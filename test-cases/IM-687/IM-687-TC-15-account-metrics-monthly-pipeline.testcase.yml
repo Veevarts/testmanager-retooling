@@ -1,0 +1,244 @@
+schemaVersion: "1.0"
+
+id: "30e8f5bc-ff93-4056-b9eb-33fffa179a0a"
+key: "TC-15"
+title: "Account Metrics monthly pipeline populates Salesforce records and is replay-safe"
+description: |
+  Cobertura QA de IM-687 (sub-tarea de IM-507 - VeevartAnalytics AWS foundation)
+  para validar el pipeline mensual de Account Metrics: ejecucion del step
+  function, poblamiento de las secciones Information, Client's KPIs, Veevart
+  KPIs (Online & Onsite, POS Mobile, Credit Card Transactions), Totals,
+  Maintenance Level y New Metrics, reconciliacion entre canales y totales,
+  idempotencia bajo replay y correctitud de Groups Income (regresion IM-686),
+  manejo de cuentas sin actividad y fallas del pipeline sin artefactos
+  parciales, y aislamiento de datos en corridas multi-cuenta.
+  Relaciona: IM-508, IM-509, IM-510, IM-511, IM-512, IM-628, IM-635, IM-686.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "At least one client account exists with source dashboards populated for the target metric period"
+  - "The Account Metrics step function is deployed and scheduled"
+  - "QA has read access to the Account Metrics page in Salesforce (Case Manager > Account Metrics)"
+  - "QA has access to the source dashboards or reference queries needed to reconcile values"
+  - "A control account with documented expected values for the target period exists"
+  - "At least one account with no activity in the target period exists to validate the empty case"
+
+format: gherkin
+scenarios:
+  - title: "Monthly run creates one Account Metrics record per account and period"
+    tags:
+      - happy-path
+      - scheduling
+    given:
+      - "an account with source dashboards populated for the target metric period"
+    when:
+      - "the Account Metrics step function executes for that period"
+    then:
+      - "exactly one Account Metrics record is created in Salesforce for the account"
+      - "the record has Date Entered set to the run date"
+      - "the record has Metric Period Key matching the target period in YYYY-MM format"
+      - "the record has Date set to the last day of the target period"
+
+  - title: "Information section is populated correctly"
+    tags:
+      - happy-path
+      - information
+    given:
+      - "an account with a known migration date and active campaigns"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "the Account lookup points to the correct client account"
+      - "Country reflects the account country"
+      - "Adyen Migration Date reflects the documented migration date for the account"
+      - "Number of Active Campaigns and Revenue brought by Active Campaigns match the campaign source"
+      - "Revenue brought by Waiting List matches the waiting list source"
+      - "Month Total Income and Shared Revenue reflect the documented totals for the period"
+
+  - title: "Client's KPIs reflect the source dashboard values"
+    tags:
+      - happy-path
+      - client-kpis
+    given:
+      - "an account with activity in donations, memberships, rentals, ticketing and shop for the period"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Donations Income, Membership Income, Rentals Income, Ticketing/Groups Income and Shop Income match the client dashboard values"
+      - "New Members, Current Members, Number of Visitors and Groups/Events Confirmed match the client dashboard counts"
+
+  - title: "Veevart Online and Onsite KPIs are split correctly per channel"
+    tags:
+      - happy-path
+      - veevart-kpis
+      - channel-split
+    given:
+      - "an account that processed donations, memberships, tickets, rentals, courses, shop and Shopify in the period"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "each Online channel field reflects the online transaction sum (Donations Online, Membership Online, Tickets Online, Courses Online, Shop Online, Shopify Income)"
+      - "each SF Income field reflects the corresponding Salesforce-recorded sum (Donations SF, Membership SF, Tickets/Groups SF, Rentals SF, Shop Online)"
+      - "E-Payment Income reflects the documented online payment total"
+
+  - title: "POS Mobile KPIs are populated per channel"
+    tags:
+      - happy-path
+      - pos-mobile
+    given:
+      - "an account that used POS Mobile to process donations, memberships, tickets, rentals and shop"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Donation, Membership, Ticketing, Rentals and Shop POS Mobile Income each reflect the corresponding POS Mobile sum"
+      - "POS Mobile Income equals the sum of the POS Mobile channels"
+
+  - title: "Credit Card Transactions reconcile online and onsite"
+    tags:
+      - reconciliation
+      - credit-card
+    given:
+      - "an account with credit card transactions in the period across online and onsite"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Credit Card Transactions - Online and Credit Card Transactions - Onsite match the documented counts"
+      - "Credit Card Income - Online and Credit Card Income - Onsite match the documented sums"
+      - "Total of Credit Card Transactions equals the sum of online plus onsite counts"
+      - "Total Income of Credit Card Transactions equals the sum of online plus onsite incomes"
+
+  - title: "Totals reconcile with channel breakdown"
+    tags:
+      - reconciliation
+      - totals
+    given:
+      - "a generated Account Metrics record with all channel KPIs populated"
+    when:
+      - "the implementation team reviews the Totals section"
+    then:
+      - "Online Income equals the documented sum of all online channels"
+      - "Onsite Income equals the documented sum of all onsite channels including POS Mobile"
+
+  - title: "Maintenance Level reflects Case Manager state"
+    tags:
+      - happy-path
+      - maintenance
+    given:
+      - "an account with a known maintenance level and a known set of open cases"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Maintenance Level matches the account maintenance level"
+      - "Total Number of Open Cases matches the open case count for the account"
+
+  - title: "New Metrics section populates from source"
+    tags:
+      - happy-path
+      - new-metrics
+    given:
+      - "an account with grants, gift cards, recurring donations, recurring memberships, courses, rentals, tickets, and chargebacks in the period"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Grants Income and Number of Grants reflect the grants source"
+      - "Number of GiftCards Sold Online and Revenue Brought by GiftCards Sold Online reflect the giftcards source"
+      - "Number of Donations, Number of Memberships, Number of Courses Sold, Number of Rentals Sold and Number of Tickets Sold reflect the operational counts"
+      - "Income from Recurring Donations, Number of Recurring Donations and Number of Recurring Donations Inactive reflect the recurring donations source"
+      - "Income from Recurring Memberships, Number of Recurring Memberships and Number of Recurring Memberships Inactive reflect the recurring memberships source"
+      - "Groups Income reflects the documented groups source value"
+      - "Courses Income reflects the documented courses source value"
+      - "Number of Total Payments and Total Payment Value (Adyen) reflect the Adyen payments source"
+      - "Chargebacks Lost Rate, Value Lost Rate, Won Rate and Value Won Rate match the chargebacks source"
+      - "Number of Chargebacks, Number of Chargebacks Lost, Number of Chargebacks Won, Total Value of Chargebacks, Total Value of Chargebacks Lost and Total Value of Chargebacks Won reconcile internally"
+
+  - title: "Re-running the pipeline for the same period is idempotent"
+    tags:
+      - regression
+      - im-686
+      - replay
+      - idempotency
+    given:
+      - "an Account Metrics record already exists for an account and a period"
+    when:
+      - "the step function is replayed for the same account and period"
+    then:
+      - "the existing record is updated in place or replaced"
+      - "no duplicate Account Metrics record is created for that account and period"
+      - "the final values match the latest source data"
+
+  - title: "Groups Income returns the documented value"
+    tags:
+      - regression
+      - im-686
+      - groups-income
+    given:
+      - "the fix from IM-686 is deployed"
+      - "an account with known groups activity for the period"
+    when:
+      - "the Account Metrics record is generated"
+    then:
+      - "Groups Income equals the documented expected value from the source"
+      - "the previous Groups Income bug is not reproducible"
+
+  - title: "Account with no activity in the period is handled safely"
+    tags:
+      - edge-case
+      - empty-account
+    given:
+      - "an account with no transactions in the target period"
+    when:
+      - "the Account Metrics step function runs for that period"
+    then:
+      - "either an Account Metrics record is created with zero or null values per field"
+      - "or the account is skipped without creating a partial record"
+      - "the run does not fail the overall pipeline"
+
+  - title: "Pipeline failure does not leave partial Account Metrics records"
+    tags:
+      - negative
+      - failure-isolation
+    given:
+      - "the source extraction or normalization stage fails for an account"
+    when:
+      - "the Account Metrics step function processes the account"
+    then:
+      - "no partial Account Metrics record is persisted for that account and period"
+      - "the failure is surfaced for operator review"
+      - "other accounts in the same run are not blocked by the failed account"
+
+  - title: "Multi-account run isolates data per account"
+    tags:
+      - edge-case
+      - multi-tenant
+      - isolation
+    given:
+      - "the step function processes multiple accounts in the same run"
+    when:
+      - "each account is normalized and persisted"
+    then:
+      - "each Account Metrics record only contains the data for its own account"
+      - "no KPI value from one account leaks into another account's record"
+
+tags:
+  - im-687
+  - im-507
+  - im-686
+  - veevart-analytics
+  - account-metrics
+  - step-function
+  - kpi-pipeline
+  - salesforce
+  - reconciliation
+  - regression
+
+estimatedDuration: 180
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-12T10:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-12T10:00:00Z"
+  version: 1
