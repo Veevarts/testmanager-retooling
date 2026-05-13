@@ -42,8 +42,9 @@ Por defecto, `codex` debe trabajar así:
 | Creating test cases, generating tests, QA cases | `.claude/skills/testcase-generator/SKILL.md` |
 | Creating test plans, planning QA, release testing | `.claude/skills/testplan-generator/SKILL.md` |
 | Creating test runs, executing tests, recording results | `.claude/skills/testrun-generator/SKILL.md` |
+| Generating the full QA bundle (plan QA en Jira + test case en repo) desde una historia Jira | `.claude/skills/qa-bundle-generator/SKILL.md` |
 
-Read the corresponding skill BEFORE writing any `.testcase.yml`, `.testplan.yml`, or `.testrun.yml` file.
+Read the corresponding skill BEFORE writing any `.testcase.yml`, `.testplan.yml`, or `.testrun.yml` file, or BEFORE editing a Jira QA Sub-task description as part of a bundled QA workflow.
 
 ## Skill Priority
 
@@ -52,8 +53,9 @@ Read the corresponding skill BEFORE writing any `.testcase.yml`, `.testplan.yml`
 1. Si la tarea pide casos de prueba, cobertura funcional, escenarios QA o archivos `.testcase.yml`, usar `testcase-generator`.
 2. Si la tarea pide un plan de pruebas, suite de release, selección de casos o archivos `.testplan.yml`, usar `testplan-generator`.
 3. Si la tarea pide ejecución, corrida, registro de resultados o archivos `.testrun.yml`, usar `testrun-generator`.
-4. Si una tarea mezcla varios artefactos, resolver en este orden:
-   `testcase-generator` -> `testplan-generator` -> `testrun-generator`
+4. Si la tarea pide armar el plan de pruebas QA completo desde una historia Jira (escribir el plan en la descripción del QA Sub-task Y crear el `.testcase.yml` en el repo en un solo flujo), usar `qa-bundle-generator`.
+5. Si una tarea mezcla varios artefactos, resolver en este orden:
+   `qa-bundle-generator` -> `testcase-generator` -> `testplan-generator` -> `testrun-generator`
 
 ## Decision Defaults
 
