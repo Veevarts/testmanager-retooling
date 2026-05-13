@@ -1,0 +1,209 @@
+schemaVersion: "1.0"
+
+id: "f1ef1089-89cc-45c3-aeff-6cc2f2be30f7"
+key: "TC-16"
+title: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
+description: |
+  Cobertura QA de IM-707 (sub-tarea QA IM-725) bajo el epic IM-70 Altru
+  Queries. Validacion funcional en el sandbox tucsontrainings sobre el
+  outcome de la migracion implementada en PR 104 (MigrationToolETL):
+  generacion correcta de npsp__Partial_Soft_Credit__c y
+  npsp__Account_Soft_Credit__c, preservacion del hard credit del donante,
+  comportamiento del auto-creator de NPSP, rollups en Contact y Account,
+  y deteccion del defecto de picklist restringido en npsp__Role__c.
+
+  Dataset usado: TEST_IM707 cargado via Anonymous Apex
+  (tmp/im707_seed.apex en el lado dev). Cubre 3 Opportunities con 4
+  Partial Soft Credits y 1 Account Soft Credit, escenarios de multi-
+  recognition, cross-recognition, soft credit al 100%, y la org
+  reconocida (Tucson Family Foundation).
+
+  Hallazgo de bug verificado en preparacion del dataset:
+  npsp__Account_Soft_Credit__c.npsp__Role__c es picklist restringido
+  (valores validos: Donation Source, Influencer, Match). El pipeline del
+  PR emite role='Soft Credit' hardcoded, lo que sera rechazado por
+  Salesforce al cargar cada fila de ASC. Workaround temporal en el seed:
+  npsp__Role__c='Donation Source'. Esto bloquea el path org-recognized
+  hasta que el pipeline se corrija o el picklist se amplie.
+
+  Cambio de enfoque (2026-05-12): este test case fue reescrito para
+  validacion funcional en Salesforce post-import. La cobertura del SQL
+  upstream (grain REVENUERECOGNITION.ID, filtros 'FF Soft Credit', join
+  paths) queda cubierta por la integration spec del PR
+  (soft-credit-recognition-query.integration.spec.ts).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Acceso al sandbox tucsontrainings (tucsonbotanical--trainings.sandbox.my.salesforce.com) con permisos de lectura sobre npsp__Partial_Soft_Credit__c, npsp__Account_Soft_Credit__c, Opportunity, Contact y Account"
+  - "Dataset TEST_IM707 cargado via Anonymous Apex (3 Opportunities, 3 Contacts en Household Accounts, 1 Organization Account, 4 PSC, 1 ASC)"
+  - "NPSP instalado con Account Model = Household Account y npo02__Soft_Credit_Roles__c que incluye 'Soft Credit'"
+  - "QA tiene permisos para correr SOQL via sf data query contra el sandbox"
+  - "QA tiene acceso al PR 104 (MigrationToolETL) y al SQL soft_credit_recognition.sql para trazar el contrato de salida"
+
+format: gherkin
+scenarios:
+  - title: "OPP_1 has the expected Partial Soft Credit rows for Bob and Carla"
+    tags:
+      - happy-path
+      - ac-1
+      - multi-recognition
+      - psc
+    given:
+      - "the TEST_IM707 dataset is loaded in tucson-trainings"
+      - "TEST_IM707_OPP_1 has Amount 19000 USD with Alice as the primary donor"
+    when:
+      - "QA queries npsp__Partial_Soft_Credit__c filtered by npsp__Opportunity__r.Name = 'TEST_IM707_OPP_1'"
+    then:
+      - "the result contains exactly 2 rows"
+      - "one row has npsp__Contact equal to Bob, npsp__Amount equal to 10000 and npsp__Role_Name equal to 'Soft Credit'"
+      - "one row has npsp__Contact equal to Carla, npsp__Amount equal to 4000 and npsp__Role_Name equal to 'Soft Credit'"
+      - "both rows reference the same Opportunity TEST_IM707_OPP_1"
+
+  - title: "OPP_1 has the expected Account Soft Credit row for Tucson Family Foundation"
+    tags:
+      - happy-path
+      - ac-1
+      - org-recognition
+      - asc
+    given:
+      - "the TEST_IM707 dataset is loaded in tucson-trainings"
+      - "TEST_IM707 Tucson Family Foundation is an Organization Account flagged as recognized for OPP_1"
+    when:
+      - "QA queries npsp__Account_Soft_Credit__c filtered by npsp__Opportunity__r.Name = 'TEST_IM707_OPP_1'"
+    then:
+      - "the result contains exactly 1 row"
+      - "the row references TEST_IM707 Tucson Family Foundation as npsp__Account"
+      - "npsp__Amount equals 5000"
+      - "npsp__Role equals 'Donation Source' (workaround for the restricted picklist; the pipeline contract should be 'Soft Credit', see the bug scenario)"
+
+  - title: "Hard credit on OPP_1 stays with the original donor after soft credits are loaded"
+    tags:
+      - ac-2
+      - hard-credit-preservation
+    given:
+      - "OPP_1 was created with Alice as the primary donor for 19000 USD before any soft credit row was loaded"
+    when:
+      - "QA inspects OPP_1 after the soft credit dataset is loaded"
+    then:
+      - "OPP_1.AccountId still points to Alice's Household Account"
+      - "OPP_1.npsp__Primary_Contact__c still references Alice"
+      - "OPP_1.Amount remains 19000 USD"
+      - "no PSC or ASC row reassigns the primary donor of the opportunity"
+
+  - title: "100 percent soft credit case: Carla is recognized for the full 2000 USD of OPP_3"
+    tags:
+      - edge-case
+      - full-amount-soft-credit
+      - regression-evidence
+    given:
+      - "OPP_3 was created with Alice as the donor for Amount 2000 USD"
+      - "Carla is soft-credited for the full 2000 USD on OPP_3"
+    when:
+      - "QA queries the PSCs for OPP_3"
+    then:
+      - "exactly one PSC exists for OPP_3"
+      - "the PSC references Carla with npsp__Amount equal to 2000"
+      - "OPP_3.Amount remains 2000 USD (the 100 percent soft credit does not alter the hard credit)"
+
+  - title: "Cross-recognition: Bob is the donor on OPP_2 and the recognized contact on OPP_1"
+    tags:
+      - regression-evidence
+      - cross-recognition
+    given:
+      - "Bob is the primary donor of OPP_2 for 5000 USD"
+      - "Bob is soft-credited for 10000 USD on OPP_1"
+    when:
+      - "QA inspects Bob's contact rollup fields after NPSP rollups have run"
+    then:
+      - "Bob's hard credit total reflects 5000 USD from OPP_2"
+      - "Bob's soft credit total reflects 10000 USD from OPP_1"
+      - "Bob does not appear as donor on OPP_1 and does not appear as a recipient on OPP_2"
+
+  - title: "NPSP auto-creates a Partial Soft Credit when an OCR with role 'Soft Credit' is inserted"
+    tags:
+      - npsp-behavior
+      - auto-create
+      - ac-1
+      - migration-collision-risk
+    given:
+      - "npo02__Households_Settings__c.npsp__Soft_Credit_Roles__c includes 'Soft Credit'"
+      - "an Opportunity exists with Amount equal to X"
+    when:
+      - "an OpportunityContactRole with Role = 'Soft Credit' is inserted for that Opportunity and a Contact"
+    then:
+      - "NPSP automatically creates a npsp__Partial_Soft_Credit__c row for that Opportunity and Contact"
+      - "the auto-created PSC has npsp__Amount equal to the full Opportunity Amount until it is updated"
+      - "the migration must either avoid emitting an OCR row or reconcile with the auto-created PSC, otherwise duplicate or wrong-amount PSCs will appear in production"
+
+  - title: "NPSP rollups on Contact and Account reflect the loaded soft credit data"
+    tags:
+      - rollup-validation
+      - npsp-rollups
+    given:
+      - "the TEST_IM707 dataset is loaded and NPSP rollups have completed"
+    when:
+      - "QA inspects rollup fields on Alice, Bob, Carla and on the Tucson Family Foundation Account"
+    then:
+      - "Bob's npsp__Soft_Credit_Total__c reflects 10000 USD from OPP_1"
+      - "Carla's npsp__Soft_Credit_Total__c reflects 4000 USD + 2000 USD from OPP_1 and OPP_3"
+      - "Alice's npsp__Soft_Credit_Total__c reflects 2500 USD from OPP_2"
+      - "Tucson Family Foundation's account-level soft credit rollup reflects 5000 USD from OPP_1"
+      - "no rollup over-counts a contribution by combining hard credit and soft credit on the same opportunity"
+
+  - title: "VERIFIED BUG: ASC insert with npsp__Role__c = 'Soft Credit' is rejected by the restricted picklist"
+    tags:
+      - bug-verified
+      - restricted-picklist
+      - negative
+      - high-risk
+      - blocker
+    given:
+      - "npsp__Account_Soft_Credit__c.npsp__Role__c is a restricted picklist with values [Donation Source, Influencer, Match]"
+      - "the PR pipeline hardcodes role = 'Soft Credit' for ASC rows"
+    when:
+      - "an attempt is made to insert npsp__Account_Soft_Credit__c with npsp__Role__c = 'Soft Credit'"
+    then:
+      - "Salesforce rejects the insert with INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST"
+      - "every ASC row emitted by the pipeline will fail at load time"
+      - "the bug blocks the org-recognized soft credit path in production until the pipeline is changed to use a valid value or the picklist is widened"
+
+  - title: "Asymmetry: PSC accepts free-text 'Soft Credit' but ASC rejects it"
+    tags:
+      - bug-verified
+      - data-model-asymmetry
+    given:
+      - "npsp__Partial_Soft_Credit__c.npsp__Role_Name__c is an unrestricted text field"
+      - "npsp__Account_Soft_Credit__c.npsp__Role__c is a restricted picklist"
+    when:
+      - "PSC and ASC rows are inserted with the same intent of role = 'Soft Credit'"
+    then:
+      - "the PSC insert succeeds with npsp__Role_Name__c equal to 'Soft Credit'"
+      - "the ASC insert fails unless npsp__Role__c is one of the picklist values"
+      - "the QA report flags this asymmetry as a data-model contract gap to resolve with the NPSP target spec before sign-off"
+
+tags:
+  - im-707
+  - im-70
+  - im-725
+  - altru
+  - soft-credits
+  - npsp
+  - salesforce
+  - partial-soft-credit
+  - account-soft-credit
+  - tucson-trainings
+  - rollup-validation
+  - restricted-picklist
+  - bug-verified
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-12T16:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-12T18:00:00Z"
+  version: 2
