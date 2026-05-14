@@ -5,32 +5,59 @@ key: "TC-16"
 title: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
 description: |
   Cobertura QA de IM-707 (sub-tarea IM-725) bajo el epic IM-70 Altru
-  Queries. Validacion funcional en el sandbox tucsontrainings sobre el
+  Queries. Validacion funcional end-to-end en tucsontrainings sobre el
   outcome de la migracion de PR 104 (MigrationToolETL), anclada al
-  dataset PR_IM707: cuatro Opportunities que cubren los cuatro patrones
-  funcionales relevantes (multi_mixed, multi_psc, single_psc, single_asc).
+  dataset PR_IM707 (4 Opportunities: single_asc, multi_psc, multi_mixed,
+  single_psc).
 
-  Cambios desde v2:
-  - Dataset TEST_IM707 reemplazado por PR_IM707 (4 Opps con donors,
-    recipients y RecognizedAccs dedicados; ver preconditions).
-  - El bug de picklist restringido en npsp__Role__c quedo resuelto en
-    el pipeline emitiendo 'Donation Source' en ASC; ahora se valida
-    como regression-fix en el Scenario 3.
-  - Se reducen los escenarios de 9 a 4 escenarios densos, organizados
-    por patron funcional y agregando rollups end-to-end como cierre.
+  Cambios v4 (desde v3, 2026-05-14):
+  - Reordenados los escenarios por impacto: regression fix primero
+    (single_asc), luego grano (multi_psc), mezcla (multi_mixed),
+    rollups end-to-end al cierre.
+  - Agregados los IDs concretos del sandbox en preconditions para
+    reproducibilidad.
+  - Agregada la validacion del OCR related list en cada escenario por
+    Opportunity (donor primary + N Soft Credit OCRs por distinct
+    recipient Contact).
+  - Agregada la preservacion del hard credit en el escenario single_asc.
+  - Scenario 4 extendido a Number of Soft Credits y Last Soft Credit
+    Date (el checklist funcional del PR los menciona explicitamente).
 
 type: integration
 priority: medium
 status: active
 
 preconditions:
-  - "Acceso al sandbox tucsontrainings con permisos de lectura sobre npsp__Partial_Soft_Credit__c, npsp__Account_Soft_Credit__c, Opportunity, Contact y Account"
-  - "Dataset PR_IM707 cargado: 4 Opportunities (multi_mixed 225000, multi_psc 106762, single_psc 5000, single_asc 5000), cada una con su Donor primario, recipients y, cuando aplica, una org RecognizedAcc"
-  - "NPSP instalado con Account Model = Household Account; el rollup batch job ya corrio al menos una vez tras la carga"
+  - "Acceso al sandbox tucsontrainings con permisos de lectura sobre npsp__Partial_Soft_Credit__c, npsp__Account_Soft_Credit__c, Opportunity, Contact, Account y OpportunityContactRole"
+  - "Dataset PR_IM707 cargado: 4 Opportunities (multi_mixed 225000 CloseDate 2026-04-14, multi_psc 106762 CloseDate 2026-03-15, single_psc 5000 CloseDate 2026-02-13, single_asc 5000 CloseDate 2026-01-14) con sus Donors, recipients y RecognizedAccs"
+  - "OCRs explicitos creados durante el seed (el trigger npe01__Enable_Opportunity_Contact_Role_Trigger__c esta apagado en este sandbox)"
+  - "IDs principales en tucson-trainings: Donor1=003W400000xqfMvIAI, Donor2=003W400000xqfMyIAI, Donor3=003W400000xqfN2IAI, Donor4=003W400000xqfN4IAI; multi_psc recipients = 003W400000xqfMzIAI / 003W400000xqfN0IAI / 003W400000xqfN1IAI; multi_mixed recipients = 003W400000xqfMwIAI / 003W400000xqfMxIAI; multi_mixed RecognizedAcc = 001W400000wxjB2IAI; single_asc RecognizedAcc = 001W400000wxjB3IAI"
+  - "NPSP instalado con Account Model = Household Account; el soft credit rollup batch job ya corrio al menos una vez tras la carga"
   - "QA tiene permisos para correr SOQL via sf data query"
 
 format: gherkin
 scenarios:
+  - title: "OPP single_asc routes the soft credit to ASC with a valid restricted picklist value (regression fix verified)"
+    tags:
+      - ac-1
+      - regression-fix
+      - org-recognition
+      - asc
+      - restricted-picklist-fix
+      - headline
+    given:
+      - "npsp__Account_Soft_Credit__c.npsp__Role__c is a restricted picklist that only accepts Donation Source, Influencer or Match"
+      - "OPP single_asc has Donor4 as primary donor for 5000 USD with CloseDate 2026-01-14 and the single_asc RecognizedAcc as the recognized organization"
+    when:
+      - "QA queries npsp__Account_Soft_Credit__c filtered by Opportunity = OPP single_asc"
+    then:
+      - "exactly 1 ASC row exists, referencing the single_asc RecognizedAcc with npsp__Amount equal to 150"
+      - "npsp__Role__c equals 'Donation Source' (the pipeline now emits a valid picklist value)"
+      - "the load completed without INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST"
+      - "no PSC row exists for OPP single_asc (the org-recognized path routes to ASC only)"
+      - "OPP single_asc.Amount remains 5000 USD and Primary Contact remains Donor4"
+      - "the OpportunityContactRole related list on OPP single_asc shows exactly 1 row: Donor4 with IsPrimary = true (no Soft Credit OCRs because the recognized party is an Account)"
+
   - title: "OPP multi_psc preserves five distinct Partial Soft Credit rows including reused recipients"
     tags:
       - ac-1
@@ -40,7 +67,7 @@ scenarios:
       - psc
     given:
       - "the PR_IM707 dataset is loaded in tucson-trainings"
-      - "OPP multi_psc has Donor2 as primary donor for 106762 USD"
+      - "OPP multi_psc has Donor2 as primary donor for 106762 USD with CloseDate 2026-03-15"
     when:
       - "QA queries npsp__Partial_Soft_Credit__c filtered by Opportunity = OPP multi_psc"
     then:
@@ -49,6 +76,7 @@ scenarios:
       - "two recipient Contacts each appear in 2 PSC rows on the same Opportunity (the grain preserves one row per REVENUERECOGNITION.ID even when the recognized constituent repeats)"
       - "every row has npsp__Role_Name equal to 'Soft Credit'"
       - "OPP multi_psc.Amount remains 106762 USD and Primary Contact remains Donor2"
+      - "the OpportunityContactRole related list on OPP multi_psc shows 1 Donor OCR (Donor2 IsPrimary = true) plus 3 Soft Credit OCRs (one per distinct recipient Contact, IsPrimary = false)"
 
   - title: "OPP multi_mixed exposes PSC and ASC for the same donation without changing hard credit"
     tags:
@@ -60,32 +88,15 @@ scenarios:
       - hard-credit-preservation
     given:
       - "the PR_IM707 dataset is loaded"
-      - "OPP multi_mixed has Donor1 as primary donor for 225000 USD"
+      - "OPP multi_mixed has Donor1 as primary donor for 225000 USD with CloseDate 2026-04-14"
     when:
       - "QA inspects OPP multi_mixed and its related lists in Salesforce"
     then:
       - "OPP multi_mixed.Amount remains 225000 USD and Primary Contact remains Donor1"
       - "npsp__Partial_Soft_Credit__c contains 2 rows for OPP multi_mixed: each recipient Contact with npsp__Amount 50000 and npsp__Role_Name 'Soft Credit'"
-      - "npsp__Account_Soft_Credit__c contains 1 row for OPP multi_mixed: RecognizedAcc with npsp__Amount 50000 and npsp__Role 'Donation Source'"
+      - "npsp__Account_Soft_Credit__c contains 1 row for OPP multi_mixed: the multi_mixed RecognizedAcc with npsp__Amount 50000 and npsp__Role 'Donation Source'"
       - "the sum of soft credits (150000 USD = 67% of the hard credit) does not modify or duplicate the hard credit on OPP multi_mixed"
-
-  - title: "OPP single_asc routes the soft credit to npsp__Account_Soft_Credit__c with a valid restricted picklist value (regression fix verified)"
-    tags:
-      - ac-1
-      - regression-fix
-      - org-recognition
-      - asc
-      - restricted-picklist-fix
-    given:
-      - "npsp__Account_Soft_Credit__c.npsp__Role__c is a restricted picklist that only accepts Donation Source, Influencer or Match"
-      - "OPP single_asc has Donor4 as primary donor for 5000 USD and RecognizedAcc as the recognized organization"
-    when:
-      - "QA queries npsp__Account_Soft_Credit__c filtered by Opportunity = OPP single_asc"
-    then:
-      - "exactly 1 ASC row exists, referencing RecognizedAcc with npsp__Amount equal to 150"
-      - "npsp__Role__c equals 'Donation Source' (the pipeline now emits a valid picklist value)"
-      - "the load completed without INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST"
-      - "no PSC row exists for OPP single_asc (the org-recognized path routes to ASC only)"
+      - "the OpportunityContactRole related list on OPP multi_mixed shows 1 Donor OCR (Donor1 IsPrimary = true) plus 2 Soft Credit OCRs (one per recipient Contact, IsPrimary = false)"
 
   - title: "NPSP rollups on recognized Contacts and Accounts reflect the loaded soft credit data end-to-end"
     tags:
@@ -94,18 +105,19 @@ scenarios:
       - npsp-rollups
       - cross-opp-coverage
     given:
-      - "the PR_IM707 dataset (all 4 Opportunities) is loaded and the NPSP rollup batch has completed"
+      - "the PR_IM707 dataset (all 4 Opportunities) is loaded and the NPSP soft credit rollup batch has completed"
     when:
-      - "QA inspects npsp__Soft_Credit_Total__c and related rollup fields on each recognized Contact and on each recognized Account"
+      - "QA inspects npsp__Soft_Credit_Total__c, Number of Soft Credits and Last Soft Credit Date on each recognized Contact, and the equivalent account-level rollup fields on each recognized Account"
     then:
-      - "the multi_psc recipient that received 52175 + 1000 shows a Soft Credit Total of 53175"
-      - "the multi_psc recipient that received 10000 + 3000 shows a Soft Credit Total of 13000"
-      - "the multi_psc recipient that received 5000 shows a Soft Credit Total of 5000"
-      - "each multi_mixed recipient Contact shows a Soft Credit Total of 50000"
-      - "the single_psc recipient Contact shows a Soft Credit Total of 250"
-      - "the multi_mixed RecognizedAcc shows an Account-level soft credit total of 50000"
-      - "the single_asc RecognizedAcc shows an Account-level soft credit total of 150"
+      - "the multi_psc recipient that received 52175 + 1000 shows Soft Credit Total of 53175 across 2 soft credits"
+      - "the multi_psc recipient that received 10000 + 3000 shows Soft Credit Total of 13000 across 2 soft credits"
+      - "the multi_psc recipient that received 5000 shows Soft Credit Total of 5000 across 1 soft credit"
+      - "each multi_mixed recipient Contact shows Soft Credit Total of 50000 across 1 soft credit"
+      - "the single_psc recipient Contact shows Soft Credit Total of 250 across 1 soft credit"
+      - "the multi_mixed RecognizedAcc shows an account-level soft credit total of 50000"
+      - "the single_asc RecognizedAcc shows an account-level soft credit total of 150"
       - "no Donor (Donor1, Donor2, Donor3, Donor4) sees their own Opportunity reflected in their soft credit rollups"
+      - "Last Soft Credit Date on each recognized party matches the CloseDate of the latest Opportunity that soft-credits them"
 
 tags:
   - im-707
@@ -119,13 +131,14 @@ tags:
   - account-soft-credit
   - tucson-trainings
   - rollup-validation
+  - ocr-validation
   - pr-im707
 
-estimatedDuration: 60
+estimatedDuration: 75
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-12T16:30:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-14T10:00:00Z"
-  version: 3
+  updatedAt: "2026-05-14T13:30:00Z"
+  version: 4
