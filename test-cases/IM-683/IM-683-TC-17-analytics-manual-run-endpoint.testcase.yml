@@ -1,0 +1,100 @@
+schemaVersion: "1.0"
+
+id: "509d2a62-6649-40cc-8e1a-9a1ea4929366"
+key: "TC-17"
+title: "POST /analytics/manual-runs enforces API key, validates request body, and returns 202 with execution metadata"
+description: |
+  Cobertura QA del contrato HTTP base del endpoint manual-extraction
+  agregado en IM-683 (sub-tarea IM-726) bajo el epic IM-505 KPI
+  automation phase 1 engine and sync. Repositorio: VeevartAnalytics.
+
+  Alcance: pruebas base del endpoint (auth, validacion, success). Las
+  garantias downstream (preservacion del date range a traves del state
+  machine, filtrado de destinationAccounts, comportamiento del schedule
+  mensual sin filtros manuales) corresponden a los ACs 2, 3 y 6 y deben
+  cubrirse por separado como tests de pipeline, no como endpoint base.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "El endpoint POST /analytics/manual-runs esta desplegado en el entorno objetivo (staging o equivalente)"
+  - "Una API key valida esta provisionada (API Gateway usage plan o AWS Secrets Manager) y QA la tiene disponible para los requests"
+  - "La state machine de analytics extraction esta desplegada y la API Lambda tiene states:StartExecution sobre ella"
+  - "QA tiene un subscriberOrgId y un accountId reconocidos por el sistema para usar como payload base"
+  - "QA puede observar las ejecuciones nuevas en la state machine (consola AWS Step Functions o describeExecution via CLI) para confirmar start / no-start"
+
+format: gherkin
+scenarios:
+  - title: "Valid request returns 202 with executionArn and submittedScope"
+    tags:
+      - ac-1
+      - happy-path
+      - http-contract
+      - success
+    given:
+      - "QA has a valid x-api-key value"
+      - "the request body has periodStart 2026-03-01, periodEnd 2026-03-31, a valid subscriberOrgId, and a valid accountId"
+    when:
+      - "the client sends POST /analytics/manual-runs with the x-api-key header and the JSON body"
+    then:
+      - "the response status is 202"
+      - "the response body has status equal to 'accepted'"
+      - "the response body has executionArn matching the pattern arn:aws:states:.*:execution:.*"
+      - "the response body has submittedScope echoing periodStart, periodEnd, subscriberOrgId and accountId from the request"
+      - "a new Step Functions execution is started for that scope and is visible in the AWS Step Functions console within a few seconds"
+
+  - title: "Missing or invalid API key is rejected without starting an execution"
+    tags:
+      - ac-4
+      - http-contract
+      - auth
+      - negative
+    given:
+      - "the request body is otherwise valid"
+    when:
+      - "the client sends POST /analytics/manual-runs without an x-api-key header"
+      - "or the client sends the same request with an x-api-key value that is not provisioned"
+    then:
+      - "the response status is 401 or 403"
+      - "the response body does not include an executionArn"
+      - "no Step Functions execution is started for that request"
+      - "the server logs the request correlation metadata without logging the submitted API key value"
+
+  - title: "Malformed request body returns 400 with field-level validation details"
+    tags:
+      - ac-5
+      - http-contract
+      - validation
+      - negative
+    given:
+      - "QA has a valid x-api-key value"
+    when:
+      - "the client sends POST /analytics/manual-runs with periodStart after periodEnd"
+      - "or the client sends the request with subscriberOrgId or accountId missing"
+    then:
+      - "the response status is 400"
+      - "the response body identifies the offending field(s) and the validation rule each one violates"
+      - "the response body does not include an executionArn"
+      - "no Step Functions execution is started for that request"
+
+tags:
+  - im-683
+  - im-505
+  - im-726
+  - veevart-analytics
+  - manual-extraction
+  - api-key
+  - endpoint
+  - http-contract
+  - step-functions
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-14T18:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-14T18:00:00Z"
+  version: 1
