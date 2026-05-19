@@ -1,0 +1,711 @@
+schemaVersion: "1.0"
+id: tr-e2d5aa18-17f6-46c6-bef9-74f356d9c7df
+key: TR-035
+title: "Run TC-20: Altru constituent attribute migration data review + functional sandbox (Tucson)"
+status: in-progress
+environment:
+  name: tucson
+  url: safesql://tucson/tucson_db_1
+  buildVersion: "MigrationToolETL PR 109 (branch story/attributes-query-IM-696)"
+startedAt: "2026-05-19T19:24:00.000Z"
+results:
+  - testCaseId: 70f1712c-5765-4ea0-bd48-33f2f2b5e6d3
+    testCaseKey: TC-20
+    testCaseTitle: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+    testCaseFilePath: test-cases/IM-696/IM-696-TC-20-altru-constituent-attribute-migration.testcase.yml
+    scenarioTitle: "Catalog universe parity against Tucson"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-05-19T19:24:31.530Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "safesql profile `tucson` verificado con `safesql profiles show tucson` (bastion bastion.internal.veevartapp.com + keychain entry safesql-tucson activos)"
+        phase: given
+        text: "safesql access to tucson_db_1 is configured"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "attributes.sql lineas 31-38 confirman el filtro: WHERE ac.FLAGGEDFORDELETE = 0 AND ac.FLAGGEDFOREXTENSIONREMOVAL = 0, JOIN a INFORMATION_SCHEMA.TABLES + COLUMNS sobre CONSTITUENTID"
+        phase: given
+        text: "the new attributes.sql discovery cursor filters by FLAGGEDFORDELETE = 0 AND FLAGGEDFOREXTENSIONREMOVAL = 0 AND CONSTITUENTID column present"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: `safesql run tucson s1-inventory.sql` (query_sha=676352cc457d, started=2026-05-19T19:24:27.472Z)"
+        phase: when
+        text: "QA runs catalog inventory aggregates against ATTRIBUTECATEGORY joined with TABLECATALOG and INFORMATION_SCHEMA"
+        attachments:
+          - name: s1-inventory.sql
+            path: attachments/tr-035-tc-20/s1-inventory.sql
+            mimeType: application/sql
+            size: 4352
+          - name: s1-tucson-output-2026-05-19.json
+            path: attachments/tr-035-tc-20/s1-tucson-output-2026-05-19.json
+            mimeType: application/json
+            size: 1101
+      - order: 4
+        status: passed
+        actual: "Observado: 180"
+        phase: then
+        text: "total_categories equals 180"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado: 180 (Tucson actualmente no tiene categorias flagged-for-delete)"
+        phase: then
+        text: "not_flagged equals 180 (Tucson has no flagged-for-delete categories in this snapshot)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado: 103"
+        phase: then
+        text: "active_constituent_scoped equals 103"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado: 0 (todas las 180 categorias tienen su tabla fisica presente en INFORMATION_SCHEMA.TABLES)"
+        phase: then
+        text: "active_orphans equals 0"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "Observado: 77 (categorias con tabla fisica pero sin columna CONSTITUENTID = no constituent-scoped; el query las descarta)"
+        phase: then
+        text: "non_constituent_scoped (active with table but no CONSTITUENTID column) equals 77 (filtered out by the COLUMNS join)"
+        attachments: []
+      - order: 9
+        status: passed
+        actual: "Observado: DATATYPECODE 0=47 Text, 1=1 Number, 2=8 Date, 4=27 Code Table, 5=20 Yes/No. Suma: 47+1+8+27+20 = 103"
+        phase: then
+        text: "the DATATYPECODE distribution sums to 103 with 47 Text, 1 Number, 8 Date, 27 Code Table, 20 Yes/No"
+        attachments: []
+      - order: 10
+        status: passed
+        actual: "Observado: 69,563 (sum across active+constituent-scoped tablas usando sys.partitions.rows con index_id IN (0,1))"
+        phase: then
+        text: "approx_total_rows across the 103 active tables equals 69,563"
+        attachments: []
+      - order: 11
+        status: passed
+        actual: "Observado: has_dbtablename_col=1, has_tablename_col=0. El query del PR resuelve code tables via CODETABLECATALOG.DBTABLENAME y eso queda pinned"
+        phase: then
+        text: "CODETABLECATALOG has column DBTABLENAME but not TABLENAME (gotcha pin)"
+        attachments: []
+    notes: |
+      Aggregates del PR (sha b58ac472c40c, 2026-05-11) se reproducen exacto en el snapshot
+      actual de Tucson: 103 active constituent-scoped categories y 69,563 active rows.
+      Universe coverage: 180 total - 77 non-constituent-scoped - 0 flagged - 0 orphan = 103
+      active constituent-scoped.
+    attachments: []
+    defects: []
+
+  - testCaseId: 70f1712c-5765-4ea0-bd48-33f2f2b5e6d3
+    testCaseKey: TC-20
+    testCaseTitle: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+    testCaseFilePath: test-cases/IM-696/IM-696-TC-20-altru-constituent-attribute-migration.testcase.yml
+    scenarioTitle: "Per-row output contract: routing, typed slots and grain"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-05-19T19:42:09.440Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "safesql profile `tucson` confirmado (mismo paso 1 de Scenario 1)"
+        phase: given
+        text: "safesql access is configured"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Wrapper en s2-s3-contract-and-resilience.sql declara los 4 params con valor 0/NULL antes de inyectar attributes.sql; el output va a temp table #out via 'INSERT INTO #out EXEC sp_executesql @sql, ...'"
+        phase: given
+        text: "attributes.sql is wrapped with @hasDateFilterFrom = 0, @hasDateFilterTo = 0, @dateFilterFrom = NULL, @dateFilterTo = NULL to run a full extraction"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: `safesql run tucson s2-s3-contract-and-resilience.sql --allow-writes` (query_sha=3d06cd975b71, started=2026-05-19T19:42:02.377Z, duration ~7s para extraer + 8 aggregates downstream)"
+        phase: when
+        text: "QA runs the full query and aggregates the output by Data_Type__c and routing"
+        attachments:
+          - name: s2-s3-contract-and-resilience.sql
+            path: attachments/tr-035-tc-20/s2-s3-contract-and-resilience.sql
+            mimeType: application/sql
+            size: 19630
+          - name: s2-s3-tucson-output-2026-05-19.json
+            path: attachments/tr-035-tc-20/s2-s3-tucson-output-2026-05-19.json
+            mimeType: application/json
+            size: 1998
+      - order: 4
+        status: passed
+        actual: "Observado: total_emitted = 62,647 (matchea exacto el PR baseline)"
+        phase: then
+        text: "total_emitted_rows equals 62,647 (PR baseline; matches the active universe minus rows routed to a non-eligible constituent)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado: neither_populated = 0. Toda fila emitida tiene al menos un lookup poblado"
+        phase: then
+        text: "no emitted row has both Contact__c and Household_Organization__c null (neither-populated count equals 0)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado: contact_only=23,301 (individuos sin household), household_only=205 (groups/orgs), both_populated=39,141 (individuos con household — ambos lookups por diseño). Total 62,647"
+        phase: then
+        text: "the routing breakdown shows contact_only (individuals without household), household_only (groups/organizations), and both_populated (individuals with a household where both lookups are intentionally set by design)"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado: total_rows=62,647, distinct_external_ids=62,647, duplicates=0"
+        phase: then
+        text: "count(distinct Implementation_External_ID__c) equals count(*) (one emitted row per ATTRIBUTE<UUID>.ID, no duplicates)"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "Observado: across los 5 grupos Data_Type__c, with_text == n para cada grupo (11,862/852/4,596/43,900/1,437) y all_slots_null=0. Confirma que Value_Text__c se popula siempre como representational string"
+        phase: then
+        text: "Value_Text__c is populated on every row as the representational string (literal text for Text, resolved code description for Code Table, 'Yes'/'No' for Yes/No, ISO date string for Date, stringified number for Number/Currency)"
+        attachments: []
+      - order: 9
+        status: passed
+        actual: "Observado: Yes/No grupo n=1,437, with_bool=1,437, with_date=0, with_number=0. v_yesno_missing_bool=0, v_yesno_extra_slot=0"
+        phase: then
+        text: "for every row with Data_Type__c = 'Yes/No', Value_Boolean__c is not null AND Value_Date__c and Value_Number__c are null"
+        attachments: []
+      - order: 10
+        status: passed
+        actual: "Observado: Date grupo n=852, with_date=852, with_bool=0, with_number=0. v_date_missing=0, v_date_extra_slot=0"
+        phase: then
+        text: "for every row with Data_Type__c = 'Date', Value_Date__c is not null AND Value_Boolean__c and Value_Number__c are null"
+        attachments: []
+      - order: 11
+        status: passed
+        actual: "Observado: Number grupo n=4,596, with_number=4,596, with_bool=0, with_date=0. v_num_missing=0, v_num_extra_slot=0. (En Tucson no se emitieron rows con Data_Type__c='Currency'.)"
+        phase: then
+        text: "for every row with Data_Type__c in ('Number','Currency'), Value_Number__c is not null AND Value_Boolean__c and Value_Date__c are null"
+        attachments: []
+      - order: 12
+        status: passed
+        actual: "Observado: Text grupo n=43,900 (with_bool=0, with_date=0, with_number=0) + Code Table grupo n=11,862 (with_bool=0, with_date=0, with_number=0). Total 55,762. v_text_missing=0, v_text_extra_slot=0"
+        phase: then
+        text: "for every row with Data_Type__c in ('Text','Code Table'), Value_Boolean__c, Value_Date__c and Value_Number__c are all null"
+        attachments: []
+    notes: |
+      Hallazgo importante: el routing NO es xor. 39,141 de los 62,647 rows (62%) tienen
+      tanto Contact__c como Household_Organization__c populados. Esto es por diseño:
+      cuando el constituent es un individuo con household, Contact__c apunta al individuo
+      y Household_Organization__c apunta al household. Los downstream reports en Salesforce
+      deben tener esto en cuenta para evitar contar duplicado.
+
+      Otro hallazgo: Value_Text__c se popula siempre como representational string,
+      incluso para Yes/No (con "Yes"/"No"), Date (ISO string) y Number (stringified).
+      El typed slot (Boolean/Date/Number) se popula adicionalmente cuando el Data_Type__c
+      lo requiere.
+
+      Distribucion final por Data_Type__c en Tucson:
+        Code Table: 11,862  (todos con Value_Text__c = descripcion resuelta)
+        Date:          852  (con Value_Date__c + Value_Text__c ISO)
+        Number:      4,596  (con Value_Number__c + Value_Text__c stringified)
+        Text:       43,900  (solo Value_Text__c)
+        Yes/No:      1,437  (con Value_Boolean__c + Value_Text__c "Yes"/"No")
+        TOTAL:      62,647
+
+      No hay rows con Data_Type__c='Currency' ni con Data_Type__c='Other' en Tucson.
+    attachments: []
+    defects: []
+
+  - testCaseId: 70f1712c-5765-4ea0-bd48-33f2f2b5e6d3
+    testCaseKey: TC-20
+    testCaseTitle: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+    testCaseFilePath: test-cases/IM-696/IM-696-TC-20-altru-constituent-attribute-migration.testcase.yml
+    scenarioTitle: "Catalog resilience: flagged, orphan and non-constituent-scoped categories never produce emitted rows"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-05-19T19:42:09.440Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Per Scenario 1 baseline: active_orphans=0, not_flagged=180 (= total_categories), v_flaggedremoval_emitted=0 confirmado en Scenario 3 abajo"
+        phase: given
+        text: "Tucson currently has 0 orphan active categories and 0 flagged categories (per Scenario 1 baseline)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Per Scenario 1 baseline: non_constituent_scoped=77"
+        phase: given
+        text: "77 non-constituent-scoped categories exist with a physical table but no CONSTITUENTID column"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: el mismo wrapper script de Scenario 2 incluye S3.a (distinct categories) y S3.b (violation counters); resultado en s2-s3-tucson-output-2026-05-19.json"
+        phase: when
+        text: "QA inspects the emitted output from attributes.sql (from Scenario 2)"
+        attachments:
+          - name: s2-s3-contract-and-resilience.sql
+            path: attachments/tr-035-tc-20/s2-s3-contract-and-resilience.sql
+            mimeType: application/sql
+            size: 19630
+          - name: s2-s3-tucson-output-2026-05-19.json
+            path: attachments/tr-035-tc-20/s2-s3-tucson-output-2026-05-19.json
+            mimeType: application/json
+            size: 1998
+      - order: 4
+        status: passed
+        actual: "Observado: v_flagged_emitted=0. Ninguna categoria con FLAGGEDFORDELETE=1 emitio rows (consistente con not_flagged=180 en Scenario 1)"
+        phase: then
+        text: "no emitted row originates from a category with FLAGGEDFORDELETE = 1"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado: v_flaggedremoval_emitted=0"
+        phase: then
+        text: "no emitted row originates from a category with FLAGGEDFOREXTENSIONREMOVAL = 1"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado: v_orphan_emitted=0. El INNER JOIN a INFORMATION_SCHEMA.TABLES descarta huerfanos antes de componer las branches"
+        phase: then
+        text: "no emitted row originates from a category whose TABLECATALOG.TABLENAME is missing from INFORMATION_SCHEMA.TABLES"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado: v_no_constituentid_col_emitted=0. Las 77 categorias non-constituent-scoped quedan filtradas por el JOIN a INFORMATION_SCHEMA.COLUMNS con COLUMN_NAME='CONSTITUENTID'"
+        phase: then
+        text: "no emitted row originates from a category whose physical table lacks a CONSTITUENTID column (the 77 non-constituent-scoped ones never appear)"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "Confirmado en Scenario 1 (has_dbtablename_col=1, has_tablename_col=0)"
+        phase: then
+        text: "the CODETABLECATALOG joins resolve via DBTABLENAME (per sanity check from Scenario 1)"
+        attachments: []
+    notes: |
+      Hallazgo: 98 distinct Source_Category_ID__c values appeared in the emitted output,
+      no 103. Eso significa que 5 categorias activas constituent-scoped en Tucson estan
+      vacias (no tienen filas en su tabla ATTRIBUTE<UUID>). Esto es expected; el query
+      las descubre via el discovery cursor pero no emite rows porque sus tablas estan
+      vacias. No es un bug.
+
+      Los 4 violation counters confirman que el discovery + composition cursor del
+      query NUNCA emite rows desde categorias flaggeadas, huerfanas o non-constituent-
+      scoped. Resilience garantizada por el JOIN strategy.
+    attachments: []
+    defects: []
+
+  - testCaseId: 70f1712c-5765-4ea0-bd48-33f2f2b5e6d3
+    testCaseKey: TC-20
+    testCaseTitle: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+    testCaseFilePath: test-cases/IM-696/IM-696-TC-20-altru-constituent-attribute-migration.testcase.yml
+    scenarioTitle: "Functional upsert end-to-end into tucsonbotanical--veevartd"
+    scenarioIndex: 3
+    status: not-run
+    executedAt: ""
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "the PR 109 pipeline build is available locally (branch story/attributes-query-IM-696)"
+        attachments: []
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "tucsonbotanical--veevartd has Constituent_Attribute__c deployed with the 15-field contract"
+        attachments: []
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: given
+        text: "the tester user has create/update permissions on Constituent_Attribute__c and read on Contact and Household_Organization__c"
+        attachments: []
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA runs the pipeline against tucson_db_1 to generate the CSV"
+        attachments: []
+      - order: 5
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA upserts the CSV into tucsonbotanical--veevartd via Bulk API on the External_ID__c field"
+        attachments: []
+      - order: 6
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA re-runs the upsert with the same CSV (idempotency check)"
+        attachments: []
+      - order: 7
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the first upsert completes successfully with 0 hard errors"
+        attachments: []
+      - order: 8
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the total Constituent_Attribute__c row count in the sandbox after upsert equals the CSV row count (approximately 62,647)"
+        attachments: []
+      - order: 9
+        status: not-run
+        actual: ""
+        phase: then
+        text: "every record has exactly one of Contact__c or Household_Organization__c populated"
+        attachments: []
+      - order: 10
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the second upsert produces 0 new records (idempotent)"
+        attachments: []
+      - order: 11
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the LastModifiedDate of records changes on re-run only when a field value differs in the source"
+        attachments: []
+    notes: |
+      ## Playbook paso a paso para Scenario 4
+
+      ### Preparacion (una sola vez)
+
+      1. Clonar MigrationToolETL y posicionarse en la rama del PR:
+         ```bash
+         git clone git@github.com:Veevarts/MigrationToolETL.git
+         cd MigrationToolETL
+         git checkout story/attributes-query-IM-696
+         npm install
+         ```
+
+      2. Confirmar que `tucsonbotanical--veevartd` esta autenticado con `sf` CLI.
+         Si no lo esta:
+         ```bash
+         sf org login web --instance-url https://test.salesforce.com --alias veevartd
+         # Usa el username SA del sandbox tucsonbotanical--veevartd
+         sf org list --json | jq '.result.nonScratchOrgs[] | select(.alias=="veevartd")'
+         ```
+
+      3. Verificar que `Constituent_Attribute__c` existe en el sandbox y tiene los 15 fields:
+         ```bash
+         sf sobject describe --sobject Constituent_Attribute__c --target-org veevartd | jq '.fields[] | .name'
+         ```
+         Esperar al menos estos campos: Implementation_External_ID__c, Contact__c,
+         Household_Organization__c, Attribute_Name__c, Attribute_Group__c, Data_Type__c,
+         Value_Text__c, Value_Boolean__c, Value_Date__c, Value_Number__c, Comment__c,
+         Start_Date__c, End_Date__c, Source_Category_ID__c, Source_Code_Table__c.
+
+      ### Paso 1 - Generar el CSV desde Tucson
+
+      4. Configurar variables de entorno con las credenciales del MS SQL tunnel (mismas
+         que usa safesql). Ejemplo (no copiar passwords al transcript):
+         ```bash
+         export DB_HOST=localhost
+         export DB_PORT=41433
+         export DB_NAME=tucson_db_1
+         export DB_USER=SA
+         export DB_PASS=$(security find-generic-password -s safesql-tucson -a SA -w)
+         ```
+         (Si la pipeline usa otra forma de configurar la conexion, ajustar.)
+
+      5. Abrir el tunnel SSH al bastion en otra terminal:
+         ```bash
+         ssh -L 41433:ec2-44-193-204-43.compute-1.amazonaws.com:1433 \
+             -i ~/Downloads/veev-ue1-prod-bastion-ssh-key \
+             ec2-user@bastion.internal.veevartapp.com
+         ```
+
+      6. Correr el extractor de constituent-attribute:
+         ```bash
+         npm run extract -- --object constituent-attribute
+         # o el comando equivalente del PR — revisar README o package.json scripts
+         ```
+         Output esperado: archivo `constituent_attributes_<timestamp>.csv` con ~62,647
+         filas + header. Tiempo aproximado: < 1 min.
+
+      7. Validar el CSV antes de upsert:
+         ```bash
+         wc -l constituent_attributes_*.csv   # Esperado: 62,648 (header + 62,647 rows)
+         head -1 constituent_attributes_*.csv  # Esperado: 15 columnas, incluyendo Implementation_External_ID__c
+         awk -F',' 'NR>1 {print NF}' constituent_attributes_*.csv | sort -u
+         # Esperado: 15 (todas las rows tienen 15 columnas)
+         ```
+
+         **Evidencia a capturar:** el `wc -l` output, el `head -1` output, y el `awk`
+         count. Guardar en `attachments/tr-035-tc-20/s4-csv-validation.txt`.
+
+      ### Paso 2 - Upsert al sandbox via Bulk API
+
+      8. Hacer upsert sobre Implementation_External_ID__c:
+         ```bash
+         sf data import bulk \
+             --sobject Constituent_Attribute__c \
+             --file constituent_attributes_<ts>.csv \
+             --external-id Implementation_External_ID__c \
+             --target-org veevartd \
+             --wait 30
+         ```
+         Output esperado: `Job ID: 750dz...`, `Processed: 62647`, `Failed: 0`.
+
+         **Evidencia a capturar:** screenshot del output del comando + Job ID.
+
+      9. Confirmar el total via SOQL:
+         ```bash
+         sf data query \
+             --query "SELECT COUNT(Id) FROM Constituent_Attribute__c" \
+             --target-org veevartd
+         ```
+         Esperado: 62647.
+
+      10. Confirmar routing en el sandbox:
+          ```bash
+          sf data query --target-org veevartd --query "
+            SELECT
+              COUNT_DISTINCT(Id) FILTER (WHERE Contact__c != null AND Household_Organization__c = null) AS contact_only,
+              COUNT_DISTINCT(Id) FILTER (WHERE Contact__c = null AND Household_Organization__c != null) AS household_only,
+              COUNT_DISTINCT(Id) FILTER (WHERE Contact__c != null AND Household_Organization__c != null) AS both,
+              COUNT_DISTINCT(Id) FILTER (WHERE Contact__c = null AND Household_Organization__c = null) AS neither
+            FROM Constituent_Attribute__c"
+          ```
+          (Nota: SOQL no soporta FILTER, usar queries separados o subqueries.)
+
+          Esperado: contact_only ≈ 23,301, household_only ≈ 205, both ≈ 39,141, neither = 0.
+
+      ### Paso 3 - Re-run para idempotency
+
+      11. Correr el mismo upsert otra vez:
+          ```bash
+          sf data import bulk \
+              --sobject Constituent_Attribute__c \
+              --file constituent_attributes_<ts>.csv \
+              --external-id Implementation_External_ID__c \
+              --target-org veevartd \
+              --wait 30
+          ```
+          Output esperado: `Processed: 62647`, `Failed: 0`, `Created: 0`, `Updated: 0`
+          o similar (Bulk API API v2 reporta los counts diferente; el punto clave es
+          que ningun record nuevo se creo y que solo se updateo rows con campos
+          modificados).
+
+      12. Confirmar count sigue igual:
+          ```bash
+          sf data query --query "SELECT COUNT(Id) FROM Constituent_Attribute__c" --target-org veevartd
+          ```
+          Esperado: 62647 (sin cambios).
+
+      ### Cuando termines
+
+      - Captura: outputs de los comandos, Job IDs, screenshots de los resultados SOQL.
+      - Adjunta los archivos a `attachments/tr-035-tc-20/` (e.g., s4-csv-validation.txt,
+        s4-upsert-job1.txt, s4-soql-count.txt, s4-upsert-job2-idempotent.txt).
+      - Edita este testrun y reemplaza los `status: not-run` y `actual: ""` con los
+        valores observados; sube los attachments al step "when" correspondiente.
+    attachments: []
+    defects: []
+
+  - testCaseId: 70f1712c-5765-4ea0-bd48-33f2f2b5e6d3
+    testCaseKey: TC-20
+    testCaseTitle: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+    testCaseFilePath: test-cases/IM-696/IM-696-TC-20-altru-constituent-attribute-migration.testcase.yml
+    scenarioTitle: "Per-constituent traceability in the sandbox"
+    scenarioIndex: 4
+    status: not-run
+    executedAt: ""
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "a representative Tucson Constituent has at least one attribute in each of the 5 DATATYPECODE classes (Text, Number, Date, Code Table, Yes/No)"
+        attachments: []
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "QA has the Constituent's Altru LOOKUPID and the corresponding Contact ID in tucsonbotanical--veevartd"
+        attachments: []
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA opens that Contact in Salesforce"
+        attachments: []
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA cross-checks each related list row against the Altru source attribute"
+        attachments: []
+      - order: 5
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the Constituent_Attribute__c related list shows one row per Altru attribute for that constituent"
+        attachments: []
+      - order: 6
+        status: not-run
+        actual: ""
+        phase: then
+        text: "each row displays the correct Data_Type__c label"
+        attachments: []
+      - order: 7
+        status: not-run
+        actual: ""
+        phase: then
+        text: "each row shows the value populated in the matching typed slot (Value_Text__c for Text/Code Table, Value_Boolean__c for Yes/No, Value_Date__c for Date, Value_Number__c for Number/Currency)"
+        attachments: []
+      - order: 8
+        status: not-run
+        actual: ""
+        phase: then
+        text: "the values match what is shown in Altru for that constituent's attribute records"
+        attachments: []
+      - order: 9
+        status: not-run
+        actual: ""
+        phase: then
+        text: "no extra Constituent_Attribute__c records appear that do not correspond to an Altru attribute"
+        attachments: []
+    notes: |
+      ## Playbook paso a paso para Scenario 5
+
+      Prerequisito: Scenario 4 PASS (los 62,647 records cargados en el sandbox).
+
+      ### Paso 1 - Elegir un Constituent representativo
+
+      1. Buscar un Constituent en Tucson que tenga al menos un attribute en cada
+         DATATYPECODE (Text, Number, Date, Code Table, Yes/No). Usar safesql:
+         ```sql
+         SET NOCOUNT ON;
+
+         WITH cat_active AS (
+             SELECT DISTINCT ac.ID AS catid, ac.DATATYPECODE
+             FROM ATTRIBUTECATEGORY ac
+             JOIN TABLECATALOG tc ON tc.ID = ac.TABLECATALOGID
+             JOIN INFORMATION_SCHEMA.TABLES it ON it.TABLE_NAME = tc.TABLENAME
+             JOIN INFORMATION_SCHEMA.COLUMNS ic ON ic.TABLE_NAME = tc.TABLENAME AND ic.COLUMN_NAME = 'CONSTITUENTID'
+             WHERE ac.FLAGGEDFORDELETE = 0 AND ac.FLAGGEDFOREXTENSIONREMOVAL = 0
+         )
+         -- Aqui hacer un cross-tabulation por constituent + datatype y buscar
+         -- aquellos con 5 distinct datatypes. Manual; los nombres de tablas
+         -- ATTRIBUTE<UUID> hay que descubrirlos desde cat_active.
+         ```
+         Mas pragmatico: en lugar de hacer el cross-tabulation desde la fuente,
+         hacerlo en Salesforce despues de la carga (paso 2 abajo).
+
+      2. **Alternativa mas rapida** (recomendada): query Salesforce despues del
+         upsert (Scenario 4 ya hecho):
+         ```bash
+         sf data query --target-org veevartd --query "
+           SELECT
+             Contact__c,
+             COUNT_DISTINCT(Data_Type__c) datatypes
+           FROM Constituent_Attribute__c
+           WHERE Contact__c != null
+           GROUP BY Contact__c
+           HAVING COUNT_DISTINCT(Data_Type__c) >= 5
+           ORDER BY datatypes DESC
+           LIMIT 5"
+         ```
+         (Si SOQL no soporta HAVING COUNT_DISTINCT, hacer en multiple steps o
+         consultar directamente con Tooling API / SOQL Builder.)
+
+      3. Tomar el primer Contact__c que tenga 5 distinct Data_Type__c. Anotar:
+         - Contact__c ID en Salesforce (15-18 char)
+         - Su LOOKUPID en Altru (via SOQL: `SELECT LookUp_ID__c FROM Contact WHERE Id = '...'`)
+
+         **Evidencia a capturar:** screenshot del SOQL output con el Contact__c
+         elegido.
+
+      ### Paso 2 - Inspeccionar la related list en Salesforce
+
+      4. Abrir Salesforce en el browser con la URL:
+         ```
+         https://tucsonbotanical--veevartd.sandbox.lightning.force.com/lightning/r/Contact/<contact-id>/view
+         ```
+         (Ajustar el subdomain si es distinto.)
+
+      5. Bajar a la related list `Constituent_Attribute__c` (puede tener label
+         "Constituent Attributes" o similar).
+
+         **Evidencia a capturar:** screenshot completo de la related list mostrando
+         las filas. Adjuntar como `s5-related-list-screenshot.png`.
+
+      6. Para cada row visible, anotar:
+         - Attribute_Name__c
+         - Data_Type__c
+         - Value_Text__c (siempre populado)
+         - Value_Boolean__c / Value_Date__c / Value_Number__c (segun aplique)
+
+      ### Paso 3 - Cross-check contra Altru
+
+      7. Obtener la lista de attributes que tiene este constituent en Altru. Usar
+         safesql con un wrapper similar al de Scenario 2 pero filtrado por el
+         CONSTITUENTID especifico:
+         ```sql
+         -- Pegar el wrapper de s2-s3-contract-and-resilience.sql.
+         -- En vez de "SELECT * FROM #out" al final, hacer:
+         SELECT
+             Attribute_Name__c,
+             Attribute_Group__c,
+             Data_Type__c,
+             Value_Text__c,
+             Value_Boolean__c,
+             Value_Date__c,
+             Value_Number__c
+         FROM #out
+         WHERE Implementation_External_ID__c IS NOT NULL
+           -- Replace con el UUID del CONSTITUENT que matches al Contact elegido:
+           -- AND constituent_id = '<altru-constituent-uuid>'
+         ORDER BY Data_Type__c, Attribute_Name__c;
+         ```
+         (Nota: hay que joinear contra CONSTITUENT.LOOKUPID = '<lookupid>' para
+         filtrar.)
+
+         **Evidencia a capturar:** safesql JSON output. Adjuntar como
+         `s5-altru-attributes.json`.
+
+      8. Comparar fila por fila:
+         - Mismo Attribute_Name__c presente en ambos lados?
+         - Mismo Data_Type__c?
+         - Mismo valor en el slot tipado correspondiente?
+         - Mismo Value_Text__c representational?
+
+         Si todo matchea -> Scenario 5 PASS.
+         Si hay discrepancia -> documentar como finding (cualquier row presente
+         en Altru pero ausente en Salesforce, o viceversa, o con valor distinto).
+
+      ### Cuando termines
+
+      - Captura: screenshots, SOQL outputs, safesql JSON output, listado de
+        attributes desde la UI de Altru si tienes acceso.
+      - Adjunta a `attachments/tr-035-tc-20/` (s5-related-list-screenshot.png,
+        s5-altru-attributes.json, s5-comparison-notes.md).
+      - Edita este testrun y reemplaza los `status: not-run` y `actual: ""` con
+        los valores observados.
+    attachments: []
+    defects: []
+
+summary:
+  total: 5
+  passed: 3
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 2
+  passRate: 60
+
+history:
+  - action: "started"
+    timestamp: "2026-05-19T19:24:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Scenarios 1, 2, 3 data review iniciado y ejecutado contra Tucson via safesql"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-19T19:50:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-19T19:50:00.000Z"
