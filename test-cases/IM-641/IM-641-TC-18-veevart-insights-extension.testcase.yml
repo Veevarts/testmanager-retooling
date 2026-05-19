@@ -1,0 +1,362 @@
+schemaVersion: "1.0"
+
+id: "ef637892-9e5e-492d-b1ad-76fae9eee1bb"
+key: "TC-18"
+title: "Veevart Insights Chrome extension end-to-end through Salesforce Hosted MCP"
+description: |
+  Cobertura QA del demo Veevart Insights bajo la historia padre IM-641
+  (Configure Salesforce Hosted MCP with Veevart context for ChatGPT/Claude)
+  y la historia relacionada IM-697 (Build Veevart Insights Chrome Extension
+  Demo). Sub-task QA asociada: IM-732. Fuente normativa: Notion
+  "Veevart Insights - Product, Setup & QA Testing Guide" (May 15, 2026).
+
+  Alcance: conexion OAuth + PKCE desde el side panel de Chrome al Salesforce
+  Hosted MCP custom server respaldado por el paquete VeevartMCPContext,
+  carga de contexto y tools, respuestas analiticas, creacion de reportes a
+  traves de tools empaquetados, modo guiado opt-in, negativos de permisos,
+  regresiones de UX y resiliencia del service worker.
+
+  Riesgos abiertos al momento de creacion (2026-05-15):
+  - Bloqueante de paquete: la version 0.20.0.1 de VeevartMCPContext solo
+    expone Get Veevart MCP Context como @InvocableMethod. Sin
+    VeevartMCPAnalyticsTool, VeevartMCPSOQLTool, VeevartMCPCreateReportTool,
+    VeevartMCPReportRecipesTool, VeevartMCPReportTypesTool y los de
+    contexto secundarios anotados, los Scenarios 4, 5, 6, 7 quedan
+    bloqueados y los negativos 9, 10 no son ejecutables. Escalar al owner
+    del repo VeevartMCPContext para release con @InvocableMethod en cada
+    tool.
+  - Gaps de documentacion confirmados: aud del JWT Bearer es
+    https://test.salesforce.com (sandbox) o https://login.salesforce.com
+    (prod), NO el My Domain como dice la guia; el campo Scope del External
+    Credential debe ir vacio en JWT Bearer; openid != id en la UI de
+    OAuth scopes; el Hosted MCP custom server no se provisiona via paquete
+    y debe crearse manualmente por org; el unpacked load en Chrome puede
+    cambiar el extension ID y rompe el callback URL del ECA, preferir
+    Chrome Web Store unlisted beta.
+  - Setup org subscriber requerido: Certificate VeevartMCPJWT, External
+    Client App Veevart MCP API con Authorization Code + PKCE y JWT Bearer
+    Flow, External Credential VeevartMCPExternalCredential con JWT Bearer,
+    Named Principal VeevartMCPIntegrationPrincipal, Named Credential
+    VeevartMCPAPI con namespace allowlist veevart, Permission Set
+    unmanaged Veevart_MCP_API_Callout_Access (deploy SFDX), Hosted MCP
+    server custom name VeevartMCP.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "El paquete VeevartMCPContext esta instalado en la org objetivo (verificar version, mininimo la que exponga los tools como @InvocableMethod)"
+  - "Permission set managed 'Veevart MCP Context User' asignado al tester user"
+  - "Permission set unmanaged 'Veevart_MCP_API_Callout_Access' creado en la org (deploy SFDX) y asignado al JWT subject user"
+  - "Hosted MCP custom server 'VeevartMCP' creado en Setup > MCP Servers > Salesforce Servers, Active, con los Apex tools del paquete agregados"
+  - "External Client App 'Veevart MCP API' configurado con: Authorization Code + PKCE habilitado, JWT Bearer Flow habilitado con certificate VeevartMCPJWT cargado, Issue JWT-based access tokens for named users habilitado, Require Secret for Web Server / Refresh Token desmarcados, scopes 'openid' + 'api' + 'refresh_token' + 'mcp_api' seleccionados, Permitted Users = 'Admin approved users are pre-authorized' con 'Veevart MCP API Callout Access' pre-autorizado, IP Relaxation = 'Relax IP restrictions'"
+  - "External Credential 'VeevartMCPExternalCredential' configurado con OAuth 2.0 + JWT Bearer Flow, Scope vacio, Identity Provider URL '<my-domain>/services/oauth2/token', Signing Certificate VeevartMCPJWT (RS256), JWT Expiration 120s, Common Claims con iss = consumer key del ECA (raw), sub = username del JWT subject user (raw), aud = 'https://test.salesforce.com' para sandbox o 'https://login.salesforce.com' para prod (raw, sin comillas adicionales)"
+  - "Named Credential 'VeevartMCPAPI' apunta al My Domain del org, External Credential vinculado, Generate Authorization Header habilitado, Allowed Namespaces 'veevart' configurado"
+  - "Callout read-only previo OK: anonymous Apex 'GET callout:VeevartMCPAPI/services/data/v65.0/limits' retorna HTTP 200"
+  - "El tester user tiene permiso de crear reportes y acceso a la carpeta default seleccionada en la extension; tambien tiene FLS de los objetos y report types involucrados"
+  - "Chrome extension Veevart Insights Agent BETA cargado (Chrome Web Store unlisted beta recomendado o unpacked desde dist/) con un extension ID estable"
+  - "El callback URL del External Client App coincide exactamente con 'https://<chrome-extension-id>.chromiumapp.org/salesforce-oauth' del extension ID cargado"
+  - "Settings de la extension configurados: Connection con Consumer Key del ECA, Salesforce Login URL = 'https://test.salesforce.com' para sandbox o 'https://login.salesforce.com' para prod, scopes 'mcp_api api refresh_token openid', MCP Server URL apuntando al server correcto segun el tipo de org, MCP Context Tool Name 'veevart__VeevartMCPContextTool', BYO AI provider key (Anthropic u OpenAI) cargada"
+  - "Default report save folder seleccionado en Settings > General cuando se vayan a probar saved reports"
+  - "Multiple chats habilitado si se va a probar Scenario 12; deshabilitado en otro caso"
+  - "Service worker activo y IndexedDB disponible para chat history local"
+
+format: gherkin
+scenarios:
+  - title: "Smoke: side panel opens, settings auto-save, and Salesforce OAuth connects via External Client App"
+    tags:
+      - ac-1
+      - happy-path
+      - smoke
+      - oauth
+      - pkce
+    given:
+      - "the Veevart Insights extension is loaded in Chrome and the user has not connected Salesforce"
+    when:
+      - "the user opens the side panel"
+      - "the user opens Settings"
+      - "the user changes any setting and observes no Save button"
+      - "the user clicks Connect Salesforce and completes External Client App OAuth + PKCE"
+    then:
+      - "the header only shows the Salesforce connection state without duplicating the chat loading copy"
+      - "Settings opens with the General tab first"
+      - "the changed setting persists without a Save button"
+      - "the connection state moves to Connected and the org or instance URL is displayed in the side panel"
+      - "no Salesforce browser cookies or sid cookies are read by the extension"
+      - "the connection survives reopening the side panel"
+
+  - title: "Identity prompt as Veevart domain expert"
+    tags:
+      - ac-1
+      - happy-path
+      - identity
+      - context
+    given:
+      - "the extension is connected to Salesforce"
+      - "a BYO AI provider key is configured"
+      - "the Hosted MCP server has Get Veevart MCP Context registered"
+    when:
+      - "the user sends the prompt: What can you do?"
+    then:
+      - "the assistant introduces itself as Veevart Insights, a Veevart expert for museums and cultural institutions"
+      - "the answer references Veevart domains such as memberships, fundraising, ticketing, exhibitions, POS, rentals or collections"
+      - "the answer is not framed as a generic Salesforce chatbot"
+      - "no Salesforce report is created during the prompt"
+
+  - title: "Setup validation prompts load context and tool definitions from Hosted MCP"
+    tags:
+      - ac-1
+      - happy-path
+      - context
+      - org-capabilities
+    given:
+      - "the extension is connected to a QA org with VeevartMCPContext installed"
+      - "the Hosted MCP server exposes the expected packaged tools"
+    when:
+      - "the user sends: What Veevart capabilities are available in this org?"
+      - "the user sends: List the Veevart context topics you can use."
+      - "the user sends: Which report tools are available in this org?"
+      - "the user sends: What report types can be used for membership reporting?"
+    then:
+      - "each answer is derived from Salesforce Hosted MCP context and the packaged tools registered on the server"
+      - "any tool that is missing from the server is surfaced as a setup blocker instead of being silently ignored"
+      - "debug logs do not expose access tokens, OAuth codes or donor PII"
+
+  - title: "Analytics question returns a bounded summary, not a saved report"
+    tags:
+      - ac-1
+      - happy-path
+      - analytics
+      - soql
+    given:
+      - "the extension is connected"
+      - "the org exposes VeevartMCPAnalyticsTool and VeevartMCPSOQLTool through the Hosted MCP server"
+    when:
+      - "the user sends: Who are the top 5 people I should try to reactivate as potential donors?"
+    then:
+      - "the assistant answers using Veevart context, org capabilities or focused aggregate SOQL"
+      - "no Salesforce report is created"
+      - "empty results are described as no matching records for the filters used, not as a connection failure unless an actual auth or permission error was returned by the tool"
+      - "caveats are added when Salesforce limits cannot express the exact analysis requested"
+
+  - title: "Membership revenue saved report is created and the link is returned in chat (primary regression)"
+    tags:
+      - ac-1
+      - happy-path
+      - saved-report
+      - regression-primary
+      - report-creation
+    given:
+      - "the extension is connected"
+      - "the default report folder is selected in Settings > General"
+      - "the user is authorized for report creation in that folder"
+    when:
+      - "the user sends: Give me a report showing membership revenue by month over the last two years."
+    then:
+      - "the assistant identifies saved-report intent and plans with Veevart report recipes"
+      - "the assistant validates membership and report type availability when needed"
+      - "VeevartMCPCreateReportTool is called and returns successfully"
+      - "the created report opens automatically in Salesforce"
+      - "the final chat response includes the exact report link as a clickable URL"
+      - "the report is saved in the default folder, grouped by close month and summarizing revenue amount"
+      - "when a chart is part of the request, the response reports chart persistence or warning details"
+      - "no claim of 'Report Created Successfully' appears unless the create tool actually succeeded"
+
+  - title: "Additional saved-report prompts create reports through packaged tools"
+    tags:
+      - ac-1
+      - happy-path
+      - saved-report
+      - report-creation
+    given:
+      - "the extension is connected with report creation auth ready"
+    when:
+      - "the user sends: Create a report of won opportunities from the last 90 days grouped by close month."
+      - "the user sends: Create a donor reactivation prospects report showing lapsed donors with lifetime giving of 1000 or more."
+      - "the user sends: Show all members by 5-digit zip code as a report."
+      - "the user sends: Add or repair the chart on this existing report: <report id>"
+    then:
+      - "each prompt creates a saved report through VeevartMCPCreateReportTool"
+      - "each final response includes the exact Salesforce report link"
+      - "no business records are created, updated or deleted as a side effect of any of these prompts"
+
+  - title: "Guided manual fallback requires explicit user confirmation"
+    tags:
+      - ac-1
+      - happy-path
+      - guided-mode
+      - safety
+    given:
+      - "the extension is connected"
+      - "an existing report id is known"
+    when:
+      - "the user sends: Change the report column color to red."
+      - "MCP cannot modify the chart style for that report"
+    then:
+      - "the assistant offers guided manual steps and asks the user to confirm guided mode"
+      - "only after explicit confirmation does the extension show one step at a time with Done, Could not do it and Cancel controls"
+      - "the assistant does not jump directly to manual guided creation when MCP-safe paths were not attempted"
+
+  - title: "Negative: missing Veevart MCP Context User permission surfaces a clear setup blocker"
+    tags:
+      - ac-2
+      - negative
+      - permissions
+      - missing-doc
+    given:
+      - "the test user is missing the Veevart MCP Context User permission set"
+    when:
+      - "the user connects Salesforce and asks any Veevart Insights prompt"
+    then:
+      - "the assistant reports the missing permission as a setup blocker"
+      - "no fabricated report link is shown"
+      - "no manual report recreation is requested without an explicit fallback decision"
+
+  - title: "Negative: missing Veevart_MCP_API_Callout_Access blocks report creation cleanly"
+    tags:
+      - ac-2
+      - negative
+      - permissions
+      - report-creation
+    given:
+      - "the user lacks the Veevart_MCP_API_Callout_Access permission set"
+      - "the user is otherwise able to chat with the extension"
+    when:
+      - "the user sends a saved-report prompt that would otherwise create a report"
+    then:
+      - "VeevartMCPCreateReportTool returns a credential or permission error"
+      - "the assistant states the exact blocker in the chat"
+      - "the assistant never says 'Report Created Successfully'"
+      - "the assistant never returns an invented report link"
+
+  - title: "Negative: Named Credential missing veevart namespace allowlist blocks callout"
+    tags:
+      - ac-2
+      - negative
+      - named-credential
+      - namespace-allowlist
+    given:
+      - "the Named Credential VeevartMCPAPI does not include 'veevart' in Allowed Namespaces for Callouts"
+    when:
+      - "the user triggers a saved-report flow that depends on the packaged Apex callouts"
+    then:
+      - "the assistant surfaces the credential error referencing the Named Credential setup"
+      - "the assistant does not silently fall back to a fabricated success"
+      - "the troubleshooting suggests validating that 'GET callout:VeevartMCPAPI/services/data/v65.0/limits' returns 200"
+
+  - title: "Negative: mismatched Hosted MCP URL for org type returns auth error"
+    tags:
+      - ac-2
+      - negative
+      - mcp-url
+      - sandbox-vs-prod
+      - regression-evidence
+    given:
+      - "the connected org is a sandbox"
+      - "the configured Hosted MCP URL points to '/custom/' instead of '/sandbox/custom/'"
+    when:
+      - "the user sends any prompt that requires MCP context"
+    then:
+      - "the response surfaces HTTP 401 or Invalid token from MCP"
+      - "the user can fix the URL in Settings > Connection and reconnect to recover"
+      - "the extension does not reuse a stale connected state to fake success"
+
+  - title: "UX regression: prompt history recall and multi-chat isolation"
+    tags:
+      - ac-1
+      - regression
+      - ux
+      - composer
+      - indexeddb
+    given:
+      - "the user has sent multiple prompts in the active chat"
+      - "multiple chats are enabled in Settings"
+    when:
+      - "the user presses Arrow Up at the start of the composer input"
+      - "the user presses Arrow Down to navigate back"
+      - "the user creates a second chat, switches between chats and types a draft while disconnected, then reconnects"
+    then:
+      - "Arrow Up recalls previous prompts of the active chat newest-first"
+      - "Arrow Down returns toward the current draft"
+      - "switching between chats preserves each chat history isolated in IndexedDB"
+      - "the draft typed while disconnected is preserved after reconnect"
+
+  - title: "UX regression: header, loading copy and Settings auto-save"
+    tags:
+      - ac-1
+      - regression
+      - ux
+      - header
+      - settings
+    given:
+      - "the side panel is open"
+    when:
+      - "the user observes the header during chat loading"
+      - "the user changes any field in Settings"
+      - "the user completes a successful report creation flow"
+    then:
+      - "the loading copy 'Loading Veevart Insights Agent' only appears in the chat area, never duplicated in the header"
+      - "every setting in Settings auto-saves on change with no Save buttons present"
+      - "every successful report creation final answer includes a clickable Salesforce report link"
+
+  - title: "Resilience: side panel close/open, cancel, service worker restart and token expiry"
+    tags:
+      - ac-1
+      - regression
+      - resilience
+      - service-worker
+      - reconnect
+    given:
+      - "the side panel is open while an MCP preflight is in progress"
+    when:
+      - "the user closes and reopens the side panel during the preflight"
+      - "the user cancels a slow answer"
+      - "a report creation flow is triggered after a service worker restart"
+      - "the Salesforce OAuth token expires while the user is mid-session"
+    then:
+      - "closing and reopening the side panel preserves the connection state and current chat"
+      - "canceling a slow answer clears the loading state and no stale late MCP response overwrites the current chat"
+      - "the post-restart report creation flow completes successfully or surfaces a clear recoverable error"
+      - "after token expiry the user can reconnect without reinstalling the extension and resume the workflow"
+
+  - title: "Safety guarantees on the tool surface and log sanitization"
+    tags:
+      - ac-2
+      - safety
+      - tool-surface
+      - log-sanitization
+    given:
+      - "the assistant only has access to packaged Veevart MCP tools registered on the Hosted MCP server"
+    when:
+      - "the user runs through any of the prompts in this test case"
+    then:
+      - "the model cannot invoke direct local Salesforce SOQL, schema, report REST, dashboard or user lookup tools outside the packaged ones"
+      - "no business record create, update or delete is performed by any tool"
+      - "access tokens, OAuth codes, private keys and donor PII are never logged"
+      - "report creation only occurs when the user explicitly asks for a saved report"
+
+tags:
+  - im-641
+  - im-732
+  - im-697
+  - veevart-insights
+  - chrome-extension
+  - salesforce
+  - hosted-mcp
+  - oauth-pkce
+  - jwt-bearer
+  - named-credential
+  - external-credential
+  - report-creation
+  - tucson-botanical
+  - sandbox-trainings
+
+estimatedDuration: 180
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-15T22:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-15T22:50:00Z"
+  version: 1
