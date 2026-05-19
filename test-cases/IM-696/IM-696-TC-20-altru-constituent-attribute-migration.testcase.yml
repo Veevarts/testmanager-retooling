@@ -1,0 +1,178 @@
+schemaVersion: "1.0"
+
+id: "70f1712c-5765-4ea0-bd48-33f2f2b5e6d3"
+key: "TC-20"
+title: "Altru constituent attribute migration: dynamic query, routing, typed slots and sandbox upsert (Tucson)"
+description: |
+  Cobertura QA de IM-696 (sub-task IM-763) bajo el epic IM-70 Altru
+  Queries. Valida el output del nuevo query dinamico `attributes.sql` +
+  extractor + pipeline + target object `Constituent_Attribute__c` del
+  PR 109 en MigrationToolETL.
+
+  Es una slice ETL completamente nueva: descubre categorias en runtime
+  (UNION ALL via sp_executesql), normaliza valores heterogeneos en 4
+  typed slots, y rutea cada fila a Contact__c xor Household_Organization__c.
+
+  Dos vias de validacion complementarias:
+  - Via 1: data review (safesql contra tucson_db_1) para los 3 primeros
+    scenarios — universe parity, per-row contract, catalog resilience.
+  - Via 2: functional sandbox (tucsonbotanical--veevartd) para los 2
+    ultimos scenarios — upsert end-to-end y traceabilidad por
+    constituent.
+
+  Aggregates Tucson confirmados (2026-05-19 via safesql):
+  - Total ATTRIBUTECATEGORY: 180
+  - No flaggeadas: 180
+  - Active constituent-scoped: 103
+  - Orphans: 0
+  - No constituent-scoped (filtradas): 77
+  - Approx active rows: 69,563
+  - Distribucion DATATYPECODE: 47 Text / 1 Number / 8 Date / 27 Code Table / 20 Yes/No
+  - Expected emitted (per PR baseline): 62,647
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/109
+  - Branch: story/attributes-query-IM-696
+  - PR validation safesql sweeps: SHA 49ea61f1389b (inventory), SHA b58ac472c40c (canonical filter)
+  - PR sandbox upsert: tucsonbotanical--veevartd via Bulk API job 750dz00000DBl4CAAT (62,647 rows en 46s, 0 errores)
+
+  Severidad de la story: Medium.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre ATTRIBUTECATEGORY, TABLECATALOG, CODETABLECATALOG, ATTRIBUTEGROUPCODE, CONSTITUENT, CONSTITUENTHOUSEHOLD, las 103 tablas ATTRIBUTE<UUID> activas, INFORMATION_SCHEMA.TABLES, INFORMATION_SCHEMA.COLUMNS, sys.tables, sys.partitions"
+  - "Branch story/attributes-query-IM-696 checked-out localmente para correr attributes.sql; wrap requerido con DECLARE @hasDateFilterFrom BIT = 0; DECLARE @dateFilterFrom DATE = NULL; (idem para From/To) para full extraction"
+  - "tucsonbotanical--veevartd accesible via sf CLI con Constituent_Attribute__c deployado y 15 fields del contrato (Value_Text__c, Value_Boolean__c, Value_Date__c, Value_Number__c, Data_Type__c, Contact__c, Household_Organization__c, External_ID__c + metadata)"
+  - "QA puede correr SOQL via sf data query con read sobre los 15 fields y sobre Contact y Household_Organization__c"
+  - "Pipeline build del PR 109 ejecutable (npm install y npm run + parametros para target object CONSTITUENT_ATTRIBUTE)"
+  - "Bulk API enabled en el sandbox tucsonbotanical--veevartd"
+  - "Para Scenario 5: un Constituent representativo de Tucson identificado con LOOKUPID conocido que tenga al menos un attribute de cada DATATYPECODE (Text, Number, Date, Code Table, Yes/No)"
+
+format: gherkin
+scenarios:
+  - title: "Catalog universe parity against Tucson"
+    tags:
+      - data-review
+      - aggregate-parity
+      - catalog
+      - tucson
+    given:
+      - "safesql access to tucson_db_1 is configured"
+      - "the new attributes.sql discovery cursor filters by FLAGGEDFORDELETE = 0 AND FLAGGEDFOREXTENSIONREMOVAL = 0 AND CONSTITUENTID column present"
+    when:
+      - "QA runs catalog inventory aggregates against ATTRIBUTECATEGORY joined with TABLECATALOG and INFORMATION_SCHEMA"
+    then:
+      - "total_categories equals 180"
+      - "not_flagged equals 180 (Tucson has no flagged-for-delete categories in this snapshot)"
+      - "active_constituent_scoped equals 103"
+      - "active_orphans equals 0"
+      - "non_constituent_scoped (active with table but no CONSTITUENTID column) equals 77 (filtered out by the COLUMNS join)"
+      - "the DATATYPECODE distribution sums to 103 with 47 Text, 1 Number, 8 Date, 27 Code Table, 20 Yes/No"
+      - "approx_total_rows across the 103 active tables equals 69,563"
+      - "CODETABLECATALOG has column DBTABLENAME but not TABLENAME (gotcha pin)"
+
+  - title: "Per-row output contract: routing exclusive + typed slot + grain"
+    tags:
+      - data-review
+      - routing
+      - typed-slots
+      - grain
+    given:
+      - "safesql access is configured"
+      - "attributes.sql is wrapped with @hasDateFilterFrom = 0, @hasDateFilterTo = 0, @dateFilterFrom = NULL, @dateFilterTo = NULL to run a full extraction"
+    when:
+      - "QA runs the full query and aggregates the output by Data_Type__c and routing"
+    then:
+      - "total_emitted_rows is approximately 62,647 (PR baseline; matches the active universe minus rows routed to a non-eligible constituent, delta around 7,000)"
+      - "every emitted row has Contact__c populated XOR Household_Organization__c populated (count of rows with both populated equals 0 and count of rows with neither populated equals 0)"
+      - "count(distinct External_ID__c) equals count(*) (one emitted row per ATTRIBUTE<UUID>.ID, no duplicates)"
+      - "for every row with Data_Type__c = 'Yes/No', Value_Boolean__c is not null and Value_Date__c and Value_Number__c are null"
+      - "for every row with Data_Type__c in ('Number', 'Currency'), Value_Number__c is not null and Value_Date__c and Value_Boolean__c are null"
+      - "for every row with Data_Type__c = 'Date', Value_Date__c is not null and Value_Number__c and Value_Boolean__c are null"
+      - "for every row with Data_Type__c = 'Text', Value_Text__c is not null and the three other typed slots are null"
+      - "for every row with Data_Type__c = 'Code Table', Value_Text__c contains the resolved code description (or the raw code id when CODETABLECATALOG resolution is unavailable)"
+
+  - title: "Catalog resilience: flagged, orphan and non-constituent-scoped categories never produce emitted rows"
+    tags:
+      - data-review
+      - resilience
+      - negative
+    given:
+      - "Tucson currently has 0 orphan active categories and 0 flagged categories (per Scenario 1 baseline)"
+      - "77 non-constituent-scoped categories exist with a physical table but no CONSTITUENTID column"
+    when:
+      - "QA inspects the emitted output from attributes.sql (from Scenario 2)"
+    then:
+      - "no emitted row originates from a category with FLAGGEDFORDELETE = 1"
+      - "no emitted row originates from a category with FLAGGEDFOREXTENSIONREMOVAL = 1"
+      - "no emitted row originates from a category whose TABLECATALOG.TABLENAME is missing from INFORMATION_SCHEMA.TABLES"
+      - "no emitted row originates from a category whose physical table lacks a CONSTITUENTID column (the 77 non-constituent-scoped ones never appear)"
+      - "the CODETABLECATALOG joins resolve via DBTABLENAME (per sanity check from Scenario 1)"
+
+  - title: "Functional upsert end-to-end into tucsonbotanical--veevartd"
+    tags:
+      - functional
+      - sandbox-upsert
+      - tucsonbotanical-veevartd
+      - idempotency
+    given:
+      - "the PR 109 pipeline build is available locally (branch story/attributes-query-IM-696)"
+      - "tucsonbotanical--veevartd has Constituent_Attribute__c deployed with the 15-field contract"
+      - "the tester user has create/update permissions on Constituent_Attribute__c and read on Contact and Household_Organization__c"
+    when:
+      - "QA runs the pipeline against tucson_db_1 to generate the CSV"
+      - "QA upserts the CSV into tucsonbotanical--veevartd via Bulk API on the External_ID__c field"
+      - "QA re-runs the upsert with the same CSV (idempotency check)"
+    then:
+      - "the first upsert completes successfully with 0 hard errors"
+      - "the total Constituent_Attribute__c row count in the sandbox after upsert equals the CSV row count (approximately 62,647)"
+      - "every record has exactly one of Contact__c or Household_Organization__c populated"
+      - "the second upsert produces 0 new records (idempotent)"
+      - "the LastModifiedDate of records changes on re-run only when a field value differs in the source"
+
+  - title: "Per-constituent traceability in the sandbox"
+    tags:
+      - functional
+      - traceability
+      - regression-evidence
+      - tucsonbotanical-veevartd
+    given:
+      - "a representative Tucson Constituent has at least one attribute in each of the 5 DATATYPECODE classes (Text, Number, Date, Code Table, Yes/No)"
+      - "QA has the Constituent's Altru LOOKUPID and the corresponding Contact ID in tucsonbotanical--veevartd"
+    when:
+      - "QA opens the Contact in Salesforce and inspects the Constituent_Attribute__c related list"
+      - "QA cross-checks each related list row against the Altru source attribute"
+    then:
+      - "the related list shows one row per Altru attribute for that constituent"
+      - "each row displays the correct Data_Type__c label"
+      - "each row shows the value populated in the matching typed slot (Value_Text__c for Text/Code Table, Value_Boolean__c for Yes/No, Value_Date__c for Date, Value_Number__c for Number/Currency)"
+      - "the values match what is shown in Altru for that constituent's attribute records"
+      - "no extra Constituent_Attribute__c records appear that do not correspond to an Altru attribute"
+
+tags:
+  - im-696
+  - im-70
+  - im-763
+  - altru
+  - migration-tool-etl
+  - attributes-query
+  - constituent-attribute
+  - dynamic-sql
+  - tucson
+  - tucsonbotanical-veevartd
+  - data-review
+  - sandbox-upsert
+  - pr-109
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-19T19:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-19T19:30:00Z"
+  version: 1
