@@ -1,0 +1,320 @@
+schemaVersion: "1.0"
+
+id: "2cf225b4-4186-43e2-bba2-c76b02facc51"
+key: "TC-19"
+title: "Altru contact migration query reflects deceased and inactive constituents with full opt-out and household exclusion cascade"
+description: |
+  Cobertura QA de IM-626 (sub-task IM-734) bajo el epic IM-70 Altru
+  Queries. Foco: revision de datos sobre el output de los queries
+  actualizados (`contact.sql` + `CROSS APPLY ST`) tras PR 105 en
+  MigrationToolETL (`fix(contact): reflect altru deceased and inactive
+  status in veevart IM-626`).
+
+  Severidad de la story: 2 - Critical (Compliance, Financial Loss on
+  reports, Data Corruption).
+
+  El query nuevo:
+  - Re-keya npsp__Deceased__c a presencia de fila DECEASEDCONSTITUENT
+    (antes: parse de DECEASEDDATE; se perdian 333 deceased en Tucson).
+  - Mapea CONSTITUENT.ISINACTIVE a Inactive__c (antes: campo no migraba;
+    1,748 inactive ganados en Tucson).
+  - Agrega 3 household exclusion (Name, Formal_Greeting,
+    Informal_Greeting) solo para DECEASED.
+  - Cascadea HasOptedOutOfEmail / Do_not_mail__c / DoNotCall con OR
+    logico entre flag Altru y deceased-or-inactive.
+  - Agrega npsp__Do_Not_Contact__c con default = inactive-or-deceased
+    (sin fuente Altru).
+  - NO agrega HasOptedOutOfFax (excluido intencionalmente).
+
+  Bloqueo activo: el equipo de Implementations no puede subir el backup
+  nuevo de Tucson (al 2026-05-13), lo que limita parcialmente los
+  Scenarios 1, 2, 3, 4, 5 y 13 al snapshot anterior (`sha 2d5c71ce7d29`).
+  Sin nuevo backup no se cierra QA.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/105
+  - Branch: story/deceased-and-inactive-contacts-in-altru-not-IM-626
+  - Sandbox de upsert validado en PR: im696-tucson
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "QA tiene acceso al MS SQL de Altru Tucson via safesql tunnel"
+  - "Snapshot de Tucson disponible (sha 2d5c71ce7d29 o posterior); el backup nuevo de Tucson sigue pendiente de upload por parte de Implementations"
+  - "Permisos para ejecutar SELECT sobre CONSTITUENT, DECEASEDCONSTITUENT, CONSTITUENTSOLICITCODES y CONSTITUENTPHONE en Altru Tucson"
+  - "CSV del objeto contact generado por la rama story/deceased-and-inactive-contacts-in-altru-not-IM-626 contra el snapshot Tucson actual; volumen esperado ~100,259 filas"
+  - "Headers del CSV incluyen las 5 nuevas columnas: Inactive__c, npsp__Exclude_from_Household_Name__c, npsp__Exclude_from_Household_Formal_Greeting__c, npsp__Exclude_from_Household_Informal_Greeting__c, npsp__Do_Not_Contact__c"
+  - "Sandbox Salesforce destino im696-tucson (o equivalente con Contact.Inactive__c disponible en el schema)"
+  - "QA puede correr SOQL via sf data query con permisos read sobre npsp__Deceased__c, Inactive__c, los 3 household exclusion, HasOptedOutOfEmail, Do_not_mail__c, DoNotCall, HasOptedOutOfFax y npsp__Do_Not_Contact__c"
+  - "Mapeo Altru Lookup ID -> External_ID__c (u otro key field) documentado para el sandbox"
+  - "Altru Lookup IDs de regresion disponibles: 112009 (Mr. Alexander Hunter, DECEASED) y 8-10014788 (James Connolly, INACTIVE)"
+  - "QA tiene la lista de contactos previamente corregidos a mano en Veevart referenciada en la descripcion de IM-626 (opcional para Scenario 13; pedir al reporter si no la tiene)"
+  - "Herramientas locales disponibles para inspeccion CSV: xsv o awk + python pandas + wc"
+  - "Linea base previa documentada: deceased contacts en main = ~934, inactive contacts en main = 0, columnas del CSV en main conocidas para diff de headers en Scenario 10"
+
+format: gherkin
+scenarios:
+  - title: "Aggregate count parity: deceased contacts in CSV equal DECEASEDCONSTITUENT row count in Altru"
+    tags:
+      - ac-1
+      - data-review
+      - aggregate-count
+      - deceased
+      - regression-evidence
+    given:
+      - "the contact CSV produced by PR 105 against Tucson is available"
+      - "safesql access to the Tucson Altru database is configured"
+    when:
+      - "QA counts rows in the CSV where npsp__Deceased__c equals true"
+      - "QA runs a safesql aggregate counting distinct CONSTITUENT rows that have at least one DECEASEDCONSTITUENT child row"
+    then:
+      - "both counts match exactly (expected baseline approximately 1,267 deceased contacts in Tucson)"
+      - "the CSV deceased count is 333 higher than the previous main-branch baseline (regression evidence: pre-fix only ~934 were flagged)"
+      - "no CSV row has npsp__Deceased__c equal to true without a corresponding DECEASEDCONSTITUENT row in Altru"
+      - "the count of CSV rows equals the safesql distinct count (no duplicate external IDs)"
+
+  - title: "Aggregate count parity: inactive contacts in CSV equal CONSTITUENT.ISINACTIVE = 1 in Altru"
+    tags:
+      - ac-1
+      - data-review
+      - aggregate-count
+      - inactive
+    given:
+      - "the contact CSV produced by PR 105 against Tucson is available"
+    when:
+      - "QA counts rows in the CSV where Inactive__c equals true"
+      - "QA runs a safesql aggregate counting CONSTITUENT rows with ISINACTIVE = 1"
+    then:
+      - "both counts match exactly (expected baseline approximately 1,748 inactive contacts in Tucson)"
+      - "the previous main-branch baseline for Inactive__c was zero (the field was not migrated before PR 105)"
+      - "no CSV row has Inactive__c equal to true without ISINACTIVE = 1 in Altru"
+
+  - title: "Regression: Mr. Alexander Hunter (Altru Lookup 112009) is flagged deceased end-to-end"
+    tags:
+      - ac-1
+      - regression-evidence
+      - deceased
+      - tucson
+    given:
+      - "Mr. Alexander Hunter has Altru Lookup ID 112009 with a DECEASEDCONSTITUENT row"
+      - "the contact CSV from PR 105 has been generated against Tucson"
+      - "the CSV has been upserted into the im696-tucson sandbox"
+    when:
+      - "QA locates the CSV row corresponding to Lookup 112009"
+      - "QA runs a SOQL query against the Contact in Salesforce using the same external id"
+    then:
+      - "the CSV row has npsp__Deceased__c = true"
+      - "the CSV row has npsp__Exclude_from_Household_Name__c = true"
+      - "the CSV row has npsp__Exclude_from_Household_Formal_Greeting__c = true"
+      - "the CSV row has npsp__Exclude_from_Household_Informal_Greeting__c = true"
+      - "the CSV row has HasOptedOutOfEmail = true"
+      - "the CSV row has Do_not_mail__c = true"
+      - "the CSV row has DoNotCall = true"
+      - "the CSV row has npsp__Do_Not_Contact__c = true"
+      - "the same boolean contract is reflected on the Salesforce Contact after the upsert completes"
+
+  - title: "Regression: James Connolly (Altru Lookup 8-10014788) is flagged inactive without deceased semantics"
+    tags:
+      - ac-1
+      - regression-evidence
+      - inactive
+      - tucson
+    given:
+      - "James Connolly has Altru Lookup ID 8-10014788 with CONSTITUENT.ISINACTIVE = 1 and no DECEASEDCONSTITUENT row"
+      - "the contact CSV from PR 105 has been generated against Tucson"
+      - "the CSV has been upserted into the im696-tucson sandbox"
+    when:
+      - "QA locates the CSV row corresponding to Lookup 8-10014788"
+      - "QA runs a SOQL query against the Contact in Salesforce using the same external id"
+    then:
+      - "the CSV row has Inactive__c = true"
+      - "the CSV row has npsp__Deceased__c = false"
+      - "the CSV row has HasOptedOutOfEmail = true"
+      - "the CSV row has Do_not_mail__c = true"
+      - "the CSV row has DoNotCall = true"
+      - "the CSV row has npsp__Do_Not_Contact__c = true"
+      - "the CSV row has npsp__Exclude_from_Household_Name__c = false"
+      - "the CSV row has npsp__Exclude_from_Household_Formal_Greeting__c = false"
+      - "the CSV row has npsp__Exclude_from_Household_Informal_Greeting__c = false"
+      - "the same boolean contract is reflected on the Salesforce Contact after the upsert completes"
+
+  - title: "Four-scenario field matrix matches the PR validation expectations (36/36 assertions)"
+    tags:
+      - ac-1
+      - happy-path
+      - field-matrix
+      - sandbox-im696-tucson
+    given:
+      - "the CSV contains representative rows for: deceased with DECEASEDDATE, deceased without DECEASEDDATE, inactive only, and active control"
+      - "QA can identify each scenario row by Altru Lookup ID"
+    when:
+      - "QA inspects each scenario row in the CSV and the matching Contact in Salesforce after upsert"
+    then:
+      - "deceased rows (with or without DECEASEDDATE) have npsp__Deceased__c = true, all three household exclusion fields = true, the three opt-out fields = true, and npsp__Do_Not_Contact__c = true"
+      - "inactive-only rows have Inactive__c = true, the three opt-out fields = true, npsp__Do_Not_Contact__c = true, npsp__Deceased__c = false, and the three household exclusion fields = false"
+      - "active control rows have npsp__Deceased__c = false, Inactive__c = false, the three household exclusion fields = false, npsp__Do_Not_Contact__c = false, and the three opt-out fields equal the original Altru opt-out value (not forced to true)"
+      - "the upsert in im696-tucson reports 36 of 36 field assertions passing across the 4 scenario rows"
+      - "no scenario row violates the per-status field contract"
+
+  - title: "Opt-out cascade preserves Altru opt-outs via OR semantics (no overwrite to false)"
+    tags:
+      - ac-1
+      - cascade
+      - opt-out
+      - or-logic
+    given:
+      - "a CSV row corresponds to an active Altru constituent with EMAILOPTOUT = 1"
+      - "another CSV row corresponds to a deceased constituent with EMAILOPTOUT = 0 in Altru"
+      - "a third CSV row corresponds to an inactive-only constituent with DONOTMAIL = 1 in Altru"
+    when:
+      - "QA inspects HasOptedOutOfEmail, Do_not_mail__c and DoNotCall on each row"
+    then:
+      - "the active-but-opted-out row has HasOptedOutOfEmail = true (Altru opt-out preserved)"
+      - "the deceased-but-not-opted-out-in-Altru row has HasOptedOutOfEmail = true (cascaded by deceased state)"
+      - "the inactive-only-with-Altru-donotmail row has Do_not_mail__c = true (both sources concur)"
+      - "no row has HasOptedOutOfEmail, Do_not_mail__c or DoNotCall flipped to false where Altru had the matching opt-out flag set to 1"
+      - "the OR semantics hold across all three cascade fields against their respective Altru sources"
+
+  - title: "Household exclusion fires only for deceased, not for inactive-only"
+    tags:
+      - ac-1
+      - household-exclusion
+      - deceased-exclusive
+    given:
+      - "a CSV row corresponds to an inactive-only constituent (ISINACTIVE = 1, no DECEASEDCONSTITUENT row)"
+      - "another CSV row corresponds to a deceased constituent (with DECEASEDCONSTITUENT row regardless of ISINACTIVE)"
+    when:
+      - "QA inspects the three household exclusion fields on each row"
+      - "QA aggregates across the full CSV to find any row where any household exclusion field is true while npsp__Deceased__c is false"
+    then:
+      - "the inactive-only row has all three household exclusion fields = false"
+      - "the deceased row has all three household exclusion fields = true"
+      - "the aggregate query returns zero rows (no household exclusion ever fires without deceased)"
+
+  - title: "npsp__Do_Not_Contact__c follows the deceased-or-inactive macro"
+    tags:
+      - ac-1
+      - do-not-contact
+      - macro-derived
+    given:
+      - "the CSV contains rows for deceased, inactive-only and active constituents"
+    when:
+      - "QA inspects npsp__Do_Not_Contact__c on each category"
+      - "QA cross-checks against Altru to confirm there is no equivalent column in source"
+    then:
+      - "deceased rows have npsp__Do_Not_Contact__c = true"
+      - "inactive-only rows have npsp__Do_Not_Contact__c = true"
+      - "active rows have npsp__Do_Not_Contact__c = false"
+      - "no Altru column directly maps to this boolean; the contract is fully derived from the IsInactiveOrDeceased macro in contact.sql"
+
+  - title: "Negative: active constituents are not marked deceased nor inactive"
+    tags:
+      - ac-2
+      - negative
+      - active-baseline
+    given:
+      - "a sample of at least 10 active Altru constituents (no DECEASEDCONSTITUENT row, ISINACTIVE = 0)"
+    when:
+      - "QA inspects their CSV rows"
+    then:
+      - "npsp__Deceased__c is false on every sample row"
+      - "Inactive__c is false on every sample row"
+      - "all three household exclusion fields are false on every sample row"
+      - "npsp__Do_Not_Contact__c is false on every sample row"
+      - "HasOptedOutOfEmail, Do_not_mail__c and DoNotCall reflect the raw Altru opt-out values (not forced to true)"
+
+  - title: "CSV header contract: 5 new columns added, existing columns preserved, HasOptedOutOfFax excluded"
+    tags:
+      - ac-2
+      - csv-contract
+      - headers
+      - missing-doc
+    given:
+      - "the contact CSV produced by PR 105"
+      - "the contact CSV header from the previous main branch is available for diff"
+    when:
+      - "QA inspects the CSV header row"
+      - "QA diffs the headers against the previous main baseline"
+    then:
+      - "the headers include exactly these 5 new columns: Inactive__c, npsp__Exclude_from_Household_Name__c, npsp__Exclude_from_Household_Formal_Greeting__c, npsp__Exclude_from_Household_Informal_Greeting__c, npsp__Do_Not_Contact__c"
+      - "all headers from the previous main branch are still present (no removed columns)"
+      - "HasOptedOutOfFax is NOT in the new columns (intentional exclusion in PR 105; cascade applies via npsp__Do_Not_Contact__c only)"
+      - "the total CSV column count equals previous count + 5"
+
+  - title: "Negative: target sandbox missing Contact.Inactive__c fails the upsert with a clear error"
+    tags:
+      - ac-2
+      - negative
+      - tenant-compatibility
+      - schema-gating
+    given:
+      - "a Salesforce target sandbox where Contact.Inactive__c does not exist in the schema"
+    when:
+      - "QA attempts the upsert of the new CSV against that sandbox"
+    then:
+      - "the upsert fails with INVALID_FIELD or equivalent error referencing Inactive__c"
+      - "the failure is detected before bulk deployment progresses"
+      - "QA documents the tenant as gated until Inactive__c is added to the Contact schema"
+      - "no partial migration writes occur on the target Contacts as a side effect of the failed upsert"
+
+  - title: "Idempotency: re-running the migration produces identical flag values"
+    tags:
+      - ac-2
+      - idempotency
+      - re-run
+    given:
+      - "an initial run of the PR 105 pipeline against Tucson completed successfully"
+      - "the resulting CSV was upserted into im696-tucson"
+    when:
+      - "QA triggers a second run with the same source snapshot and upserts again"
+    then:
+      - "every Contact in the target sandbox retains the same values for npsp__Deceased__c, Inactive__c, the three household exclusion fields, the three opt-out fields and npsp__Do_Not_Contact__c"
+      - "no field flips between true and false between runs"
+      - "no Contact gains a Last Modified Date jump on these fields beyond the expected upsert noise"
+
+  - title: "Cross-check against manually-corrected cases referenced in IM-626"
+    tags:
+      - ac-2
+      - manual-fix-preservation
+      - data-drift
+      - missing-doc
+    given:
+      - "IM-626 reports that other deceased or inactive cases beyond Mr. Alexander Hunter and James Connolly were manually updated in Veevart before PR 105"
+      - "QA has the list of Salesforce Contact IDs corresponding to those manual fixes"
+    when:
+      - "QA runs the new pipeline against the current Tucson snapshot"
+      - "QA queries those Contacts in im696-tucson after the upsert"
+    then:
+      - "their npsp__Deceased__c, Inactive__c, household exclusion and opt-out fields match what the manual fixes had set"
+      - "no manual fix is silently regressed by the migration"
+      - "any discrepancy is reported as a separate finding (not closed as part of IM-626) since it likely indicates Altru source drift, not a pipeline bug"
+
+tags:
+  - im-626
+  - im-70
+  - im-734
+  - altru
+  - migration-tool-etl
+  - contact-query
+  - deceased
+  - inactive
+  - household-exclusion
+  - opt-out-cascade
+  - npsp
+  - tucson
+  - sandbox-im696-tucson
+  - data-review
+  - query-regression
+  - pr-105
+  - cross-apply-st
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-19T15:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-19T15:30:00Z"
+  version: 1
