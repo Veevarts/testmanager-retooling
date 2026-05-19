@@ -1,0 +1,69 @@
+============================================================
+First upsert (job 750W400000ZoJrKIAV)
+============================================================
+sf data upsert bulk
+  --sobject Constituent_Attribute__c
+  --file constituent-attributes-filtered.csv
+  --external-id Implementation_External_ID__c
+  --line-ending CRLF
+  --target-org veevartd
+
+Result:
+  Status: JobComplete
+  Processed records: 163
+  Successful records: 163
+  Failed records: 0
+  Elapsed: 9.23s
+
+============================================================
+Idempotency re-run (job 750W400000ZoJktIAF)
+============================================================
+Same command, same CSV.
+
+Result:
+  Status: JobComplete
+  Processed records: 163
+  Successful records: 163
+  Failed records: 0
+  Elapsed: 8.96s
+
+============================================================
+SOQL verification (post-upsert sandbox state)
+============================================================
+SELECT COUNT(Id) total FROM Constituent_Attribute__c
+  -> 163 (matches CSV input, idempotent across both runs)
+
+SELECT COUNT(Id) FROM Constituent_Attribute__c
+  WHERE Contact__c != null AND Household_Organization__c = null
+  -> 83 (contact_only)
+
+SELECT COUNT(Id) FROM Constituent_Attribute__c
+  WHERE Contact__c = null AND Household_Organization__c != null
+  -> 52 (household_only)
+
+SELECT COUNT(Id) FROM Constituent_Attribute__c
+  WHERE Contact__c != null AND Household_Organization__c != null
+  -> 28 (both)
+
+SELECT COUNT(Id) FROM Constituent_Attribute__c
+  WHERE Contact__c = null AND Household_Organization__c = null
+  -> 0 (neither)
+
+Distribution matches the Python filter output exactly:
+  contact_only_hit:   83
+  household_only_hit: 52
+  both_hit:           28
+  emitted total:     163
+
+============================================================
+Scope note
+============================================================
+The PR-claimed baseline of 62,647 rows requires the full Tucson
+Constituent migration to have been performed in the target sandbox.
+The trainings sandbox only has 27 Contacts + 15 Accounts with
+Auctifera__Implementation_External_ID__c populated, so the upsert
+covers a representative SUBSET of 163 attribute rows whose Constituent
+already exists in the sandbox. The full 62,647-row contract is
+validated by data review in Scenarios 1-3; the sandbox upsert verifies
+the end-to-end mechanics (Bulk API + lookup-by-external-id resolution +
+typed slot persistence + idempotency) against real Constituents.
