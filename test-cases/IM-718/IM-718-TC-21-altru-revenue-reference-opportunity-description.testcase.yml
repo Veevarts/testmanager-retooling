@@ -1,0 +1,130 @@
+schemaVersion: "1.0"
+
+id: "0e616a60-cc13-48d4-be16-f5a4467c930c"
+key: "TC-21"
+title: "Altru Revenue Reference exposed as Opportunity Description in donation/pledge/membership queries"
+description: |
+  Cobertura QA de IM-718 (sub-task IM-764) bajo el epic IM-70 Altru
+  Queries. Valida el PR 108 en MigrationToolETL que agrega
+  `REVENUE_EXT.REFERENCE` a las queries de Opportunity (donation,
+  pledge, membership), exponiendolo como `Opportunity.Description`
+  en Salesforce.
+
+  Dos vias de validacion:
+  - Data review (safesql tucson_db_1): aggregate coverage parity y
+    per-row contract donation/pledge.
+  - Functional sandbox (veevartd): upsert end-to-end con Description
+    visible en la UI de Opportunity individual + idempotency.
+
+  Aggregates Tucson confirmados (2026-05-19):
+  - REVENUE_EXT total: 641,668 / con REFERENCE: 621,843 (96.9%)
+  - REFERENCE max length: 255 chars (Description capacity: 32,000)
+  - Pledge FT: 679 total / 652 con REFERENCE (96.0% — exact PR match)
+  - Donation candidates: 55,089 / 45,424 con REFERENCE (~82.5%)
+  - Membership: 120,927 total / 91,558 con Description via COALESCE
+  - Membership BOTH populated different: 6,858 (exact PR baseline)
+
+  Sandbox upsert:
+  - 33 Opportunities con vnfp__Implementation_External_ID__c populado
+  - Upsert via Bulk API: 33/33 success, 0 errors (Job 750W400000Zojp0IAB)
+  - 20 con Description populated (REFERENCE no vacio en Altru), 13 NULL
+    (matching gift claim rows sin REFERENCE source)
+  - Idempotency confirmada con re-run (Job 750W400000ZovYQIAZ)
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/108
+  - Branch: story/revenue-reference-field-missing-from-IM-718
+  - Sandbox: veevartd (= tucsonbotanical--trainings)
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre REVENUE_EXT, FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, MEMBERSHIPTRANSACTION en Tucson"
+  - "sf CLI auth contra veevartd (tucsonbotanical--trainings.sandbox.my.salesforce.com)"
+  - "Sandbox tiene al menos algunas Opportunities con vnfp__Implementation_External_ID__c populado (33 disponibles en trainings)"
+  - "User QA con permisos update sobre Opportunity y read sobre vnfp__Implementation_External_ID__c"
+  - "Bulk API 2.0 enabled en el sandbox"
+
+format: gherkin
+scenarios:
+  - title: "Aggregate coverage parity contra Tucson baseline"
+    tags:
+      - data-review
+      - aggregate-parity
+      - revenue-reference
+      - tucson
+    given:
+      - "safesql access to tucson_db_1 is configured"
+      - "the PR 108 queries (donation_transaction.sql, donation_pledges.sql, membership_transactions.sql) add re.REFERENCE to the SELECT list as Opportunity.Description"
+    when:
+      - "QA runs aggregate coverage queries on REVENUE_EXT and the three opportunity universes"
+    then:
+      - "REVENUE_EXT total equals 641,668 and REFERENCE non-empty equals 621,843 (96.9% coverage)"
+      - "REVENUE_EXT max REFERENCE length equals 255 (no truncation risk vs Description 32K capacity)"
+      - "Pledge FT total equals 679 with 652 having REFERENCE (96.0%, exact PR baseline match)"
+      - "Donation candidate count equals approximately 55,089 with 45,424 having REFERENCE (~82.5%, within 0.3% of PR baseline)"
+      - "MEMBERSHIPTRANSACTION total equals 120,927 with 91,558 receiving Description via COALESCE(COMMENTS, REFERENCE)"
+      - "6,858 membership transactions have BOTH COMMENTS and REFERENCE populated with different text (exact PR baseline; these preserve COMMENTS as primary Description and surface REFERENCE on the new Revenue_Reference__c field)"
+
+  - title: "Donation/Pledge per-row contract: REFERENCE maps 1:1 to Description"
+    tags:
+      - data-review
+      - per-row-contract
+      - direct-mapping
+    given:
+      - "a sample of 5 pledge FT rows with non-empty REFERENCE in REVENUE_EXT joined by FT.ID"
+    when:
+      - "QA queries the joined output (FT + REVENUE_EXT for that FT.ID)"
+    then:
+      - "each row's Description equals the source REFERENCE verbatim, no transformation, no truncation"
+      - "sample values observed include 'Trade spots on AZPM for 6 Gala tickets', 'Sponsorship of Crescent Moon', 'Maintenance of the B&O Pavilion', 'LightsUp! sponsorship notification received 9/26/25 Originally applied for Hort...'"
+      - "the same direct-mapping contract holds for donation_transaction.sql (re.REFERENCE AS Description, no COALESCE)"
+      - "rows where REVENUE_EXT.REFERENCE is NULL emit Description = NULL (no empty-string fabrication)"
+
+  - title: "Functional upsert: Description visible in the sandbox Opportunity UI"
+    tags:
+      - functional
+      - sandbox-upsert
+      - visual-evidence
+      - veevartd
+    given:
+      - "33 Opportunities exist in tucsonbotanical--trainings with vnfp__Implementation_External_ID__c populated and Description = null"
+      - "for each of those 33 sandbox Opportunities, safesql resolves the corresponding REVENUE_EXT.REFERENCE from Tucson"
+    when:
+      - "QA generates a CSV mapping vnfp__Implementation_External_ID__c to Description = REFERENCE"
+      - "QA upserts the CSV via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF)"
+      - "QA re-runs the same upsert (idempotency check)"
+      - "QA opens individual Opportunity records in the Salesforce UI to verify Description is visible"
+    then:
+      - "the first upsert completes with 33 successful, 0 failed"
+      - "20 of the 33 Opportunities show Description populated with the verbatim REFERENCE text (e.g., 'Zen Garden Gallery and Meditation Room IMO Peggy Hitchcock', 'LightsUp! Presenting Sponsor 2023 from Stonewall Fund at CFSA', 'Glasser fund charitable fund through Fidelity 20200902')"
+      - "the remaining 13 Opportunities (all 'Matching gift claim' type in Altru) have Description = NULL because their source REFERENCE is empty"
+      - "the Description field is visible in the Opportunity Lightning page Details section without requiring custom layout changes"
+      - "the second upsert produces 33 successful records and 0 net new (idempotent)"
+
+tags:
+  - im-718
+  - im-70
+  - im-764
+  - altru
+  - migration-tool-etl
+  - revenue-reference
+  - opportunity
+  - description
+  - tucson
+  - veevartd
+  - data-review
+  - sandbox-upsert
+  - pr-108
+
+estimatedDuration: 45
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-19T22:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-19T22:00:00Z"
+  version: 1
