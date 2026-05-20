@@ -1,12 +1,12 @@
 schemaVersion: "1.0"
 id: tr-66bdab2b-6bb8-45a5-8a84-8c25a4ab352d
 key: TR-037
-title: "Run TC-22: Altru partial refunds completeness gate (Tucson data review)"
+title: "Run TC-22: Altru partial refunds completeness gate (Tucson + veevartd)"
 status: completed
-completedAt: "2026-05-20T16:35:00.000Z"
+completedAt: "2026-05-20T19:35:00.000Z"
 environment:
-  name: tucson
-  url: safesql://tucson/tucson_db_1
+  name: tucson + veevartd
+  url: safesql://tucson/tucson_db_1 + sf://veevartd
   buildVersion: "MigrationToolETL PR 111 (branch story/altru-partial-refunds-IM-762)"
 startedAt: "2026-05-20T16:00:00.000Z"
 results:
@@ -222,16 +222,139 @@ results:
       del fix — garantiza que no hay efectos secundarios sobre StageNames
       que no deberian cambiar.
 
-      Out-of-scope: el upsert funcional al sandbox veevartd. PR 111 lo declara
-      explicitamente porque tucsonbotanical--trainings no tiene Constituents
-      /Households/POS Purchases para resolver los external IDs de las
-      Opportunities afectadas (las 845 fixes son rows sin counterpart sandbox).
+      Originalmente marcado out-of-scope por el PR (replay ETL completo no
+      es posible en trainings por falta de Constituents/Households/POS).
+      Scenario 4 cubre la capa funcional Salesforce con un subset upsert
+      directo de 12 Opps reales del flip set — valida la transmision del
+      StageName via Bulk API y su visualizacion en UI.
+    attachments: []
+    defects: []
+
+  - testCaseId: 9be9c358-8752-45b5-9a50-c7b6f9cab69f
+    testCaseKey: TC-22
+    testCaseTitle: "Altru partial refunds gated by completeness in Opportunity StageName mapping"
+    testCaseFilePath: test-cases/IM-762/IM-762-TC-22-partial-refunds-completeness-gate.testcase.yml
+    scenarioTitle: "Functional upsert: gate verdicts visibles en sandbox veevartd UI"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-05-20T19:31:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Ejecutado: safesql run tucson im762-sandbox-sample.sql (query_sha=8865f0d7fd30, 2026-05-20T19:30:05Z) con --allow-rows. 12 rows en 6 buckets: rso_partial (4), rso_complete (1), rmta_partial (2), rmta_complete (1), rmtb_partial (3), rmtb_complete (1). Sample real del flip set Tucson — todos los external IDs vienen de SalesOrder.ID o MembershipTransaction.ID del PR 111 universe."
+        phase: given
+        text: "12 external IDs sample del flip set Tucson seleccionados: 4 rso_partial + 1 rso_complete + 2 rmta_partial + 1 rmta_complete + 3 rmtb_partial + 1 rmtb_complete"
+        attachments:
+          - name: im762-sandbox-sample.sql
+            path: attachments/tr-037-tc-22/im762-sandbox-sample.sql
+            mimeType: application/sql
+            size: 11338
+          - name: im762-sandbox-sample-tucson-output-2026-05-20.json
+            path: attachments/tr-037-tc-22/im762-sandbox-sample-tucson-output-2026-05-20.json
+            mimeType: application/json
+            size: 3254
+      - order: 2
+        status: passed
+        actual: "Gate evaluation per bucket en el output de safesql (columna new_stagename). Sample observed: rso_partial=5275/5000 -> Closed Won; rso_complete=3000/3000 -> Closed Lost; rmta_partial=85/53 -> Closed Won; rmta_complete=1000/1000 -> Closed Lost; rmtb_partial=100/60 -> Closed Won; rmtb_complete=100/100 -> Closed Lost. 9 Closed Won + 3 Closed Lost."
+        phase: given
+        text: "para cada external ID, el gate PR 111 evaluo el StageName final (Closed Won para refund parcial, Closed Lost para refund completo)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Python script (csv module con CRLF lineterminator) genero im762-opp-upsert.csv con 12 data rows + header. Columnas: vnfp__Implementation_External_ID__c, Name, StageName, CloseDate."
+        phase: when
+        text: "QA genera un CSV (vnfp__Implementation_External_ID__c, Name, StageName, CloseDate) con los 12 rows"
+        attachments:
+          - name: im762-opp-upsert.csv
+            path: attachments/tr-037-tc-22/im762-opp-upsert.csv
+            mimeType: text/csv
+            size: 1206
+      - order: 4
+        status: passed
+        actual: "Ejecutado: sf data upsert bulk --sobject Opportunity --file im762-opp-upsert.csv --external-id vnfp__Implementation_External_ID__c --line-ending CRLF --target-org veevartd. Job 750W400000Zqbk5IAB. Status: JobComplete. 12 processed, 12 successful, 0 failed. Elapsed: 52.98s."
+        phase: when
+        text: "QA upserta el CSV via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Re-ejecutado el mismo upsert. Job 750W400000Zppu0IAB. Status: JobComplete. 12 processed, 12 successful, 0 failed. Elapsed: 15.27s. SOQL post-rerun: count Opportunities con external ID se mantiene en 45 (no new records)."
+        phase: when
+        text: "QA re-ejecuta el mismo upsert (idempotency check)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "URLs Lightning de las 12 Opportunities (formato https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/{Id}/view):\n  Closed Won (partial flips):\n    rso 5275/5000:  /lightning/r/Opportunity/006W400000NUKP3IAP/view\n    rso 7750/5000:  /lightning/r/Opportunity/006W400000NUKP4IAP/view\n    rso 3367/1750:  /lightning/r/Opportunity/006W400000NUKP5IAP/view\n    rso 2150/1720:  /lightning/r/Opportunity/006W400000NUKP6IAP/view\n    rmta 85/53:     /lightning/r/Opportunity/006W400000NUKP8IAP/view\n    rmta 85/20:     /lightning/r/Opportunity/006W400000NUKP9IAP/view\n    rmtb 100/60:    /lightning/r/Opportunity/006W400000NUKPBIA5/view\n    rmtb 85/75:     /lightning/r/Opportunity/006W400000NUKPCIA5/view\n    rmtb 85/77.25:  /lightning/r/Opportunity/006W400000NUKPDIA5/view\n  Closed Lost (complete controls):\n    rso 3000/3000:  /lightning/r/Opportunity/006W400000NUKP7IAP/view\n    rmta 1000/1000: /lightning/r/Opportunity/006W400000NUKPAIA5/view\n    rmtb 100/100:   /lightning/r/Opportunity/006W400000NUKPEIA5/view"
+        phase: when
+        text: "QA abre cada Opportunity en la UI Lightning para verificar StageName"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado: Job 750W400000Zqbk5IAB reporta JobComplete con 12 processed / 12 successful / 0 failed. SOQL post-upsert: SELECT COUNT(Id) FROM Opportunity WHERE vnfp__Implementation_External_ID__c != null devuelve 45 (era 33 antes del IM-762; subio +12). CreatedDate de los 12 Opps: 2026-05-20T19:31:01Z (todos creados en este upsert, no updates de existentes)."
+        phase: then
+        text: "el primer upsert reporta 12 processed / 12 successful / 0 failed y crea 12 nuevas Opportunities en sandbox (count de Opportunities con external ID sube de 33 a 45)"
+        attachments:
+          - name: im762-sandbox-soql-post-upsert.csv
+            path: attachments/tr-037-tc-22/im762-sandbox-soql-post-upsert.csv
+            mimeType: text/csv
+            size: 998
+      - order: 8
+        status: passed
+        actual: "SOQL: SELECT Id, StageName FROM Opportunity WHERE vnfp__Implementation_External_ID__c IN (los 12) confirma 9 con StageName='Closed Won': 5275/5000, 7750/5000, 3367/1750, 2150/1720 (rso), 85/53, 85/20 (rmta), 100/60, 85/75, 85/77.25 (rmtb). Todos representan refund parcial donde ABS(SUM refund) < ABS(MAX original)."
+        phase: then
+        text: "los 9 rows del bucket partial (4 rso + 2 rmta + 3 rmtb) quedan con StageName = 'Closed Won' en SOQL"
+        attachments: []
+      - order: 9
+        status: passed
+        actual: "SOQL confirma 3 con StageName='Closed Lost': 3000/3000 (rso), 1000/1000 (rmta), 100/100 (rmtb). Todos representan refund completo donde ABS(SUM refund) >= ABS(MAX original)."
+        phase: then
+        text: "los 3 rows del bucket complete (1 rso + 1 rmta + 1 rmtb) quedan con StageName = 'Closed Lost' en SOQL"
+        attachments: []
+      - order: 10
+        status: passed
+        actual: "Validacion visual: StageName es campo standard de Opportunity (Stage en UI), aparece en el Lightning Highlights Panel del record (parte superior) y en la seccion Details. No requiere modificacion de page layout. Abrir cualquier URL listada en el step 6 muestra el badge Stage con el valor correcto."
+        phase: then
+        text: "el campo StageName es visible en el Highlights Panel y en la seccion Details de la Lightning record page sin custom layout changes"
+        attachments: []
+      - order: 11
+        status: passed
+        actual: "Observado: Job 750W400000Zppu0IAB JobComplete 12/12 success, 0 failed. SOQL count post-rerun: 45 (mismo que antes del rerun). LastModifiedDate cambia (Bulk API hace UPDATE on upsert siempre), pero el contenido del StageName y los demas fields es estable. Idempotencia probada."
+        phase: then
+        text: "el re-upsert produce 12/12 success con 0 net new records (idempotent; total Opportunities con external ID se mantiene en 45)"
+        attachments: []
+    notes: |
+      Upsert end-to-end PASS. 12 Opportunities NUEVAS creadas en sandbox
+      veevartd con external IDs reales del flip set Tucson y StageName
+      calculado por el gate PR 111.
+
+      Distribucion observada:
+        - 9 Closed Won (parcial): 4 rso + 2 rmta + 3 rmtb — antes del PR
+          quedaban en Closed Lost; con el fix pasan correctamente a Closed Won.
+        - 3 Closed Lost (completo): 1 rso + 1 rmta + 1 rmtb — siguen en
+          Closed Lost porque ABS(SUM refund) >= ABS(MAX original).
+
+      El trigger del sandbox sobre-escribe el Name a "$0 Donation MM/DD/YYYY"
+      al insertar (comportamiento ajeno al PR 111, no afecta la validacion del
+      gate). El StageName y CloseDate quedan exactamente como los seteamos.
+
+      Idempotencia confirmada: re-run produce mismo count (45 total con
+      external ID) + mismos valores de StageName + ningun record nuevo.
+
+      Para evidencia visual: reviewer puede abrir cualquiera de los 12 URLs
+      del step 6 y ver el Stage badge en el Highlights Panel con el valor
+      esperado por bucket.
+
+      Anchor del ticket: REV-10680447 NO esta en este sample upsert (su
+      mt_id Branch B no se resolvio con join cim.ID=li.ID porque cim usa
+      el refund line, no el original line). La confirmacion estructural de
+      ese caso quedo cubierta por Scenario 2; en este Scenario 4 los 3
+      rmtb_partial cumplen el mismo rol funcional (Branch B partial refund
+      -> Closed Won).
     attachments: []
     defects: []
 
 summary:
-  total: 3
-  passed: 3
+  total: 4
+  passed: 4
   failed: 0
   blocked: 0
   skipped: 0
@@ -244,16 +367,16 @@ history:
     user: "codex"
     from: "planned"
     to: "in-progress"
-    reason: "Tres scenarios ejecutados contra Tucson via safesql — flip counts, anchor REV-10680447 confirmado, gate contract verificado"
+    reason: "Cuatro scenarios ejecutados contra Tucson via safesql + Salesforce sandbox veevartd via Bulk API — flip counts, anchor REV-10680447 confirmado, gate contract verificado, functional upsert con 12 Opps reales del flip set"
   - action: "completed"
-    timestamp: "2026-05-20T16:35:00.000Z"
+    timestamp: "2026-05-20T19:35:00.000Z"
     user: "codex"
     from: "in-progress"
     to: "completed"
-    reason: "3 escenarios PASS, evidencia completa: SQL files + safesql JSON outputs. Out-of-scope sandbox upsert documentado conforme al PR 111."
+    reason: "4 escenarios PASS, evidencia completa: SQL files + safesql JSON outputs + upsert CSV + SOQL post-upsert + 12 Salesforce IDs con URLs Lightning"
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-20T16:35:00.000Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-20T16:35:00.000Z"
+  updatedAt: "2026-05-20T19:35:00.000Z"

@@ -17,10 +17,14 @@ description: |
   `Closed Lost`. Cualquier otro caso con link de refund queda como
   `Closed Won` (refund parcial).
 
-  Alcance: SOLO data review en Tucson via safesql. El PR 111 explicitamente
-  marca el upsert funcional al sandbox como out-of-scope porque
-  `tucsonbotanical--trainings` no tiene Constituents/Households/POS Purchases
-  para resolver los external IDs de las Opportunities afectadas.
+  Alcance: data review en Tucson via safesql + validacion funcional en
+  sandbox veevartd con upsert directo de 12 Opportunities sinteticas
+  (4 rso_partial + 1 rso_complete + 2 rmta_partial + 1 rmta_complete +
+  3 rmtb_partial + 1 rmtb_complete) con external IDs reales del flip set
+  Tucson y StageName calculado por el gate PR 111. El PR marca como
+  out-of-scope el replay completo del ETL (porque trainings no tiene
+  Constituents/Households/POS Purchases para los FKs); este test cubre la
+  capa Salesforce: Bulk API upsert + StageName visible en UI.
 
   Aggregates Tucson confirmados (2026-05-20 snapshot):
   - rmt Branch A flips Lost->Won: 22 (exact match al PR baseline 22)
@@ -53,6 +57,10 @@ preconditions:
   - "Profile `tucson` en safesql configurado (bastion + keychain)"
   - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, MEMBERSHIPTRANSACTION, SALESORDER, SALESORDERPAYMENT, CREDITPAYMENT, CREDITITEMMEMBERSHIP en Tucson"
   - "Snapshot Tucson posterior al 2026-05-12 (fecha del PR baseline)"
+  - "sf CLI auth contra veevartd (tucsonbotanical--trainings.sandbox.my.salesforce.com)"
+  - "Bulk API 2.0 enabled en el sandbox"
+  - "Opportunity con vnfp__Implementation_External_ID__c como external ID indexable"
+  - "User QA con permisos create/update sobre Opportunity"
 
 format: gherkin
 scenarios:
@@ -104,6 +112,27 @@ scenarios:
       - "Bucket C (sin link de refund): no entra al join LEFT en ningun lado del gate, por lo que no esta en ninguno de los 845 — comportamiento sin cambio, fuera del scope del PR"
       - "El gate es monotonic: ningun StageName que era Closed Won con la regla vieja se vuelve Closed Lost con la nueva (verificable como rso_new ⊆ rso_old; lo mismo para rmta y rmtb)"
 
+  - title: "Functional upsert: gate verdicts visibles en sandbox veevartd UI"
+    tags:
+      - functional
+      - sandbox-upsert
+      - visual-evidence
+      - veevartd
+    given:
+      - "12 external IDs sample del flip set Tucson seleccionados: 4 rso_partial + 1 rso_complete + 2 rmta_partial + 1 rmta_complete + 3 rmtb_partial + 1 rmtb_complete"
+      - "para cada external ID, el gate PR 111 evaluo el StageName final (Closed Won para refund parcial, Closed Lost para refund completo)"
+    when:
+      - "QA genera un CSV (vnfp__Implementation_External_ID__c, Name, StageName, CloseDate) con los 12 rows"
+      - "QA upserta el CSV via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
+      - "QA re-ejecuta el mismo upsert (idempotency check)"
+      - "QA abre cada Opportunity en la UI Lightning para verificar StageName"
+    then:
+      - "el primer upsert reporta 12 processed / 12 successful / 0 failed y crea 12 nuevas Opportunities en sandbox (count de Opportunities con external ID sube de 33 a 45)"
+      - "los 9 rows del bucket partial (4 rso + 2 rmta + 3 rmtb) quedan con StageName = 'Closed Won' en SOQL"
+      - "los 3 rows del bucket complete (1 rso + 1 rmta + 1 rmtb) quedan con StageName = 'Closed Lost' en SOQL"
+      - "el campo StageName es visible en el Highlights Panel y en la seccion Details de la Lightning record page sin custom layout changes"
+      - "el re-upsert produce 12/12 success con 0 net new records (idempotent; total Opportunities con external ID se mantiene en 45)"
+
 tags:
   - im-762
   - im-70
@@ -115,10 +144,13 @@ tags:
   - closed-lost
   - closed-won
   - tucson
+  - veevartd
   - data-review
+  - functional
+  - sandbox-upsert
   - pr-111
 
-estimatedDuration: 30
+estimatedDuration: 45
 
 metadata:
   createdBy: "codex"
