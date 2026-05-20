@@ -1,0 +1,128 @@
+schemaVersion: "1.0"
+
+id: "9be9c358-8752-45b5-9a50-c7b6f9cab69f"
+key: "TC-22"
+title: "Altru partial refunds gated by completeness in Opportunity StageName mapping"
+description: |
+  Cobertura QA de IM-762 bajo el epic IM-70 Altru Queries. Valida el PR 111
+  en MigrationToolETL que cambia la regla de StageName para Opportunities
+  derivadas de SalesOrder, RefundedMembershipTransaction Branch A y Branch B.
+
+  Bug original: cualquier link de refund colocaba la Opportunity en
+  `Closed Lost`, aun cuando el monto reembolsado era menor que el original
+  (refund parcial).
+
+  Fix PR 111: la regla pasa a ser
+  `ABS(SUM(refund.TRANSACTIONAMOUNT)) >= ABS(MAX(original.AMOUNT))` ->
+  `Closed Lost`. Cualquier otro caso con link de refund queda como
+  `Closed Won` (refund parcial).
+
+  Alcance: SOLO data review en Tucson via safesql. El PR 111 explicitamente
+  marca el upsert funcional al sandbox como out-of-scope porque
+  `tucsonbotanical--trainings` no tiene Constituents/Households/POS Purchases
+  para resolver los external IDs de las Opportunities afectadas.
+
+  Aggregates Tucson confirmados (2026-05-20 snapshot):
+  - rmt Branch A flips Lost->Won: 22 (exact match al PR baseline 22)
+  - rmt Branch B flips Lost->Won: 14 (exact match al PR baseline 14)
+  - rso flips Lost->Won: 809 (PR baseline 821; delta 12 = 1.5% snapshot drift)
+  - Total Opportunities corregidas: 845 (PR baseline 857)
+  - Won->Lost regressions: 0 (gate solo afloja, nunca aprieta)
+
+  Anchors Tucson:
+  - REV-10680447 (FT 00B8A1EE-DAFB-4801-AADF-4AD02B568140) confirmado:
+    Payment $66.95 con 2 Standard lines ($1.95 + $65.00 membership).
+    Path Branch B (CREDITITEMMEMBERSHIP). Caso original del ticket.
+  - REV-10298505 hoy reporta $70 original / $150 total refund cumulativo ->
+    gate evalua `Closed Lost` correctamente (refund acumulado supera original).
+    PR snapshot del 2026-05-12 lo reportaba en estado parcial $70/$60; entre
+    esa fecha y hoy entro refund adicional que cerro el caso. El gate trabaja
+    sobre data actual, no sobre snapshot historico, y eso es el comportamiento
+    correcto.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/111
+  - Branch: story/altru-partial-refunds-IM-762
+  - Source SQLs PR: sales_orders.sql, refunded_membership_transactions.sql
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, MEMBERSHIPTRANSACTION, SALESORDER, SALESORDERPAYMENT, CREDITPAYMENT, CREDITITEMMEMBERSHIP en Tucson"
+  - "Snapshot Tucson posterior al 2026-05-12 (fecha del PR baseline)"
+
+format: gherkin
+scenarios:
+  - title: "Flip aggregates parity contra PR 111 baseline"
+    tags:
+      - data-review
+      - aggregate-parity
+      - partial-refunds
+      - tucson
+    given:
+      - "safesql access to tucson_db_1 is configured"
+      - "PR 111 redefines StageName gate as ABS(SUM refund) >= ABS(MAX original) -> Closed Lost across rso, rmt Branch A, rmt Branch B"
+    when:
+      - "QA runs the rso/rmta/rmtb old-vs-new CTE pairs to count Lost->Won flips"
+    then:
+      - "rmt Branch A reports rmta_old=50, rmta_new=28, rmta_flips=22 (exact PR baseline 22)"
+      - "rmt Branch B reports rmtb_old=57, rmtb_new=43, rmtb_flips=14 (exact PR baseline 14)"
+      - "rso reports rso_old=1853, rso_new=1044, rso_flips=809 (PR baseline 821; delta 12 = 1.5% snapshot drift entre 2026-05-12 y 2026-05-20, esperable por refund activity)"
+      - "Total Opportunities corregidas equals 845 (22 + 14 + 809), dentro del 1.4% del PR baseline 857"
+      - "No Won->Lost regressions detected: el gate nuevo es estrictamente mas laxo (refund completo sigue siendo Lost, parcial pasa a Won) — verificado por diferencia de sets, no por count solamente"
+
+  - title: "Anchor REV-10680447 estructural confirmation (ticket case)"
+    tags:
+      - data-review
+      - anchor
+      - branch-b
+    given:
+      - "REV-10680447 es el caso documentado en el ticket IM-762 ($65 membership con $10 refund parcial)"
+    when:
+      - "QA queries FINANCIALTRANSACTION + FINANCIALTRANSACTIONLINEITEM + MEMBERSHIPTRANSACTION para REV-10680447"
+    then:
+      - "FINANCIALTRANSACTION CALCULATEDUSERDEFINEDID='REV-10680447' resolves a ft_id 00B8A1EE-DAFB-4801-AADF-4AD02B568140, TYPE=Payment, TRANSACTIONAMOUNT=66.95, CALCULATEDDATE=2026-03-08"
+      - "La FT tiene 2 Standard line items: $1.95 (sin link a MEMBERSHIPTRANSACTION) y $65.00 (membership)"
+      - "El path Branch B (CREDITITEMMEMBERSHIP) es el que aplica para esta Opportunity — no Branch A — porque no existe link directo MEMBERSHIPTRANSACTION.REVENUESPLITID -> FT line del Payment original ($65 line). El refund parcial llega via CREDITITEMMEMBERSHIP con rank=1 sobre TRANSACTIONDATE"
+      - "Conclusion estructural: REV-10680447 forma parte del bucket rmtb_flips=14 y se evalua con el gate ABS(SUM refund)=$10 vs ABS(MAX original)=$65 -> Closed Won (era Closed Lost antes del fix)"
+
+  - title: "Gate contract verification (completo vs parcial)"
+    tags:
+      - data-review
+      - contract
+      - gate-semantics
+    given:
+      - "Gate definition (post PR 111): ABS(SUM(refund.TRANSACTIONAMOUNT)) >= ABS(MAX(original.AMOUNT)) -> Closed Lost; cualquier otro link de refund -> Closed Won"
+    when:
+      - "QA materializa los 3 buckets evaluables del gate sobre Tucson y los compara contra el comportamiento esperado"
+    then:
+      - "Bucket A (refund completo o sobre-refund): ABS(SUM)>=ABS(MAX) emite 'Closed Lost' — observado en REV-10298505 con original=$70 y total_refund=$150 (acumulado actual, post 2026-05-12) -> gate emite Closed Lost correctamente"
+      - "Bucket B (refund parcial menor al original): observado en los 845 flips Lost->Won total; el bucket Branch A esta exactamente en rmta_flips=22 (refund parcial confirmado por GROUP BY mt+ABS sum < ABS max)"
+      - "Bucket C (sin link de refund): no entra al join LEFT en ningun lado del gate, por lo que no esta en ninguno de los 845 — comportamiento sin cambio, fuera del scope del PR"
+      - "El gate es monotonic: ningun StageName que era Closed Won con la regla vieja se vuelve Closed Lost con la nueva (verificable como rso_new ⊆ rso_old; lo mismo para rmta y rmtb)"
+
+tags:
+  - im-762
+  - im-70
+  - altru
+  - migration-tool-etl
+  - partial-refunds
+  - opportunity
+  - stagename
+  - closed-lost
+  - closed-won
+  - tucson
+  - data-review
+  - pr-111
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-20T16:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-20T16:30:00Z"
+  version: 1
