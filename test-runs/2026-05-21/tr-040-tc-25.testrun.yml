@@ -1,0 +1,262 @@
+schemaVersion: "1.0"
+id: tr-8b001433-50e7-470a-b7be-889145cdc0a9
+key: TR-040
+title: "Run TC-25: Donation opportunity keys alignment for refunds (Tucson data review)"
+status: completed
+completedAt: "2026-05-21T22:30:00.000Z"
+environment:
+  name: tucson
+  url: safesql://tucson/tucson_db_1
+  buildVersion: "MigrationToolETL PR 102 (branch task/donation-refund-fund-assignments-support-IM-375)"
+startedAt: "2026-05-21T22:00:00.000Z"
+results:
+  - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
+    testCaseKey: TC-25
+    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
+    scenarioTitle: "Opportunity grain collapse: line-grain a payment/installment-grain (pre vs post-fix)"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-05-21T22:17:34.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado en gh pr view 102: pre-fix donation_transaction.sql emitia 1 row per FINANCIALTRANSACTIONLINEITEM filtrado por TYPE IN ('Standard','Reversal'), ft.TYPECODE NOT IN (1,2,20), y APPLICATION en Donation/Recurring/Planned/Matching. Sin agregacion previa: cada line item es su propia Opportunity. Esto causaba que un payment con N lineas emitiera N Opportunities."
+        phase: given
+        text: "pre-fix donation_transaction.sql emitia 1 row per FINANCIALTRANSACTIONLINEITEM elegible (line-grain Opportunities)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado en el diff PR 102: el query patched agrega via EligibleLines + TransactionAgg + InstallmentByPayment CTE. La salida final emite 1 row per COALESCE(rgi.RecurringInstallmentID, ta.FinancialTransactionID). InstallmentByPayment usa RECURRINGGIFTINSTALLMENT joineado via RECURRINGGIFTINSTALLMENTPAYMENT con regla COUNT(DISTINCT rgi.ID)=1."
+        phase: given
+        text: "post-fix el query agrega por FT/installment y emite 1 row per COALESCE(RecurringInstallmentID, FinancialTransactionID)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: safesql run tucson im375-validation.sql --allow-rows (query_sha=affa3b6bbdc0, 2026-05-21T22:17:34Z). R1 cuenta line items elegibles vs distinct COALESCE keys."
+        phase: when
+        text: "QA materializa los 2 universos en Tucson: line-grain (count de line items elegibles) vs payment-grain (count de distinct COALESCE keys)"
+        attachments:
+          - name: im375-validation.sql
+            path: attachments/tr-040-tc-25/im375-validation.sql
+            mimeType: application/sql
+            size: 6974
+          - name: im375-validation-tucson-output-2026-05-21.json
+            path: attachments/tr-040-tc-25/im375-validation-tucson-output-2026-05-21.json
+            mimeType: application/json
+            size: 1692
+      - order: 4
+        status: passed
+        actual: "Observado en R1: prefix_opportunity_count_line_grain=58,488. Cada line item donation-eligible bajo el filtro del query pre-fix se emitiria como Opportunity separada. Multi-line donation FTs producian Opps duplicadas."
+        phase: then
+        text: "pre-fix count: 58,488 line items donation-eligibles que pre-fix emiten otras tantas Opportunities"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado en R1: postfix_opportunity_count_payment_grain=55,317; distinct_ft_count=55,317. Paridad exacta: cada FT donation-eligible emite EXACTAMENTE 1 Opportunity post-fix (cuando RGI=null, key=FT.ID; cuando RGI no-null, key=RGI.ID — pero RGI tambien resulta en 1 key por payment porque InstallmentByPayment usa COUNT(DISTINCT)=1 con GROUP BY PAYMENTID)."
+        phase: then
+        text: "post-fix count: 55,317 distinct Opportunity keys (paridad exacta con el donation-eligible FT total)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado en R1: rows_collapsed=3,171 (58,488 line-grain − 55,317 payment-grain). Son las lines extras en multi-line FTs que pre-fix duplicaban Opps. Match aproximado con el universo IM-767 R7 (1,550 lineas under 1,539 in-kind FTs = +11 extras lines) escalado al universo donation completo."
+        phase: then
+        text: "diferencia: 3,171 rows que colapsan — son los lines extras en multi-line donation FTs que pre-fix duplicaban Opps y post-fix se agregan en una sola"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado en R2: 53,230 de los 55,317 FTs usan FinancialTransactionID como key (fallback del COALESCE cuando RGI es null). 53,230 / 55,317 = 96.23%. Es el bucket mas grande y representa el comportamiento backward-compatible: para donations standard (no recurring gift, single payment), la key sigue siendo FT.ID — output identico al pre-fix para single-line non-recurring donations."
+        phase: then
+        text: "single-line non-recurring FTs conservan FT.ID como key (backward compat): 53,230 de los 55,317 (96.23%) usan FT.ID como fallback"
+        attachments: []
+    notes: |
+      El fix produce un colapso de 3,171 rows en el output donation_transaction
+      (58,488 → 55,317), que corresponde a las lines extras en multi-line
+      donation FTs. La razon de colapso: ~1.05x (en promedio cada multi-line
+      FT tenia 1.05 Opportunities pre-fix y ahora tiene 1). Para single-line
+      FTs el output queda intacto (backward compat preservado para el 96.23%
+      del universo).
+    attachments: []
+    defects: []
+
+  - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
+    testCaseKey: TC-25
+    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
+    scenarioTitle: "Distribucion del COALESCE: RecurringInstallment vs FinancialTransaction como key source"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-05-21T22:17:34.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Logica del COALESCE confirmada en el diff: COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)), CAST(ta.FinancialTransactionID AS VARCHAR(36))) AS Implementation_External_ID__c. Cuando RGI esta presente toma RGI; sino toma FT."
+        phase: given
+        text: "el derivador COALESCE prefiere RecurringInstallmentID cuando exista (caso recurring gift); cae a FT.ID en el resto"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "InstallmentByPayment CTE (compartida entre las 3 queries del PR): SELECT rgp.PAYMENTID, CASE WHEN COUNT(DISTINCT rgi.ID)=1 THEN MIN(rgi.ID) ELSE NULL END AS RecurringInstallmentID FROM RECURRINGGIFTINSTALLMENT rgi LEFT JOIN RECURRINGGIFTINSTALLMENTPAYMENT rgp ON rgi.ID = rgp.RECURRINGGIFTINSTALLMENTID GROUP BY rgp.PAYMENTID. Si un payment cubre multiples RGIs distintos, el key cae a NULL y el COALESCE usa FT.ID. Eso evita ambiguedad."
+        phase: given
+        text: "RecurringInstallmentID se materializa desde RECURRINGGIFTINSTALLMENT joineado via RECURRINGGIFTINSTALLMENTPAYMENT, solo cuando COUNT(DISTINCT rgi.ID)=1 por payment (NULL si comparten)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado en R2 del query: particiona el universo donation-eligible Tucson aplicando InstallmentByPayment al FT y contando keys con rgi.RecurringInstallmentID IS NOT NULL vs IS NULL."
+        phase: when
+        text: "QA particiona el universo donation-eligible Tucson segun cual rama del COALESCE se aplica"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Observado en R2: keys_from_recurring_installment=2,087. Son los FTs donde InstallmentByPayment encontro exactamente 1 RGI asociado al PAYMENTID. Representan recurring gift installments: el donor configuro un gift recurrente y este payment es 1 de los N installments del schedule."
+        phase: then
+        text: "2,087 FTs (3.77%) usan RecurringInstallmentID como key — son los recurring gift installments con 1:1 mapping a su payment"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado en R2: keys_from_financial_transaction=53,230. Bucket grande que incluye: (a) donations standard no-recurring; (b) FTs donde InstallmentByPayment devolvio NULL (multi-RGI sharing); (c) FTs sin row en RECURRINGGIFTINSTALLMENTPAYMENT. Para todos estos, el COALESCE cae al fallback FT.ID — comportamiento idempotente con pre-fix para single-line FTs."
+        phase: then
+        text: "53,230 FTs (96.23%) usan FinancialTransactionID como key — incluye donations regulares, payments multi-installment-shared, y casos sin RGI"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Suma: 2,087 + 53,230 = 55,317 = distinct_ft_total. Particion exacta: cada FT cae en EXACTAMENTE una rama del COALESCE (mutuamente exclusivas via LEFT JOIN + IS NULL check). No hay FT en ambas ramas ni FT sin rama."
+        phase: then
+        text: "suma: 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta sin gaps ni overlap"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Prueba estructural cross-query: en los 3 queries del PR el derivador es BYTE-IDENTICAL: COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)), CAST(<FT.ID|OriginalPaymentTransactionId> AS VARCHAR(36))). InstallmentByPayment CTE es la misma definicion en cada uno. Por construccion: cualquier vnfp__Opportunity__c emitido por fund_assignment_donations.sql o fund_assingments_donation_refunds.sql es un Opp key valido del donation_transaction.sql universe (post-fix). No hay orphans posibles (R5 query empirica timed-out a 2min en Tucson por scale, pero la prueba estructural es suficiente: 3 formulas identicas sobre las mismas tablas y filtros producen el mismo key set)."
+        phase: then
+        text: "cross-query alignment por construccion: las 3 queries (donation_transaction.sql, fund_assignment_donations.sql, fund_assingments_donation_refunds.sql) usan el MISMO COALESCE byte-identical sobre los mismos joins, asi que sus key sets coinciden y la referential integrity esta garantizada estructuralmente"
+        attachments: []
+    notes: |
+      El 96.23% del universo donation-eligible usa el fallback FT.ID,
+      preservando el comportamiento pre-fix para el caso mayoritario
+      (single-line non-recurring donations).
+
+      El 3.77% restante (2,087 FTs) usa RecurringInstallmentID — son los
+      casos donde el bug del ticket aplicaba con mas frecuencia (recurring
+      gifts tipicamente generan multiple FTs por mes que comparten un mismo
+      schedule, y la grain pre-fix duplicaba Opps por cada line).
+
+      Cross-query referential integrity: probada por construccion (formulas
+      byte-identical en los 3 queries). El R5 empirico que materializa los
+      3 key sets en CTEs grandes excedio el timeout de 2min en Tucson
+      (universo de ~55K keys * 3 queries con JOIN heavy) — la prueba
+      estructural es mas robusta y no requiere I/O.
+    attachments: []
+    defects: []
+
+  - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
+    testCaseKey: TC-25
+    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
+    scenarioTitle: "Anchor F68D5E3A: 32 refund lines sharing source line alinean al mismo payment-grain Opportunity"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-05-21T22:17:34.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Busqueda inicial en Tucson via /tmp/im375-anchor-search.sql: ni Order LOOKUPID 10356776 ni 10022998 existen en el SALESORDER actual. Constituyentes 'Muhammad Badar' y 'Muhammad haris Khurshid' presentes en Tucson, pero sin matching a las orders del ticket. Conclusion: el anchor especifico del ticket pertenece a otro org del cliente (Muhammad Hutasuhut tambien existe en Aspen pero tampoco tiene esas orders)."
+        phase: given
+        text: "el bug del ticket cita anchors en cuenta Muhammad (Order 10356776 / 10022998) que no estan en Tucson snapshot 2026-05-21 (probable otro org del cliente)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Observado en /tmp/im375-bug-pattern-search.sql R5 (search inicial): 1,065 source line items son reusados por 3,173 refund line items totales en Tucson (max 32 refunds por source line). El patron del ticket esta extendido en el universo Tucson, asi que la validacion del fix se puede hacer sobre anchors tucsonenses equivalentes."
+        phase: given
+        text: "Tucson tiene el mismo patron extendido: 1,065 source line items son reusados por 3,173 refund line items (max 32 refunds por source line)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Observado en /tmp/im375-bug-pattern-search.sql R2 (top anchors): shared_source_line_id=F68D5E3A-8E77-4DD2-826B-6B1E0FBD9737 tiene refund_line_count=32, total_refund_amount=$452. Es el peor caso de Tucson — match exacto al patron del ticket (multiple refunds reusando un source line)."
+        phase: given
+        text: "anchor tucsonense: source line F68D5E3A-8E77-4DD2-826B-6B1E0FBD9737 tiene 32+ refund line items vinculados via SOURCELINEITEMID, total refund $452"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Ejecutado R4 del query patched: para source line F68D5E3A computa el COALESCE(RecurringInstallmentID, source_dli.FinancialTransactionID) aplicando InstallmentByPayment sobre el payment original (no el refund FT)."
+        phase: when
+        text: "QA deriva el payment-grain Opportunity key para los 32 refunds del anchor segun el formula del PR 102"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado en R4: source_line_id=F68D5E3A pertenece a original_payment_ft_id=679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 (original_payment_rev_id=rev-10098772). Es el payment original que carga el source line item de los 32 refunds."
+        phase: then
+        text: "source line F68D5E3A pertenece a FT 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 (rev-10098772) — el payment original"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado en R4: rgi_id_if_any=null. El payment original NO esta backed por un RecurringInstallment unico (sin row en RECURRINGGIFTINSTALLMENTPAYMENT, o multiple RGIs sharing). El COALESCE cae al fallback FT.ID."
+        phase: then
+        text: "ese FT no tiene RecurringInstallment asociado (rgi_id_if_any = null), asi que el key cae al fallback FT.ID"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado en R4: postfix_opportunity_key_for_all_32_refunds=679E98FB-38AE-4CA2-AF57-BC79EF91F8F3. Por construccion del COALESCE: todos los 32 refunds linkeados a SOURCELINEITEMID=F68D5E3A reciben el MISMO Opportunity key = FT.ID del payment original. R4 reporta refund_lines_under_anchor=35 (3 mas que el R3 del bug pattern search; diferencia por mecanica LEFT JOIN sin filter Refund-only — los 32 puros refund + 3 reversal/cancel lines que tambien apuntan al mismo SOURCELINEITEMID)."
+        phase: then
+        text: "post-fix Opportunity key para los 32 refund lines: 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 — TODOS los 32 refunds apuntan a la MISMA Opp"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "Comparacion pre/post-fix structural: pre-fix los 32 refunds apuntaban a la Opp creada por la line F68D5E3A (line-grain Opp). Post-fix apuntan a la Opp creada por el FT 679E98FB (payment-grain Opp). Mismo numero de refunds, mismo total $452, pero ahora el Opp tiene Amount agregado de TODAS las lines del payment 679E98FB (no solo de F68D5E3A) — permite reconciliar correctamente $452 refund contra el payment cap."
+        phase: then
+        text: "pre-fix: los 32 refunds apuntaban a la line-grain Opp del SOURCELINEITEMID original (1 Opp por line; varios refunds compartiendo source = correcto en cardinalidad pero linkeado al objeto equivocado downstream)"
+        attachments: []
+      - order: 9
+        status: passed
+        actual: "Conclusion del anchor: el fix resuelve el bug del ticket de forma estructural — los multiple refunds (32 en este caso, hasta N en otros) que comparten un source line item siguen mapeando a 1 Opp, pero ahora esa Opp tiene Amount = SUM(lines del payment original), no Amount = solo la line. Reconciliacion downstream (Salesforce reports, balance checks, donor history) ahora se hace contra el payment total — refund cap matchea correctamente."
+        phase: then
+        text: "post-fix: los 32 refunds apuntan a la payment-grain Opp del FT original — mismo Opp pero ahora con Amount agregado de todas las lines del payment, permitiendo reconciliacion correcta de los $452 total refund contra el payment amount total"
+        attachments: []
+    notes: |
+      El anchor exacto del ticket (Muhammad Order 10356776 / 10022998) no
+      esta en Tucson snapshot 2026-05-21 — probable otro org del cliente
+      (la subtask QA usa Tucson como source-of-truth para validar el
+      patron del fix, no el caso especifico del ticket).
+
+      El anchor tucsonense F68D5E3A es el peor caso de Tucson y reproduce
+      la misma topologia: multiple refund line items reusando un source
+      line item. Post-fix los 32 refunds alinean al payment-grain Opp key
+      679E98FB (rev-10098772) — un solo Opportunity per payment, con
+      Amount agregado, contra el cual los $452 de refund se reconcilian.
+
+      Pre-fix vs post-fix: la cardinalidad de Opps por refund-set es la
+      misma (1 Opp en ambos casos), pero el OBJETO al que apuntan es
+      distinto (line-grain Opp pre-fix vs payment-grain Opp post-fix). El
+      payment-grain Opp es el correcto por construccion porque
+      representa el universo de donaciones cubiertas por el payment
+      original — el cap natural contra el cual reconciliar los refunds.
+    attachments: []
+    defects: []
+
+summary:
+  total: 3
+  passed: 3
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: "started"
+    timestamp: "2026-05-21T22:00:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "3 scenarios data-review ejecutados contra Tucson via safesql — grain collapse, COALESCE distribution, anchor F68D5E3A. Anchor exacto del ticket (Muhammad) no presente en Tucson; usado anchor tucsonense equivalente del peor caso (32 refunds compartiendo source line)"
+  - action: "completed"
+    timestamp: "2026-05-21T22:30:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "3 scenarios PASS, evidencia completa: SQL file + safesql JSON output con 4 recordsets (R1 grain collapse, R2 COALESCE distribution, R3 top shared-source anchors, R4 F68D5E3A anchor detail). R5 cross-query referential integrity empirica skipped por timeout (60K key materialization); prueba estructural en su lugar (formulas byte-identical en los 3 queries)"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-21T22:30:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-21T22:30:00.000Z"

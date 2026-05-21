@@ -1,0 +1,145 @@
+schemaVersion: "1.0"
+
+id: "3062958a-b03f-4556-8aaf-6a81cea21295"
+key: "TC-25"
+title: "Donation opportunity keys aligned across 3 queries for refund support"
+description: |
+  Cobertura QA de IM-375 (PR 102 en MigrationToolETL) bajo el epic IM-70
+  Altru Queries. Valida la alineacion del Opportunity key entre 3 queries:
+
+    - donation_transaction.sql: Implementation_External_ID__c
+    - fund_assignment_donations.sql: vnfp__Opportunity__c
+    - fund_assingments_donation_refunds.sql: vnfp__Opportunity__c
+
+  Las 3 usan ahora el mismo derivador:
+
+    COALESCE(
+        CAST(rgi.RecurringInstallmentID AS VARCHAR(36)),
+        CAST(<source_payment_FT.ID> AS VARCHAR(36))
+    )
+
+  Donde RecurringInstallmentID viene de RECURRINGGIFTINSTALLMENT joineado
+  via RECURRINGGIFTINSTALLMENTPAYMENT (1 RGI por payment cuando
+  COUNT(DISTINCT)=1; NULL si comparten).
+
+  Bug original: en fund_assignment_refunds.sql los refunds linkeaban a la
+  Opportunity via SOURCELINEITEMID. Algunos refunds reusan el mismo
+  SOURCELINEITEMID en multiples refund line items (anchor del ticket:
+  Order 10356776 o 10022998 en cuenta Muhammad — no presentes en Tucson
+  snapshot 2026-05-21, probablemente otro org del cliente; pero el patron
+  esta extendido: 1,065 source lines en Tucson son reusados por 3,173
+  refund lines, max 32 refunds por source line).
+
+  Fix PR 102 (3 queries SQL + tests):
+  - donation_transaction.sql: emite 1 Opp per payment/installment (no per
+    line-item). Amount aggregado.
+  - fund_assignment_donations.sql: el vnfp__Opportunity__c apunta al
+    mismo Opp key. Fund rows conservan line-item grain.
+  - fund_assingments_donation_refunds.sql: refunds apuntan al
+    payment/installment grain del payment original (no al source line
+    item directo).
+  - Backward compat: single-line non-recurring donations conservan FT.ID
+    como key.
+
+  Universo Tucson confirmado (snapshot 2026-05-21):
+  - Pre-fix Opportunities (line grain): 58,488
+  - Post-fix Opportunities (payment grain): 55,317 — diferencia 3,171
+    rows que colapsan (multi-line donation FTs).
+  - Keys from RecurringInstallment: 2,087 (3.77%).
+  - Keys from FinancialTransaction (fallback): 53,230.
+
+  Anchor en Tucson: source line F68D5E3A en FT 679E98FB (rev-10098772)
+  tiene 32+ refund line items linkeados via SOURCELINEITEMID. Post-fix
+  los 32 refunds alinean al SAME payment-grain Opp key 679E98FB (sin RGI
+  en este caso; fallback a FT.ID).
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/102
+  - Branch: task/donation-refund-fund-assignments-support-IM-375
+  - Issue: https://veevart.atlassian.net/browse/IM-375
+  - QA Sub-task: https://veevart.atlassian.net/browse/IM-731
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, RECURRINGGIFTINSTALLMENT, RECURRINGGIFTINSTALLMENTPAYMENT en Tucson"
+  - "Branch `task/donation-refund-fund-assignments-support-IM-375` checkeada para referencia del derivador del key"
+
+format: gherkin
+scenarios:
+  - title: "Opportunity grain collapse: line-grain a payment/installment-grain (pre vs post-fix)"
+    tags:
+      - data-review
+      - grain-collapse
+      - tucson
+    given:
+      - "pre-fix donation_transaction.sql emitia 1 row per FINANCIALTRANSACTIONLINEITEM elegible (line-grain Opportunities)"
+      - "post-fix el query agrega por FT/installment y emite 1 row per COALESCE(RecurringInstallmentID, FinancialTransactionID)"
+    when:
+      - "QA materializa los 2 universos en Tucson: line-grain (count de line items elegibles) vs payment-grain (count de distinct COALESCE keys)"
+    then:
+      - "pre-fix count: 58,488 line items donation-eligibles que pre-fix emiten otras tantas Opportunities"
+      - "post-fix count: 55,317 distinct Opportunity keys (paridad exacta con el donation-eligible FT total)"
+      - "diferencia: 3,171 rows que colapsan — son los lines extras en multi-line donation FTs que pre-fix duplicaban Opps y post-fix se agregan en una sola"
+      - "single-line non-recurring FTs conservan FT.ID como key (backward compat): 53,230 de los 55,317 (96.23%) usan FT.ID como fallback"
+
+  - title: "Distribucion del COALESCE: RecurringInstallment vs FinancialTransaction como key source"
+    tags:
+      - data-review
+      - coalesce-distribution
+    given:
+      - "el derivador COALESCE prefiere RecurringInstallmentID cuando exista (caso recurring gift); cae a FT.ID en el resto"
+      - "RecurringInstallmentID se materializa desde RECURRINGGIFTINSTALLMENT joineado via RECURRINGGIFTINSTALLMENTPAYMENT, solo cuando COUNT(DISTINCT rgi.ID)=1 por payment (NULL si comparten)"
+    when:
+      - "QA particiona el universo donation-eligible Tucson segun cual rama del COALESCE se aplica"
+    then:
+      - "2,087 FTs (3.77%) usan RecurringInstallmentID como key — son los recurring gift installments con 1:1 mapping a su payment"
+      - "53,230 FTs (96.23%) usan FinancialTransactionID como key — incluye donations regulares, payments multi-installment-shared, y casos sin RGI"
+      - "suma: 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta sin gaps ni overlap"
+      - "cross-query alignment por construccion: las 3 queries (donation_transaction.sql, fund_assignment_donations.sql, fund_assingments_donation_refunds.sql) usan el MISMO COALESCE byte-identical sobre los mismos joins, asi que sus key sets coinciden y la referential integrity esta garantizada estructuralmente"
+
+  - title: "Anchor F68D5E3A: 32 refund lines sharing source line alinean al mismo payment-grain Opportunity"
+    tags:
+      - data-review
+      - anchor
+      - shared-source-line
+      - bug-pattern
+    given:
+      - "el bug del ticket cita anchors en cuenta Muhammad (Order 10356776 / 10022998) que no estan en Tucson snapshot 2026-05-21 (probable otro org del cliente)"
+      - "Tucson tiene el mismo patron extendido: 1,065 source line items son reusados por 3,173 refund line items (max 32 refunds por source line)"
+      - "anchor tucsonense: source line F68D5E3A-8E77-4DD2-826B-6B1E0FBD9737 tiene 32+ refund line items vinculados via SOURCELINEITEMID, total refund $452"
+    when:
+      - "QA deriva el payment-grain Opportunity key para los 32 refunds del anchor segun el formula del PR 102"
+    then:
+      - "source line F68D5E3A pertenece a FT 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 (rev-10098772) — el payment original"
+      - "ese FT no tiene RecurringInstallment asociado (rgi_id_if_any = null), asi que el key cae al fallback FT.ID"
+      - "post-fix Opportunity key para los 32 refund lines: 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 — TODOS los 32 refunds apuntan a la MISMA Opp"
+      - "pre-fix: los 32 refunds apuntaban a la line-grain Opp del SOURCELINEITEMID original (1 Opp por line; varios refunds compartiendo source = correcto en cardinalidad pero linkeado al objeto equivocado downstream)"
+      - "post-fix: los 32 refunds apuntan a la payment-grain Opp del FT original — mismo Opp pero ahora con Amount agregado de todas las lines del payment, permitiendo reconciliacion correcta de los $452 total refund contra el payment amount total"
+
+tags:
+  - im-375
+  - im-70
+  - im-731
+  - altru
+  - migration-tool-etl
+  - donation
+  - opportunity
+  - refund
+  - fund-assignment
+  - recurring-gift
+  - tucson
+  - data-review
+  - pr-102
+
+estimatedDuration: 25
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-21T22:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-21T22:20:00Z"
+  version: 1
