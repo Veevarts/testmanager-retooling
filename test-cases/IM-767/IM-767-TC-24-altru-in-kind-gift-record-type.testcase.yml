@@ -1,0 +1,141 @@
+schemaVersion: "1.0"
+
+id: "24e73b7a-2373-4b9e-b202-0ce2fbb992ba"
+key: "TC-24"
+title: "Altru in-kind gift transactions emit the IN_KIND_GIFT Opportunity record type"
+description: |
+  Cobertura QA de IM-767 (PR 112 en MigrationToolETL) bajo el epic IM-70
+  Altru Queries. Valida el cambio en `donation_transaction.sql` que detecta
+  in-kind gifts via REVENUEPAYMENTMETHOD -> GIFTINKINDPAYMENTMETHODDETAIL
+  y emite el token `{{IN_KIND_GIFT_RECORD_TYPE_ID}}` en lugar del
+  `{{Donation_Record_Type}}` standard.
+
+  Bug original: el query hardcodeaba `{{Donation_Record_Type}}` para todas
+  las transactions, asi que in-kind gifts terminaban como standard
+  Donations en Salesforce. Cliente reporto que TCR Solutions, Inc.
+  (Org 1935950 en Tucson, rev-10672300) tiene casi todas sus transactions
+  como in-kind y aparecian como Donations standard post-migracion.
+
+  Fix PR 112 (multi-archivo):
+  - `donation_transaction.sql`: nueva CTE `GiftInKindTransactions` (DISTINCT
+    REVENUEID con join a GIFTINKINDPAYMENTMETHODDETAIL); LEFT JOIN en
+    EligibleLines con flag `HasGiftInKindPaymentDetail`; MAX agregado en
+    TransactionAgg; CASE final emite IN_KIND token o standard token.
+  - `donation-transaction.extractor.ts` y `donation-pledges.extractor.ts`:
+    fail-fast env var checks (SF_DONATION_RECORD_TYPE_ID,
+    SF_IN_KIND_GIFT_RECORD_TYPE_ID) y reemplazo de tokens.
+  - Regression test `donation-record-type-query.spec.ts`.
+
+  Scope: SOLO In-Kind Gift mapping. Matching Gift / Major Gift quedan
+  fuera porque requieren proof separado de source-data lineage.
+
+  Aggregates Tucson confirmados (snapshot 2026-05-21):
+  - Universo in-kind distinct (CTE base): 1,542 FTs con GIFTINKINDPAYMENTMETHODDETAIL.
+  - Universo donation-eligible total: 55,317 FTs.
+  - Donation-eligible IN-KIND: 1,539 FTs (-> emiten IN_KIND_GIFT_RECORD_TYPE_ID).
+  - Donation-eligible STANDARD: 53,778 FTs (-> emiten Donation_Record_Type).
+  - Diferencia 1,542 vs 1,539: 3 in-kind FTs caen fuera del filtro
+    donation-eligible (probablemente TYPECODE en (1,2,20) Pledge/Recurring/Write-off
+    o sin Application Donation/Recurring/Planned/Matching).
+
+  Row grain invariance:
+  - 1,539 in-kind FTs cubren 1,550 lineas eligibles.
+  - 1,533 son single-line; 6 son multi-line (max 6 lineas/FT).
+  - El CTE DISTINCT + MAX(HasGiftInKindPaymentDetail) garantiza 1 row por FT
+    en el output, incluso para multi-line in-kind.
+
+  Anchor del ticket: rev-10672300 (TCR Solutions, Inc.) FT
+  8EA4981A-4226-4040-923A-878FBC14E985, Payment $1,000, 2026-02-01.
+  has_gift_in_kind_detail = 1 confirmado.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/112
+  - Branch: story/gift-record-types-from-altru-are-not-IM-767
+  - Issue: https://veevart.atlassian.net/browse/IM-767
+  - QA Sub-task: https://veevart.atlassian.net/browse/IM-776
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, REVENUEPAYMENTMETHOD, GIFTINKINDPAYMENTMETHODDETAIL en Tucson"
+  - "Branch `story/gift-record-types-from-altru-are-not-IM-767` checkeada para referencia de las CTEs"
+  - "Env vars `SF_DONATION_RECORD_TYPE_ID` y `SF_IN_KIND_GIFT_RECORD_TYPE_ID` configurados fuera del repo antes de correr exports (validacion previa al deploy, no parte de este QA)"
+
+format: gherkin
+scenarios:
+  - title: "Anchor rev-10672300 + samples positivo/negativo emiten el token correcto"
+    tags:
+      - data-review
+      - anchor
+      - record-type-mapping
+      - tucson
+    given:
+      - "rev-10672300 (TCR Solutions, Inc., Org 1935950) es el caso reportado en el ticket — transactions casi todas in-kind en Altru pero migradas como Donations standard pre-fix"
+      - "TCR Solutions tiene 20 FTs visibles en Tucson, todas Payment $1,000 mensuales, todas con has_gift_in_kind_detail=1"
+    when:
+      - "QA ejecuta el CTE GiftInKindTransactions del PR sobre Tucson y verifica el token emitido para 5 in-kind sample FTs + 5 standard donation sample FTs (positive + negative control)"
+    then:
+      - "rev-10672300 FT 8EA4981A-4226-4040-923A-878FBC14E985 (Payment $1,000, 2026-02-01) tiene has_gift_in_kind_detail=1 y el CASE patched emite '{{IN_KIND_GIFT_RECORD_TYPE_ID}}' — el bug del ticket queda corregido"
+      - "los 20 TCR Solutions FTs visibles tienen has_gift_in_kind_detail=1 — confirma el patron del cliente (organization completa en in-kind, no solo rev-10672300)"
+      - "5 in-kind sample FTs (rev-10681991, rev-10681312, rev-10671987, rev-10671990, rev-10672300) emiten '{{IN_KIND_GIFT_RECORD_TYPE_ID}}' — confirma que el flag se propaga correctamente al CASE"
+      - "5 standard donation sample FTs (rev-10648430 Payment, rev-10682173/10682171/10682109/10682028 Orders) emiten '{{Donation_Record_Type}}' — confirma el fallback safe para no-in-kind transactions"
+
+  - title: "In-Kind universe aggregate vs donation-eligible intersection"
+    tags:
+      - data-review
+      - aggregate-counts
+    given:
+      - "PR 112 detecta in-kind via REVENUEPAYMENTMETHOD.REVENUEID con join a GIFTINKINDPAYMENTMETHODDETAIL.ID"
+      - "el CASE final solo aplica si el FT pasa los filtros de donation-eligible (TYPECODE NOT IN 1,2,20; line type Standard/Reversal; APPLICATION en Donation/Recurring/Planned/Matching)"
+    when:
+      - "QA particiona el universo Tucson en in-kind vs standard tras aplicar los filtros del query patched"
+    then:
+      - "1,542 FTs distinct tienen REVENUEPAYMENTMETHOD -> GIFTINKINDPAYMENTMETHODDETAIL (universo in-kind absoluto)"
+      - "55,317 FTs son donation-eligible (universo total que entra al CASE del PR)"
+      - "1,539 FTs son donation-eligible Y in-kind -> emiten IN_KIND_GIFT_RECORD_TYPE_ID en el output"
+      - "53,778 FTs son donation-eligible Y standard -> emiten Donation_Record_Type en el output (fallback safe)"
+      - "diferencia 1,542 - 1,539 = 3 FTs caen fuera del filtro donation-eligible (Pledge/Recurring/Write-off TYPECODE o APPLICATION no aplicable) — comportamiento sin cambio en PR 112"
+      - "1,539 + 53,778 = 55,317 = donation-eligible total — no se pierde ni se duplica ningun row"
+
+  - title: "Row-grain invariance: multi-line in-kind FTs emiten 1 row via CTE DISTINCT + MAX"
+    tags:
+      - data-review
+      - row-grain
+      - cte-aggregation
+    given:
+      - "el riesgo principal del PR es que el CTE GiftInKindTransactions multiplique rows si una FT tiene multiples lines y el join no agrega correctamente"
+      - "el PR mitiga via DISTINCT en GiftInKindTransactions + MAX(el.HasGiftInKindPaymentDetail) en TransactionAgg — un FT con cualquier line in-kind queda flaggeada con 1 row, no N rows"
+    when:
+      - "QA cuenta lineas eligibles bajo cada in-kind FT para detectar multi-line cases y verifica que la agregacion no expande el output"
+    then:
+      - "1,539 in-kind FTs cubren 1,550 eligible lines totales (delta de 11 lineas extras en multi-line FTs)"
+      - "1,533 son single-line FTs (1 line == 1 row, no riesgo)"
+      - "6 son multi-line FTs (2-6 lines cada uno; max 6 lines/FT)"
+      - "si el CTE NO usara DISTINCT + MAX, el output del CASE multiplicaria a 1,550 in-kind rows en lugar de 1,539 — el CTE GARANTIZA 1 row por FT por construccion (DISTINCT + agregacion a nivel FT)"
+      - "row grain del output donation_transaction = N FTs (no N lines), igual pre/post-fix; el cambio del PR no introduce duplicacion"
+
+tags:
+  - im-767
+  - im-70
+  - im-776
+  - altru
+  - migration-tool-etl
+  - donation
+  - opportunity
+  - record-type
+  - in-kind-gift
+  - tucson
+  - data-review
+  - pr-112
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-21T17:15:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-21T17:15:00Z"
+  version: 1
