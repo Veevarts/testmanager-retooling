@@ -124,16 +124,18 @@ scenarios:
     when:
       - "QA genera un CSV enriquecido (vnfp__Implementation_External_ID__c, Name, StageName, CloseDate, Amount, vnfp__Refunded_Amount__c, Description) con los 12 rows"
       - "QA upserta el CSV via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
-      - "QA inserta via Bulk API 2.0 24 npe01__OppPayment__c records (2 por Opportunity: uno con npe01__Payment_Amount__c positivo = original y npsp__Type__c='Payment (original)'; uno con npe01__Payment_Amount__c negativo = -total_refund y npsp__Type__c='Refund')"
-      - "QA limpia los Payments auto-generados por el NPSP Opportunity trigger (positive amount, Type=null) para dejar exactamente 2 Payments por Opportunity (original + refund)"
+      - "QA inserta via Bulk API 2.0 12 npe01__OppPayment__c records (uno por Opportunity, npe01__Payment_Amount__c positivo = original, Type='Payment (original)')"
+      - "QA limpia los Payments auto-generados por el NPSP Opportunity trigger (positive amount, Type=null) para dejar exactamente 1 Payment por Opportunity"
+      - "QA inserta via Bulk API 2.0 24 Auctifera__Fund_Donation_Assignment__c records (2 por Opportunity: uno original con Status='Sold'/Accounting_Status='Posted'/Action_Type=null/Donated_Amount=original; uno refund con Status='Refunded'/Accounting_Status='Refunded'/Action_Type='Refunded'/Donated_Amount=total_refund). Esta es la convencion real de prod Tucson: el refund se registra a nivel de Fund Donation Assignments, NO como negative-amount Payment"
       - "QA re-ejecuta el mismo upsert (idempotency check)"
-      - "QA abre cada Opportunity en la UI Lightning para verificar Stage + Amount + Refunded Value + Description + Payments related list (1 original + 1 Refund)"
+      - "QA abre cada Opportunity en la UI Lightning para verificar Stage + Amount + Refunded Value + Description + Payments related list (1 original) + Fund Donation Assignments related list (1 Sold/Posted + 1 Refunded)"
     then:
       - "el primer upsert Opportunity reporta 12 processed / 12 successful / 0 failed y crea/actualiza 12 Opportunities en sandbox (count de Opportunities con external ID sube de 33 a 45 en la corrida inicial; en corridas posteriores se mantiene 45)"
-      - "el insert Payments reporta 24 processed / 24 successful / 0 failed (2 por Opportunity); el delete de Payments auto-trigger reporta 9 success (un auto-payment se creo solo para los 9 Closed Won; los 3 Closed Lost no disparan auto-creation)"
-      - "los 9 rows del bucket partial (4 rso + 2 rmta + 3 rmtb) quedan con StageName='Closed Won' en SOQL y muestran Amount > Refunded Value en la UI + Payments related list con 1 original positivo y 1 Refund negativo (refund parcial visible y trazable)"
-      - "los 3 rows del bucket complete (1 rso + 1 rmta + 1 rmtb) quedan con StageName='Closed Lost' en SOQL y muestran Amount == Refunded Value en la UI + Payments related list con 1 original positivo y 1 Refund negativo de mismo monto absoluto (refund completo visible y trazable)"
-      - "el campo Stage es visible en el Highlights Panel; Amount y Refunded Value en la seccion Details (campos standard + vnfp__Refunded_Amount__c sin custom layout changes); Description documenta el contrato del gate (ABS(refund) vs ABS(original)); Payments related list expone 2 records por Opp (original + refund convencion NPSP signed amount)"
+      - "el insert Payments reporta 12 processed / 12 successful / 0 failed (uno original positivo por Opportunity); el delete de Payments auto-trigger reporta 9 success (auto-payment se crea solo para los 9 Closed Won; los 3 Closed Lost no disparan auto-creation)"
+      - "el insert Fund Donation Assignments reporta 24 processed / 24 successful / 0 failed (2 por Opportunity: 1 Sold/Posted con Donated_Amount=original + 1 Refunded con Donated_Amount=total_refund linkeada al Technical Payment)"
+      - "los 9 rows del bucket partial (4 rso + 2 rmta + 3 rmtb) quedan con StageName='Closed Won' en SOQL y muestran en UI: Amount > Refunded Value en Details; FDA Sold con monto original + FDA Refunded con monto refund (refund parcial visible y trazable a nivel FDA, igual que en prod)"
+      - "los 3 rows del bucket complete (1 rso + 1 rmta + 1 rmtb) quedan con StageName='Closed Lost' en SOQL y muestran en UI: Amount == Refunded Value en Details; FDA Sold con monto original + FDA Refunded con mismo monto absoluto (refund completo visible y trazable a nivel FDA)"
+      - "el campo Stage es visible en el Highlights Panel; Amount y Refunded Value en la seccion Details (campos standard + vnfp__Refunded_Amount__c sin custom layout changes); Description documenta el contrato del gate (ABS(refund) vs ABS(original)); Payments related list expone 1 record original + Fund Donation Assignments related list expone 2 records (Sold/Posted + Refunded), reproduciendo el modelo real de prod Tucson"
       - "el re-upsert produce 12/12 success con 0 net new records (idempotent; total Opportunities con external ID se mantiene en 45)"
 
 tags:
