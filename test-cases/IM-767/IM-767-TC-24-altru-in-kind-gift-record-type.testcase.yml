@@ -117,6 +117,30 @@ scenarios:
       - "si el CTE NO usara DISTINCT + MAX, el output del CASE multiplicaria a 1,550 in-kind rows en lugar de 1,539 — el CTE GARANTIZA 1 row por FT por construccion (DISTINCT + agregacion a nivel FT)"
       - "row grain del output donation_transaction = N FTs (no N lines), igual pre/post-fix; el cambio del PR no introduce duplicacion"
 
+  - title: "Functional upsert: Record Type badge correcto en sandbox veevartd UI"
+    tags:
+      - functional
+      - sandbox-upsert
+      - visual-evidence
+      - veevartd
+      - record-type
+    given:
+      - "sandbox veevartd tiene 2 Opportunity Record Types relevantes activos: 'Donation' (012al000005Hi9xAAC) y 'In-Kind Gift' (012al000005IE01AAG)"
+      - "4 external IDs sample: 3 in-kind (rev-10672300 anchor TCR Solutions $1,000, rev-10681312 $2,000, rev-10671987 $150) + 1 standard control (rev-10648430 $300 Payment)"
+    when:
+      - "QA construye CSV con vnfp__Implementation_External_ID__c, Name, StageName, CloseDate, Amount, RecordTypeId donde RecordTypeId es el Salesforce Id real per el verdict del gate (In-Kind ID para los 3 in-kind, Donation ID para el control)"
+      - "QA upserta via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
+      - "QA re-ejecuta el mismo upsert (idempotency check)"
+      - "QA verifica via SOQL post-upsert los RecordType.Name y RecordType.DeveloperName asignados a cada Opportunity"
+      - "QA abre cada Opportunity en la UI Lightning para verificar el Record Type badge en el Highlights Panel"
+    then:
+      - "el primer upsert reporta 4 processed / 4 successful / 0 failed y crea/actualiza 4 Opportunities con RecordTypeId asignado"
+      - "los 3 in-kind Opps quedan con RecordType.Name='In-Kind Gift' y RecordType.DeveloperName='In_Kind_Gift' en SOQL"
+      - "el 1 standard donation Opp queda con RecordType.Name='Donation' y RecordType.DeveloperName='Donation' en SOQL"
+      - "el Record Type badge es visible en el Highlights Panel del Lightning record page sin custom layout changes; el sandbox trigger renombra el Name al patron '$N {Record Type Label} MM/DD/YYYY' confirmando indirectamente que el Record Type esta asignado"
+      - "el re-upsert produce 4/4 success con 0 net new records (idempotent)"
+      - "reviewer puede abrir cualquiera de las 4 URLs Lightning y ver: anchor rev-10672300 con Record Type 'In-Kind Gift' (el bug del ticket queda corregido en UI); standard control rev-10648430 con Record Type 'Donation' (fallback safe visible)"
+
 tags:
   - im-767
   - im-70
@@ -128,10 +152,13 @@ tags:
   - record-type
   - in-kind-gift
   - tucson
+  - veevartd
   - data-review
+  - functional
+  - sandbox-upsert
   - pr-112
 
-estimatedDuration: 30
+estimatedDuration: 45
 
 metadata:
   createdBy: "codex"

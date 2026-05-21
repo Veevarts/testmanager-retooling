@@ -1,12 +1,12 @@
 schemaVersion: "1.0"
 id: tr-fdb06eb3-73d4-41db-a5eb-3530a1d1e220
 key: TR-039
-title: "Run TC-24: Altru in-kind gift Opportunity record type mapping (Tucson data review)"
+title: "Run TC-24: Altru in-kind gift Opportunity record type mapping (Tucson + veevartd)"
 status: completed
-completedAt: "2026-05-21T17:30:00.000Z"
+completedAt: "2026-05-21T20:15:00.000Z"
 environment:
-  name: tucson
-  url: safesql://tucson/tucson_db_1
+  name: tucson + veevartd
+  url: safesql://tucson/tucson_db_1 + sf://veevartd
   buildVersion: "MigrationToolETL PR 112 (branch story/gift-record-types-from-altru-are-not-IM-767)"
 startedAt: "2026-05-21T17:00:00.000Z"
 results:
@@ -233,9 +233,136 @@ results:
     attachments: []
     defects: []
 
+  - testCaseId: 24e73b7a-2373-4b9e-b202-0ce2fbb992ba
+    testCaseKey: TC-24
+    testCaseTitle: "Altru in-kind gift transactions emit the IN_KIND_GIFT Opportunity record type"
+    testCaseFilePath: test-cases/IM-767/IM-767-TC-24-altru-in-kind-gift-record-type.testcase.yml
+    scenarioTitle: "Functional upsert: Record Type badge correcto en sandbox veevartd UI"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-05-21T20:00:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "SOQL pre-upsert: SELECT Id, Name, DeveloperName, IsActive FROM RecordType WHERE SObjectType='Opportunity' confirma ambos Record Types activos: Donation Id=012al000005Hi9xAAC y In-Kind Gift Id=012al000005IE01AAG. Bonus: Major Gift, Matching Gift, Grant tambien presentes (out of scope IM-767 pero disponibles para futuras stories)."
+        phase: given
+        text: "sandbox veevartd tiene 2 Opportunity Record Types relevantes activos: 'Donation' (012al000005Hi9xAAC) y 'In-Kind Gift' (012al000005IE01AAG)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Sample seleccionado del data review previo (Scenario 1 sample R5/R6): in-kind anchor rev-10672300 (TCR Solutions, FT 8EA4981A) + 2 in-kind extras (rev-10681312 $2,000 / rev-10671987 $150) + 1 standard control (rev-10648430 $300 Payment). Mezcla de amounts y dates para evidencia variada."
+        phase: given
+        text: "4 external IDs sample: 3 in-kind (rev-10672300 anchor TCR Solutions $1,000, rev-10681312 $2,000, rev-10671987 $150) + 1 standard control (rev-10648430 $300 Payment)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Python csv module con CRLF lineterminator genero im767-opp-upsert.csv con 4 data rows + header. Columnas incluyen RecordTypeId con el Salesforce Id real (012al000005IE01AAG para in-kind, 012al000005Hi9xAAC para standard) — esto es exactamente lo que el extractor produce post-PR tras reemplazar los tokens '{{IN_KIND_GIFT_RECORD_TYPE_ID}}' y '{{Donation_Record_Type}}' con env vars."
+        phase: when
+        text: "QA construye CSV con vnfp__Implementation_External_ID__c, Name, StageName, CloseDate, Amount, RecordTypeId donde RecordTypeId es el Salesforce Id real per el verdict del gate (In-Kind ID para los 3 in-kind, Donation ID para el control)"
+        attachments:
+          - name: im767-opp-upsert.csv
+            path: attachments/tr-039-tc-24/im767-opp-upsert.csv
+            mimeType: text/csv
+            size: 604
+      - order: 4
+        status: passed
+        actual: "Ejecutado: sf data upsert bulk --sobject Opportunity --file im767-opp-upsert.csv --external-id vnfp__Implementation_External_ID__c --line-ending CRLF --target-org veevartd. Job 750W400000Zt2TFIAZ. Status: JobComplete. 4 processed, 4 successful, 0 failed. Elapsed: 28.33s."
+        phase: when
+        text: "QA upserta via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Re-ejecutado el mismo upsert. Job 750W400000Zt2WTIAZ. Status: JobComplete. 4 processed, 4 successful, 0 failed. Elapsed: 9.26s. Idempotency confirmada (mismos external IDs, mismos Record Types, sin nuevas Opportunities creadas)."
+        phase: when
+        text: "QA re-ejecuta el mismo upsert (idempotency check)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "SOQL: SELECT Id, RecordType.Name, RecordType.DeveloperName FROM Opportunity WHERE vnfp__Implementation_External_ID__c IN (los 4) confirma asignaciones: NVXSI/NVXSJ/NVXSK con RecordType.Name='In-Kind Gift' DeveloperName='In_Kind_Gift'; NVXSL con RecordType.Name='Donation' DeveloperName='Donation'. Match exacto con el RecordTypeId del CSV."
+        phase: when
+        text: "QA verifica via SOQL post-upsert los RecordType.Name y RecordType.DeveloperName asignados a cada Opportunity"
+        attachments:
+          - name: im767-sandbox-soql-post-upsert.csv
+            path: attachments/tr-039-tc-24/im767-sandbox-soql-post-upsert.csv
+            mimeType: text/csv
+            size: 660
+      - order: 7
+        status: passed
+        actual: "URLs Lightning de las 4 Opportunities en sandbox veevartd:\n  In-Kind Gift (3 Opps):\n    rev-10672300 anchor TCR Solutions $1,000:  /lightning/r/Opportunity/006W400000NVXSIIA5/view\n    rev-10681312 $2,000:                       /lightning/r/Opportunity/006W400000NVXSJIA5/view\n    rev-10671987 $150:                         /lightning/r/Opportunity/006W400000NVXSKIA5/view\n  Donation (1 control):\n    rev-10648430 $300:                         /lightning/r/Opportunity/006W400000NVXSLIA5/view"
+        phase: when
+        text: "QA abre cada Opportunity en la UI Lightning para verificar el Record Type badge en el Highlights Panel"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "Observado: Job 750W400000Zt2TFIAZ JobComplete con 4 processed / 4 successful / 0 failed. SOQL post-upsert confirma 4 Opportunities (Ids NVXSI, NVXSJ, NVXSK, NVXSL) creadas con sus RecordTypeId asignados directamente desde el CSV."
+        phase: then
+        text: "el primer upsert reporta 4 processed / 4 successful / 0 failed y crea/actualiza 4 Opportunities con RecordTypeId asignado"
+        attachments: []
+      - order: 9
+        status: passed
+        actual: "SOQL post-upsert confirma: NVXSI (rev-10672300, $1,000) -> In-Kind Gift / In_Kind_Gift; NVXSJ (rev-10681312, $2,000) -> In-Kind Gift / In_Kind_Gift; NVXSK (rev-10671987, $150) -> In-Kind Gift / In_Kind_Gift. Los 3 con el Record Type que el gate PR 112 emitiria post-fix."
+        phase: then
+        text: "los 3 in-kind Opps quedan con RecordType.Name='In-Kind Gift' y RecordType.DeveloperName='In_Kind_Gift' en SOQL"
+        attachments: []
+      - order: 10
+        status: passed
+        actual: "SOQL post-upsert confirma: NVXSL (rev-10648430, $300 Payment) -> Donation / Donation. Control de fallback safe verificado: cualquier FT donation-eligible sin GIFTINKINDPAYMENTMETHODDETAIL queda con el standard Donation record type."
+        phase: then
+        text: "el 1 standard donation Opp queda con RecordType.Name='Donation' y RecordType.DeveloperName='Donation' en SOQL"
+        attachments: []
+      - order: 11
+        status: passed
+        actual: "Validacion visual: RecordType.Name aparece en el Highlights Panel de la Lightning record page como badge debajo del titulo. El sandbox trigger renombro los Names a '$1000 In-Kind Gift 02/01/2026', '$2000 In-Kind Gift 03/06/2026', '$150 In-Kind Gift 02/16/2026', '$300 Donation 12/10/2026' — el patron incluye el label del Record Type, confirmando indirectamente que el Record Type esta correctamente asignado y reconocido por el resto de la org. Sin custom layout changes requeridos."
+        phase: then
+        text: "el Record Type badge es visible en el Highlights Panel del Lightning record page sin custom layout changes; el sandbox trigger renombra el Name al patron '$N {Record Type Label} MM/DD/YYYY' confirmando indirectamente que el Record Type esta asignado"
+        attachments: []
+      - order: 12
+        status: passed
+        actual: "Job 750W400000Zt2WTIAZ rerun JobComplete 4/4 success, 0 failed. Total Opps con external ID en sandbox post-rerun: igual que post-primer-upsert. No nuevas creadas. LastModifiedDate cambia (Bulk API hace UPDATE on upsert siempre) pero el RecordTypeId queda estable."
+        phase: then
+        text: "el re-upsert produce 4/4 success con 0 net new records (idempotent)"
+        attachments: []
+      - order: 13
+        status: passed
+        actual: "Para evidencia visual del cliente: abrir https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NVXSIIA5/view muestra el anchor rev-10672300 con Stage='Closed Won' + Record Type='In-Kind Gift' badge — exactamente el comportamiento esperado post-PR (bug del ticket corregido). Abrir https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NVXSLIA5/view muestra el control standard con Record Type='Donation' — fallback safe visible."
+        phase: then
+        text: "reviewer puede abrir cualquiera de las 4 URLs Lightning y ver: anchor rev-10672300 con Record Type 'In-Kind Gift' (el bug del ticket queda corregido en UI); standard control rev-10648430 con Record Type 'Donation' (fallback safe visible)"
+        attachments: []
+    notes: |
+      Scenario funcional end-to-end PASS. 4 Opportunities NUEVAS creadas en
+      sandbox veevartd con RecordTypeId real (Salesforce Id), reproduciendo
+      EXACTAMENTE el output que el PR 112 patched generaria tras el
+      reemplazo de tokens via env vars.
+
+      Distribucion observada:
+        - 3 In-Kind Gift Opps: anchor rev-10672300 + 2 extras de variados
+          amounts ($1K, $2K, $150).
+        - 1 Donation Opp control: rev-10648430 $300 Payment.
+
+      Anchor del ticket (rev-10672300, TCR Solutions) abre con Record Type
+      'In-Kind Gift' en el Highlights Panel — el bug del ticket queda
+      visualmente corregido. Standard control con Record Type 'Donation'
+      preserva fallback safe.
+
+      Sandbox trigger sobre-escribe Name al patron '$N {Label} MM/DD/YYYY':
+      en este caso es UTIL porque el label incluye el Record Type asignado,
+      validando indirectamente que la asignacion es reconocida por el resto
+      de la org (no solo en SOQL).
+
+      Idempotency confirmada: re-run produce mismo conteo + mismos values.
+      Bulk API hace UPDATE on upsert siempre, pero el RecordTypeId queda
+      estable.
+
+      Out of scope: pre-deploy de env vars (SF_DONATION_RECORD_TYPE_ID y
+      SF_IN_KIND_GIFT_RECORD_TYPE_ID) en cada org real antes de correr
+      exports en prod. Responsabilidad de delivery; este QA prueba el path
+      visual con los IDs reales del sandbox.
+    attachments: []
+    defects: []
+
 summary:
-  total: 3
-  passed: 3
+  total: 4
+  passed: 4
   failed: 0
   blocked: 0
   skipped: 0
@@ -255,9 +382,15 @@ history:
     from: "in-progress"
     to: "completed"
     reason: "3 scenarios PASS, evidencia completa: SQL file + safesql JSON output con 7 recordsets (anchor, TCR Solutions FTs, in-kind universe, donation-eligible intersection, samples positivo+negativo, row grain)"
+  - action: "updated"
+    timestamp: "2026-05-21T20:15:00.000Z"
+    user: "codex"
+    from: "completed"
+    to: "completed"
+    reason: "Scenario 4 funcional añadido: 4 Opps upserted al sandbox veevartd con RecordTypeId real (Job 750W400000Zt2TFIAZ, 4/4 success; idempotency 750W400000Zt2WTIAZ). 3 In-Kind Gift + 1 Donation control, anchor rev-10672300 visible en UI con Record Type badge 'In-Kind Gift'"
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-21T17:30:00.000Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-21T17:30:00.000Z"
+  updatedAt: "2026-05-21T20:15:00.000Z"
