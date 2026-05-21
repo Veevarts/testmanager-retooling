@@ -112,31 +112,24 @@ scenarios:
       - "Bucket C (sin link de refund): no entra al join LEFT en ningun lado del gate, por lo que no esta en ninguno de los 845 — comportamiento sin cambio, fuera del scope del PR"
       - "El gate es monotonic: ningun StageName que era Closed Won con la regla vieja se vuelve Closed Lost con la nueva (verificable como rso_new ⊆ rso_old; lo mismo para rmta y rmtb)"
 
-  - title: "Functional upsert: gate verdicts visibles en sandbox veevartd UI"
+  - title: "Opportunity con refund parcial queda Closed Won (sandbox veevartd)"
     tags:
       - functional
-      - sandbox-upsert
-      - visual-evidence
+      - partial-refund
+      - opportunity
       - veevartd
     given:
-      - "12 external IDs sample del flip set Tucson seleccionados: 4 rso_partial + 1 rso_complete + 2 rmta_partial + 1 rmta_complete + 3 rmtb_partial + 1 rmtb_complete"
-      - "para cada external ID, el gate PR 111 evaluo el StageName final (Closed Won para refund parcial, Closed Lost para refund completo)"
+      - "una Opportunity anchor representa un caso del flip set Tucson con refund PARCIAL: rso $5,275 original / $5,000 refund (NUKP3, ext_id C8A4972F-F89D-4B12-A727-6BC1B0371300)"
+      - "una Opportunity control representa un caso de refund COMPLETO: rso $3,000 original / $3,000 refund (NUKP7, ext_id 9EF69B07-0385-46C3-B9FC-C53C354E54E0)"
+      - "ambas existen en el sandbox veevartd con su Payment original (npe01__OppPayment__c) y sus 2 Fund Donation Assignments (1 Sold por el monto original + 1 Refunded por el monto del refund, convencion real de prod Tucson)"
     when:
-      - "QA genera un CSV enriquecido (vnfp__Implementation_External_ID__c, Name, StageName, CloseDate, Amount, vnfp__Refunded_Amount__c, Description) con los 12 rows"
-      - "QA upserta el CSV via Bulk API 2.0 (sf data upsert bulk --line-ending CRLF --external-id vnfp__Implementation_External_ID__c)"
-      - "QA inserta via Bulk API 2.0 12 npe01__OppPayment__c records (uno por Opportunity, npe01__Payment_Amount__c positivo = original, Type='Payment (original)')"
-      - "QA limpia los Payments auto-generados por el NPSP Opportunity trigger (positive amount, Type=null) para dejar exactamente 1 Payment por Opportunity"
-      - "QA inserta via Bulk API 2.0 24 Auctifera__Fund_Donation_Assignment__c records (2 por Opportunity: uno original con Status='Sold'/Accounting_Status='Posted'/Action_Type=null/Donated_Amount=original; uno refund con Status='Refunded'/Accounting_Status='Refunded'/Action_Type='Refunded'/Donated_Amount=total_refund). Esta es la convencion real de prod Tucson: el refund se registra a nivel de Fund Donation Assignments, NO como negative-amount Payment"
-      - "QA re-ejecuta el mismo upsert (idempotency check)"
-      - "QA abre cada Opportunity en la UI Lightning para verificar Stage + Amount + Refunded Value + Description + Payments related list (1 original) + Fund Donation Assignments related list (1 Sold/Posted + 1 Refunded)"
+      - "QA abre la Opportunity anchor (refund parcial) en la UI Lightning y verifica Stage badge + Amount + Refunded Value + Payments related list + Fund Donation Assignments related list"
+      - "QA abre la Opportunity control (refund completo) y verifica los mismos elementos"
     then:
-      - "el primer upsert Opportunity reporta 12 processed / 12 successful / 0 failed y crea/actualiza 12 Opportunities en sandbox (count de Opportunities con external ID sube de 33 a 45 en la corrida inicial; en corridas posteriores se mantiene 45)"
-      - "el insert Payments reporta 12 processed / 12 successful / 0 failed (uno original positivo por Opportunity); el delete de Payments auto-trigger reporta 9 success (auto-payment se crea solo para los 9 Closed Won; los 3 Closed Lost no disparan auto-creation)"
-      - "el insert Fund Donation Assignments reporta 24 processed / 24 successful / 0 failed (2 por Opportunity: 1 Sold/Posted con Donated_Amount=original + 1 Refunded con Donated_Amount=total_refund linkeada al Technical Payment)"
-      - "los 9 rows del bucket partial (4 rso + 2 rmta + 3 rmtb) quedan con StageName='Closed Won' en SOQL y muestran en UI: Amount > Refunded Value en Details; FDA Sold con monto original + FDA Refunded con monto refund (refund parcial visible y trazable a nivel FDA, igual que en prod)"
-      - "los 3 rows del bucket complete (1 rso + 1 rmta + 1 rmtb) quedan con StageName='Closed Lost' en SOQL y muestran en UI: Amount == Refunded Value en Details; FDA Sold con monto original + FDA Refunded con mismo monto absoluto (refund completo visible y trazable a nivel FDA)"
-      - "el campo Stage es visible en el Highlights Panel; Amount y Refunded Value en la seccion Details (campos standard + vnfp__Refunded_Amount__c sin custom layout changes); Description documenta el contrato del gate (ABS(refund) vs ABS(original)); Payments related list expone 1 record original + Fund Donation Assignments related list expone 2 records (Sold/Posted + Refunded), reproduciendo el modelo real de prod Tucson"
-      - "el re-upsert produce 12/12 success con 0 net new records (idempotent; total Opportunities con external ID se mantiene en 45)"
+      - "la Opp anchor (refund parcial) muestra Stage='Closed Won', Amount=$5,275, Refunded Value=$5,000, diff $275 visible. Pre-fix esta Opp habria quedado Closed Lost (cualquier link de refund forzaba Lost); con el gate PR 111 queda Closed Won porque ABS($5,000) < ABS($5,275)"
+      - "la Opp control (refund completo) muestra Stage='Closed Lost', Amount=$3,000, Refunded Value=$3,000, diff $0. Comportamiento identico pre/post-fix porque ABS($3,000) >= ABS($3,000)"
+      - "ambas Opps exponen en el related list Fund Donation Assignments un FDA Sold (Status='Sold', Action_Type=null, Donated_Amount=original) + un FDA Refunded (Status='Refunded', Action_Type='Refunded', Donated_Amount=refund). El record del refund es trazable como entity propia, no como negative payment"
+      - "la diferencia visible entre las 2 Opps (Stage badge Won vs Lost + ratio Refunded/Amount 95% vs 100%) prueba que el gate PR 111 discrimina correctamente refund parcial vs completo a nivel de la UI funcional, replicando el modelo de datos real de prod Tucson"
 
 tags:
   - im-762
