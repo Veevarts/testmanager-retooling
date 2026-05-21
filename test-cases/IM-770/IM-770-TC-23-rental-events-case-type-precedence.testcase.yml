@@ -1,0 +1,134 @@
+schemaVersion: "1.0"
+
+id: "4f3f02d2-6bbf-4c1b-8e9f-818cc59aa3ae"
+key: "TC-23"
+title: "rental_events_groups.sql CASE type-precedence fix preserves full RESERVATION universe"
+description: |
+  Cobertura QA de IM-770 (PR 113 en MigrationToolETL) que parchea el CASE
+  de `Auctifera__Client_Contact__c` en
+  `src/data-migration/infrastructure/destination/sql-server/queries/rental-event/rental_events_groups.sql`.
+
+  Bug: el CASE mezclaba el literal nvarchar `'[ANONYMOUS_CONTACT]'`
+  (introducido por IM-539 para reservaciones huerfanas) con
+  `so.CONSTITUENTID` (uniqueidentifier). SQL Server infiere el tipo del
+  CASE como uniqueidentifier (mayor precedencia) e intenta implicit cast
+  del literal nvarchar a GUID al evaluar la rama anonymous -> falla con
+  `Conversion failed when converting from a character string to
+  uniqueidentifier`.
+
+  El driver mssql streamea row-by-row, asi que el extractor recibe rows
+  validos hasta toparse con el primer RESERVATION huerfano y muere el
+  stream. En Tucson el ticket reporta 13 de 1547 rows entregadas antes
+  del error.
+
+  Fix: `CAST(so.CONSTITUENTID AS NVARCHAR(36))` en la rama del GUID, asi
+  el CASE resuelve a nvarchar y el placeholder literal sigue siendo
+  valido. Una sola linea cambia (PR 113 +1/-1).
+
+  Tucson aggregates confirmados (snapshot 2026-05-21 via safesql):
+  - RESERVATION total: 1501 (ticket reporta 1547 — snapshot drift de 46
+    rows entre la fecha del PR y hoy, consistente con cancelaciones).
+  - Rama anonymous (NULL u orphaned CONSTITUENTID): 16 rows (EXACTO al
+    ticket).
+  - Rama GUID valido (isOrganization=0 AND isGroup=0 AND
+    isConstituent=1): 843 rows -> emite CAST GUID como nvarchar.
+  - Rama ELSE NULL (CONSTITUENTID matchea pero no cumple condicion de
+    persona individual — organizaciones, groups, no-constituents):
+    642 rows -> emite NULL.
+  - Total emitido por el query patched: 1501 (paridad exacta con
+    `COUNT(*) FROM RESERVATION`).
+
+  Anchor cases en Tucson (rows que disparaban el bug):
+  - CB1AD76B-...-029C8D096B12 "Adult Group - Guinn"
+  - C0C7622E-...-0490CF68553D "Zaragoza"
+  - A4395FC0-...-14317B647BD0 "Rain Bird Senior Staff Dinner"
+  - 7FD3E9B0-...-26DDA6213D35 "Christy DeMeyer-Community Youth Group"
+  - DCC6CA67-...-2B4B00AECE17 "Ava June's Sweet 16"
+  Todos con CONSTITUENTID poblado en SALESORDER pero sin row match en
+  CONSTITUENT (orphaned reference).
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/113
+  - Branch: bug/rental-events-case-type-precedence-IM-770
+  - Issue: https://veevart.atlassian.net/browse/IM-770
+  - PR predecesor: PR 80 (IM-539) introdujo el placeholder.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre RESERVATION, SALESORDER, CONSTITUENT, CONSTITUENTHOUSEHOLD en Tucson"
+  - "Branch `bug/rental-events-case-type-precedence-IM-770` checkeada para referencia del CAST"
+  - "Snapshot Tucson posterior a la fecha del PR (drift esperado en RESERVATION count)"
+
+format: gherkin
+scenarios:
+  - title: "Type-precedence resolution: patched CASE emite todas las RESERVATIONs sin error"
+    tags:
+      - data-review
+      - type-precedence
+      - tucson
+    given:
+      - "el CASE original mezcla literal nvarchar '[ANONYMOUS_CONTACT]' con so.CONSTITUENTID (uniqueidentifier), forzando la inferencia del result type a uniqueidentifier y el implicit cast del literal a GUID en runtime"
+      - "PR 113 envuelve la rama del GUID en CAST(so.CONSTITUENTID AS NVARCHAR(36)), forzando el result type a nvarchar"
+    when:
+      - "QA corre la version patched del CASE sobre Tucson contando los rows emitidos por rama"
+    then:
+      - "el query patched emite 1501 rows totales (paridad exacta con COUNT(*) FROM RESERVATION)"
+      - "ningun row produce 'Conversion failed when converting from a character string to uniqueidentifier' — el stream completa sin error"
+      - "la rama anonymous emite el literal nvarchar '[ANONYMOUS_CONTACT]' sin colision de tipo"
+      - "la rama del GUID emite el CONSTITUENTID convertido a NVARCHAR(36) (formato 8-4-4-4-12 lowercase, e.g. 'e038d8a0-77c7-4eaf-93d6-001df554dbc9')"
+
+  - title: "Row breakdown por rama del CASE (anonymous + valid GUID + NULL else)"
+    tags:
+      - data-review
+      - row-breakdown
+    given:
+      - "Tucson tiene 1501 rows en RESERVATION (snapshot 2026-05-21; el ticket original reporto 1547 — drift de 46 rows)"
+    when:
+      - "QA particiona el universo segun la rama del CASE evaluada por cada RESERVATION"
+    then:
+      - "16 rows caen en la rama anonymous (so.CONSTITUENTID IS NULL OR c.ID IS NULL) — match EXACTO al ticket, son las que disparaban el bug"
+      - "843 rows caen en la rama del GUID valido (constituent es persona: ISORGANIZATION=0 AND ISGROUP=0 AND ISCONSTITUENT=1)"
+      - "642 rows caen en el ELSE NULL (constituent es organization/group o no-constituent — el CASE emite NULL, comportamiento sin cambio en PR 113)"
+      - "suma 16 + 843 + 642 = 1501 = RESERVATION total — no se pierde ni se duplica ningun row"
+
+  - title: "Anchor verification: 5 RESERVATIONs huerfanas emiten '[ANONYMOUS_CONTACT]' literal"
+    tags:
+      - data-review
+      - anchor
+      - placeholder
+      - im-539-intent
+    given:
+      - "5 anchor RESERVATIONs identificadas en Tucson con CONSTITUENTID poblado pero sin row en CONSTITUENT (orphaned reference)"
+      - "los 5 anchors son: 'Adult Group - Guinn' (CB1AD76B), 'Zaragoza' (C0C7622E), 'Rain Bird Senior Staff Dinner' (A4395FC0), 'Christy DeMeyer-Community Youth Group' (7FD3E9B0), 'Ava June's Sweet 16' (DCC6CA67)"
+    when:
+      - "QA ejecuta el query patched y selecciona el output Auctifera__Client_Contact__c de las 5 anchor rows"
+    then:
+      - "los 5 anchors emiten literalmente '[ANONYMOUS_CONTACT]' como valor de Auctifera__Client_Contact__c — preserva el intent de IM-539 (placeholder para operator-driven replacement antes del upload)"
+      - "ninguno emite NULL ni el GUID original — el bug original disfrazaba estos rows como faltantes en el output al hacer streaming-die"
+      - "sample positive control: 3 RESERVATIONs con constituent valido emiten su CONSTITUENTID como string (e.g. Jepsen/Beckman Ceremony -> 'e038d8a0-77c7-4eaf-93d6-001df554dbc9'), confirmando el formato del CAST"
+
+tags:
+  - im-770
+  - im-539
+  - altru
+  - migration-tool-etl
+  - rental-event
+  - sql-server
+  - type-precedence
+  - anonymous-contact
+  - tucson
+  - data-review
+  - pr-113
+
+estimatedDuration: 25
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-21T15:10:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-21T15:10:00Z"
+  version: 1
