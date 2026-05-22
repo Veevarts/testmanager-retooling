@@ -3,7 +3,7 @@ id: tr-8b001433-50e7-470a-b7be-889145cdc0a9
 key: TR-040
 title: "Run TC-25: Donation opportunity keys alignment for refunds (Tucson + veevartd)"
 status: completed
-completedAt: "2026-05-22T13:35:00.000Z"
+completedAt: "2026-05-22T14:30:00.000Z"
 environment:
   name: tucson + veevartd
   url: safesql://tucson/tucson_db_1 + sf://veevartd
@@ -425,19 +425,54 @@ results:
         phase: then
         text: "reconciliacion contable: el Payment Opp ahora muestra Amount $100 con $100 Refunded = $0 net (refund completo), accionable desde reportes; pre-fix la atribucion incorrecta al Order distorsionaba balances"
         attachments: []
+      - order: 12
+        status: passed
+        actual: "Correccion aplicada por feedback del reviewer ('por que ambas estan paid?'). Estado inicial del sandbox tenia 2 npe01__OppPayment__c auto-generados por el NPSP trigger (1 bajo cada Opp con StageName=Closed Won y Amount>0). Eso no reflejaba la migracion real (en Altru solo el Payment FT carga dinero; el Order es compromiso). Pasos correctores: (a) sf data delete bulk para borrar el Payment auto-creado bajo Order Opp NX5A9 (Job 750W400000Zug0VIAR, 1/1 success); (b) update Payment Opp NX5AA Payment a npsp__Type__c='Payment (original)' + Payment_Date=2023-12-31; (c) update Order Opp NX5A9 StageName='Pledged' para suprimir el auto-payment trigger y reflejar semantica de compromiso pendiente."
+        phase: when
+        text: "QA corrige el sandbox para suprimir auto-payments del NPSP trigger en la Order Opp y dejar el modelo fiel a la migracion real (Payment record solo bajo la Payment Opp)"
+        attachments:
+          - name: im375-functional-soql-corrected-opps.csv
+            path: attachments/tr-040-tc-25/im375-functional-soql-corrected-opps.csv
+            mimeType: text/csv
+            size: 320
+          - name: im375-functional-soql-corrected-payments.csv
+            path: attachments/tr-040-tc-25/im375-functional-soql-corrected-payments.csv
+            mimeType: text/csv
+            size: 200
+          - name: im375-functional-soql-corrected-fdas.csv
+            path: attachments/tr-040-tc-25/im375-functional-soql-corrected-fdas.csv
+            mimeType: text/csv
+            size: 250
+      - order: 13
+        status: passed
+        actual: "Estado final corregido: Order Opp NX5A9 Stage='Pledged' (compromiso, no pago) con 1 FDA Sold $100 + 0 Payments. Payment Opp NX5AA Stage='Closed Won' (pago recibido) con 1 Payment record $100 (Type='Payment (original)', Paid=true) + 1 FDA Sold $100 + 1 FDA Refunded $100. Ahora la asimetria visual cuenta la historia correcta: el Order tiene compromiso sin dinero atribuido; el Payment tiene dinero recibido y un refund que lo neutraliza."
+        phase: then
+        text: "estado final fiel a la migracion real: Order Opp en 'Pledged' sin payments (el order es compromiso, no entrada de dinero); Payment Opp en 'Closed Won' con 1 Payment $100 + 1 FDA Refunded $100 (el dinero entro y se devolvio)"
+        attachments: []
     notes: |
-      Scenario funcional end-to-end PASS en sandbox veevartd. 2 Opps + 3
-      FDAs creados reproducen el par tipico Altru Order+Payment+Refund:
-        - Order Opp (rev-10449528, NX5A9): 1 FDA Sold $100. Sin refund.
-          Demuestra que post-fix el refund NO se atribuye al Order.
-        - Payment Opp (rev-10449527, NX5AA): 1 FDA Sold + 1 FDA Refunded
-          ($100 cada uno). Demuestra que post-fix el refund se atribuye
-          al Payment canonico (correcto).
+      Scenario funcional end-to-end PASS en sandbox veevartd, corregido tras
+      feedback del reviewer ('por que ambas estan paid?').
 
-      Para evidencia visual: abrir ambas URLs lado a lado en el browser y
-      capturar las related lists 'Fund Donation Assignments'. La diferencia
-      (Order: 1 FDA, Payment: 2 FDAs incluido el Refunded) prueba el
-      comportamiento del fix sin ambiguedad.
+      Estado FINAL (corregido):
+        - Order Opp (rev-10449528, NX5A9): Stage='Pledged', Amount=$100,
+          0 Payment records, 1 FDA Sold. Representa el compromiso del
+          donante sin atribuir dinero recibido — fiel a Altru.
+        - Payment Opp (rev-10449527, NX5AA): Stage='Closed Won', Amount=$100,
+          1 Payment record ($100, Type='Payment (original)', Paid=true),
+          1 FDA Sold + 1 FDA Refunded ($100 cada uno). Representa el ingreso
+          real del dinero y su devolucion subsecuente.
+
+      Asi el sandbox cuenta la historia correcta:
+        - "Donante prometio $100" -> queda en Order Opp como Pledged
+        - "Donante pago los $100" -> queda en Payment Opp como Closed Won
+          con Payment record visible
+        - "Despues pidio refund de $100" -> queda como FDA Refunded en la
+          Payment Opp (no en la Order Opp — eso es lo que IM-375 corrige)
+
+      Pre-fix el refund FDA se habria atribuido a la Order Opp (linkeado
+      via SOURCELINEITEMID -> source FT que es el Order). Post-fix se
+      atribuye a la Payment Opp (linkeado via CREDITPAYMENT -> Payment
+      original).
 
       Anchor del ticket (Muhammad Order 10356776 / 10022998) no presente
       en Tucson snapshot 2026-05-22. El anchor tucsonense rev-10449528 /
@@ -474,9 +509,15 @@ history:
     from: "completed"
     to: "completed"
     reason: "Aplicado strict review flow: side-by-side pre/post + scope-fit + touch radius + behavioral diff CORRECTO + Scenario 4 funcional. Hallazgo critico: TR-040 v1 confundio universo de line items (58,488) con universo de Opportunities (55,317); pre-fix YA agregaba por FT via TransactionAgg CTE. El delta real del PR es (a) RGI adoption en 2,087 donation Opps y (b) refund Opp re-link en 100% (188/188) de los donation refunds. Scenario 4 funcional ejecutado en veevartd: anchor rev-10449528 (Order) + rev-10449527 (Payment) con refund $100 attached al Payment Opp post-fix correcto"
+  - action: "updated"
+    timestamp: "2026-05-22T14:30:00.000Z"
+    user: "codex"
+    from: "completed"
+    to: "completed"
+    reason: "Sandbox corregido por feedback del reviewer ('por que ambas estan paid?'): Order Opp NX5A9 movida a Stage=Pledged + auto-payment eliminado (Job 750W400000Zug0VIAR); Payment Opp NX5AA Payment record actualizado con Type='Payment (original)'. Ahora el sandbox modela fielmente la migracion real: Order=compromiso sin dinero, Payment=ingreso + refund subsecuente. Steps 12-13 agregados a Scenario 4"
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-21T22:30:00.000Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-22T13:35:00.000Z"
+  updatedAt: "2026-05-22T14:30:00.000Z"
