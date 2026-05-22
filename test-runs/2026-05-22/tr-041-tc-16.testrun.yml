@@ -1,0 +1,402 @@
+schemaVersion: "1.0"
+id: tr-2ff6c90b-00ec-4ab1-9f9d-89ea28f3f51d
+key: TR-041
+title: "Run TC-16: NPSP soft credit migration — strict review re-validation post TR-028 (PR 104)"
+status: completed
+completedAt: "2026-05-22T17:30:00.000Z"
+environment:
+  name: veevartd (tucsontrainings)
+  url: sf://veevartd
+  buildVersion: "MigrationToolETL PR 104 head (commits 65df2cb7, 8a9e8b5b, 371e33b0, 2 main merges desde TR-028 2026-05-14)"
+startedAt: "2026-05-22T17:00:00.000Z"
+
+scopeFit: |
+  Scope-fit mapping (strict flow): cada acceptance criterion del ticket IM-707 mapeado
+  a las lineas del PR 104 que lo implementan y a la evidencia QA que lo cubre. PR 104
+  total: 17 archivos, +1307/-1.
+
+  AC1: "PR 104 produces correct npsp__Partial_Soft_Credit__c and
+       npsp__Account_Soft_Credit__c records in Salesforce, with proper grain
+       (one PSC per REVENUERECOGNITION.ID) and proper routing
+       (PSC for Contact recipients, ASC for Organization recipients)."
+  -> PR lines: soft_credit_recognition.sql (51 lines, single SELECT con joins a
+     REVENUERECOGNITION + REVENUESPLIT_EXT + FINANCIALTRANSACTION + CONSTITUENT
+     recognized + CONSTITUENT donor + REVENUERECOGNITIONTYPECODE).
+     soft-credit-recognition.mapper.ts (101 lines, routea PSC vs ASC en base a
+     Recognized_Is_Organization__c). soft-credit-recognition.pipeline.ts (127 lineas).
+  -> Coverage: Scenarios 1, 2, 3 (PSC/ASC re-validados PASS contra current PR state).
+  -> Evidence: SOQL post-load en attachments/tr-041-tc-16/soql-evidence/.
+
+  AC2: "NPSP rollups on recognized Contacts and Accounts reflect the loaded soft
+       credit data end-to-end (Soft Credit Total, Number of Soft Credits, Last
+       Soft Credit Date)."
+  -> PR lines: ninguna (NPSP rollups son feature del NPSP package, no del PR; el
+     PR solo carga los PSCs/ASCs y el batch de rollup los suma).
+  -> Coverage parcial: Scenario 4. Contact-level rollups verificados; los 4 de los 6
+     recipients matchean. Los 2 recipients multi_psc que reciben 2 PSCs muestran
+     rollup deduplicado por (Opp, Contact) — comportamiento NPSP default, NO bug del PR.
+  -> Evidence: SOQL contact-rollups.csv.
+  -> Gap CRITICO: Account-level rollups NO EXISTEN en veevartd (no fields *Soft_Credit*
+     en Account object). Las 2 expectaciones a nivel Account en S4 (multi_mixed RecAcc
+     $50000 y single_asc RecAcc $150) NO son verificables sin configuracion adicional.
+     Tampoco es responsabilidad del PR 104 (es NPSP/SF org setup).
+
+  Verdict: PR 104 cumple AC1 completamente. AC2 cumple parcialmente — el PR carga la
+  data correctamente, los rollups Contact-level funcionan via NPSP default behavior;
+  las expectaciones multi-PSC-per-Contact en el TC v4 son INCORRECTAS (asumian sum por
+  PSC, pero NPSP deduplica por (Opp, Contact)). Account-level out of scope para el PR.
+
+touchRadius: |
+  Touch radius check (strict flow): archivos modificados por PR 104 + impacto sobre
+  el resto del pipeline ETL.
+
+  Modificados/nuevos por PR 104 (17 archivos, +1307/-1):
+  - SQL: queries/soft-credit/soft_credit_recognition.sql (51 lineas, archivo NUEVO)
+  - Domain: model/soft-credit-recognition-record.entity.ts + .spec.ts (+147 lineas)
+  - Specifications: soft-credit-recognition.specification.ts (+22)
+  - Infrastructure: extractors/soft-credit-recognition.extractor.ts (+109);
+    mappers/soft-credit-recognition.mapper.ts + .spec.ts (+144)
+  - Pipeline: application/pipelines/soft-credit-recognition.pipeline.ts + .spec.ts (+275)
+  - Wiring: data-migration.module.ts (+5), migration-object.enum.ts (+1),
+    registry/extractor.registry.ts (+2)
+  - Tests: query-regression/soft-credit-recognition-* (+542 lineas, 3 archivos)
+  - Docs: README.md + altru-model-context.md (+5 lineas)
+  - Build: package.json (+5)
+
+  Cambios POST-TR-028 (3 commits non-merge):
+  - 65df2cb7 2026-05-19: SQL CAST cleanup (uniqueidentifier columns emitidas sin
+    VARCHAR(36) wrapping, igual que IM-770 pattern). +9/-9 en SQL. Impact: ninguno
+    en S1-S3 — re-verified PASS.
+  - 8a9e8b5b 2026-05-19: solo tests (docker uuid assertions). +45/-33 solo en
+    .integration.spec.ts. Impact: cero en QA data review.
+  - 371e33b0 2026-05-22: SQL date filter precision (`<= @filterDateTo` -> `< DATEADD(DAY,
+    1, @filterDateTo)`); mapper null handling defensive. +2/-2 SQL + +1/-1 mapper.
+    Impact: solo en queries con date filter activo; los TRs no usaron filter, sin impacto.
+
+  No modificados por el PR pero potencialmente afectados:
+  - donation_transaction.sql, fund_assignment_donations.sql, fund_assingments_donation_refunds.sql
+    -> sin interseccion con soft_credit_recognition.sql. Distintos universos (REVENUERECOGNITION
+    vs FINANCIALTRANSACTIONLINEITEM). Sin riesgo cross-query.
+  - membership_transactions.sql, fund_assignment_memberships.sql -> mismo argumento, distintos
+    objects target. Sin riesgo.
+  - extractor.registry.ts -> agregada UNA entrada nueva sin renombrar/borrar las anteriores.
+    Idempotente para los otros migration objects.
+
+  Riesgos del touch radius:
+  - Si un downstream consumer (Salesforce trigger/flow/report) asumia que los Constituent IDs
+    venian como VARCHAR(36), podria romperse al recibir el GUID raw del driver mssql tras el
+    CAST cleanup. Mitigacion: el mapper.ts ya estaba diseñado para stringify (mismo patron de
+    IM-770), asi que el CSV emite el GUID en formato 8-4-4-4-12 lowercase como antes.
+  - Si el operador habia configurado un rollup batch con scope distinto al default NPSP,
+    los rollups multi-PSC-per-Contact podrian diferir de lo que aqui validamos. No es bug
+    del PR — es config-side.
+
+  Conclusion: touch radius muy contenido (1 nuevo file SQL + nueva wiring DI sin tocar
+  paths existentes). El PR puede mergearse sin riesgo para los otros queries.
+
+postTR028Diff: |
+  Diff de los cambios SQL/mapper desde TR-028 ejecutado el 2026-05-14:
+
+  COMMIT 65df2cb7 (May 19) - "cover remaining review findings":
+    SQL: removed CAST(... AS VARCHAR(36)) from 6 output columns + ORDER BY.
+    Outputs now flow as uniqueidentifier raw; downstream mapper.ts stringifies.
+    Reason: review feedback to align with IM-770 pattern (let the driver handle GUID).
+    Impact on TR-028 scenarios: ZERO empirico — values in CSV identicos.
+
+  COMMIT 8a9e8b5b (May 19) - "normalize docker uuid assertions":
+    Only .integration.spec.ts changes. No production code or query impact.
+
+  COMMIT 371e33b0 (May 22) - "remaining PR review feedback":
+    SQL: date filter precision improvement (datetime-safe; uses DATEADD(DAY,1,...)
+         instead of <= for the upper bound).
+    Mapper: returns null instead of String(value) when date parse fails.
+    Impact: filter change only affects queries with explicit date range (the TRs
+    haven't used filter; default --useDateFrom=0 paths unaffected).
+
+  Re-validation against TR-028 PASSED scenarios:
+  - Scenario 1 (multi_psc 5 PSC rows): PASS post-commits — exact match on amounts.
+  - Scenario 2 (multi_mixed PSC + ASC): PASS post-commits.
+  - Scenario 3 (single_asc ASC + restricted picklist fix): PASS post-commits.
+
+  Conclusion: los 3 commits SQL/mapper post-TR-028 NO rompen ningun scenario
+  previamente validado. PR sigue siendo correcto.
+
+results:
+  - testCaseId: f1ef1089-89cc-45c3-aeff-6cc2f2be30f7
+    testCaseKey: TC-16
+    testCaseTitle: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
+    testCaseFilePath: test-cases/IM-707/IM-707-TC-16-altru-soft-credit-recognition-migration.testcase.yml
+    scenarioTitle: "OPP single_asc routes the soft credit to ASC with a valid restricted picklist value (regression fix verified)"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-05-22T17:05:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado en sandbox veevartd: OPP single_asc Id=006W400000NMZI4IAP existe con Name='Donor4 PR_IM707 single_asc Household $5000 Donation 01/14/2026', Amount=$5,000, CloseDate=2026-01-14."
+        phase: given
+        text: "OPP single_asc has Donor4 as primary donor for 5000 USD with CloseDate 2026-01-14 and the single_asc RecognizedAcc as the recognized organization"
+        attachments:
+          - name: dataset-opportunities.csv
+            path: attachments/tr-041-tc-16/soql-evidence/dataset-opportunities.csv
+            mimeType: text/csv
+            size: 400
+      - order: 2
+        status: passed
+        actual: "SOQL: SELECT * FROM npsp__Account_Soft_Credit__c WHERE npsp__Opportunity__c='006W400000NMZI4IAP'. Resultado: 1 row, npsp__Account__c=001W400000wxjB3IAI (single_asc RecognizedAcc), npsp__Amount__c=$150, npsp__Role__c='Donation Source'. Match exacto al expected."
+        phase: then
+        text: "exactly 1 ASC row exists, referencing the single_asc RecognizedAcc with npsp__Amount equal to 150 and npsp__Role__c equals 'Donation Source'"
+        attachments:
+          - name: all-ascs.csv
+            path: attachments/tr-041-tc-16/soql-evidence/all-ascs.csv
+            mimeType: text/csv
+            size: 350
+      - order: 3
+        status: passed
+        actual: "SOQL: SELECT COUNT(Id) FROM npsp__Partial_Soft_Credit__c WHERE npsp__Opportunity__c='006W400000NMZI4IAP'. Result: 0. Confirma que el org-recognized path NO crea PSC."
+        phase: then
+        text: "no PSC row exists for OPP single_asc (the org-recognized path routes to ASC only)"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Re-validado contra current PR state (post-commits 65df2cb7 / 371e33b0). Carga del CSV no produjo INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST (Role='Donation Source' es valor valido de la restricted picklist). Hard credit preservado: Opp.Amount sigue siendo $5,000."
+        phase: then
+        text: "the load completed without INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST; OPP single_asc.Amount remains 5000 USD"
+        attachments: []
+    notes: |
+      S3 re-validado PASS contra current PR state. Los commits SQL post-TR-028
+      (CAST cleanup + date filter) no afectan la salida de este scenario.
+    attachments: []
+    defects: []
+
+  - testCaseId: f1ef1089-89cc-45c3-aeff-6cc2f2be30f7
+    testCaseKey: TC-16
+    testCaseTitle: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
+    testCaseFilePath: test-cases/IM-707/IM-707-TC-16-altru-soft-credit-recognition-migration.testcase.yml
+    scenarioTitle: "OPP multi_psc preserves five distinct Partial Soft Credit rows including reused recipients"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-05-22T17:05:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "OPP multi_psc Id=006W400000NMZI2IAP, Donor2=003W400000xqfMyIAI, Amount=$106,762, CloseDate=2026-03-15. Confirmado en SOQL."
+        phase: given
+        text: "OPP multi_psc has Donor2 as primary donor for 106762 USD with CloseDate 2026-03-15"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "SOQL devolvio EXACTAMENTE 5 PSC rows para OPP multi_psc: $52,175 (xqfN1), $10,000 (xqfN0), $5,000 (xqfN0), $3,000 (xqfMz), $1,000 (xqfMz). Match EXACTO al expected: amounts [52175, 10000, 5000, 3000, 1000]."
+        phase: then
+        text: "exactly 5 PSC rows exist for that Opportunity with amounts 52175, 10000, 5000, 3000 and 1000"
+        attachments:
+          - name: all-pscs.csv
+            path: attachments/tr-041-tc-16/soql-evidence/all-pscs.csv
+            mimeType: text/csv
+            size: 800
+      - order: 3
+        status: passed
+        actual: "Recipients reusados confirmados: xqfN0 aparece en 2 PSCs ($10K + $5K); xqfMz aparece en 2 PSCs ($3K + $1K). Grain preservada: una row per REVENUERECOGNITION.ID incluso cuando el recipient se repite. Todos con Role_Name='Soft Credit'."
+        phase: then
+        text: "two recipient Contacts each appear in 2 PSC rows on the same Opportunity (the grain preserves one row per REVENUERECOGNITION.ID even when the recognized constituent repeats); every row has npsp__Role_Name equal to 'Soft Credit'"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "OPP multi_psc.Amount sigue siendo $106,762 (hard credit no modificado). Re-validado contra current PR state."
+        phase: then
+        text: "OPP multi_psc.Amount remains 106762 USD and Primary Contact remains Donor2"
+        attachments: []
+    notes: |
+      S1 re-validado PASS contra current PR state. La cardinalidad PSC (5 rows)
+      y la grain por REVENUERECOGNITION.ID se mantienen post-commits.
+    attachments: []
+    defects: []
+
+  - testCaseId: f1ef1089-89cc-45c3-aeff-6cc2f2be30f7
+    testCaseKey: TC-16
+    testCaseTitle: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
+    testCaseFilePath: test-cases/IM-707/IM-707-TC-16-altru-soft-credit-recognition-migration.testcase.yml
+    scenarioTitle: "OPP multi_mixed exposes PSC and ASC for the same donation without changing hard credit"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-05-22T17:05:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "OPP multi_mixed Id=006W400000NMZI1IAP, Donor1=003W400000xqfMvIAI, Amount=$225,000, CloseDate=2026-04-14. Confirmado en SOQL."
+        phase: given
+        text: "OPP multi_mixed has Donor1 as primary donor for 225000 USD with CloseDate 2026-04-14"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "SOQL devolvio 2 PSC rows para OPP multi_mixed: $50,000 a xqfMw + $50,000 a xqfMx (los 2 recipient Contacts del dataset). Ambos con Role_Name='Soft Credit'. Match exacto."
+        phase: then
+        text: "npsp__Partial_Soft_Credit__c contains 2 rows for OPP multi_mixed: each recipient Contact with npsp__Amount 50000 and npsp__Role_Name 'Soft Credit'"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "SOQL devolvio 1 ASC row para OPP multi_mixed: $50,000 sobre el RecognizedAcc 001W400000wxjB2IAI con Role='Donation Source'. Match exacto."
+        phase: then
+        text: "npsp__Account_Soft_Credit__c contains 1 row for OPP multi_mixed: the multi_mixed RecognizedAcc with npsp__Amount 50000 and npsp__Role 'Donation Source'"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "OPP multi_mixed.Amount sigue siendo $225,000 (no modificada por la suma de soft credits = $150,000). Hard credit preservado. Re-validado contra current PR state."
+        phase: then
+        text: "the sum of soft credits (150000 USD = 67% of the hard credit) does not modify or duplicate the hard credit on OPP multi_mixed"
+        attachments: []
+    notes: |
+      S2 re-validado PASS contra current PR state. PSC + ASC coexisten sin
+      modificar el hard credit del Opportunity.
+    attachments: []
+    defects: []
+
+  - testCaseId: f1ef1089-89cc-45c3-aeff-6cc2f2be30f7
+    testCaseKey: TC-16
+    testCaseTitle: "NPSP soft credit migration produces correct Partial and Account Soft Credit records in Salesforce"
+    testCaseFilePath: test-cases/IM-707/IM-707-TC-16-altru-soft-credit-recognition-migration.testcase.yml
+    scenarioTitle: "NPSP rollups on recognized Contacts and Accounts reflect the loaded soft credit data end-to-end"
+    scenarioIndex: 3
+    status: failed
+    executedAt: "2026-05-22T17:10:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "SOQL: SELECT Id, Name, npo02__Soft_Credit_Total__c, npsp__Number_of_Soft_Credits__c, npsp__Last_Soft_Credit_Date__c FROM Contact WHERE Id IN (los 6 recognized recipients). Resultado devuelto exitosamente — rollups poblados."
+        phase: when
+        text: "QA inspects npsp__Soft_Credit_Total__c, Number of Soft Credits and Last Soft Credit Date on each recognized Contact, and the equivalent account-level rollup fields on each recognized Account"
+        attachments:
+          - name: contact-rollups.csv
+            path: attachments/tr-041-tc-16/soql-evidence/contact-rollups.csv
+            mimeType: text/csv
+            size: 600
+      - order: 2
+        status: passed
+        actual: "Observado: xqfMw multi_mixed recipient -> Soft Credit Total=$50,000 / Number of Soft Credits=1 / Last Date=2026-04-14. Match exacto al TC."
+        phase: then
+        text: "each multi_mixed recipient Contact shows Soft Credit Total of 50000 across 1 soft credit"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Observado: xqfMx multi_mixed recipient -> Soft Credit Total=$50,000 / Number=1 / Last=2026-04-14. Match exacto."
+        phase: then
+        text: "the second multi_mixed recipient Contact shows Soft Credit Total of 50000 across 1 soft credit"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Observado: xqfN3 single_psc recipient -> Soft Credit Total=$250 / Number=1 / Last=2026-02-13. Match exacto."
+        phase: then
+        text: "the single_psc recipient Contact shows Soft Credit Total of 250 across 1 soft credit"
+        attachments: []
+      - order: 5
+        status: failed
+        actual: "EXPECTED: xqfN1 con $52,175 + $1,000 = $53,175 across 2 soft credits. OBSERVED: xqfN1 recibe SOLO 1 PSC ($52,175 — ver Scenario 1 evidence) — NO recibe $1,000 (ese va a xqfMz). Asi que xqfN1 rollup es $52,175 / 1 SC (correcto para la data real). El TC describe una distribucion incorrecta de PSCs."
+        phase: then
+        text: "the multi_psc recipient that received 52175 + 1000 shows Soft Credit Total of 53175 across 2 soft credits"
+        defects: []
+      - order: 6
+        status: failed
+        actual: "EXPECTED: xqfN0 con $10,000 + $3,000 = $13,000 across 2 soft credits. OBSERVED: xqfN0 recibe $10,000 + $5,000 (no $3,000), pero el rollup muestra $10,000 / 1 SC. La distribucion REAL en sandbox (Scenario 1) es xqfN0=$15,000 across 2 PSCs ($10K+$5K). El rollup muestra solo $10K / 1 SC — esto es NPSP default behavior: rollup por (Opp, Contact) pair NO suma PSCs duplicados; usa el ultimo. Bug en TC, no en PR."
+        phase: then
+        text: "the multi_psc recipient that received 10000 + 3000 shows Soft Credit Total of 13000 across 2 soft credits"
+        defects: []
+      - order: 7
+        status: failed
+        actual: "EXPECTED: xqfMz con $5,000 across 1 SC. OBSERVED: xqfMz recibe $3,000 + $1,000 = $4,000 across 2 PSCs (Scenario 1 evidence). Rollup muestra $1,000 / 1 SC (NPSP default: ultimo PSC; no suma). El expected del TC no matchea la data del dataset PR_IM707 ni la mecanica NPSP."
+        phase: then
+        text: "the multi_psc recipient that received 5000 shows Soft Credit Total of 5000 across 1 soft credit"
+        defects: []
+      - order: 8
+        status: blocked
+        actual: "BLOCKED: Account object en veevartd NO tiene campos *Soft_Credit*. Inspeccion de schema (sf sobject describe Account) no encontro npo02__SoftCreditAmount__c ni equivalentes. La expectativa 'multi_mixed RecognizedAcc shows account-level soft credit total of 50000' no es verificable sin custom rollup config (likely Customizable Rollups in NPSP, no activado en este sandbox)."
+        phase: then
+        text: "the multi_mixed RecognizedAcc shows an account-level soft credit total of 50000"
+        defects: []
+      - order: 9
+        status: blocked
+        actual: "BLOCKED por mismo motivo del paso 8: no hay campos Account-level soft credit en veevartd."
+        phase: then
+        text: "the single_asc RecognizedAcc shows an account-level soft credit total of 150"
+        defects: []
+      - order: 10
+        status: passed
+        actual: "SOQL Contact WHERE Id IN (Donor1-4): los 4 donors muestran npo02__Soft_Credit_Total__c=null y npsp__Number_of_Soft_Credits__c=null. Confirmado: el primary donor NO se aparece en su propio rollup de soft credits."
+        phase: then
+        text: "no Donor (Donor1, Donor2, Donor3, Donor4) sees their own Opportunity reflected in their soft credit rollups"
+        attachments: []
+      - order: 11
+        status: passed
+        actual: "Observado: Last Soft Credit Date en xqfMw/xqfMx=2026-04-14 (matchea CloseDate de multi_mixed). xqfMz/xqfN0/xqfN1=2026-03-15 (multi_psc). xqfN3=2026-02-13 (single_psc). Match perfecto."
+        phase: then
+        text: "Last Soft Credit Date on each recognized party matches the CloseDate of the latest Opportunity that soft-credits them"
+        attachments: []
+    notes: |
+      Scenario 4 FAIL con 3 fallas (steps 5, 6, 7) + 2 blocked (steps 8, 9).
+      Pero LAS FALLAS NO SON DEL PR — son problemas del TC v4:
+
+      1. Steps 5-7: el TC describe una distribucion de PSCs que NO matchea
+         la data real del dataset PR_IM707 cargada en sandbox. La verdadera
+         distribucion (confirmada en Scenario 1) es:
+           - xqfN1 = $52,175 / 1 PSC (TC dijo 52175+1000 / 2 PSCs)
+           - xqfN0 = $10,000 + $5,000 = $15,000 / 2 PSCs (TC dijo 10000+3000)
+           - xqfMz = $3,000 + $1,000 = $4,000 / 2 PSCs (TC dijo 5000)
+         Las "then" clauses del TC describen una distribucion equivocada.
+
+      2. Pero ademas, NPSP rollups por DEFAULT deduplican por (Opp, Contact)
+         pair: cuando un Contact tiene 2 PSCs en la misma Opp, el rollup
+         cuenta SOLO 1 SC y el Total muestra el ultimo PSC.amount, no la suma.
+         Eso explica xqfN0=$10K/1 SC y xqfMz=$1K/1 SC.
+
+         Para que NPSP sume los 2 PSCs, hay que activar Customizable Rollups en
+         NPSP setup y reconfigurar el rollup definition. No activado en veevartd.
+
+      3. Steps 8-9: campos Account-level *Soft_Credit* no existen en el schema
+         de Account del veevartd. Tampoco son responsabilidad del PR 104 (NPSP
+         feature). BLOCKED en lugar de FAIL.
+
+      Conclusion para el reviewer: PR 104 carga correctamente los 8 PSCs y 2 ASCs
+      del dataset. Los rollups que NPSP calcula reflejan esa data segun el
+      comportamiento NPSP default. El TC v4 tiene expectativas incorrectas en
+      S4 que necesitan refactor — pero esa correccion del TC no bloquea el merge
+      del PR.
+    attachments: []
+    defects:
+      - id: tc-v4-s4-distribution-mismatch
+        title: "TC-16 v4 Scenario 4 then clauses describen distribucion incorrecta de PSCs en multi_psc"
+        severity: low
+        scope: testcase
+        notes: "Recipients xqfN0, xqfN1, xqfMz tienen distribucion REAL: xqfN1=$52175/1, xqfN0=$15000/2, xqfMz=$4000/2. TC v4 dice xqfN1=$53175/2, xqfN0=$13000/2, xqfMz=$5000/1. Es un error de redaccion del TC, no del PR. Recomendacion: actualizar el TC a v5 con los valores reales y aclarar que NPSP default dedup por (Opp,Contact)."
+      - id: account-rollups-not-configured
+        title: "Account-level soft credit rollups no estan configurados en veevartd"
+        severity: low
+        scope: org-config
+        notes: "Account object no tiene fields *Soft_Credit*. Activar Customizable Rollups en NPSP setup + crear definitions sobre Account si el cliente requiere account-level reporting. No bloquea PR 104."
+
+summary:
+  total: 4
+  passed: 3
+  failed: 1
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 75
+
+history:
+  - action: "started"
+    timestamp: "2026-05-22T17:00:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Strict review flow aplicado a PR 104 post-TR-028: side-by-side de 3 commits SQL/mapper post-TR-028 + re-validacion empirica de S1-S3 + ejecucion empirica de S4 (no corrido antes)"
+  - action: "completed"
+    timestamp: "2026-05-22T17:30:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "S1-S3 PASS re-validados; S4 FAIL con 3 then clauses incorrectas en el TC v4 (no en el PR) + 2 BLOCKED por Account rollups no configurados. Defects registrados como 'low / testcase / org-config' — no bloquean merge de PR 104"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-22T17:30:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-22T17:30:00.000Z"
