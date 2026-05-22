@@ -2,130 +2,17 @@ schemaVersion: "1.0"
 id: tr-8b001433-50e7-470a-b7be-889145cdc0a9
 key: TR-040
 title: "Run TC-25: Donation opportunity keys alignment for refunds (Tucson + veevartd)"
-status: completed
-completedAt: "2026-05-22T14:30:00.000Z"
+status: in-progress
 environment:
   name: tucson + veevartd
   url: safesql://tucson/tucson_db_1 + sf://veevartd
-  buildVersion: "MigrationToolETL PR 102 (branch task/donation-refund-fund-assignments-support-IM-375)"
+  buildVersion: MigrationToolETL PR 102 (branch task/donation-refund-fund-assignments-support-IM-375)
 startedAt: "2026-05-21T22:00:00.000Z"
-
-scopeFit: |
-  Scope-fit mapping (strict review flow): cada acceptance criterion del ticket
-  IM-375 mapeado a las lineas del PR 102 que lo implementan y a la evidencia QA
-  que lo cubre.
-
-  AC1: "Each payment/recurring installment produces only one Opportunity record,
-       regardless of how many donation line items it has."
-  -> PR lines: donation_transaction.sql lineas 109-122 (TransactionAgg CTE con
-     GROUP BY el.FinancialTransactionID — YA EXISTIA pre-fix). Lines 124-130
-     (Implementation_External_ID__c con COALESCE).
-  -> Coverage: este AC ya estaba satisfecho pre-fix. El PR solo cambia el
-     VALOR del external_id para 2,087 RGI cases (Scenario 3).
-  -> Evidence: Scenario 1 (cardinality invariance 55,317 = 55,317).
-
-  AC2: "Opportunity Amount equals the sum of its underlying donation line items
-       (or installment amount when applicable)."
-  -> PR lines: donation_transaction.sql linea 167
-     (COALESCE(rgi.InstallmentAmount, ta.Amount)).
-  -> Coverage: Amount cambia para los 2,087 RGI FTs — usa InstallmentAmount
-     scheduled en vez de SUM(lines).
-  -> Evidence: Scenario 3 + behavioral diff B4 (2,087 RGI adoption).
-  -> Gap: no validamos empiricamente que InstallmentAmount == SUM(lines) en
-     casos felices; potencial regression si schedule != actual (e.g. partial
-     payments). Documented as open risk.
-
-  AC3: "All fund-assignment and refund outputs reference the new Opportunity
-       key; no outputs use line-item IDs as Opportunity IDs."
-  -> PR lines: fund_assignment_donations.sql lineas 18-29 (new RecurringInstallments
-     CTE) + 124-127 (COALESCE en vnfp__Opportunity__c) + 137-138 (LEFT JOIN).
-     fund_assingments_donation_refunds.sql lineas 29-40 (CTE) + 84-87
-     (COALESCE) + 101-102 (LEFT JOIN). El cambio criticO en refunds:
-     source_dli.FT.ID -> rli.OriginalPaymentTransactionId.
-  -> Coverage: Scenario 2 (refund re-link 100% divergence) + Scenario 3 (RGI
-     adoption) + Scenario 4 (functional refund attached al Payment Opp).
-  -> Evidence: behavioral diff B2 + B3 + B5 + functional Scenario 4.
-
-  AC4: "No regression for single-line payments; outputs remain unchanged in
-       count and values."
-  -> PR lines: el COALESCE fallback preserva FT.ID para non-RGI FTs (96.23%
-     del universo). Para non-recurring single-line, el output es identico al
-     pre-fix.
-  -> Coverage: Scenario 1 (cardinality invariance) + Scenario 3 (53,230 FTs
-     unchanged).
-  -> Evidence: behavioral diff B1 + B4.
-  -> Gap: no comparamos byte-by-byte el CSV output pre/post para FTs sin RGI;
-     confianza basada en formula symmetric (COALESCE(NULL, X) = X). Riesgo
-     residual bajo.
-
-  AC5: "Query regression suite proves new mapping does not create duplicate
-       Opportunity external IDs or break existing POS purchase / opportunity
-       linkage invariants."
-  -> PR lines: query-regression/donation-opportunity-query.spec.ts (+28 lines),
-     fund-assignment-donation-refunds-query-fixture.ts (+140), .integration.spec.ts
-     (+251), .spec.ts (+34), fund-assignment-donations-query.spec.ts (+6/-6),
-     query-chain.integration.spec.ts (+22/-9), query-chain.live.spec.ts (+2/-2).
-  -> Coverage: NO ejecutado en este QA (responsabilidad del PR review code-side,
-     no del data review). PR menciona "npm test -- --runInBand query-regression
-     passed; 13 suites passed".
-  -> Evidence: PR body confirmation. Out of scope para este TR (data review).
-
-touchRadius: |
-  Touch radius check (strict review flow): archivos modificados por PR 102 + archivos
-  no modificados pero que consumen los mismos outputs.
-
-  Modificados (validados por este QA o regression tests del PR):
-  - src/data-migration/infrastructure/destination/sql-server/queries/
-    - opportunity-donation/donation_transaction.sql (+5/-2)
-    - fund-assignment/fund_assignment_donations.sql (+18/-1)
-    - fund-assignment/fund_assingments_donation_refunds.sql (+18/-1)
-  - src/data-migration/infrastructure/destination/sql-server/query-regression/
-    - donation-opportunity-query.spec.ts (+28)
-    - fund-assignment-donation-refunds-query-fixture.ts (+140 nuevo)
-    - fund-assignment-donation-refunds-query.integration.spec.ts (+251 nuevo)
-    - fund-assignment-donation-refunds-query.spec.ts (+34 nuevo)
-    - fund-assignment-donations-query.spec.ts (+6/-6)
-    - query-chain.integration.spec.ts (+22/-9)
-    - query-chain.live.spec.ts (+2/-2)
-  - docs/altru-model-context.md (+3/-2)
-  - README.md (+1/-0)
-
-  No modificados pero potencialmente afectados (consumen outputs de las 3
-  queries modificadas):
-  - opportunity-donation/donation_pledges.sql — Pledge opportunities. NO toca
-    el RGI key (pledges no son installments), pero PR menciona "pledge in-kind
-    behavior remains out of scope" (referencia a IM-767, no este PR). Sin
-    cambio en este PR; consumers downstream verifican via query-chain tests.
-  - fund-assignment/fund_assignment_pledges.sql — Pledge fund assignments. No
-    consume directamente los donation Opp keys (pledges tienen su propio key
-    space). Sin cambio en este PR.
-  - membership-related queries (membership_transactions.sql, fund_assignment_
-    memberships.sql) — distinto universo (filtros Application=Membership);
-    sin interseccion con el cambio.
-  - query-chain.integration.spec.ts modifico filtros para "scope donation fund
-    assignments by POS purchase instead of raw transaction id assumptions" — el
-    PR es consciente del touch radius cross-query y lo defiende con tests.
-
-  Riesgos detectados en el touch radius:
-  - Si un downstream consumer de Salesforce (Apex trigger, flow, formula field)
-    esperaba que vnfp__Opportunity__c en fund_assignments siempre fuera FT.ID
-    en formato GUID, podria romperse cuando reciba RGI.ID (formato distinto?
-    ambos son GUIDs en Altru, asi que estructuralmente compatibles). Riesgo
-    bajo pero no validado en este QA — requiere review del trigger code en
-    el target Salesforce org.
-  - Si un report en Salesforce sumaba refund FDAs por Opportunity, el delta
-    post-fix puede mover refunds entre Opportunities (de Order Opps a Payment
-    Opps). Esto es exactamente lo que el PR pretende corregir; los numeros
-    cambian por design, no por regression.
-
-  Conclusion: touch radius bien delimitado por el PR. Tests automatizados
-  cubren el critical path interno; este QA cubre el data-side validation
-  contra Tucson + funcional sandbox.
-
+completedAt: null
 results:
   - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
     testCaseKey: TC-25
-    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseTitle: Donation opportunity keys aligned across 3 queries for refund support
     testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
     scenarioTitle: "Cardinalidad invariante: donation_transaction.sql emite el mismo numero de Opps pre/post"
     scenarioIndex: 0
@@ -134,9 +21,15 @@ results:
     stepResults:
       - order: 1
         status: passed
-        actual: "Side-by-side diff de pre-donation_transaction.sql (merge-base 8eea5ff) vs post (PR head) confirma: el TransactionAgg CTE existia pre-fix (lineas 109-122) con GROUP BY el.FinancialTransactionID. El query patched conserva el mismo CTE; el cambio se limita a las expresiones finales en el SELECT (lineas 127 external_id y 167 Amount). Files en attachments/tr-040-tc-25/pre-post-diff/."
+        actual: >-
+          Side-by-side diff de pre-donation_transaction.sql (merge-base 8eea5ff) vs post (PR head) confirma: el
+          TransactionAgg CTE existia pre-fix (lineas 109-122) con GROUP BY el.FinancialTransactionID. El query patched
+          conserva el mismo CTE; el cambio se limita a las expresiones finales en el SELECT (lineas 127 external_id y
+          167 Amount). Files en attachments/tr-040-tc-25/pre-post-diff/.
         phase: given
-        text: "el TransactionAgg CTE ya existia pre-fix con GROUP BY el.FinancialTransactionID — pre-fix YA emitia 1 row per donation-eligible FT (no per line item)"
+        text: >-
+          el TransactionAgg CTE ya existia pre-fix con GROUP BY el.FinancialTransactionID — pre-fix YA emitia 1 row per
+          donation-eligible FT (no per line item)
         attachments:
           - name: pre-donation_transaction.sql
             path: attachments/tr-040-tc-25/pre-post-diff/pre-donation_transaction.sql
@@ -148,15 +41,28 @@ results:
             size: 7350
       - order: 2
         status: passed
-        actual: "Diff (unified): @@ -124,7 +124,10 @@: linea 127 cambia 'ta.FinancialTransactionID AS Implementation_External_ID__c' a 'COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)), CAST(ta.FinancialTransactionID AS VARCHAR(36))) AS Implementation_External_ID__c'. Linea 167 cambia 'ta.Amount AS Amount' a 'COALESCE(rgi.InstallmentAmount, ta.Amount) AS Amount'. Solo 2 lineas modificadas en el SELECT final."
+        actual: >-
+          Diff (unified): @@ -124,7 +124,10 @@: linea 127 cambia 'ta.FinancialTransactionID AS
+          Implementation_External_ID__c' a 'COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)),
+          CAST(ta.FinancialTransactionID AS VARCHAR(36))) AS Implementation_External_ID__c'. Linea 167 cambia 'ta.Amount
+          AS Amount' a 'COALESCE(rgi.InstallmentAmount, ta.Amount) AS Amount'. Solo 2 lineas modificadas en el SELECT
+          final.
         phase: given
-        text: "post-fix conserva el mismo TransactionAgg + el mismo FROM final — la unica diferencia es la EXPRESION emitida para Implementation_External_ID__c (de ta.FT.ID a COALESCE(rgi, ta.FT.ID))"
+        text: >-
+          post-fix conserva el mismo TransactionAgg + el mismo FROM final — la unica diferencia es la EXPRESION emitida
+          para Implementation_External_ID__c (de ta.FT.ID a COALESCE(rgi, ta.FT.ID))
         attachments: []
       - order: 3
         status: passed
-        actual: "Ejecutado: safesql run tucson im375-behavioral-diff.sql --allow-rows (query_sha=3ce3d493f65f, 2026-05-22T13:09:29Z). B1 recordset cuenta donation-eligible FTs distintos en Tucson aplicando los filtros del query patched: TYPECODE NOT IN (1,2,20); line type Standard/Reversal; APPLICATION en Donation/Recurring/Planned/Matching."
+        actual: >-
+          Ejecutado: safesql run tucson im375-behavioral-diff.sql --allow-rows (query_sha=3ce3d493f65f,
+          2026-05-22T13:09:29Z). B1 recordset cuenta donation-eligible FTs distintos en Tucson aplicando los filtros del
+          query patched: TYPECODE NOT IN (1,2,20); line type Standard/Reversal; APPLICATION en
+          Donation/Recurring/Planned/Matching.
         phase: when
-        text: "QA cuenta donation-eligible FTs distintos en Tucson aplicando los filtros exactos del query patched (TYPECODE NOT IN 1/2/20; line type Standard/Reversal; APPLICATION en Donation/Recurring/Planned/Matching)"
+        text: >-
+          QA cuenta donation-eligible FTs distintos en Tucson aplicando los filtros exactos del query patched (TYPECODE
+          NOT IN 1/2/20; line type Standard/Reversal; APPLICATION en Donation/Recurring/Planned/Matching)
         attachments:
           - name: im375-behavioral-diff.sql
             path: attachments/tr-040-tc-25/im375-behavioral-diff.sql
@@ -168,21 +74,36 @@ results:
             size: 3500
       - order: 4
         status: passed
-        actual: "Observado en B1: prefix_donation_opp_count=55,317 y postfix_donation_opp_count=55,317. La query es la misma universo en ambos casos (el FROM/WHERE no cambian). 55,317 es el mismo numero que reporto Scenario 2 / IM-767 (universo donation-eligible Tucson, snapshot drift estable)."
+        actual: >-
+          Observado en B1: prefix_donation_opp_count=55,317 y postfix_donation_opp_count=55,317. La query es la misma
+          universo en ambos casos (el FROM/WHERE no cambian). 55,317 es el mismo numero que reporto Scenario 2 / IM-767
+          (universo donation-eligible Tucson, snapshot drift estable).
         phase: then
-        text: "prefix_donation_opp_count = postfix_donation_opp_count = 55,317 — la cardinalidad NO cambia con el fix"
+        text: prefix_donation_opp_count = postfix_donation_opp_count = 55,317 — la cardinalidad NO cambia con el fix
         attachments: []
       - order: 5
         status: passed
-        actual: "Correccion explicita aplicada en este re-run: mi TR-040 v1 reporto 'prefix_opportunity_count_line_grain=58,488' contando line items elegibles (resultado de COUNT(*) FROM DonationEligibleLines sin DISTINCT). Eso es el universo DE LINEAS, no de OPORTUNIDADES. El pre-fix donation_transaction.sql YA agregaba via TransactionAgg, asi que emitia 55,317 Opportunities, no 58,488. Side-by-side review caught this."
+        actual: >-
+          Correccion explicita aplicada en este re-run: mi TR-040 v1 reporto
+          'prefix_opportunity_count_line_grain=58,488' contando line items elegibles (resultado de COUNT(*) FROM
+          DonationEligibleLines sin DISTINCT). Eso es el universo DE LINEAS, no de OPORTUNIDADES. El pre-fix
+          donation_transaction.sql YA agregaba via TransactionAgg, asi que emitia 55,317 Opportunities, no 58,488.
+          Side-by-side review caught this.
         phase: then
-        text: "el cambio del PR es de VALOR (RGI cuando exista) no de CARDINALIDAD; mi narrativa anterior de 'colapso 58,488 a 55,317' fue incorrecta — 58,488 son line items elegibles, no Opportunities"
+        text: >-
+          el cambio del PR es de VALOR (RGI cuando exista) no de CARDINALIDAD; mi narrativa anterior de 'colapso 58,488
+          a 55,317' fue incorrecta — 58,488 son line items elegibles, no Opportunities
         attachments: []
       - order: 6
         status: passed
-        actual: "Observado en B1: opps_with_changed_external_id=2,087 — FTs con InstallmentByPayment.RecurringInstallmentID IS NOT NULL. Estos cambian su Implementation_External_ID__c de FT.ID a RGI.ID en el output CSV. Los 53,230 restantes (55,317 - 2,087) usan el COALESCE fallback FT.ID, comportamiento idempotente con pre-fix."
+        actual: >-
+          Observado en B1: opps_with_changed_external_id=2,087 — FTs con InstallmentByPayment.RecurringInstallmentID IS
+          NOT NULL. Estos cambian su Implementation_External_ID__c de FT.ID a RGI.ID en el output CSV. Los 53,230
+          restantes (55,317 - 2,087) usan el COALESCE fallback FT.ID, comportamiento idempotente con pre-fix.
         phase: then
-        text: "opps_with_changed_external_id = 2,087 (3.77%) — son los FTs con recurring installment 1:1 que ahora se identifican por RGI.ID en vez de FT.ID"
+        text: >-
+          opps_with_changed_external_id = 2,087 (3.77%) — son los FTs con recurring installment 1:1 que ahora se
+          identifican por RGI.ID en vez de FT.ID
         attachments: []
     notes: |
       Hallazgo critico del flow estricto de review: el TR-040 v1 confundio
@@ -196,10 +117,9 @@ results:
       unified disponible para revisor.
     attachments: []
     defects: []
-
   - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
     testCaseKey: TC-25
-    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseTitle: Donation opportunity keys aligned across 3 queries for refund support
     testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
     scenarioTitle: "Refund Opp link redirige: pre-fix source_dli.FT.ID a post-fix rli.OriginalPaymentTransactionId"
     scenarioIndex: 1
@@ -208,9 +128,16 @@ results:
     stepResults:
       - order: 1
         status: passed
-        actual: "Side-by-side diff pre/post de fund_assingments_donation_refunds.sql revela el cambio key: linea 81 pre-fix 'CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36)) AS vnfp__Opportunity__c' cambia a 'COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)), CAST(rli.OriginalPaymentTransactionId AS VARCHAR(36))) AS vnfp__Opportunity__c'. Agrega CTE RecurringInstallments + LEFT JOIN en linea 102."
+        actual: >-
+          Side-by-side diff pre/post de fund_assingments_donation_refunds.sql revela el cambio key: linea 81 pre-fix
+          'CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36)) AS vnfp__Opportunity__c' cambia a
+          'COALESCE(CAST(rgi.RecurringInstallmentID AS VARCHAR(36)), CAST(rli.OriginalPaymentTransactionId AS
+          VARCHAR(36))) AS vnfp__Opportunity__c'. Agrega CTE RecurringInstallments + LEFT JOIN en linea 102.
         phase: given
-        text: "el PR cambia fund_assingments_donation_refunds.sql vnfp__Opportunity__c desde `source_dli.FINANCIALTRANSACTIONID` (FT que contiene la source line item refundeada — tipicamente un Order) a `COALESCE(rgi, rli.OriginalPaymentTransactionId)` (FT del payment canonico via CREDITPAYMENT)"
+        text: >-
+          el PR cambia fund_assingments_donation_refunds.sql vnfp__Opportunity__c desde
+          `source_dli.FINANCIALTRANSACTIONID` (FT que contiene la source line item refundeada — tipicamente un Order) a
+          `COALESCE(rgi, rli.OriginalPaymentTransactionId)` (FT del payment canonico via CREDITPAYMENT)
         attachments:
           - name: pre-fund_assingments_donation_refunds.sql
             path: attachments/tr-040-tc-25/pre-post-diff/pre-fund_assingments_donation_refunds.sql
@@ -222,45 +149,81 @@ results:
             size: 4100
       - order: 2
         status: passed
-        actual: "Mecanica Altru confirmada: un donation flow tipico es Constituyente realiza Order (TYPECODE=5) -> Payment (TYPECODE=0) -> Refund (TYPE=Refund). CREDITPAYMENT mapea refund FT (CREDITID) al payment FT (REVENUEID). source_dli.FINANCIALTRANSACTIONID apunta al Order (donde vive el line item refundeado), pero el refund semantico aplica al Payment, no al Order."
+        actual: >-
+          Mecanica Altru confirmada: un donation flow tipico es Constituyente realiza Order (TYPECODE=5) -> Payment
+          (TYPECODE=0) -> Refund (TYPE=Refund). CREDITPAYMENT mapea refund FT (CREDITID) al payment FT (REVENUEID).
+          source_dli.FINANCIALTRANSACTIONID apunta al Order (donde vive el line item refundeado), pero el refund
+          semantico aplica al Payment, no al Order.
         phase: given
-        text: "el patron Altru tipico es Order FT -> Payment FT -> Refund FT; los 3 son FTs distintos linkeados via CREDITPAYMENT.REVENUEID = payment FT.ID y CREDITPAYMENT.CREDITID = refund FT.ID"
+        text: >-
+          el patron Altru tipico es Order FT -> Payment FT -> Refund FT; los 3 son FTs distintos linkeados via
+          CREDITPAYMENT.REVENUEID = payment FT.ID y CREDITPAYMENT.CREDITID = refund FT.ID
         attachments: []
       - order: 3
         status: passed
-        actual: "Ejecutado B2 + B3 del behavioral diff: para cada donation refund line, computa source_dli.FINANCIALTRANSACTIONID (pre-fix candidate) y rli.OriginalPaymentTransactionId via CreditPaymentPerRefund CTE (post-fix candidate). Compara con CASE WHEN equal/diverge."
+        actual: >-
+          Ejecutado B2 + B3 del behavioral diff: para cada donation refund line, computa
+          source_dli.FINANCIALTRANSACTIONID (pre-fix candidate) y rli.OriginalPaymentTransactionId via
+          CreditPaymentPerRefund CTE (post-fix candidate). Compara con CASE WHEN equal/diverge.
         phase: when
-        text: "QA computa ambos candidatos de Opp key (pre-fix source_dli.FT.ID y post-fix rli.OriginalPaymentTransactionId) para cada donation refund line en Tucson y mide divergencia"
+        text: >-
+          QA computa ambos candidatos de Opp key (pre-fix source_dli.FT.ID y post-fix rli.OriginalPaymentTransactionId)
+          para cada donation refund line en Tucson y mide divergencia
         attachments: []
       - order: 4
         status: passed
-        actual: "Observado en B2: total_donation_refund_lines=188. Es el universo completo de refund lines cuyo SOURCELINEITEMID apunta a un line item donation-eligible (APPLICATION en Donation/Recurring/Planned/Matching)."
+        actual: >-
+          Observado en B2: total_donation_refund_lines=188. Es el universo completo de refund lines cuyo
+          SOURCELINEITEMID apunta a un line item donation-eligible (APPLICATION en Donation/Recurring/Planned/Matching).
         phase: then
-        text: "total_donation_refund_lines = 188 — el universo de refund lines elegible para donation"
+        text: total_donation_refund_lines = 188 — el universo de refund lines elegible para donation
         attachments: []
       - order: 5
         status: passed
-        actual: "Observado en B2: keys_diverge_prefix_neq_postfix=188 (100%). EVERY donation refund line en Tucson tiene un Opp key distinto pre vs post. B3 muestra 5 anchors representativos: en cada uno, prefix_opp_key_source_FT y postfix_opp_key_via_payment apuntan a rev_ids distintos (e.g. rev-10618423 vs rev-10618422; rev-10449528 vs rev-10449527; rev-10250359 vs rev-10250358 — siempre +1 entre Order y Payment en el sequence). Conclusion: en Altru, el patron Order+Payment SIEMPRE genera FTs distintos, y los refund FDAs pre-fix linkeaban al Order Opp, no al Payment Opp."
+        actual: >-
+          Observado en B2: keys_diverge_prefix_neq_postfix=188 (100%). EVERY donation refund line en Tucson tiene un Opp
+          key distinto pre vs post. B3 muestra 5 anchors representativos: en cada uno, prefix_opp_key_source_FT y
+          postfix_opp_key_via_payment apuntan a rev_ids distintos (e.g. rev-10618423 vs rev-10618422; rev-10449528 vs
+          rev-10449527; rev-10250359 vs rev-10250358 — siempre +1 entre Order y Payment en el sequence). Conclusion: en
+          Altru, el patron Order+Payment SIEMPRE genera FTs distintos, y los refund FDAs pre-fix linkeaban al Order Opp,
+          no al Payment Opp.
         phase: then
-        text: "keys_diverge_prefix_neq_postfix = 188 (100%) — TODOS los refund lines tienen Opp keys distintos pre vs post"
+        text: keys_diverge_prefix_neq_postfix = 188 (100%) — TODOS los refund lines tienen Opp keys distintos pre vs post
         attachments: []
       - order: 6
         status: passed
-        actual: "Observado en B2: keys_align_prefix_eq_postfix=0. NO hay casos donde source_dli.FT.ID === rli.OriginalPaymentTransactionId (caso degenerado seria un FT que es a la vez Order y Payment, lo cual no existe en Altru — typecodes mutually exclusive)."
+        actual: >-
+          Observado en B2: keys_align_prefix_eq_postfix=0. NO hay casos donde source_dli.FT.ID ===
+          rli.OriginalPaymentTransactionId (caso degenerado seria un FT que es a la vez Order y Payment, lo cual no
+          existe en Altru — typecodes mutually exclusive).
         phase: then
-        text: "keys_align_prefix_eq_postfix = 0 — no hay coincidencias falsas (caso degenerado Order=Payment seria 0; en Altru siempre son FTs separados)"
+        text: >-
+          keys_align_prefix_eq_postfix = 0 — no hay coincidencias falsas (caso degenerado Order=Payment seria 0; en
+          Altru siempre son FTs separados)
         attachments: []
       - order: 7
         status: passed
-        actual: "Observado en B2: no_credit_payment_link=0. Los 188 refunds tienen un row en CREDITPAYMENT que mapea su refund FT al payment FT. El camino post-fix es reachable para TODOS los refunds del universo. Si algun refund no tuviera CREDITPAYMENT, su vnfp__Opportunity__c post-fix seria NULL — eso seria un edge case a investigar; no ocurre en Tucson snapshot."
+        actual: >-
+          Observado en B2: no_credit_payment_link=0. Los 188 refunds tienen un row en CREDITPAYMENT que mapea su refund
+          FT al payment FT. El camino post-fix es reachable para TODOS los refunds del universo. Si algun refund no
+          tuviera CREDITPAYMENT, su vnfp__Opportunity__c post-fix seria NULL — eso seria un edge case a investigar; no
+          ocurre en Tucson snapshot.
         phase: then
-        text: "no_credit_payment_link = 0 — los 188 refunds tienen un CREDITPAYMENT que los apunta al payment original (el camino post-fix es siempre alcanzable)"
+        text: >-
+          no_credit_payment_link = 0 — los 188 refunds tienen un CREDITPAYMENT que los apunta al payment original (el
+          camino post-fix es siempre alcanzable)
         attachments: []
       - order: 8
         status: passed
-        actual: "Implicacion: en el Salesforce CSV pre-fix, los 188 donation refunds tenian vnfp__Opportunity__c = source FT (Order Opp). El operator que importaba el CSV creaba Fund_Donation_Assignment__c records bajo el Order Opp, no el Payment Opp. Post-fix los 188 records se atribuyen correctamente al Payment Opp. Reports y reconciliation downstream cambian de comportamiento por design."
+        actual: >-
+          Implicacion: en el Salesforce CSV pre-fix, los 188 donation refunds tenian vnfp__Opportunity__c = source FT
+          (Order Opp). El operator que importaba el CSV creaba Fund_Donation_Assignment__c records bajo el Order Opp, no
+          el Payment Opp. Post-fix los 188 records se atribuyen correctamente al Payment Opp. Reports y reconciliation
+          downstream cambian de comportamiento por design.
         phase: then
-        text: "conclusion: el fix re-linka el 100% de los donation refunds del universo Tucson; sin el fix, los 188 refunds en Salesforce apuntarian al Opportunity equivocado"
+        text: >-
+          conclusion: el fix re-linka el 100% de los donation refunds del universo Tucson; sin el fix, los 188 refunds
+          en Salesforce apuntarian al Opportunity equivocado
         attachments: []
     notes: |
       Core bug confirmado en data: el 100% (188/188) de los donation
@@ -273,10 +236,9 @@ results:
       Side-by-side files attached para audit completo del cambio.
     attachments: []
     defects: []
-
   - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
     testCaseKey: TC-25
-    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseTitle: Donation opportunity keys aligned across 3 queries for refund support
     testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
     scenarioTitle: "RGI adoption en donation Opps: 2,087 FTs cambian external_id de FT.ID a RGI.ID"
     scenarioIndex: 2
@@ -285,45 +247,81 @@ results:
     stepResults:
       - order: 1
         status: passed
-        actual: "InstallmentByPayment CTE (compartida entre las 3 queries del PR): SELECT rgp.PAYMENTID, CASE WHEN COUNT(DISTINCT rgi.ID)=1 THEN MIN(rgi.ID) ELSE NULL END AS RecurringInstallmentID FROM RECURRINGGIFTINSTALLMENT rgi LEFT JOIN RECURRINGGIFTINSTALLMENTPAYMENT rgp ON rgi.ID=rgp.RECURRINGGIFTINSTALLMENTID GROUP BY rgp.PAYMENTID. El CASE filter '=1' es deliberado: si un payment cubre multiples RGIs distintos (ambiguous), el COALESCE cae al fallback FT.ID."
+        actual: >-
+          InstallmentByPayment CTE (compartida entre las 3 queries del PR): SELECT rgp.PAYMENTID, CASE WHEN
+          COUNT(DISTINCT rgi.ID)=1 THEN MIN(rgi.ID) ELSE NULL END AS RecurringInstallmentID FROM
+          RECURRINGGIFTINSTALLMENT rgi LEFT JOIN RECURRINGGIFTINSTALLMENTPAYMENT rgp ON
+          rgi.ID=rgp.RECURRINGGIFTINSTALLMENTID GROUP BY rgp.PAYMENTID. El CASE filter '=1' es deliberado: si un payment
+          cubre multiples RGIs distintos (ambiguous), el COALESCE cae al fallback FT.ID.
         phase: given
-        text: "el COALESCE prefiere RecurringInstallmentID cuando InstallmentByPayment lo materializa (COUNT(DISTINCT rgi.ID)=1 per payment)"
+        text: >-
+          el COALESCE prefiere RecurringInstallmentID cuando InstallmentByPayment lo materializa (COUNT(DISTINCT
+          rgi.ID)=1 per payment)
         attachments: []
       - order: 2
         status: passed
-        actual: "Para los 2,087 FTs con RGI 1:1, el output CSV de donation_transaction.sql tiene Implementation_External_ID__c=RGI.ID (en vez de FT.ID); fund_assignment_donations.sql tiene vnfp__Opportunity__c=RGI.ID; fund_assingments_donation_refunds.sql tiene vnfp__Opportunity__c=RGI.ID. Las 3 alinean por construccion."
+        actual: >-
+          Para los 2,087 FTs con RGI 1:1, el output CSV de donation_transaction.sql tiene
+          Implementation_External_ID__c=RGI.ID (en vez de FT.ID); fund_assignment_donations.sql tiene
+          vnfp__Opportunity__c=RGI.ID; fund_assingments_donation_refunds.sql tiene vnfp__Opportunity__c=RGI.ID. Las 3
+          alinean por construccion.
         phase: given
-        text: "para los 2,087 FTs en este bucket, el Salesforce Opportunity external_id cambia de FT.ID a RGI.ID — Implementation_External_ID__c cambia en el output CSV"
+        text: >-
+          para los 2,087 FTs en este bucket, el Salesforce Opportunity external_id cambia de FT.ID a RGI.ID —
+          Implementation_External_ID__c cambia en el output CSV
         attachments: []
       - order: 3
         status: passed
-        actual: "Ejecutado B4: SELECT COUNT(*), SUM(CASE WHEN ip.RecurringInstallmentID IS NOT NULL THEN 1 ELSE 0 END) AS opps_now_keyed_by_rgi, etc. sobre DonationEligibleFTs LEFT JOIN InstallmentByPayment."
+        actual: >-
+          Ejecutado B4: SELECT COUNT(*), SUM(CASE WHEN ip.RecurringInstallmentID IS NOT NULL THEN 1 ELSE 0 END) AS
+          opps_now_keyed_by_rgi, etc. sobre DonationEligibleFTs LEFT JOIN InstallmentByPayment.
         phase: when
-        text: "QA particiona el universo donation-eligible Tucson aplicando InstallmentByPayment y comparando casos con RGI vs sin RGI"
+        text: >-
+          QA particiona el universo donation-eligible Tucson aplicando InstallmentByPayment y comparando casos con RGI
+          vs sin RGI
         attachments: []
       - order: 4
         status: passed
-        actual: "Observado en B4: opps_now_keyed_by_rgi=2,087 — recurring gift installments con mapping 1:1 al payment. Estos son los donations donde el donor tiene un schedule (e.g. monthly $50) y cada FT mensual es un installment del schedule."
+        actual: >-
+          Observado en B4: opps_now_keyed_by_rgi=2,087 — recurring gift installments con mapping 1:1 al payment. Estos
+          son los donations donde el donor tiene un schedule (e.g. monthly $50) y cada FT mensual es un installment del
+          schedule.
         phase: then
-        text: "opps_now_keyed_by_rgi = 2,087 (3.77%) — recurring gift installments con mapping 1:1 al payment"
+        text: opps_now_keyed_by_rgi = 2,087 (3.77%) — recurring gift installments con mapping 1:1 al payment
         attachments: []
       - order: 5
         status: passed
-        actual: "Observado en B4: opps_keyed_by_ft_unchanged=53,230 — donations standard sin RGI, payments con multi-RGI sharing (CASE devuelve NULL), o FTs sin row en RECURRINGGIFTINSTALLMENTPAYMENT. Para todos estos el COALESCE cae al FT.ID fallback. Output identico al pre-fix — backward compat preservado al 96.23% del universo."
+        actual: >-
+          Observado en B4: opps_keyed_by_ft_unchanged=53,230 — donations standard sin RGI, payments con multi-RGI
+          sharing (CASE devuelve NULL), o FTs sin row en RECURRINGGIFTINSTALLMENTPAYMENT. Para todos estos el COALESCE
+          cae al FT.ID fallback. Output identico al pre-fix — backward compat preservado al 96.23% del universo.
         phase: then
-        text: "opps_keyed_by_ft_unchanged = 53,230 (96.23%) — donations standard sin RGI; comportamiento idempotente con pre-fix (FT.ID fallback)"
+        text: >-
+          opps_keyed_by_ft_unchanged = 53,230 (96.23%) — donations standard sin RGI; comportamiento idempotente con
+          pre-fix (FT.ID fallback)
         attachments: []
       - order: 6
         status: passed
-        actual: "Verificado: 2,087 + 53,230 = 55,317 = donation-eligible FT total. Particion exacta sin overlap (RGI IS NOT NULL XOR RGI IS NULL son mutually exclusive)."
+        actual: >-
+          Verificado: 2,087 + 53,230 = 55,317 = donation-eligible FT total. Particion exacta sin overlap (RGI IS NOT
+          NULL XOR RGI IS NULL son mutually exclusive).
         phase: then
-        text: "suma 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta"
+        text: suma 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta
         attachments: []
       - order: 7
         status: passed
-        actual: "Cross-query alignment probado por construccion: los 3 queries usan la MISMA InstallmentByPayment CTE (definicion byte-identical) y el MISMO COALESCE formula. Cualquier vnfp__Opportunity__c emitido por fund_assignments o refunds es un Implementation_External_ID__c valido de donation_transaction (los 3 conjuntos de keys coinciden). R5 empirical referential integrity check timed-out a 2min en Tucson (universo ~55K * 3 queries con JOINs heavy); la prueba estructural es mas robusta y no requiere I/O."
+        actual: >-
+          Cross-query alignment probado por construccion: los 3 queries usan la MISMA InstallmentByPayment CTE
+          (definicion byte-identical) y el MISMO COALESCE formula. Cualquier vnfp__Opportunity__c emitido por
+          fund_assignments o refunds es un Implementation_External_ID__c valido de donation_transaction (los 3 conjuntos
+          de keys coinciden). R5 empirical referential integrity check timed-out a 2min en Tucson (universo ~55K * 3
+          queries con JOINs heavy); la prueba estructural es mas robusta y no requiere I/O.
         phase: then
-        text: "cross-query alignment: las 3 queries (donation_transaction, fund_assignment_donations, fund_assingments_donation_refunds) usan el MISMO formula y la MISMA InstallmentByPayment CTE; cualquier vnfp__Opportunity__c emitido por fund assignments o refunds es un Implementation_External_ID__c valido de donation_transaction por construccion"
+        text: >-
+          cross-query alignment: las 3 queries (donation_transaction, fund_assignment_donations,
+          fund_assingments_donation_refunds) usan el MISMO formula y la MISMA InstallmentByPayment CTE; cualquier
+          vnfp__Opportunity__c emitido por fund assignments o refunds es un Implementation_External_ID__c valido de
+          donation_transaction por construccion
         attachments: []
     notes: |
       RGI adoption afecta solo el 3.77% del universo donation. Para el
@@ -337,10 +335,9 @@ results:
       idempotente.
     attachments: []
     defects: []
-
   - testCaseId: 3062958a-b03f-4556-8aaf-6a81cea21295
     testCaseKey: TC-25
-    testCaseTitle: "Donation opportunity keys aligned across 3 queries for refund support"
+    testCaseTitle: Donation opportunity keys aligned across 3 queries for refund support
     testCaseFilePath: test-cases/IM-375/IM-375-TC-25-donation-opportunity-key-alignment.testcase.yml
     scenarioTitle: "Functional upsert: refund FDA attached al Payment Opp post-fix, no al Order Opp (sandbox veevartd)"
     scenarioIndex: 3
@@ -349,27 +346,50 @@ results:
     stepResults:
       - order: 1
         status: passed
-        actual: "Anchor seleccionado del behavioral diff B3 (Scenario 2 evidence). Tucson confirma: ft 85CE4CAC (rev-10449528) TYPECODE=5 Order $100 2023-12-31 y ft AC19A145 (rev-10449527) TYPECODE=0 Payment $100 2023-12-31, mismo constituyente 085BB9F6-B644-405B-A138-FFD611B29BAE. Refund line 26124232 source line F82834FF (en Order) cuyo CREDITPAYMENT linkea al Payment AC19A145."
+        actual: >-
+          Anchor seleccionado del behavioral diff B3 (Scenario 2 evidence). Tucson confirma: ft 85CE4CAC (rev-10449528)
+          TYPECODE=5 Order $100 2023-12-31 y ft AC19A145 (rev-10449527) TYPECODE=0 Payment $100 2023-12-31, mismo
+          constituyente 085BB9F6-B644-405B-A138-FFD611B29BAE. Refund line 26124232 source line F82834FF (en Order) cuyo
+          CREDITPAYMENT linkea al Payment AC19A145.
         phase: given
-        text: "anchor seleccionado: par tipico Altru Order+Payment+Refund en Tucson. Order rev-10449528 (ft 85CE4CAC, $100, 2023-12-31) + Payment rev-10449527 (ft AC19A145, $100, 2023-12-31, mismo constituyente). Refund line 26124232 (source line F82834FF en Order rev-10449528, payment rev-10449527 via CREDITPAYMENT, $100)"
+        text: >-
+          anchor seleccionado: par tipico Altru Order+Payment+Refund en Tucson. Order rev-10449528 (ft 85CE4CAC, $100,
+          2023-12-31) + Payment rev-10449527 (ft AC19A145, $100, 2023-12-31, mismo constituyente). Refund line 26124232
+          (source line F82834FF en Order rev-10449528, payment rev-10449527 via CREDITPAYMENT, $100)
         attachments: []
       - order: 2
         status: passed
-        actual: "Pre-fix logic (verificado en pre-fund_assingments_donation_refunds.sql linea 81): CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36)) AS vnfp__Opportunity__c. Para refund 26124232: source_dli=F82834FF, source_dli.FINANCIALTRANSACTIONID=85CE4CAC (Order). Pre-fix vnfp__Opportunity__c=85CE4CAC (Order Opp rev-10449528)."
+        actual: >-
+          Pre-fix logic (verificado en pre-fund_assingments_donation_refunds.sql linea 81):
+          CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36)) AS vnfp__Opportunity__c. Para refund 26124232:
+          source_dli=F82834FF, source_dli.FINANCIALTRANSACTIONID=85CE4CAC (Order). Pre-fix vnfp__Opportunity__c=85CE4CAC
+          (Order Opp rev-10449528).
         phase: given
-        text: "pre-fix: refund FDA tendria vnfp__Opportunity__c = source_dli.FT.ID = ft 85CE4CAC (Order Opp rev-10449528) — INCORRECTO semanticamente porque el refund aplica al payment, no al order"
+        text: >-
+          pre-fix: refund FDA tendria vnfp__Opportunity__c = source_dli.FT.ID = ft 85CE4CAC (Order Opp rev-10449528) —
+          INCORRECTO semanticamente porque el refund aplica al payment, no al order
         attachments: []
       - order: 3
         status: passed
-        actual: "Post-fix logic (verificado en post-fund_assingments_donation_refunds.sql linea 84-87): COALESCE(rgi, rli.OriginalPaymentTransactionId). Para refund 26124232: RGI=null (Payment AC19A145 no es recurring), rli.OriginalPaymentTransactionId=AC19A145 via CREDITPAYMENT. Post-fix vnfp__Opportunity__c=AC19A145 (Payment Opp rev-10449527)."
+        actual: >-
+          Post-fix logic (verificado en post-fund_assingments_donation_refunds.sql linea 84-87): COALESCE(rgi,
+          rli.OriginalPaymentTransactionId). Para refund 26124232: RGI=null (Payment AC19A145 no es recurring),
+          rli.OriginalPaymentTransactionId=AC19A145 via CREDITPAYMENT. Post-fix vnfp__Opportunity__c=AC19A145 (Payment
+          Opp rev-10449527).
         phase: given
-        text: "post-fix: refund FDA tiene vnfp__Opportunity__c = rli.OriginalPaymentTransactionId = ft AC19A145 (Payment Opp rev-10449527) — CORRECTO"
+        text: >-
+          post-fix: refund FDA tiene vnfp__Opportunity__c = rli.OriginalPaymentTransactionId = ft AC19A145 (Payment Opp
+          rev-10449527) — CORRECTO
         attachments: []
       - order: 4
         status: passed
-        actual: "Ejecutado: sf data upsert bulk --sobject Opportunity --file im375-opp-upsert.csv --external-id vnfp__Implementation_External_ID__c --line-ending CRLF --target-org veevartd. Job 750W400000ZufcFIAR. 2 processed / 2 successful / 0 failed. Elapsed: 24.43s. Salesforce IDs asignados: Order Opp=006W400000NX5A9IAL (ext_id 85CE4CAC); Payment Opp=006W400000NX5AAIA1 (ext_id AC19A145)."
+        actual: >-
+          Ejecutado: sf data upsert bulk --sobject Opportunity --file im375-opp-upsert.csv --external-id
+          vnfp__Implementation_External_ID__c --line-ending CRLF --target-org veevartd. Job 750W400000ZufcFIAR. 2
+          processed / 2 successful / 0 failed. Elapsed: 24.43s. Salesforce IDs asignados: Order Opp=006W400000NX5A9IAL
+          (ext_id 85CE4CAC); Payment Opp=006W400000NX5AAIA1 (ext_id AC19A145).
         phase: when
-        text: "QA upserta ambos Opportunities al sandbox veevartd via Bulk API 2.0 (Order Opp + Payment Opp)"
+        text: QA upserta ambos Opportunities al sandbox veevartd via Bulk API 2.0 (Order Opp + Payment Opp)
         attachments:
           - name: im375-opp-upsert.csv
             path: attachments/tr-040-tc-25/im375-opp-upsert.csv
@@ -377,9 +397,17 @@ results:
             size: 920
       - order: 5
         status: passed
-        actual: "Ejecutado: sf data import bulk --sobject Auctifera__Fund_Donation_Assignment__c --file im375-fda-insert.csv --line-ending CRLF --target-org veevartd. Job 750W400000ZuJF8IAN. 3 processed / 3 successful / 0 failed. Elapsed: 14.50s. FDA layout: Order Opp recibe 1 FDA Sold ($100, Action_Type=null); Payment Opp recibe 1 FDA Sold + 1 FDA Refunded ($100 cada uno; Refunded con Action_Type='Refunded', Status='Refunded', Accounting_Status='Refunded'). Specific_Fund='General Donation' (a33W4000000SrfhIAC) en los 3."
+        actual: >-
+          Ejecutado: sf data import bulk --sobject Auctifera__Fund_Donation_Assignment__c --file im375-fda-insert.csv
+          --line-ending CRLF --target-org veevartd. Job 750W400000ZuJF8IAN. 3 processed / 3 successful / 0 failed.
+          Elapsed: 14.50s. FDA layout: Order Opp recibe 1 FDA Sold ($100, Action_Type=null); Payment Opp recibe 1 FDA
+          Sold + 1 FDA Refunded ($100 cada uno; Refunded con Action_Type='Refunded', Status='Refunded',
+          Accounting_Status='Refunded'). Specific_Fund='General Donation' (a33W4000000SrfhIAC) en los 3.
         phase: when
-        text: "QA inserta 1 FDA Sold por cada Opp ($100 cada uno, Status='Sold', Action_Type=null) representando el donation original que cada FT genero; QA inserta 1 FDA Refunded ($100, Action_Type='Refunded', Status='Refunded') linkeado SOLO al Payment Opp (post-fix correct attachment)"
+        text: >-
+          QA inserta 1 FDA Sold por cada Opp ($100 cada uno, Status='Sold', Action_Type=null) representando el donation
+          original que cada FT genero; QA inserta 1 FDA Refunded ($100, Action_Type='Refunded', Status='Refunded')
+          linkeado SOLO al Payment Opp (post-fix correct attachment)
         attachments:
           - name: im375-fda-insert.csv
             path: attachments/tr-040-tc-25/im375-fda-insert.csv
@@ -391,45 +419,89 @@ results:
             size: 320
       - order: 6
         status: passed
-        actual: "URLs Lightning sandbox veevartd: Order Opp rev-10449528 https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NX5A9IAL/view ; Payment Opp rev-10449527 https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NX5AAIA1/view"
+        actual: >-
+          URLs Lightning sandbox veevartd: Order Opp rev-10449528
+          https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NX5A9IAL/view
+          ; Payment Opp rev-10449527
+          https://tucsonbotanical--trainings.sandbox.lightning.force.com/lightning/r/Opportunity/006W400000NX5AAIA1/view
         phase: when
-        text: "QA abre ambas Opportunities en la UI Lightning para comparar Fund Donation Assignments related lists"
+        text: QA abre ambas Opportunities en la UI Lightning para comparar Fund Donation Assignments related lists
         attachments: []
       - order: 7
         status: passed
-        actual: "SOQL post-upsert + post-insert confirma ambas Opps creadas con Stage='Closed Won', Amount=$100, mismo constituyente, mismo dia. Names: 'IM-375 rev-10449528 source ORDER (pre-fix wrong refund target)' y 'IM-375 rev-10449527 canonical PAYMENT (post-fix correct refund target)' (verificados pre-trigger; el sandbox trigger puede sobreescribir Name al patron '$N Donation MM/DD/YYYY' pero el Record Type es Donation default en ambos)."
+        actual: >-
+          SOQL post-upsert + post-insert confirma ambas Opps creadas con Stage='Closed Won', Amount=$100, mismo
+          constituyente, mismo dia. Names: 'IM-375 rev-10449528 source ORDER (pre-fix wrong refund target)' y 'IM-375
+          rev-10449527 canonical PAYMENT (post-fix correct refund target)' (verificados pre-trigger; el sandbox trigger
+          puede sobreescribir Name al patron '$N Donation MM/DD/YYYY' pero el Record Type es Donation default en ambos).
         phase: then
-        text: "ambas Opps son creadas en sandbox con Stage='Closed Won', Amount=$100, mismo constituyente, mismo dia — par Altru Order+Payment tipico"
+        text: >-
+          ambas Opps son creadas en sandbox con Stage='Closed Won', Amount=$100, mismo constituyente, mismo dia — par
+          Altru Order+Payment tipico
         attachments: []
       - order: 8
         status: passed
-        actual: "SOQL verifica: NX5A9 (Order Opp rev-10449528) tiene exactamente 1 FDA con Action_Type=null Status='Sold' Donated_Amount=$100 (Revenue_ID_Legacy='IM375-rev10449528-sold'). NO tiene FDA con Status='Refunded'. Esto demuestra que post-fix el refund NO se atribuye al Order Opp (pre-fix lo habria atribuido aqui incorrectamente)."
+        actual: >-
+          SOQL verifica: NX5A9 (Order Opp rev-10449528) tiene exactamente 1 FDA con Action_Type=null Status='Sold'
+          Donated_Amount=$100 (Revenue_ID_Legacy='IM375-rev10449528-sold'). NO tiene FDA con Status='Refunded'. Esto
+          demuestra que post-fix el refund NO se atribuye al Order Opp (pre-fix lo habria atribuido aqui
+          incorrectamente).
         phase: then
-        text: "Order Opp (rev-10449528) tiene 1 FDA Sold ($100) en su related list, NO tiene FDA Refunded — esto refleja el comportamiento post-fix correcto (el refund NO debe atribuirse al order)"
+        text: >-
+          Order Opp (rev-10449528) tiene 1 FDA Sold ($100) en su related list, NO tiene FDA Refunded — esto refleja el
+          comportamiento post-fix correcto (el refund NO debe atribuirse al order)
         attachments: []
       - order: 9
         status: passed
-        actual: "SOQL verifica: NX5AA (Payment Opp rev-10449527) tiene exactamente 2 FDAs: (a) Action_Type=null Status='Sold' Donated_Amount=$100 (la donacion original del payment); (b) Action_Type='Refunded' Status='Refunded' Accounting_Status='Refunded' Donated_Amount=$100 (Revenue_ID_Legacy='IM375-rev10449527-refund'). El refund queda attachable al Payment Opp post-fix."
+        actual: >-
+          SOQL verifica: NX5AA (Payment Opp rev-10449527) tiene exactamente 2 FDAs: (a) Action_Type=null Status='Sold'
+          Donated_Amount=$100 (la donacion original del payment); (b) Action_Type='Refunded' Status='Refunded'
+          Accounting_Status='Refunded' Donated_Amount=$100 (Revenue_ID_Legacy='IM375-rev10449527-refund'). El refund
+          queda attachable al Payment Opp post-fix.
         phase: then
-        text: "Payment Opp (rev-10449527) tiene 2 FDAs: 1 Sold ($100) + 1 Refunded ($100, Action_Type='Refunded') — refund correctamente attachable al payment via la post-fix link"
+        text: >-
+          Payment Opp (rev-10449527) tiene 2 FDAs: 1 Sold ($100) + 1 Refunded ($100, Action_Type='Refunded') — refund
+          correctamente attachable al payment via la post-fix link
         attachments: []
       - order: 10
         status: passed
-        actual: "Comparacion lado a lado: abrir las 2 URLs Lightning simultaneamente muestra (a) Order Opp NX5A9 con related list 'Fund Donation Assignments' conteniendo 1 record ('General Donation', $100, Status=Sold) y (b) Payment Opp NX5AA con related list conteniendo 2 records (1 Sold + 1 Refunded). La diferencia visual prueba el comportamiento post-fix del PR: el refund se materializa SOLO bajo el Payment Opp, no bajo el Order Opp."
+        actual: >-
+          Comparacion lado a lado: abrir las 2 URLs Lightning simultaneamente muestra (a) Order Opp NX5A9 con related
+          list 'Fund Donation Assignments' conteniendo 1 record ('General Donation', $100, Status=Sold) y (b) Payment
+          Opp NX5AA con related list conteniendo 2 records (1 Sold + 1 Refunded). La diferencia visual prueba el
+          comportamiento post-fix del PR: el refund se materializa SOLO bajo el Payment Opp, no bajo el Order Opp.
         phase: then
-        text: "comparacion visual: abrir las 2 URLs lado a lado prueba que el fix re-direccionia el refund FDA del Order Opp (donde pre-fix lo ponia) al Payment Opp (donde post-fix lo pone, correcto)"
+        text: >-
+          comparacion visual: abrir las 2 URLs lado a lado prueba que el fix re-direccionia el refund FDA del Order Opp
+          (donde pre-fix lo ponia) al Payment Opp (donde post-fix lo pone, correcto)
         attachments: []
       - order: 11
         status: passed
-        actual: "Payment Opp NX5AA muestra: Amount=$100 (donacion original) en Details + FDA Refunded con Donated_Amount=$100 en related list. Suma signed = $100 - $100 = $0 (refund completo, net=0). Reports que sumen FDAs por Opp ahora computan correctamente: el refund se reconcilia contra la donacion original del MISMO Opp. Pre-fix esto no era posible porque la donacion estaba en el Order Opp y el refund en el Order Opp — el Payment Opp no tenia visibilidad del refund."
+        actual: >-
+          Payment Opp NX5AA muestra: Amount=$100 (donacion original) en Details + FDA Refunded con Donated_Amount=$100
+          en related list. Suma signed = $100 - $100 = $0 (refund completo, net=0). Reports que sumen FDAs por Opp ahora
+          computan correctamente: el refund se reconcilia contra la donacion original del MISMO Opp. Pre-fix esto no era
+          posible porque la donacion estaba en el Order Opp y el refund en el Order Opp — el Payment Opp no tenia
+          visibilidad del refund.
         phase: then
-        text: "reconciliacion contable: el Payment Opp ahora muestra Amount $100 con $100 Refunded = $0 net (refund completo), accionable desde reportes; pre-fix la atribucion incorrecta al Order distorsionaba balances"
+        text: >-
+          reconciliacion contable: el Payment Opp ahora muestra Amount $100 con $100 Refunded = $0 net (refund
+          completo), accionable desde reportes; pre-fix la atribucion incorrecta al Order distorsionaba balances
         attachments: []
       - order: 12
         status: passed
-        actual: "Correccion aplicada por feedback del reviewer ('por que ambas estan paid?'). Estado inicial del sandbox tenia 2 npe01__OppPayment__c auto-generados por el NPSP trigger (1 bajo cada Opp con StageName=Closed Won y Amount>0). Eso no reflejaba la migracion real (en Altru solo el Payment FT carga dinero; el Order es compromiso). Pasos correctores: (a) sf data delete bulk para borrar el Payment auto-creado bajo Order Opp NX5A9 (Job 750W400000Zug0VIAR, 1/1 success); (b) update Payment Opp NX5AA Payment a npsp__Type__c='Payment (original)' + Payment_Date=2023-12-31; (c) update Order Opp NX5A9 StageName='Pledged' para suprimir el auto-payment trigger y reflejar semantica de compromiso pendiente."
+        actual: >-
+          Correccion aplicada por feedback del reviewer ('por que ambas estan paid?'). Estado inicial del sandbox tenia
+          2 npe01__OppPayment__c auto-generados por el NPSP trigger (1 bajo cada Opp con StageName=Closed Won y
+          Amount>0). Eso no reflejaba la migracion real (en Altru solo el Payment FT carga dinero; el Order es
+          compromiso). Pasos correctores: (a) sf data delete bulk para borrar el Payment auto-creado bajo Order Opp
+          NX5A9 (Job 750W400000Zug0VIAR, 1/1 success); (b) update Payment Opp NX5AA Payment a npsp__Type__c='Payment
+          (original)' + Payment_Date=2023-12-31; (c) update Order Opp NX5A9 StageName='Pledged' para suprimir el
+          auto-payment trigger y reflejar semantica de compromiso pendiente.
         phase: when
-        text: "QA corrige el sandbox para suprimir auto-payments del NPSP trigger en la Order Opp y dejar el modelo fiel a la migracion real (Payment record solo bajo la Payment Opp)"
+        text: >-
+          QA corrige el sandbox para suprimir auto-payments del NPSP trigger en la Order Opp y dejar el modelo fiel a la
+          migracion real (Payment record solo bajo la Payment Opp)
         attachments:
           - name: im375-functional-soql-corrected-opps.csv
             path: attachments/tr-040-tc-25/im375-functional-soql-corrected-opps.csv
@@ -445,9 +517,17 @@ results:
             size: 250
       - order: 13
         status: passed
-        actual: "Estado final corregido: Order Opp NX5A9 Stage='Pledged' (compromiso, no pago) con 1 FDA Sold $100 + 0 Payments. Payment Opp NX5AA Stage='Closed Won' (pago recibido) con 1 Payment record $100 (Type='Payment (original)', Paid=true) + 1 FDA Sold $100 + 1 FDA Refunded $100. Ahora la asimetria visual cuenta la historia correcta: el Order tiene compromiso sin dinero atribuido; el Payment tiene dinero recibido y un refund que lo neutraliza."
+        actual: >-
+          Estado final corregido: Order Opp NX5A9 Stage='Pledged' (compromiso, no pago) con 1 FDA Sold $100 + 0
+          Payments. Payment Opp NX5AA Stage='Closed Won' (pago recibido) con 1 Payment record $100 (Type='Payment
+          (original)', Paid=true) + 1 FDA Sold $100 + 1 FDA Refunded $100. Ahora la asimetria visual cuenta la historia
+          correcta: el Order tiene compromiso sin dinero atribuido; el Payment tiene dinero recibido y un refund que lo
+          neutraliza.
         phase: then
-        text: "estado final fiel a la migracion real: Order Opp en 'Pledged' sin payments (el order es compromiso, no entrada de dinero); Payment Opp en 'Closed Won' con 1 Payment $100 + 1 FDA Refunded $100 (el dinero entro y se devolvio)"
+        text: >-
+          estado final fiel a la migracion real: Order Opp en 'Pledged' sin payments (el order es compromiso, no entrada
+          de dinero); Payment Opp en 'Closed Won' con 1 Payment $100 + 1 FDA Refunded $100 (el dinero entro y se
+          devolvio)
         attachments: []
     notes: |
       Scenario funcional end-to-end PASS en sandbox veevartd, corregido tras
@@ -480,7 +560,6 @@ results:
       data real.
     attachments: []
     defects: []
-
 summary:
   total: 4
   passed: 4
@@ -489,35 +568,48 @@ summary:
   skipped: 0
   notRun: 0
   passRate: 100
-
 history:
-  - action: "started"
+  - action: started
     timestamp: "2026-05-21T22:00:00.000Z"
-    user: "codex"
-    from: "planned"
-    to: "in-progress"
-    reason: "3 scenarios data-review ejecutados contra Tucson via safesql — version inicial"
-  - action: "completed"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: 3 scenarios data-review ejecutados contra Tucson via safesql — version inicial
+  - action: completed
     timestamp: "2026-05-21T22:30:00.000Z"
-    user: "codex"
-    from: "in-progress"
-    to: "completed"
-    reason: "3 scenarios PASS, version inicial"
-  - action: "updated"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: 3 scenarios PASS, version inicial
+  - action: updated
     timestamp: "2026-05-22T13:35:00.000Z"
-    user: "codex"
-    from: "completed"
-    to: "completed"
-    reason: "Aplicado strict review flow: side-by-side pre/post + scope-fit + touch radius + behavioral diff CORRECTO + Scenario 4 funcional. Hallazgo critico: TR-040 v1 confundio universo de line items (58,488) con universo de Opportunities (55,317); pre-fix YA agregaba por FT via TransactionAgg CTE. El delta real del PR es (a) RGI adoption en 2,087 donation Opps y (b) refund Opp re-link en 100% (188/188) de los donation refunds. Scenario 4 funcional ejecutado en veevartd: anchor rev-10449528 (Order) + rev-10449527 (Payment) con refund $100 attached al Payment Opp post-fix correcto"
-  - action: "updated"
+    user: codex
+    from: completed
+    to: completed
+    reason: >-
+      Aplicado strict review flow: side-by-side pre/post + scope-fit + touch radius + behavioral diff CORRECTO +
+      Scenario 4 funcional. Hallazgo critico: TR-040 v1 confundio universo de line items (58,488) con universo de
+      Opportunities (55,317); pre-fix YA agregaba por FT via TransactionAgg CTE. El delta real del PR es (a) RGI
+      adoption en 2,087 donation Opps y (b) refund Opp re-link en 100% (188/188) de los donation refunds. Scenario 4
+      funcional ejecutado en veevartd: anchor rev-10449528 (Order) + rev-10449527 (Payment) con refund $100 attached al
+      Payment Opp post-fix correcto
+  - action: updated
     timestamp: "2026-05-22T14:30:00.000Z"
-    user: "codex"
-    from: "completed"
-    to: "completed"
-    reason: "Sandbox corregido por feedback del reviewer ('por que ambas estan paid?'): Order Opp NX5A9 movida a Stage=Pledged + auto-payment eliminado (Job 750W400000Zug0VIAR); Payment Opp NX5AA Payment record actualizado con Type='Payment (original)'. Ahora el sandbox modela fielmente la migracion real: Order=compromiso sin dinero, Payment=ingreso + refund subsecuente. Steps 12-13 agregados a Scenario 4"
-
+    user: codex
+    from: completed
+    to: completed
+    reason: >-
+      Sandbox corregido por feedback del reviewer ('por que ambas estan paid?'): Order Opp NX5A9 movida a Stage=Pledged
+      + auto-payment eliminado (Job 750W400000Zug0VIAR); Payment Opp NX5AA Payment record actualizado con Type='Payment
+      (original)'. Ahora el sandbox modela fielmente la migracion real: Order=compromiso sin dinero, Payment=ingreso +
+      refund subsecuente. Steps 12-13 agregados a Scenario 4
+  - action: reopened
+    timestamp: "2026-05-22T14:49:08.537Z"
+    user: testmanager
+    from: completed
+    to: in-progress
 metadata:
-  createdBy: "codex"
+  createdBy: codex
   createdAt: "2026-05-21T22:30:00.000Z"
-  updatedBy: "codex"
-  updatedAt: "2026-05-22T14:30:00.000Z"
+  updatedBy: testmanager
+  updatedAt: "2026-05-22T14:49:08.537Z"
