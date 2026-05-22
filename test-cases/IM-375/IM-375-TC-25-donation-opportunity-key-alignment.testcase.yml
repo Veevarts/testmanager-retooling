@@ -5,59 +5,63 @@ key: "TC-25"
 title: "Donation opportunity keys aligned across 3 queries for refund support"
 description: |
   Cobertura QA de IM-375 (PR 102 en MigrationToolETL) bajo el epic IM-70
-  Altru Queries. Valida la alineacion del Opportunity key entre 3 queries:
+  Altru Queries. Valida la alineacion del Opportunity key entre 3 queries
+  donation: donation_transaction.sql, fund_assignment_donations.sql, y
+  fund_assingments_donation_refunds.sql.
 
-    - donation_transaction.sql: Implementation_External_ID__c
-    - fund_assignment_donations.sql: vnfp__Opportunity__c
-    - fund_assingments_donation_refunds.sql: vnfp__Opportunity__c
+  Mecanica del fix (resuelta tras inspeccion side-by-side pre/post):
 
-  Las 3 usan ahora el mismo derivador:
+  - donation_transaction.sql: cambia Implementation_External_ID__c de
+    `ta.FinancialTransactionID` a `COALESCE(rgi.RecurringInstallmentID,
+    ta.FinancialTransactionID)`. Cardinalidad invariante (1 Opp per FT
+    pre y post — el TransactionAgg CTE ya existia). Lo que cambia es el
+    VALOR para los 2,087 FTs con recurring installment 1:1 (3.77%).
+  - donation_transaction.sql Amount: cambia de `ta.Amount` a
+    `COALESCE(rgi.InstallmentAmount, ta.Amount)`. Para recurring FTs,
+    Amount viene del schedule (InstallmentAmount) en lugar del sum de
+    lines del payment.
+  - fund_assignment_donations.sql: agrega CTE RecurringInstallments;
+    vnfp__Opportunity__c pasa de `ft.ID` a `COALESCE(rgi, ft.ID)`. Misma
+    cardinalidad, mismo cambio de valor para los 2,087 RGI cases.
+  - fund_assingments_donation_refunds.sql (EL CAMBIO MAS IMPACTANTE):
+    vnfp__Opportunity__c pasa de `source_dli.FINANCIALTRANSACTIONID` (el
+    FT que CONTIENE la source line item — tipicamente un Order) a
+    `COALESCE(rgi, rli.OriginalPaymentTransactionId)` (el FT del payment
+    canonico via CREDITPAYMENT). Cardinalidad invariante; el LINK del
+    refund se redirige al Opp correcto.
 
-    COALESCE(
-        CAST(rgi.RecurringInstallmentID AS VARCHAR(36)),
-        CAST(<source_payment_FT.ID> AS VARCHAR(36))
-    )
+  Bug real (clarificado): pre-fix los refund fund assignments linkeaban al
+  Opportunity creado por el FT de la SOURCE LINE (un Order en la mayoria
+  de casos de Altru). El fix los redirige al Opportunity del PAYMENT
+  canonico (la FT del original payment, accesible via CREDITPAYMENT).
+  Cuando una donacion fluye Order -> Payment -> Refund en Altru, los 3
+  FTs son distintos; pre-fix el refund apuntaba al Order Opp (incorrecto
+  semanticamente); post-fix apunta al Payment Opp (correcto).
 
-  Donde RecurringInstallmentID viene de RECURRINGGIFTINSTALLMENT joineado
-  via RECURRINGGIFTINSTALLMENTPAYMENT (1 RGI por payment cuando
-  COUNT(DISTINCT)=1; NULL si comparten).
+  Anchor del ticket: Order 10356776 o 10022998 en cuenta Muhammad — no
+  presente en Tucson snapshot 2026-05-22 (probable otro org del cliente).
+  Validacion usa anchor tucsonense del mismo patron.
 
-  Bug original: en fund_assignment_refunds.sql los refunds linkeaban a la
-  Opportunity via SOURCELINEITEMID. Algunos refunds reusan el mismo
-  SOURCELINEITEMID en multiples refund line items (anchor del ticket:
-  Order 10356776 o 10022998 en cuenta Muhammad — no presentes en Tucson
-  snapshot 2026-05-21, probablemente otro org del cliente; pero el patron
-  esta extendido: 1,065 source lines en Tucson son reusados por 3,173
-  refund lines, max 32 refunds por source line).
+  Universo Tucson confirmado (snapshot 2026-05-22):
+  - Donation Opps pre-fix = post-fix = 55,317 (cardinalidad invariante).
+  - Opps con external_id cambiado (RGI adoption): 2,087 (3.77%).
+  - Opps unchanged (FT.ID fallback): 53,230 (96.23%).
+  - Total donation refund lines: 188.
+  - Refund lines donde pre/post Opp keys DIVERGE: 188 (100%).
+  - Refund lines donde keys alinean (false coincidence): 0.
 
-  Fix PR 102 (3 queries SQL + tests):
-  - donation_transaction.sql: emite 1 Opp per payment/installment (no per
-    line-item). Amount aggregado.
-  - fund_assignment_donations.sql: el vnfp__Opportunity__c apunta al
-    mismo Opp key. Fund rows conservan line-item grain.
-  - fund_assingments_donation_refunds.sql: refunds apuntan al
-    payment/installment grain del payment original (no al source line
-    item directo).
-  - Backward compat: single-line non-recurring donations conservan FT.ID
-    como key.
-
-  Universo Tucson confirmado (snapshot 2026-05-21):
-  - Pre-fix Opportunities (line grain): 58,488
-  - Post-fix Opportunities (payment grain): 55,317 — diferencia 3,171
-    rows que colapsan (multi-line donation FTs).
-  - Keys from RecurringInstallment: 2,087 (3.77%).
-  - Keys from FinancialTransaction (fallback): 53,230.
-
-  Anchor en Tucson: source line F68D5E3A en FT 679E98FB (rev-10098772)
-  tiene 32+ refund line items linkeados via SOURCELINEITEMID. Post-fix
-  los 32 refunds alinean al SAME payment-grain Opp key 679E98FB (sin RGI
-  en este caso; fallback a FT.ID).
+  Anchor Tucson seleccionado: refund line 26124232-7DBE (en source Order
+  rev-10449528, ft 85CE4CAC) cuyo payment canonico es rev-10449527 (ft
+  AC19A145). Pre-fix linkeaba a Order Opp; post-fix linkea a Payment Opp.
+  Mismo constituyente, mismo dia, mismo amount $100 — par tipico Altru
+  Order+Payment.
 
   Referencias:
   - PR: https://github.com/Veevarts/MigrationToolETL/pull/102
   - Branch: task/donation-refund-fund-assignments-support-IM-375
   - Issue: https://veevart.atlassian.net/browse/IM-375
   - QA Sub-task: https://veevart.atlassian.net/browse/IM-731
+  - Side-by-side pre/post: attachments/tr-040-tc-25/pre-post-diff/
 
 type: integration
 priority: medium
@@ -65,60 +69,85 @@ status: active
 
 preconditions:
   - "Profile `tucson` en safesql configurado (bastion + keychain)"
-  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, RECURRINGGIFTINSTALLMENT, RECURRINGGIFTINSTALLMENTPAYMENT en Tucson"
-  - "Branch `task/donation-refund-fund-assignments-support-IM-375` checkeada para referencia del derivador del key"
+  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, RECURRINGGIFTINSTALLMENT, RECURRINGGIFTINSTALLMENTPAYMENT, CREDITPAYMENT en Tucson"
+  - "Branch `task/donation-refund-fund-assignments-support-IM-375` checkeada para referencia del derivador"
+  - "sf CLI auth contra veevartd (tucsonbotanical--trainings.sandbox.my.salesforce.com) para Scenario 4 funcional"
+  - "Bulk API 2.0 enabled en sandbox; Opportunity con vnfp__Implementation_External_ID__c como external ID; Auctifera__Fund_Donation_Assignment__c createable"
 
 format: gherkin
 scenarios:
-  - title: "Opportunity grain collapse: line-grain a payment/installment-grain (pre vs post-fix)"
+  - title: "Cardinalidad invariante: donation_transaction.sql emite el mismo numero de Opps pre/post"
     tags:
       - data-review
-      - grain-collapse
+      - cardinality-invariance
+      - behavioral-diff
       - tucson
     given:
-      - "pre-fix donation_transaction.sql emitia 1 row per FINANCIALTRANSACTIONLINEITEM elegible (line-grain Opportunities)"
-      - "post-fix el query agrega por FT/installment y emite 1 row per COALESCE(RecurringInstallmentID, FinancialTransactionID)"
+      - "el TransactionAgg CTE ya existia pre-fix con GROUP BY el.FinancialTransactionID — pre-fix YA emitia 1 row per donation-eligible FT (no per line item)"
+      - "post-fix conserva el mismo TransactionAgg + el mismo FROM final — la unica diferencia es la EXPRESION emitida para Implementation_External_ID__c (de ta.FT.ID a COALESCE(rgi, ta.FT.ID))"
     when:
-      - "QA materializa los 2 universos en Tucson: line-grain (count de line items elegibles) vs payment-grain (count de distinct COALESCE keys)"
+      - "QA cuenta donation-eligible FTs distintos en Tucson aplicando los filtros exactos del query patched (TYPECODE NOT IN 1/2/20; line type Standard/Reversal; APPLICATION en Donation/Recurring/Planned/Matching)"
     then:
-      - "pre-fix count: 58,488 line items donation-eligibles que pre-fix emiten otras tantas Opportunities"
-      - "post-fix count: 55,317 distinct Opportunity keys (paridad exacta con el donation-eligible FT total)"
-      - "diferencia: 3,171 rows que colapsan — son los lines extras en multi-line donation FTs que pre-fix duplicaban Opps y post-fix se agregan en una sola"
-      - "single-line non-recurring FTs conservan FT.ID como key (backward compat): 53,230 de los 55,317 (96.23%) usan FT.ID como fallback"
+      - "prefix_donation_opp_count = postfix_donation_opp_count = 55,317 — la cardinalidad NO cambia con el fix"
+      - "el cambio del PR es de VALOR (RGI cuando exista) no de CARDINALIDAD; mi narrativa anterior de 'colapso 58,488 a 55,317' fue incorrecta — 58,488 son line items elegibles, no Opportunities"
+      - "opps_with_changed_external_id = 2,087 (3.77%) — son los FTs con recurring installment 1:1 que ahora se identifican por RGI.ID en vez de FT.ID"
 
-  - title: "Distribucion del COALESCE: RecurringInstallment vs FinancialTransaction como key source"
+  - title: "Refund Opp link redirige: pre-fix source_dli.FT.ID a post-fix rli.OriginalPaymentTransactionId"
     tags:
       - data-review
-      - coalesce-distribution
+      - refund-relink
+      - behavioral-diff
+      - core-bug
     given:
-      - "el derivador COALESCE prefiere RecurringInstallmentID cuando exista (caso recurring gift); cae a FT.ID en el resto"
-      - "RecurringInstallmentID se materializa desde RECURRINGGIFTINSTALLMENT joineado via RECURRINGGIFTINSTALLMENTPAYMENT, solo cuando COUNT(DISTINCT rgi.ID)=1 por payment (NULL si comparten)"
+      - "el PR cambia fund_assingments_donation_refunds.sql vnfp__Opportunity__c desde `source_dli.FINANCIALTRANSACTIONID` (FT que contiene la source line item refundeada — tipicamente un Order) a `COALESCE(rgi, rli.OriginalPaymentTransactionId)` (FT del payment canonico via CREDITPAYMENT)"
+      - "el patron Altru tipico es Order FT -> Payment FT -> Refund FT; los 3 son FTs distintos linkeados via CREDITPAYMENT.REVENUEID = payment FT.ID y CREDITPAYMENT.CREDITID = refund FT.ID"
     when:
-      - "QA particiona el universo donation-eligible Tucson segun cual rama del COALESCE se aplica"
+      - "QA computa ambos candidatos de Opp key (pre-fix source_dli.FT.ID y post-fix rli.OriginalPaymentTransactionId) para cada donation refund line en Tucson y mide divergencia"
     then:
-      - "2,087 FTs (3.77%) usan RecurringInstallmentID como key — son los recurring gift installments con 1:1 mapping a su payment"
-      - "53,230 FTs (96.23%) usan FinancialTransactionID como key — incluye donations regulares, payments multi-installment-shared, y casos sin RGI"
-      - "suma: 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta sin gaps ni overlap"
-      - "cross-query alignment por construccion: las 3 queries (donation_transaction.sql, fund_assignment_donations.sql, fund_assingments_donation_refunds.sql) usan el MISMO COALESCE byte-identical sobre los mismos joins, asi que sus key sets coinciden y la referential integrity esta garantizada estructuralmente"
+      - "total_donation_refund_lines = 188 — el universo de refund lines elegible para donation"
+      - "keys_diverge_prefix_neq_postfix = 188 (100%) — TODOS los refund lines tienen Opp keys distintos pre vs post"
+      - "keys_align_prefix_eq_postfix = 0 — no hay coincidencias falsas (caso degenerado Order=Payment seria 0; en Altru siempre son FTs separados)"
+      - "no_credit_payment_link = 0 — los 188 refunds tienen un CREDITPAYMENT que los apunta al payment original (el camino post-fix es siempre alcanzable)"
+      - "conclusion: el fix re-linka el 100% de los donation refunds del universo Tucson; sin el fix, los 188 refunds en Salesforce apuntarian al Opportunity equivocado"
 
-  - title: "Anchor F68D5E3A: 32 refund lines sharing source line alinean al mismo payment-grain Opportunity"
+  - title: "RGI adoption en donation Opps: 2,087 FTs cambian external_id de FT.ID a RGI.ID"
     tags:
       - data-review
-      - anchor
-      - shared-source-line
-      - bug-pattern
+      - rgi-adoption
+      - external-id-change
     given:
-      - "el bug del ticket cita anchors en cuenta Muhammad (Order 10356776 / 10022998) que no estan en Tucson snapshot 2026-05-21 (probable otro org del cliente)"
-      - "Tucson tiene el mismo patron extendido: 1,065 source line items son reusados por 3,173 refund line items (max 32 refunds por source line)"
-      - "anchor tucsonense: source line F68D5E3A-8E77-4DD2-826B-6B1E0FBD9737 tiene 32+ refund line items vinculados via SOURCELINEITEMID, total refund $452"
+      - "el COALESCE prefiere RecurringInstallmentID cuando InstallmentByPayment lo materializa (COUNT(DISTINCT rgi.ID)=1 per payment)"
+      - "para los 2,087 FTs en este bucket, el Salesforce Opportunity external_id cambia de FT.ID a RGI.ID — Implementation_External_ID__c cambia en el output CSV"
     when:
-      - "QA deriva el payment-grain Opportunity key para los 32 refunds del anchor segun el formula del PR 102"
+      - "QA particiona el universo donation-eligible Tucson aplicando InstallmentByPayment y comparando casos con RGI vs sin RGI"
     then:
-      - "source line F68D5E3A pertenece a FT 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 (rev-10098772) — el payment original"
-      - "ese FT no tiene RecurringInstallment asociado (rgi_id_if_any = null), asi que el key cae al fallback FT.ID"
-      - "post-fix Opportunity key para los 32 refund lines: 679E98FB-38AE-4CA2-AF57-BC79EF91F8F3 — TODOS los 32 refunds apuntan a la MISMA Opp"
-      - "pre-fix: los 32 refunds apuntaban a la line-grain Opp del SOURCELINEITEMID original (1 Opp por line; varios refunds compartiendo source = correcto en cardinalidad pero linkeado al objeto equivocado downstream)"
-      - "post-fix: los 32 refunds apuntan a la payment-grain Opp del FT original — mismo Opp pero ahora con Amount agregado de todas las lines del payment, permitiendo reconciliacion correcta de los $452 total refund contra el payment amount total"
+      - "opps_now_keyed_by_rgi = 2,087 (3.77%) — recurring gift installments con mapping 1:1 al payment"
+      - "opps_keyed_by_ft_unchanged = 53,230 (96.23%) — donations standard sin RGI; comportamiento idempotente con pre-fix (FT.ID fallback)"
+      - "suma 2,087 + 53,230 = 55,317 = donation-eligible FT total — particion exacta"
+      - "cross-query alignment: las 3 queries (donation_transaction, fund_assignment_donations, fund_assingments_donation_refunds) usan el MISMO formula y la MISMA InstallmentByPayment CTE; cualquier vnfp__Opportunity__c emitido por fund assignments o refunds es un Implementation_External_ID__c valido de donation_transaction por construccion"
+
+  - title: "Functional upsert: refund FDA attached al Payment Opp post-fix, no al Order Opp (sandbox veevartd)"
+    tags:
+      - functional
+      - sandbox-upsert
+      - visual-evidence
+      - veevartd
+      - refund-relink
+    given:
+      - "anchor seleccionado: par tipico Altru Order+Payment+Refund en Tucson. Order rev-10449528 (ft 85CE4CAC, $100, 2023-12-31) + Payment rev-10449527 (ft AC19A145, $100, 2023-12-31, mismo constituyente). Refund line 26124232 (source line F82834FF en Order rev-10449528, payment rev-10449527 via CREDITPAYMENT, $100)"
+      - "pre-fix: refund FDA tendria vnfp__Opportunity__c = source_dli.FT.ID = ft 85CE4CAC (Order Opp rev-10449528) — INCORRECTO semanticamente porque el refund aplica al payment, no al order"
+      - "post-fix: refund FDA tiene vnfp__Opportunity__c = rli.OriginalPaymentTransactionId = ft AC19A145 (Payment Opp rev-10449527) — CORRECTO"
+    when:
+      - "QA upserta ambos Opportunities al sandbox veevartd via Bulk API 2.0 (Order Opp + Payment Opp)"
+      - "QA inserta 1 FDA Sold por cada Opp ($100 cada uno, Status='Sold', Action_Type=null) representando el donation original que cada FT genero"
+      - "QA inserta 1 FDA Refunded ($100, Action_Type='Refunded', Status='Refunded') linkeado SOLO al Payment Opp (post-fix correct attachment)"
+      - "QA abre ambas Opportunities en la UI Lightning para comparar Fund Donation Assignments related lists"
+    then:
+      - "ambas Opps son creadas en sandbox con Stage='Closed Won', Amount=$100, mismo constituyente, mismo dia — par Altru Order+Payment tipico"
+      - "Order Opp (rev-10449528) tiene 1 FDA Sold ($100) en su related list, NO tiene FDA Refunded — esto refleja el comportamiento post-fix correcto (el refund NO debe atribuirse al order)"
+      - "Payment Opp (rev-10449527) tiene 2 FDAs: 1 Sold ($100) + 1 Refunded ($100, Action_Type='Refunded') — refund correctamente attachable al payment via la post-fix link"
+      - "comparacion visual: abrir las 2 URLs lado a lado prueba que el fix re-direccionia el refund FDA del Order Opp (donde pre-fix lo ponia) al Payment Opp (donde post-fix lo pone, correcto)"
+      - "reconciliacion contable: el Payment Opp ahora muestra Amount $100 con $100 Refunded = $0 net (refund completo), accionable desde reportes; pre-fix la atribucion incorrecta al Order distorsionaba balances"
 
 tags:
   - im-375
@@ -131,15 +160,19 @@ tags:
   - refund
   - fund-assignment
   - recurring-gift
+  - credit-payment
   - tucson
+  - veevartd
   - data-review
+  - functional
+  - sandbox-upsert
   - pr-102
 
-estimatedDuration: 25
+estimatedDuration: 45
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-21T22:20:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-21T22:20:00Z"
-  version: 1
+  updatedAt: "2026-05-22T13:30:00Z"
+  version: 2
