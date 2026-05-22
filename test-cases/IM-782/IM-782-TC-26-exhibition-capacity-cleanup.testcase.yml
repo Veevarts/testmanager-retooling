@@ -1,0 +1,127 @@
+schemaVersion: "1.0"
+
+id: "2d93d531-225c-4a18-97e1-6184902b1f85"
+key: "TC-26"
+title: "Exhibition capacity extractor cleanup: dead programId filter + orphaned duplicate query removal"
+description: |
+  Cobertura QA de IM-782 (PR 115 en MigrationToolETL) bajo el epic IM-70
+  Altru Queries. Valida un cleanup defensivo en el extractor de exhibition
+  capacity que elimina codigo muerto.
+
+  Mecanica del fix:
+
+  - Removido el predicate `AND (@hasProgramIdFilter = 0 OR e.PROGRAMID =
+    @programIdFilter)` del query activo `exhibition-time-and-capacities/
+    exhibition_capacity.sql`. El predicate referenciaba `@hasProgramIdFilter`
+    y `@programIdFilter`, parametros que el extractor SIEMPRE bindeaba a
+    `0` y `''` porque ningun front-end / API setea el campo `programId` en
+    `ExhibitionCapacityFilters`. El predicate era no-op (siempre TRUE).
+  - Eliminado el archivo huerfano `exhibition-capacity/exhibition_capacity.sql`
+    (copia duplicada que no se cargaba desde ningun extractor; solo
+    referenciado en docs de context).
+  - Removido el field `programId?: string` del interface
+    `ExhibitionCapacityFilters` en specifications.
+  - Removidas las bindings de `hasProgramIdFilter` y `programIdFilter` del
+    metodo `mergeFilters` del `ExhibitionCapacityExtractor`.
+
+  Bug latente removido: el predicate eliminado tenia la MISMA bug pattern
+  de IM-770 (mezcla nvarchar y uniqueidentifier que dispara `Conversion
+  failed when converting from a character string to uniqueidentifier` si
+  alguien hubiera intentado usar el filter con un programId real). El
+  cleanup elimina ese tiempo latente sin que nadie haya tenido que
+  tropezarlo.
+
+  Universo Tucson confirmado (snapshot 2026-05-22):
+  - Row count EVENT con PROGRAMID IS NOT NULL: 11,334 rows.
+  - Row count post-fix (sin el predicate): 11,334 rows.
+  - Rows passing the dead predicate pre-fix: 11,334 (100%) — confirma que
+    era no-op.
+  - Pre = Post EXACT — cero impacto behavioral.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/115
+  - Branch: bug/exhibition-capacity-cleanup-IM-782
+  - Issue: https://veevart.atlassian.net/browse/IM-782
+  - QA Sub-task: https://veevart.atlassian.net/browse/IM-789
+
+type: integration
+priority: low
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre EVENT en Tucson"
+  - "Branch `bug/exhibition-capacity-cleanup-IM-782` checkeada para referencia del query patched"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side confirma los 4 cambios de codigo del cleanup"
+    tags:
+      - data-review
+      - side-by-side
+      - code-cleanup
+    given:
+      - "el PR 115 declara 4 cambios de codigo + 2 actualizaciones de docs auto-generadas"
+      - "los 4 cambios son: (1) -1 linea del SQL activo eliminando el predicate dead; (2) -20 lineas borrando el archivo SQL huerfano; (3) -1 linea del interface ExhibitionCapacityFilters quitando programId; (4) -2 lineas del extractor.ts removiendo bindings de hasProgramIdFilter/programIdFilter"
+    when:
+      - "QA descarga las versiones pre/post de cada archivo afectado del repo MigrationToolETL"
+    then:
+      - "exhibition-time-and-capacities/exhibition_capacity.sql post-fix tiene 20 lineas (era 21) y la ultima clausula del WHERE removida es la del predicate dead, confirmando que el resto de la logica (date filters + PROGRAMID IS NOT NULL) queda intacto"
+      - "exhibition-capacity/exhibition_capacity.sql ya no existe en el repo post-fix (archivo borrado completo)"
+      - "ExhibitionCapacityFilters en specifications.ts solo expone `fromDate?: Date` y `toDate?: Date` (sin programId)"
+      - "ExhibitionCapacityExtractor.mergeFilters solo bindea date-related params (hasDateFilterFrom/To + dateFilterFrom/To), sin hasProgramIdFilter ni programIdFilter"
+
+  - title: "Behavioral diff: pre = post output identico contra Tucson"
+    tags:
+      - data-review
+      - behavioral-diff
+      - no-op-validation
+      - tucson
+    given:
+      - "el predicate eliminado evaluaba a TRUE siempre porque el extractor SIEMPRE bindeaba @hasProgramIdFilter = 0 (no hay path front-end que pase un programId real)"
+      - "el query activo + el query huerfano tenian logica equivalente (mismos joins, mismas columnas, mismos filtros excepto indentacion); ambos contenian el mismo predicate dead"
+    when:
+      - "QA ejecuta dos versiones del query contra Tucson: una con el predicate dead (simulando el extractor pre-fix con @hasProgramIdFilter = 0) y otra sin el predicate (simulando el query patched post-fix)"
+    then:
+      - "row count pre-fix = 11,334 events con PROGRAMID IS NOT NULL"
+      - "row count post-fix = 11,334 — match EXACT"
+      - "rows passing the dead predicate = 11,334 (100% de los rows pasaban TRUE — confirma que era no-op)"
+      - "sample de 5 rows post-fix muestra el schema de output (7 columnas: Implementation_External_ID__c, Lookup_ID__c, Auctifera__Date_Time__c, Auctifera__Display_Storage_Location__c, Auctifera__Session_Name__c, Auctifera__Target_Capacity__c, PROGRAMID) sin cambios"
+
+  - title: "Touch radius limpio: ningun otro consumer en el codebase"
+    tags:
+      - data-review
+      - touch-radius
+      - regression-risk
+    given:
+      - "el cleanup elimina dos cosas potencialmente compartibles: la propiedad ExhibitionCapacityFilters.programId y los binding params hasProgramIdFilter/programIdFilter"
+      - "ExhibitionCapacityPipeline.buildExtractionParams solo propaga fromDate y toDate desde PipelineContext (confirmado en ticket description)"
+    when:
+      - "QA busca via gh search code todas las referencias a programId, hasProgramIdFilter y exhibition_capacity.sql en el repo MigrationToolETL"
+    then:
+      - "ninguna referencia a `hasProgramIdFilter` queda en codigo production post-fix (solo en stale search index entries que apuntan a los archivos eliminados)"
+      - "las referencias a `programId` en otros archivos pertenecen a dominios distintos (museum-offer, ticket-item, membership-program, etc.) y son PROGRAMID en SQL o programId fields de otros entities — sin acoplamiento con exhibition-capacity"
+      - "las referencias a `exhibition_capacity.sql` post-fix solo apuntan a `exhibition-time-and-capacities/` (el archivo activo); el archivo huerfano ya no es referenciado en ningun lugar"
+      - "ExhibitionCapacityPipeline + ExhibitionCapacityExtractor + ExhibitionCapacitySpecification permanecen consistentes entre si (todos eliminaron programId en el mismo PR)"
+
+tags:
+  - im-782
+  - im-70
+  - im-789
+  - altru
+  - migration-tool-etl
+  - exhibition-capacity
+  - cleanup
+  - dead-code-removal
+  - tucson
+  - data-review
+  - pr-115
+
+estimatedDuration: 15
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-22T22:40:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-22T22:40:00Z"
+  version: 1

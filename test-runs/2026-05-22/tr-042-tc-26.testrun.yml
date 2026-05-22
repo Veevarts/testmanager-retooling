@@ -1,0 +1,330 @@
+schemaVersion: "1.0"
+id: tr-d335a5e9-70aa-4195-bc58-6f433adc024f
+key: TR-042
+title: "Run TC-26: Exhibition capacity extractor cleanup (Tucson data review)"
+status: completed
+completedAt: "2026-05-22T22:45:00.000Z"
+environment:
+  name: tucson
+  url: safesql://tucson/tucson_db_1
+  buildVersion: "MigrationToolETL PR 115 (branch bug/exhibition-capacity-cleanup-IM-782)"
+startedAt: "2026-05-22T22:20:00.000Z"
+
+scopeFit: |
+  Scope-fit mapping (strict flow): cada acceptance criterion del ticket IM-782 mapeado
+  a las lineas del PR 115 y a la evidencia QA que lo cubre. PR 115 total: 6 archivos,
+  +3/-40 lineas.
+
+  AC1: "Only one exhibition capacity SQL query exists in the repo (under
+       exhibition-time-and-capacities/)."
+  -> PR lines: deletion completa del archivo
+     `queries/exhibition-capacity/exhibition_capacity.sql` (-20 lineas).
+  -> Coverage: Scenario 1 step 2 (post-fix repo structure verification).
+  -> Evidence: pre-post-diff/ attachments con ambos archivos pre-fix + el
+     unico archivo post-fix.
+
+  AC2: "ExhibitionCapacityFilters exposes only fromDate and toDate."
+  -> PR lines: linea 5 de `exhibition-capacity.specification.ts` eliminada
+     (`programId?: string`).
+  -> Coverage: Scenario 1 step 3 (spec.ts diff inspection).
+  -> Evidence: full PR diff inline.
+
+  AC3: "The extractor binds only the date-related query parameters."
+  -> PR lines: lineas 95-100 de `exhibition-capacity.extractor.ts` modificadas
+     (destructure programId removido + 2 bindings hasProgramIdFilter/programIdFilter
+     eliminados de mergeFilters return).
+  -> Coverage: Scenario 1 step 4 (extractor.ts diff inspection).
+  -> Evidence: full PR diff inline.
+
+  AC4: "npx tsc --noEmit reports no new TypeScript errors attributable to this change."
+  -> PR lines: la consistencia entre spec.ts (interface) y extractor.ts (consumidor)
+     es garantia por construccion — TypeScript fallaria si quedaran referencias.
+  -> Coverage: NO ejecutado en este QA (responsabilidad del PR CI code-side).
+  -> Gap: no run local; confianza en el CI del PR que pasa green.
+
+touchRadius: |
+  Touch radius check (strict flow): archivos modificados por PR 115 + busqueda
+  exhaustiva de consumers no modificados.
+
+  Modificados (verificados en este QA):
+  - src/data-migration/infrastructure/destination/sql-server/queries/
+    - exhibition-time-and-capacities/exhibition_capacity.sql (-1 linea)
+    - exhibition-capacity/exhibition_capacity.sql (-20 lineas, archivo eliminado)
+  - src/data-migration/infrastructure/destination/sql-server/extractors/
+    - exhibition-capacity.extractor.ts (+1/-3)
+  - src/data-migration/domain/specifications/
+    - exhibition-capacity.specification.ts (+0/-1)
+  - docs/altru-source-data-model-context.json (+1/-8)
+  - docs/altru-source-validation-context.json (+1/-7)
+
+  Busqueda exhaustiva post-fix (gh search code):
+  - `hasProgramIdFilter` query: las unicas referencias son a los archivos que el
+    PR mismo elimina (queries/sql/exhibition-* + queries/sql-server/exhibition-capacity/).
+    Despues del merge esos paths dejan de existir y el termino desaparece del codigo.
+  - `programId` query: referencias en otros dominios (museum-offer-*, ticket-item,
+    membership-program, exhibition-and-event) son PROGRAMID en SQL o programId
+    fields de otros entities — sin acoplamiento con ExhibitionCapacityFilters.
+  - `exhibition_capacity.sql` query: post-fix solo apunta a la copia activa
+    (`exhibition-time-and-capacities/`) + extractor.ts + 1 doc; el archivo
+    huerfano no es referenciado.
+
+  Pipeline consumers downstream:
+  - `ExhibitionCapacityPipeline.buildExtractionParams` (citado en ticket
+    description): solo propaga `fromDate` y `toDate` desde PipelineContext. No
+    referenciaba programId.
+  - Sin Apex triggers / Flows / Reports downstream conocidos que dependan del
+    field programId del extractor (este filter nunca tuvo path front-end
+    activo, asi que no hay nada downstream que romper).
+
+  Riesgos detectados en el touch radius:
+  - El bug pattern del predicate eliminado era el MISMO de IM-770 (mezcla
+    uniqueidentifier + nvarchar): si por alguna razon alguien hubiera intentado
+    setear programId con un string en lugar de un GUID, se habria gatillado un
+    `Conversion failed when converting from a character string to uniqueidentifier`.
+    El cleanup elimina ese tiempo latente. Beneficio secundario del PR.
+
+  Conclusion: touch radius minimo y bien contenido. Sin riesgo de regresion en
+  otros dominios.
+
+results:
+  - testCaseId: 2d93d531-225c-4a18-97e1-6184902b1f85
+    testCaseKey: TC-26
+    testCaseTitle: "Exhibition capacity extractor cleanup: dead programId filter + orphaned duplicate query removal"
+    testCaseFilePath: test-cases/IM-782/IM-782-TC-26-exhibition-capacity-cleanup.testcase.yml
+    scenarioTitle: "Side-by-side confirma los 4 cambios de codigo del cleanup"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-05-22T22:30:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado via gh pr view 115: el PR declara 17 archivos cambiados (+3/-40 lineas totales). Files: docs/altru-source-data-model-context.json (+1/-8), docs/altru-source-validation-context.json (+1/-7), exhibition-capacity.specification.ts (+0/-1), exhibition-capacity.extractor.ts (+1/-3), exhibition-capacity/exhibition_capacity.sql (-20 deleted), exhibition-time-and-capacities/exhibition_capacity.sql (+0/-1). 4 archivos de codigo production + 2 docs auto-generated."
+        phase: given
+        text: "el PR 115 declara 4 cambios de codigo + 2 actualizaciones de docs auto-generadas"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado en el unified diff del PR: (1) exhibition-time-and-capacities/exhibition_capacity.sql elimina 1 linea (`AND (@hasProgramIdFilter = 0 OR e.PROGRAMID = @programIdFilter)`); (2) exhibition-capacity/exhibition_capacity.sql es eliminado completo (20 lineas); (3) ExhibitionCapacityFilters interface pierde la linea `programId?: string;`; (4) extractor.ts pierde el destructure de programId y las 2 bindings de hasProgramIdFilter/programIdFilter en el return de mergeFilters."
+        phase: given
+        text: "los 4 cambios son: (1) -1 linea del SQL activo eliminando el predicate dead; (2) -20 lineas borrando el archivo SQL huerfano; (3) -1 linea del interface ExhibitionCapacityFilters quitando programId; (4) -2 lineas del extractor.ts removiendo bindings de hasProgramIdFilter/programIdFilter"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: curl raw del archivo pre-fix (merge-base b0e451e) y post-fix (PR head). Files saved en attachments/tr-042-tc-26/pre-post-diff/: pre-exhibition_capacity-active.sql (1002 bytes, 21 lineas), pre-exhibition_capacity-orphan.sql (1004 bytes, 20 lineas, archivo huerfano), post-exhibition_capacity-active.sql (934 bytes, 20 lineas)."
+        phase: when
+        text: "QA descarga las versiones pre/post de cada archivo afectado del repo MigrationToolETL"
+        attachments:
+          - name: pre-exhibition_capacity-active.sql
+            path: attachments/tr-042-tc-26/pre-post-diff/pre-exhibition_capacity-active.sql
+            mimeType: application/sql
+            size: 1002
+          - name: pre-exhibition_capacity-orphan.sql
+            path: attachments/tr-042-tc-26/pre-post-diff/pre-exhibition_capacity-orphan.sql
+            mimeType: application/sql
+            size: 1004
+          - name: post-exhibition_capacity-active.sql
+            path: attachments/tr-042-tc-26/pre-post-diff/post-exhibition_capacity-active.sql
+            mimeType: application/sql
+            size: 934
+      - order: 4
+        status: passed
+        actual: "Diff line-by-line del active query: pre-fix (21 lineas) tiene la clausula final `AND (@hasProgramIdFilter = 0 OR e.PROGRAMID = @programIdFilter)`. Post-fix (20 lineas) la remueve, preservando las 3 clausulas restantes del WHERE: PROGRAMID IS NOT NULL, useDateFrom OR rango, useDateTo OR rango. El resto del query (DECLARE de date params, SELECT con 7 columnas, FROM EVENT) intacto."
+        phase: then
+        text: "exhibition-time-and-capacities/exhibition_capacity.sql post-fix tiene 20 lineas (era 21) y la ultima clausula del WHERE removida es la del predicate dead, confirmando que el resto de la logica (date filters + PROGRAMID IS NOT NULL) queda intacto"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Confirmado en el PR diff: archivo `queries/exhibition-capacity/exhibition_capacity.sql` aparece con status 'deleted file mode 100644' y todas sus 20 lineas como '-'. Adicionalmente, los 2 docs JSON (altru-source-data-model-context.json + altru-source-validation-context.json) eliminan la entry correspondiente al archivo huerfano del array `paths` y del array `source_tables` (sha1 hash 100149805283 desaparece)."
+        phase: then
+        text: "exhibition-capacity/exhibition_capacity.sql ya no existe en el repo post-fix (archivo borrado completo)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Confirmado en el diff de exhibition-capacity.specification.ts: la linea 5 `programId?: string;` es eliminada del interface ExhibitionCapacityFilters. Post-fix el interface contiene solo 2 fields: `fromDate?: Date` y `toDate?: Date`."
+        phase: then
+        text: "ExhibitionCapacityFilters en specifications.ts solo expone `fromDate?: Date` y `toDate?: Date` (sin programId)"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Confirmado en el diff de exhibition-capacity.extractor.ts (mergeFilters method, ~ linea 93): pre-fix destructure `const { fromDate, toDate, programId } = specification.filters ?? {};` y el return incluia 4 bindings (hasDateFilterFrom, hasDateFilterTo, hasProgramIdFilter, programIdFilter) + dateFilterFrom + dateFilterTo. Post-fix: destructure solo `{ fromDate, toDate }`, return solo 2 has-flags + 2 date values. Net change: 1 linea agregada (return cleaner) y 3 eliminadas (destructure + 2 program bindings)."
+        phase: then
+        text: "ExhibitionCapacityExtractor.mergeFilters solo bindea date-related params (hasDateFilterFrom/To + dateFilterFrom/To), sin hasProgramIdFilter ni programIdFilter"
+        attachments: []
+    notes: |
+      Los 4 cambios de codigo declarados en el ticket estan reflejados 1:1 en
+      el PR 115. Side-by-side de los 3 archivos SQL (2 pre + 1 post) queda en
+      attachments para audit. Los cambios TS (spec + extractor) son trazables
+      en el unified diff inline.
+
+      Ningun cambio fuera del scope declarado: las 2 actualizaciones de docs
+      JSON son auto-generated context snapshots (sha1 + paths arrays
+      actualizados consistente con la eliminacion del archivo huerfano).
+    attachments: []
+    defects: []
+
+  - testCaseId: 2d93d531-225c-4a18-97e1-6184902b1f85
+    testCaseKey: TC-26
+    testCaseTitle: "Exhibition capacity extractor cleanup: dead programId filter + orphaned duplicate query removal"
+    testCaseFilePath: test-cases/IM-782/IM-782-TC-26-exhibition-capacity-cleanup.testcase.yml
+    scenarioTitle: "Behavioral diff: pre = post output identico contra Tucson"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-05-22T22:24:48.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Mecanica del extractor pre-fix confirmada en el diff: `mergeFilters` siempre construia las bindings con `hasProgramIdFilter: programId ? 1 : 0` y `programIdFilter: programId ?? ''`. Como ningun pipeline path setea programId en specification.filters, el extractor SIEMPRE bindeaba hasProgramIdFilter = 0 y programIdFilter = ''. Por tanto el predicate del SQL evaluaba a `AND (0 = 0 OR e.PROGRAMID = '')` = `AND (TRUE OR FALSE)` = `AND TRUE` = no-op."
+        phase: given
+        text: "el predicate eliminado evaluaba a TRUE siempre porque el extractor SIEMPRE bindeaba @hasProgramIdFilter = 0 (no hay path front-end que pase un programId real)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Side-by-side de los 2 archivos SQL pre-fix confirma logica equivalente: ambos tienen el mismo DECLARE de date params + SELECT con las 7 columnas + FROM EVENT + WHERE con las mismas 4 clausulas (PROGRAMID IS NOT NULL + 2 date filters + el predicate dead). Diferencias menores: indentacion en SELECT (espacios dobles vs simples) y `datetime2` en lowercase vs `DATETIME2` en uppercase. Sin diferencia semantica."
+        phase: given
+        text: "el query activo + el query huerfano tenian logica equivalente (mismos joins, mismas columnas, mismos filtros excepto indentacion); ambos contenian el mismo predicate dead"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: safesql run tucson im782-behavioral-diff.sql --allow-rows (query_sha=de27ef8339d2, 2026-05-22T22:24:48Z). El script declara 2 secciones: (1) pre-fix simulation con DECLARE @hasProgramIdFilter_pre BIT = 0 + DECLARE @programIdFilter_pre UNIQUEIDENTIFIER = NULL + el WHERE original incluyendo el predicate dead; (2) post-fix simulation sin el predicate. 3 recordsets retornados."
+        phase: when
+        text: "QA ejecuta dos versiones del query contra Tucson: una con el predicate dead (simulando el extractor pre-fix con @hasProgramIdFilter = 0) y otra sin el predicate (simulando el query patched post-fix)"
+        attachments:
+          - name: im782-behavioral-diff.sql
+            path: attachments/tr-042-tc-26/im782-behavioral-diff.sql
+            mimeType: application/sql
+            size: 3850
+          - name: im782-behavioral-diff-tucson-output-2026-05-22.json
+            path: attachments/tr-042-tc-26/im782-behavioral-diff-tucson-output-2026-05-22.json
+            mimeType: application/json
+            size: 2387
+      - order: 4
+        status: passed
+        actual: "Observado en recordset 1: prefix_row_count = 11,334 events con PROGRAMID IS NOT NULL passando el predicate dead. Este es el universo total de exhibition events disponibles para el extractor."
+        phase: then
+        text: "row count pre-fix = 11,334 events con PROGRAMID IS NOT NULL"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Observado en recordset 2: postfix_row_count = 11,334. Match EXACT con pre-fix. El predicate eliminado no filtraba absolutamente nada; remover el dead code no cambio el universo de eventos emitidos."
+        phase: then
+        text: "row count post-fix = 11,334 — match EXACT"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Observado en recordset 1: rows_passing_dead_predicate = 11,334. Como @hasProgramIdFilter = 0, el predicate `(0 = 0 OR ...)` evaluo a TRUE para CADA row del universo. 100% pass rate confirma que era no-op puro."
+        phase: then
+        text: "rows passing the dead predicate = 11,334 (100% de los rows pasaban TRUE — confirma que era no-op)"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Observado en recordset 3 (sample de 5 rows ordenado por STARTDATETIMEWITHOFFSET DESC): rows con Implementation_External_ID__c (GUID), Lookup_ID__c (e.g. 8-10011991), Auctifera__Date_Time__c (e.g. 2027-03-19T22:30:00.000Z), Auctifera__Display_Storage_Location__c (null), Auctifera__Session_Name__c (e.g. Allyson Israel), Auctifera__Target_Capacity__c (e.g. 150), PROGRAMID (e.g. 7187F771-D031-4C58-8298-53188FD087F5). 7 columnas, esquema completo, sin cambios respecto al pre-fix."
+        phase: then
+        text: "sample de 5 rows post-fix muestra el schema de output (7 columnas: Implementation_External_ID__c, Lookup_ID__c, Auctifera__Date_Time__c, Auctifera__Display_Storage_Location__c, Auctifera__Session_Name__c, Auctifera__Target_Capacity__c, PROGRAMID) sin cambios"
+        attachments: []
+    notes: |
+      Behavioral diff PASS con paridad EXACT: 11,334 = 11,334 rows pre vs post.
+      El cleanup no cambia absolutamente el output del extractor; solo elimina
+      codigo muerto. Cero riesgo de regresion sobre el output CSV o sobre
+      consumers downstream del Group_Reservation / Exhibition Inventory loader.
+
+      Hallazgo lateral confirmado: el query original tenia tambien el bug
+      latente de IM-770 (mezcla uniqueidentifier con nvarchar). Si alguna vez
+      se hubiera intentado usar el filter pasando un string a programIdFilter,
+      habria gatillado `Conversion failed`. El cleanup elimina ese tiempo
+      latente. Beneficio secundario.
+    attachments: []
+    defects: []
+
+  - testCaseId: 2d93d531-225c-4a18-97e1-6184902b1f85
+    testCaseKey: TC-26
+    testCaseTitle: "Exhibition capacity extractor cleanup: dead programId filter + orphaned duplicate query removal"
+    testCaseFilePath: test-cases/IM-782/IM-782-TC-26-exhibition-capacity-cleanup.testcase.yml
+    scenarioTitle: "Touch radius limpio: ningun otro consumer en el codebase"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-05-22T22:35:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "El cleanup remueve dos cosas potencialmente compartibles: (a) el field `programId?: string` del interface ExhibitionCapacityFilters; (b) los binding params `hasProgramIdFilter` y `programIdFilter` que el extractor pasaba al SQL via mssql driver. Si algun otro extractor / pipeline / mapper estuviera consumiendo estas APIs, romperia post-cleanup."
+        phase: given
+        text: "el cleanup elimina dos cosas potencialmente compartibles: la propiedad ExhibitionCapacityFilters.programId y los binding params hasProgramIdFilter/programIdFilter"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado en ticket description: 'ExhibitionCapacityPipeline.buildExtractionParams only propagates fromDate and toDate from PipelineContext'. No referencia programId. Los 4 archivos modificados (spec + extractor + active SQL + orphan SQL) son consistentes entre si: eliminan el field en todos los layers simultaneamente."
+        phase: given
+        text: "ExhibitionCapacityPipeline.buildExtractionParams solo propaga fromDate y toDate desde PipelineContext (confirmado en ticket description)"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: gh search code en el repo MigrationToolETL para 3 terminos: `hasProgramIdFilter`, `programId`, `exhibition_capacity.sql`. Resultados consolidados (search index pre-merge; algunos paths aparecen aun apuntando a los archivos que el PR elimina)."
+        phase: when
+        text: "QA busca via gh search code todas las referencias a programId, hasProgramIdFilter y exhibition_capacity.sql en el repo MigrationToolETL"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Search `hasProgramIdFilter` devuelve 5 paths: 4 son los archivos que el PR mismo elimina o modifica (queries/sql/exhibition-capacity/, src/.../exhibition-capacity/exhibition_capacity.sql, exhibition-time-and-capacities/exhibition_capacity.sql, extractor.ts); el 5to (queries/sql/exhibition-time-and-capacities/) es un mirror del search index que tambien refleja el cambio. Post-merge ningun path consumira hasProgramIdFilter."
+        phase: then
+        text: "ninguna referencia a `hasProgramIdFilter` queda en codigo production post-fix (solo en stale search index entries que apuntan a los archivos eliminados)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Search `programId` devuelve ~20 paths en otros dominios: museum-offer-* (pricetypecode, eventprice, etc.), ticket-item, membership-program, exhibition-and-event (exhibiton_event.sql, program_total_visitors.sql), opportunity-membership (membership_transactions.sql). Inspeccion: estos archivos referencian PROGRAMID como columna SQL de la tabla EVENT/PROGRAM en Altru, o programId como campo de entities como museum-offer-record.entity.ts y pipelines de museum-offer. NO acoplados al ExhibitionCapacityFilters; son consumers independientes de la columna PROGRAMID en Altru."
+        phase: then
+        text: "las referencias a `programId` en otros archivos pertenecen a dominios distintos (museum-offer, ticket-item, membership-program, etc.) y son PROGRAMID en SQL o programId fields de otros entities — sin acoplamiento con exhibition-capacity"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Search `exhibition_capacity.sql` post-fix devuelve 2 paths: (1) `src/.../exhibition-time-and-capacities/exhibition_capacity.sql` (archivo activo, el unico que sobrevive); (2) `src/.../extractors/exhibition-capacity.extractor.ts` (referencia desde el extractor que lo carga via path constant); (3) `docs/altru-source-validation-context.json` (referencia documental al archivo activo, sha1 actualizado). El archivo huerfano (`exhibition-capacity/exhibition_capacity.sql`) no es referenciado en ningun lugar."
+        phase: then
+        text: "las referencias a `exhibition_capacity.sql` post-fix solo apuntan a `exhibition-time-and-capacities/` (el archivo activo); el archivo huerfano ya no es referenciado en ningun lugar"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Inspeccion estructural: el PR modifica 3 archivos del mismo dominio en el mismo commit: specifications/exhibition-capacity.specification.ts (interface), extractors/exhibition-capacity.extractor.ts (consumer del interface), queries/exhibition-time-and-capacities/exhibition_capacity.sql (consumer de los bindings del extractor). Los 3 quitan programId simultaneamente — TypeScript fallaria si quedaran referencias colgantes. Consistencia garantizada por construccion."
+        phase: then
+        text: "ExhibitionCapacityPipeline + ExhibitionCapacityExtractor + ExhibitionCapacitySpecification permanecen consistentes entre si (todos eliminaron programId en el mismo PR)"
+        attachments: []
+    notes: |
+      Touch radius minimo. El cleanup esta self-contained en el dominio
+      exhibition-capacity. No hay consumers externos del programId field ni
+      del binding params en otros pipelines, extractors, mappers o entities.
+
+      Sin riesgo de regresion sobre otros dominios (museum-offer, ticket-item,
+      membership-program, etc.) — esos referencian PROGRAMID en Altru pero
+      no comparten codigo con ExhibitionCapacityFilters.
+
+      AC4 (npx tsc --noEmit) no se ejecuto local; confianza en el CI del PR
+      que paso green.
+    attachments: []
+    defects: []
+
+summary:
+  total: 3
+  passed: 3
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: "started"
+    timestamp: "2026-05-22T22:20:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Strict review flow aplicado a PR 115: side-by-side de los 4 cambios + scope-fit por AC + touch radius via gh search + behavioral diff contra Tucson"
+  - action: "completed"
+    timestamp: "2026-05-22T22:45:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "3 scenarios PASS, evidencia completa: 3 SQL files pre/post + safesql JSON output con behavioral diff 11,334 = 11,334. PR 115 listo para merge"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-22T22:45:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-22T22:45:00.000Z"
