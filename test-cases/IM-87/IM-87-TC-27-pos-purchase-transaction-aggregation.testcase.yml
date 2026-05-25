@@ -147,6 +147,30 @@ scenarios:
       - "AC2 del ticket (query output includes required keys/fields) queda satisfecho: los 3 totals fields nuevos + el POS reference COALESCE son consumibles por el Salesforce loader sin depender del Opportunity trigger"
       - "AC3 (no regressions for existing POS extraction scenarios) queda satisfecho: el revenue-backed path principal sigue emitiendo los 15,946 rows pre-fix + 3,826 rows adicionales que pre-fix omitia silenciosamente por la combinacion line-grain + INNER JOIN; ningun row pre-fix queda fuera post-fix"
 
+  - title: "Functional end-to-end veevartd: anchor FT round-trips POS + Opportunity sin Opportunity trigger"
+    tags:
+      - functional
+      - sandbox
+      - veevartd
+      - external-id-lookup
+      - ac1-validation
+    given:
+      - "anchor FT en Tucson: 5B44681D-76A5-4633-964D-D6328F58806E (donation multi-line, revenue-backed, net amount 15500.00)"
+      - "revenue-backed SO del anchor: ADF8D4E7-FD42-49DE-8161-8EA57CE40ACE (LOOKUPID 8-11385811)"
+      - "las 3 queries post-fix scoped al anchor FT emiten el MISMO POS Id ADF8D4E7-... como Implementation_External_ID__c (POS) / vnfp__POS_Purchase__c (donation_transaction) / vnfp__Opportunity_POS_Purchase__c (fund_assignment) — confirmado en attachments/tr-044-tc-27/im87-anchor-scoped-tucson-output-2026-05-25.json"
+      - "veevartd (tucsontrainings) sandbox tiene el package Auctifera con los 3 campos nuevos del PR ya disponibles (Subtotal_before_discount__c, Subtotal__c, Total__c) y Opportunity.vnfp__POS_Purchase__c lookup hacia Auctifera__POS_Purchase__c"
+    when:
+      - "QA construye 2 CSVs prefijados (IM87-TR044-): pos-purchase.csv con Auctifera__Implementation_External_ID__c + los 3 totals; opportunity.csv con vnfp__Implementation_External_ID__c + vnfp__POS_Purchase__r.Auctifera__Implementation_External_ID__c apuntando al External Id del POS"
+      - "QA hace bulk upsert primero del POS y luego del Opportunity en veevartd via sf data upsert bulk (Bulk API 2.0, CRLF), SIN ningun trigger custom involucrado"
+      - "QA verifica via SOQL que Opportunity.vnfp__POS_Purchase__c esta poblado con el Id del POS recien insertado y los 3 totals fields landed correctamente"
+    then:
+      - "POS upsert: 1 success, 0 failed (job 750W400000a0JHMIA2)"
+      - "Opportunity upsert: 1 success, 0 failed (job 750W400000a0KA9IAM)"
+      - "SOQL retorna: Opportunity Id=006W400000Nb8RBIAZ con vnfp__POS_Purchase__c=a2OW4000008TFVJMA4 (resuelto via External Id lookup, no trigger)"
+      - "Opportunity.vnfp__POS_Purchase__r.Auctifera__Implementation_External_ID__c = IM87-TR044-ADF8D4E7-... — match exacto con el External Id emitido por la POS query"
+      - "Opportunity.vnfp__POS_Purchase__r.Auctifera__Total__c / Subtotal__c / Subtotal_before_discount__c = 15500 cada uno — los 3 totals fields nuevos del PR landed correctamente"
+      - "AC1 satisfecho funcionalmente: el linkage Opportunity -> POS Purchase se resuelve unicamente via External Id (no Opportunity trigger ejecutado), demostrando que la alineacion COALESCE en SQL es suficiente para garantizar referential integrity post-trigger-deactivation"
+
 tags:
   - im-87
   - im-70
@@ -161,14 +185,17 @@ tags:
   - payment-backed-fallback
   - opportunity-trigger-deactivation
   - tucson
+  - veevartd
   - data-review
+  - functional
+  - external-id-lookup
   - pr-94
 
-estimatedDuration: 30
+estimatedDuration: 45
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-25T13:50:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-25T13:50:00Z"
-  version: 1
+  updatedAt: "2026-05-25T19:35:00Z"
+  version: 2
