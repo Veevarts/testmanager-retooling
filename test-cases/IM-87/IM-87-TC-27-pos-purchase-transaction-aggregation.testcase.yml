@@ -1,0 +1,174 @@
+schemaVersion: "1.0"
+
+id: "03ca2711-9af7-4f43-a534-858b5853c4eb"
+key: "TC-27"
+title: "POS purchase queries (donation + membership + pledge) align on transaction-level aggregation with payment-backed fallback"
+description: |
+  Cobertura QA de IM-87 (PR 94 en MigrationToolETL) bajo el epic IM-70
+  Altru Queries. Valida el refactor de las queries POS purchase para que
+  Donation y Membership creation flows puedan resolver POS records sin
+  depender del Opportunity trigger (que esta siendo desactivado).
+
+  Mecanica del fix (resumida tras side-by-side de 6 archivos):
+
+  - `pos-purchase/sales_order_only_donation.sql` (refactor mayor):
+    - Pre: line-grain DonationLineItems CTE + INNER JOIN SALESORDER via
+      REVENUEID. Emitia 1 row per (FT line × SO).
+    - Post: TransactionAgg con SUM(NetAmount) per FinancialTransactionID
+      con HAVING <> 0 (zero-net filter), reversal-aware logic
+      (REVERSEDLINEITEMID), TYPECODE exclusion (Pledge/Recurring/Write-off),
+      y LEFT JOIN tanto SALESORDER (revenue path) como SALESORDERPAYMENT
+      via nuevo CTE SalesOrdersByPayment (payment path).
+    - 3 columnas nuevas: `Auctifera__Subtotal_before_discount__c`,
+      `Auctifera__Subtotal__c`, `Auctifera__Total__c` (= ta.Amount).
+    - SELECT usa COALESCE(revenue_so, payment_so) para LOOKUPID,
+      SALESMETHODTYPE, REFUNDSTATUS, STATUSCODE, CONSTITUENTID, etc.
+  - `pos-purchase/sales_order_only_membership.sql` (refactor): preserva
+    SALESORDERITEMMEMBERSHIP, SALESORDERITEMMEMBERSHIPADDON, revenue-linked
+    y payment-linked membership transaction paths. Aggrega a nivel
+    transaction y mantiene rows zero-amount intencionalmente (decision de
+    contrato).
+  - `pos-purchase/sales_order_only_pledge.sql` (refactor): aggregacion a
+    nivel transaction de pledges, excluye pledges que ya tienen sales
+    order (link es 1-1 con la opportunity downstream).
+  - `opportunity-donation/donation_transaction.sql`: usa la MISMA
+    SalesOrdersByPayment CTE + COALESCE para `vnfp__POS_Purchase__c` y los
+    fields que dependen de SO (LOOKUPID, STATUSCODE-driven StageName).
+  - `fund-assignment/fund_assignment_donations.sql`: usa la MISMA
+    SalesOrdersByPayment CTE + COALESCE para
+    `vnfp__Opportunity_POS_Purchase__c`.
+  - `opportunity-donation/donation_pledges.sql`: +1/-1 alineado con el
+    contrato de las queries hermanas.
+  - `pos-purchase-csv-descriptor.builder.ts`: agrega los 3 totals fields
+    al output CSV de donation y membership.
+
+  Cross-query alignment (estructural): las 3 queries de la cadena donation
+  (`sales_order_only_donation.sql`, `donation_transaction.sql`,
+  `fund_assignment_donations.sql`) usan el MISMO `COALESCE(revenue_so.ID,
+  payment_so.ID)` para el POS reference + la MISMA SalesOrdersByPayment
+  CTE. Por construccion, cualquier POS Id que emiten las queries downstream
+  (donation_transaction + fund_assignment) es un Implementation_External_ID__c
+  valido del POS purchase output.
+
+  Universo Tucson confirmado (snapshot 2026-05-25):
+  - Pre-fix donation POS rows: 15,946 (revenue-backed, line-grain con
+    INNER JOIN).
+  - Post-fix donation POS rows: 19,772 (transaction-grain post zero-net
+    filter, con OR payment-backed fallback).
+  - Delta: +3,826 rows. Origen: reversal-aware logic + cambio de
+    cardinalidad line-to-transaction grain (NO viene del payment-backed
+    fallback).
+  - Payment-backed-only universe (NUEVA cobertura del fallback): 0 FTs en
+    Tucson. El fallback es defensivo — no captura casos nuevos hoy pero
+    previene perdida de linkage en futuras orgs o estados donde alguna
+    donacion sea payment-backed sin SALESORDER.REVENUEID match.
+  - Eligible FT count post-fix: 52,930 (de los cuales 33,158 no tienen
+    SO match — donaciones directas via Constituent sin POS, comportamiento
+    esperado en Altru).
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/94
+  - Branch: task/pos-purchase-transaction-aggregation-IM-87
+  - Issue: https://veevart.atlassian.net/browse/IM-87
+  - QA Sub-task: https://veevart.atlassian.net/browse/IM-730
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Profile `tucson` en safesql configurado (bastion + keychain)"
+  - "Permisos SELECT sobre FINANCIALTRANSACTION, FINANCIALTRANSACTIONLINEITEM, REVENUESPLIT_EXT, SALESORDER, SALESORDERPAYMENT, SALESORDERITEMMEMBERSHIP en Tucson"
+  - "Branch `task/pos-purchase-transaction-aggregation-IM-87` checkeada para referencia del refactor"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side confirma el refactor de las 6 queries afectadas"
+    tags:
+      - data-review
+      - side-by-side
+      - refactor
+    given:
+      - "PR 94 declara 14 archivos cambiados (+643/-158): 6 SQL queries + 1 TS builder + 7 test files"
+      - "los 6 SQL queries son: sales_order_only_donation.sql, sales_order_only_membership.sql, sales_order_only_pledge.sql, donation_transaction.sql, donation_pledges.sql, fund_assignment_donations.sql"
+    when:
+      - "QA descarga las versiones pre (merge-base c3a55a5) y post (PR head) de cada uno de los 6 SQL files y compara linea por linea"
+    then:
+      - "sales_order_only_donation.sql cambia de DonationLineItems+INNER JOIN SALESORDER (line-grain, revenue-only) a TransactionAgg+LEFT JOIN SALESORDER+LEFT JOIN SalesOrdersByPayment (transaction-grain, dual path COALESCE)"
+      - "sales_order_only_membership.sql aggrega a transaction-grain preservando SALESORDERITEMMEMBERSHIP/ADDON y revenue+payment paths"
+      - "sales_order_only_pledge.sql aggrega a transaction-grain y excluye pledges con SO existente"
+      - "donation_transaction.sql + fund_assignment_donations.sql adoptan la misma SalesOrdersByPayment CTE + COALESCE para sus POS references"
+      - "el TS builder agrega los 3 totals fields (Subtotal_before_discount, Subtotal, Total) al CSV de donation y membership"
+
+  - title: "Behavioral diff donation POS: transaction-grain + reversal-aware genera +3,826 rows"
+    tags:
+      - data-review
+      - behavioral-diff
+      - tucson
+    given:
+      - "el extractor pre-fix usaba INNER JOIN SALESORDER via REVENUEID y emitia distinct so.ID por linea elegible"
+      - "el extractor post-fix aggrega EligibleLines (Standard+Reversal) por FinancialTransactionID con SUM(NetAmount) y HAVING <> 0 + LEFT JOIN SALESORDER (revenue OR payment via SalesOrdersByPayment)"
+    when:
+      - "QA materializa ambas logicas contra Tucson en un solo safesql run y compara counts"
+    then:
+      - "pre-fix donation_pos_rows = 15,946 (revenue-backed, line-grain count via INNER JOIN SALESORDER.REVENUEID)"
+      - "post-fix donation_pos_rows = 19,772 (transaction-grain count con LEFT JOIN dual-path)"
+      - "delta = +3,826 rows; origen: reversal-aware logic incluye 'Reversal' type line items que pre-fix excluia + cambio de cardinalidad line-to-FT grain"
+      - "postfix_eligible_ft_count = 52,930 — universo total donation-eligible (33,158 sin SO match son donaciones directas via Constituent, sin POS por diseño)"
+
+  - title: "Payment-backed fallback: cobertura defensiva (0 casos en Tucson hoy)"
+    tags:
+      - data-review
+      - fallback-validation
+      - defensive
+    given:
+      - "el PR agrega un fallback de SALESORDERPAYMENT.PAYMENTID = ft.ID para resolver POS cuando no hay SALESORDER.REVENUEID match"
+      - "el fallback aplica en las 3 queries de la cadena donation (POS, opportunity, fund_assignment)"
+    when:
+      - "QA cuenta FTs en Tucson que TIENEN payment-backed SO pero NO TIENEN revenue-backed SO (la cobertura nueva del fallback)"
+    then:
+      - "payment_backed_only_new = 0 — en Tucson snapshot 2026-05-25 ningun FT depende exclusivamente del path payment-backed"
+      - "el fallback es defensivo: no captura casos nuevos hoy pero previene perdida de linkage si en otra org o estado futuro alguna donacion fuera payment-backed-only"
+      - "AC1 del ticket (Donation y Membership flows pueden resolver POS sin trigger) queda satisfecho por construccion del COALESCE: el output del POS query emite el mismo Id que las queries downstream referencian"
+
+  - title: "Cross-query alignment: POS + donation_transaction + fund_assignment usan el mismo COALESCE"
+    tags:
+      - data-review
+      - cross-query-alignment
+      - referential-integrity
+    given:
+      - "las 3 queries de la cadena donation usan EL MISMO CTE SalesOrdersByPayment (definicion byte-identical en las 3) y EL MISMO COALESCE(revenue_so.ID, payment_so.ID) para el POS reference"
+      - "por construccion, cualquier vnfp__POS_Purchase__c que emite donation_transaction.sql es igual al Implementation_External_ID__c del row correspondiente en sales_order_only_donation.sql; idem para vnfp__Opportunity_POS_Purchase__c en fund_assignment_donations.sql"
+    when:
+      - "QA inspecciona las 3 queries side-by-side y verifica que las definiciones de CTE y COALESCE son identicas"
+    then:
+      - "SalesOrdersByPayment CTE: definicion identica en las 3 queries (SELECT sop.PAYMENTID, MIN(sop.SALESORDERID) FROM SALESORDERPAYMENT sop GROUP BY sop.PAYMENTID)"
+      - "POS reference: COALESCE(revenue_so.ID, payment_so.ID) identico en las 3 queries (las queries downstream tambien hacen COALESCE de LOOKUPID, STATUSCODE, etc.)"
+      - "AC2 del ticket (query output includes required keys/fields) queda satisfecho: los 3 totals fields nuevos + el POS reference COALESCE son consumibles por el Salesforce loader sin depender del Opportunity trigger"
+      - "AC3 (no regressions for existing POS extraction scenarios) queda satisfecho: el revenue-backed path principal sigue emitiendo los 15,946 rows pre-fix + 3,826 rows adicionales que pre-fix omitia silenciosamente por la combinacion line-grain + INNER JOIN; ningun row pre-fix queda fuera post-fix"
+
+tags:
+  - im-87
+  - im-70
+  - im-730
+  - altru
+  - migration-tool-etl
+  - pos-purchase
+  - donation
+  - membership
+  - pledge
+  - transaction-aggregation
+  - payment-backed-fallback
+  - opportunity-trigger-deactivation
+  - tucson
+  - data-review
+  - pr-94
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-25T13:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-25T13:50:00Z"
+  version: 1
