@@ -1,0 +1,170 @@
+schemaVersion: "1.0"
+
+id: "d28363d6-71d3-4d3d-ab5b-8e9c22d1f92e"
+key: "TC-30"
+title: "Frontend platform baseline: role-based login redirect + route guards for admin / csm-team / implementations-team"
+description: |
+  Cobertura QA de IM-603 (PR 45 en MigrationAppFrontend) bajo el epic
+  IM-601 Establish CSM OS platform foundation. Valida el refactor
+  estructural del frontend + la nueva logica de role-based routing por
+  grupos Cognito.
+
+  Scope cubierto por PR 45 (decision: el rename del repo + CloudFront del
+  Paso 1 de IM-603 quedo out of scope; este PR solo cubre Paso 2 + Paso 3):
+
+  - Refactor de carpetas: codigo migration movido a `src/features/migration/`
+    y nuevo scaffold `src/features/csm/` con `MyDayPage.tsx` placeholder.
+  - Nuevo `src/shared/auth/PostLoginRedirect.tsx` que lee `cognito:groups`
+    del JWT (ID token + access token + profile) via `useCognitoGroups` y
+    redirige:
+      - admin OR csm-team -> `/csm/my-day`
+      - implementations-team -> `/migration`
+      - sin grupo valido -> `/unauthorized`
+  - Nuevo `src/shared/hooks/useCognitoGroups.ts` (constants COGNITO_GROUPS
+    `admin`, `csm-team`, `implementations-team` + flags isAdmin/isCsm/
+    isImplementations + helper hasGroup).
+  - `src/shared/auth/ProtectedRoute.tsx` extendido con prop `allowedGroups`
+    que routea a `/unauthorized` si el grupo del usuario no esta en la
+    lista.
+  - `src/router/app.routes.tsx` define route guards:
+      - `/migration/*` -> allowedGroups: [implementations-team, admin]
+      - `/csm/*` -> allowedGroups: [csm-team, admin]
+  - Code-splitting via `React.lazy` + `Suspense` con `<AppSkeleton />`
+    fallback en cada feature `routes.tsx`.
+
+  Matriz de comportamiento esperado (per code review del PR head SHA
+  e64552ea5d1c0c4b2feb7f394c4dfc188d17afdd):
+
+  | Rol            | Post-login redirect | Acceso /migration/*  | Acceso /csm/* |
+  | -------------- | ------------------- | -------------------- | ------------- |
+  | admin          | /csm/my-day         | permitido            | permitido     |
+  | csm-team       | /csm/my-day         | -> /unauthorized     | permitido     |
+  | impls-team     | /migration          | permitido            | -> /unauthorized |
+  | (no group)     | /unauthorized       | -> /unauthorized     | -> /unauthorized |
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationAppFrontend/pull/45
+  - Branch: story/launch-frontend-platform-baseline-IM-603
+  - Issue: https://veevart.atlassian.net/browse/IM-603
+  - Parent epic: https://veevart.atlassian.net/browse/IM-601
+  - Staging URL: https://migration.dev.rtl.veevartapp.com/
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "PR 45 mergeado en `main` y desplegado en staging (https://migration.dev.rtl.veevartapp.com/)"
+  - "Cognito user pool con los 3 grupos creados: `admin`, `csm-team`, `implementations-team`"
+  - "3 usuarios test creados en Cognito, uno por grupo: admin_user (grupo `admin`), csm_user (grupo `csm-team`), impl_user (grupo `implementations-team`). Credenciales conocidas por QA"
+  - "Navegador con DevTools (Chrome / Brave) para verificar Network tab (code-splitting) e inspeccionar JWT en LocalStorage / cookies"
+  - "Sesion Cognito limpia (no hay tokens previos persistidos) antes de cada test funcional"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit confirman los cambios estructurales del PR 45"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 45 declara 106 archivos cambiados (+1230/-384, 8 commits)"
+      - "el scope del PR cubre Paso 2 (refactor a `src/features/*`) + Paso 3 (role-based routing) de IM-603; el Paso 1 (rename + CloudFront) quedo out of scope por decision del equipo"
+    when:
+      - "QA descarga del PR head (SHA e64552ea) los archivos clave de routing y los inspecciona: `app.routes.tsx`, `PostLoginRedirect.tsx`, `useCognitoGroups.ts`, `ProtectedRoute.tsx`, `features/csm/routes.tsx`, `features/csm/pages/MyDayPage.tsx`, `features/migration/routes.tsx`"
+    then:
+      - "`features/migration/` tiene 60 archivos (codigo migration completo migrado a la nueva carpeta + `routes.tsx` nuevo de +121 lineas con lazy-loaded pages)"
+      - "`features/csm/` tiene 3 archivos nuevos: `index.ts`, `routes.tsx` (+24) y `pages/MyDayPage.tsx` (+10, placeholder mostrando 'My Day'). Suficiente para validar el redirect; no se requiere UI funcional completa de CSM en este PR"
+      - "`useCognitoGroups.ts` exporta `COGNITO_GROUPS = { admin: 'admin', csm: 'csm-team', implementations: 'implementations-team' }` y un hook que extrae grupos del profile, id_token y access_token (con fallback). Expone `isAdmin`, `isCsm`, `isImplementations`, `hasGroup`"
+      - "`PostLoginRedirect.tsx` (+18) implementa el orden de prioridad correcto: `isAdmin || hasGroup(csm) -> /csm/my-day`, luego `hasGroup(implementations) -> /migration`, sin grupo -> `/unauthorized`"
+      - "`ProtectedRoute.tsx` (+18/-5) acepta prop `allowedGroups: CognitoGroup[]` y redirige a `/unauthorized` si el usuario no pertenece a ninguno de los grupos permitidos"
+      - "`app.routes.tsx` (+51/-56) configura: `/migration/*` con `allowedGroups: [implementations, admin]` y `/csm/*` con `allowedGroups: [csm, admin]`. Code-splitting via `Suspense` + `<AppSkeleton />` en LoginPage y NotFoundPage; cada feature `routes.tsx` usa `React.lazy` para sus pages"
+      - "AC 'Repo renombrado en GitHub' y AC 'CloudFront distro apunta al nuevo bucket/origin' quedan **out of scope** por decision del equipo (no estan en este PR). Los 5 ACs restantes (app funciona en /migration, login csm -> /csm/my-day, login impls -> /migration, code-splitting, layout role-aware) si los cubre este PR"
+
+  - title: "Functional login: admin -> /csm/my-day con acceso permitido tambien a /migration"
+    tags:
+      - functional
+      - sandbox
+      - staging
+      - cognito-admin
+      - screenshots
+      - ac1-validation
+    given:
+      - "QA limpia cookies / LocalStorage del dominio staging (`migration.dev.rtl.veevartapp.com`) antes del test"
+      - "QA abre el frontend en https://migration.dev.rtl.veevartapp.com/ en navegador con DevTools"
+    when:
+      - "QA hace login con el usuario test del grupo `admin` (credenciales proporcionadas por el equipo)"
+      - "QA observa la URL post-login y captura screenshot del landing page"
+      - "QA navega manualmente a https://migration.dev.rtl.veevartapp.com/migration y observa si el guard permite el acceso o redirige a /unauthorized"
+      - "(opcional) QA abre DevTools -> Network tab y captura screenshot del initial bundle download para verificar code-splitting"
+    then:
+      - "Post-login URL = `/csm/my-day` (admin tiene prioridad de redirect al workspace CSM). [SCREENSHOT esperado: my-day-admin.png]"
+      - "Landing page muestra el placeholder 'My Day' del MyDayPage.tsx (texto exacto del placeholder visible). [SCREENSHOT esperado: my-day-content.png]"
+      - "Navegacion manual a `/migration`: el guard `allowedGroups: [implementations-team, admin]` PERMITE el acceso porque admin esta en la lista. La pagina Migration (Clients/MigrationDashboard) carga correctamente. [SCREENSHOT esperado: admin-migration-access.png]"
+      - "(opcional) Network tab muestra bundles separados por feature (chunks `csm-*.js` y `migration-*.js` cargados solo cuando se accede a la ruta respectiva). [SCREENSHOT esperado: admin-network-chunks.png]"
+
+  - title: "Functional login: csm-team -> /csm/my-day con bloqueo de /migration via /unauthorized"
+    tags:
+      - functional
+      - sandbox
+      - staging
+      - cognito-csm
+      - screenshots
+      - route-guard
+      - ac1-validation
+    given:
+      - "QA limpia cookies / LocalStorage del dominio staging antes del test (logout completo del usuario admin previo)"
+      - "QA abre el frontend en https://migration.dev.rtl.veevartapp.com/"
+    when:
+      - "QA hace login con el usuario test del grupo `csm-team`"
+      - "QA observa la URL post-login y captura screenshot del landing page"
+      - "QA navega manualmente a https://migration.dev.rtl.veevartapp.com/migration"
+      - "QA observa la URL resultante y captura screenshot"
+    then:
+      - "Post-login URL = `/csm/my-day`. [SCREENSHOT esperado: csm-my-day.png]"
+      - "Landing page muestra el placeholder MyDayPage. [SCREENSHOT esperado: csm-my-day-content.png]"
+      - "Navegacion manual a `/migration`: el guard `allowedGroups: [implementations-team, admin]` NIEGA acceso porque csm-team NO esta en la lista. URL final queda en `/unauthorized` mostrando 'Your account does not have access to this workspace.' [SCREENSHOT esperado: csm-unauthorized.png]"
+
+  - title: "Functional login: implementations-team -> /migration con bloqueo de /csm/* via /unauthorized"
+    tags:
+      - functional
+      - sandbox
+      - staging
+      - cognito-implementations
+      - screenshots
+      - route-guard
+      - ac1-validation
+    given:
+      - "QA limpia cookies / LocalStorage del dominio staging antes del test (logout completo del usuario csm-team previo)"
+      - "QA abre el frontend en https://migration.dev.rtl.veevartapp.com/"
+    when:
+      - "QA hace login con el usuario test del grupo `implementations-team`"
+      - "QA observa la URL post-login y captura screenshot del landing page (debe mostrar la app Migration con la lista de Clients o el dashboard existente)"
+      - "QA navega manualmente a https://migration.dev.rtl.veevartapp.com/csm/my-day"
+      - "QA observa la URL resultante y captura screenshot"
+    then:
+      - "Post-login URL = `/migration` (o `/migration/clients` u homepage equivalente de migration). [SCREENSHOT esperado: impls-migration.png]"
+      - "Landing page muestra la app Migration original (Clients, MigrationDashboard, etc.) — la funcionalidad existente sigue accesible bajo el nuevo prefix `/migration/*`. [SCREENSHOT esperado: impls-migration-content.png]"
+      - "Navegacion manual a `/csm/my-day`: el guard `allowedGroups: [csm-team, admin]` NIEGA acceso porque implementations-team NO esta en la lista. URL final queda en `/unauthorized`. [SCREENSHOT esperado: impls-unauthorized.png]"
+
+tags:
+  - im-603
+  - im-601
+  - frontend
+  - migrationappfrontend
+  - cognito
+  - role-based-routing
+  - protected-routes
+  - code-splitting
+  - functional
+  - staging
+  - pr-45
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-26T13:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-26T13:30:00Z"
+  version: 1
