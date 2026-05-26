@@ -1,0 +1,155 @@
+schemaVersion: "1.0"
+
+id: "213f8d13-c572-4398-a9cd-491bb891c1fc"
+key: "TC-28"
+title: "Analytics Step Function survives large-batch ComputeMetricFacts and persists Marketing_Metrics__c for 154 subscriber orgs"
+description: |
+  Cobertura QA de IM-790 (sub-tarea QA Review de IM-766 - Fix analytics Step
+  Function error handling after extraction Map output), bajo el epic IM-506
+  KPI automation phase 2 scale and expansion. Repositorio: VeevartAnalytics.
+
+  Alcance: prueba de performance y resiliencia end-to-end del pipeline manual
+  de extraccion de KPIs sobre 154 cuentas (subscriber orgs) en un mismo
+  StartExecution. El test valida que el state machine
+  MonthlyKpiExtractionStateMachine ya no falla con
+  States.ReferencePathConflict ni con RangeError: Maximum call stack size
+  exceeded cuando ComputeMetricFacts procesa cientos de persisted runs (517
+  registros observados en la falla original de 2026-05-20), y que el resultado
+  termina materializado como un registro Marketing_Metrics__c por cuenta en la
+  org Veevart prod (00D60000000KdOJEA0) con LastModifiedBy del usuario que
+  dispara el pipeline y Metric_Period_Key__c igual al periodo solicitado.
+
+  El escenario funcional principal mapea la cadena completa de evidencia:
+  request en Postman -> API Gateway POST /analytics/manual-runs -> Lambda
+  StartExecution -> StateMachine ExtractRawSourceRows (Map) -> ComputeMetricFacts
+  -> PublishMarketingMetrics -> registros Marketing_Metrics__c en Salesforce.
+  La validacion final se hace cruzando los 154 Org_ID_18__c contra
+  Marketing_Metrics__c.LastModifiedDate = fecha de la corrida y
+  Metric_Period_Key__c = periodo solicitado, evidenciado mediante el script
+  de verificacion en tools/marketing-metrics-comparator.
+
+  Relaciona: IM-766 (bug parent), IM-506 (epic), IM-635 (timeout temporal),
+  IM-683/IM-726 (endpoint manual base), IM-687 (pipeline mensual base).
+
+type: performance
+priority: high
+status: active
+
+preconditions:
+  - "El fix de IM-766 esta desplegado en Staging (ExtractRawSourceRows usa ResultPath bajo $.extractionResults y ComputeMetricFacts evita spreads grandes y payloads ASL grandes)"
+  - "API Gateway POST /analytics/manual-runs y la state machine MonthlyKpiExtractionStateMachine estan desplegados en us-east-1 (account 287043460717) sobre el ambiente Staging"
+  - "QA tiene una x-api-key valida para el usage plan del endpoint manual-runs"
+  - "QA tiene la coleccion Postman 'Veevart Analytics - Manual Runs' importada y configurada con el environment Staging (host, x-api-key, periodStart, periodEnd, subscriberOrgIds, destinationAccounts)"
+  - "El comparador en /Users/veevart/Desktop/VeevartAIHub/tmp/marketing-metrics-comparator esta configurado contra el alias sf CLI 'veevart-prod' (org Veevart corporativa 00D60000000KdOJEA0)"
+  - "El input set de 154 Org_ID_18__c esta cargado en tmp/accounts-by-orgid-full.csv (cada uno mapeado a su Account record y a su lightning_url)"
+  - "QA tiene acceso a CloudWatch para inspeccionar /aws/lambda/veev-ue1-prod-veevart-ana-ComputeMetricFactsFuncti-GV38HlBm4zb0 y a la consola Step Functions para revisar la execution history"
+  - "QA tiene acceso de lectura a Marketing_Metrics__c y al objeto Account en Veevart prod"
+
+format: gherkin
+scenarios:
+  - title: "Manual run sobre 154 cuentas dispara una unica execution y persiste un Marketing_Metrics__c por cuenta para el periodo solicitado"
+    tags:
+      - happy-path
+      - performance
+      - large-batch
+      - im-766
+      - postman
+      - step-functions
+      - end-to-end
+    given:
+      - "QA tiene la x-api-key valida del environment Staging cargada en la variable {{x-api-key}} de Postman"
+      - "el body del request en Postman tiene periodStart y periodEnd consistentes con un mes calendario completo (cubierto en QA con 2026-01 y 2026-02), subscriberOrgIds con los 154 Org_ID_18__c listados en tmp/accounts-by-orgid-full.csv y destinationAccounts con los 154 Account.Id correspondientes en la org Veevart prod"
+      - "ningun registro Marketing_Metrics__c para el Metric_Period_Key__c solicitado ha sido modificado en el dia de la corrida para las 154 cuentas (baseline limpio)"
+      - "se conoce un baseline de 4 cuentas consistentemente sin record persistido (Fundacio Sorigue, Santa Barbara County Office of Arts and Culture, Museum of Australian Democracy MoAD, Questacon) por causas ajenas al fix de IM-766 (cuentas sin datos fuente o sin conexion sandbox activa); estas 4 quedan excluidas del threshold"
+    when:
+      - "QA envia POST {{host}}/analytics/manual-runs con header x-api-key {{x-api-key}} y el JSON body descrito"
+      - "QA copia el executionArn devuelto en la respuesta y lo abre en la consola Step Functions (us-east-1, account 287043460717)"
+      - "el state machine MonthlyKpiExtractionStateMachine ejecuta ExtractRawSourceRows en modo Map sobre las 154 cuentas, luego ComputeMetricFacts y finalmente PublishMarketingMetrics"
+      - "una vez la execution termina en SUCCEEDED, QA corre el script de verificacion en tmp/marketing-metrics-comparator que consulta Marketing_Metrics__c WHERE Account__c IN (los 154 Account.Id) AND Metric_Period_Key__c = periodo solicitado AND LastModifiedDate = la fecha de la corrida"
+    then:
+      - "la respuesta HTTP es 202 con status 'accepted', un executionArn valido y submittedScope que refleja periodStart, periodEnd, los 154 subscriberOrgIds y los 154 destinationAccounts"
+      - "en la consola Step Functions la execution termina en estado SUCCEEDED, sin States.ReferencePathConflict y sin RangeError: Maximum call stack size exceeded"
+      - "ExtractRawSourceRows (Map) completa los 154 iteraciones y guarda el resultado bajo $.extractionResults sin reemplazar el workflow context"
+      - "ComputeMetricFacts ejecuta sobre el resultado consolidado sin sobrepasar el call stack ni superar el limite de payload de Step Functions (no devuelve rawMetricRows ni metricFacts completos en el payload ASL)"
+      - "PublishMarketingMetrics publica los registros y termina sin lanzar errores"
+      - "el script de verificacion encuentra al menos 149 de las 154 cuentas (>=96.75%) con un Marketing_Metrics__c modificado en el dia con Metric_Period_Key__c igual al periodo solicitado; expresado como cuentas elegibles (excluyendo las 4 baseline-missing), el threshold es >=149 de 150 (>=99.3%)"
+      - "todos los registros encontrados tienen LastModifiedBy igual al usuario tecnico que dispara el pipeline (por ejemplo Jose Daniel Angarita)"
+      - "para cada cuenta con record persistido existe exactamente un Marketing_Metrics__c por (Account, Metric_Period_Key__c) (no se generan duplicados)"
+      - "las cuentas sin record persistido se reportan en la salida del script con su Org_ID_18__c y nombre, y la lista es estable entre corridas (no es ruido aleatorio); cualquier cuenta variable (que aparece y desaparece entre corridas, como Foothills Art Center observada) debe documentarse pero no degrada el batch"
+
+  - title: "Replay del mismo manual run no genera duplicados y conserva idempotencia"
+    tags:
+      - regression
+      - im-766
+      - im-687
+      - idempotency
+      - replay
+    given:
+      - "una execution previa para periodo 2026-02 sobre las 154 cuentas termino en SUCCEEDED y dejo registros persistidos"
+    when:
+      - "QA dispara nuevamente el mismo POST /analytics/manual-runs con el mismo body (mismo periodStart, periodEnd, subscriberOrgIds y destinationAccounts)"
+      - "la nueva execution termina"
+    then:
+      - "no se crean registros adicionales de Marketing_Metrics__c para Metric_Period_Key__c = '2026-02' en ninguna de las 154 cuentas"
+      - "los registros existentes son actualizados en sitio (su LastModifiedDate avanza a la fecha de la nueva corrida)"
+      - "el conteo de Marketing_Metrics__c por (Account, Metric_Period_Key__c = '2026-02') sigue siendo a lo sumo 1 por cuenta"
+
+  - title: "ComputeMetricFacts con batch grande NO enmascara errores reales con States.ReferencePathConflict"
+    tags:
+      - regression
+      - im-766
+      - error-handling
+      - negative
+    given:
+      - "QA tiene un escenario controlado donde se fuerza una falla real de calculo dentro de ComputeMetricFacts (por ejemplo un fixture con datos invalidos)"
+      - "el batch incluye mas de 100 cuentas para reproducir la condicion de batch grande"
+    when:
+      - "el manual run dispara la state machine y ComputeMetricFacts falla"
+      - "el Catch handler del state machine se ejecuta"
+    then:
+      - "la execution termina en FAILED con el error real de computo como causa surfaced"
+      - "el error NO es States.ReferencePathConflict"
+      - "el Catch routea a RecordWorkflowFailure escribiendo $.workflowError sin error de shape"
+      - "la execution history en Step Functions deja trazable el error original en el step ComputeMetricFacts"
+
+  - title: "Cuentas consistentemente sin record persistido se identifican y aislan"
+    tags:
+      - edge-case
+      - failure-isolation
+      - im-766
+    given:
+      - "se conoce una lista candidata de cuentas que historicamente no producen Marketing_Metrics__c en corridas previas del pipeline (baseline observado)"
+    when:
+      - "QA corre el script de verificacion despues de una execution SUCCEEDED para periodo 2026-02"
+    then:
+      - "el script lista las cuentas sin record persistido con su Org_ID_18__c y nombre"
+      - "la falla de esas cuentas no degrada el resto del batch (>=149 cuentas restantes si tienen su record)"
+      - "se documenta para cada cuenta sin record si la razon es ausencia de datos fuente, License inactiva, falta de conexion sandbox, o un bug nuevo por escalar"
+
+tags:
+  - im-790
+  - im-766
+  - im-506
+  - im-635
+  - im-687
+  - im-683
+  - veevart-analytics
+  - step-functions
+  - manual-extraction
+  - compute-metric-facts
+  - performance
+  - large-batch
+  - error-handling
+  - idempotency
+  - postman
+  - end-to-end
+  - salesforce
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-25T20:35:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-26T12:30:00Z"
+  version: 2
