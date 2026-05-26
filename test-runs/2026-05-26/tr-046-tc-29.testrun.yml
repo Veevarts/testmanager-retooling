@@ -1,0 +1,397 @@
+schemaVersion: "1.0"
+id: tr-faa453a9-83f2-43cc-a955-3a8655bfc1d1
+key: TR-046
+title: "Run TC-29: ticketing status filter cleanup — strict review PR 118 contra Tucson"
+status: completed
+completedAt: "2026-05-26T13:15:00.000Z"
+environment:
+  name: tucson
+  url: safesql://tucson/tucson_db_1
+  buildVersion: "MigrationToolETL PR 118 (branch fix/remove-unused-status-filter-IM-791, head 513f5324)"
+startedAt: "2026-05-26T12:50:00.000Z"
+
+scopeFit: |
+  Scope-fit mapping (strict flow): cada AC de IM-791 mapeado a las lineas
+  del PR 118 y a la evidencia QA. PR 118 total: 7 archivos, +148/-15 lineas,
+  4 commits desde merge-base acf73eb.
+
+  AC1: "ticketing_only_program.sql no longer references @useStatus,
+       @hasStatusFilter, or @statusFilter."
+  -> PR lines: -3 lineas en ticketing_only_program.sql (DECLARE +
+     condition WHERE) + cambios de date filters a HARDCODE 0/NULL.
+  -> Coverage: Scenario 1 step 1 (side-by-side).
+  -> Evidence: diff pre/post archivo, attachments/tr-046-tc-29/pre-post-diff/.
+  -> Status: PASS.
+
+  AC2: "TicketingProgramExtractor.mergeFilters no longer emits
+       hasStatusFilter / statusFilter bind params."
+  -> PR lines: -2 lineas en ticketing-program.extractor.ts (destructure +
+     bindings).
+  -> Coverage: Scenario 1 step 4 (side-by-side).
+  -> Evidence: diff pre/post archivo.
+  -> Status: PASS.
+
+  AC3: "Existing ticketing-program tests pass; ticketing_only_event.sql and
+       its extractor are unchanged."
+  -> PR lines: ticketing_only_event.sql -2 lineas + ticketing-event.extractor.ts
+     -2 lineas. AC3 dice que event queda UNCHANGED pero el PR sí lo limpia.
+  -> Coverage: Scenario 1 step 2 + step 4 (side-by-side) + Scenario 3 (touch
+     radius / scope-fit observation).
+  -> Status: VIOLADO. El scope creep es coherente (mismo principio aplicado
+     a ambos) pero contradice el AC declarado. Recomendable actualizar la
+     descripcion del ticket para reflejar el scope expandido (event +
+     program ambos).
+
+  AC4: "An Implementation Executive can run ticketing_only_program.sql
+       against a source DB with only the date-filter parameters (which
+       themselves are already hardcoded to off in this file)."
+  -> PR lines: ticketing_only_program.sql DECLAREs de date filters cambian
+     a HARDCODE (IIF(0=1,1,0), CAST(NULL AS DATE)).
+  -> Coverage: Scenario 1 step 1 (side-by-side documenta el hardcode).
+  -> Evidence: post-ticketing_only_program.sql no requiere bind params
+     externos. Un IE puede correrlo via safesql sin declarar params.
+  -> Status: PASS — IE no necesita supplyear params.
+  -> Nota: ticketing_only_event.sql sigue requiriendo bind params de date,
+     creando inconsistencia program vs event que vale flaggear.
+
+touchRadius: |
+  Touch radius check (strict flow): archivos modificados por PR 118 +
+  busqueda exhaustiva de consumers cross-codebase.
+
+  Modificados (verificados en este QA):
+  - Production code (5 archivos):
+    - src/data-migration/domain/specifications/ticketing-filters.type.ts (-1)
+    - src/data-migration/.../extractors/ticketing-event.extractor.ts (+1/-3)
+    - src/data-migration/.../extractors/ticketing-program.extractor.ts (+1/-3)
+    - src/data-migration/.../queries/ticketing/ticketing_only_event.sql (-2)
+    - src/data-migration/.../queries/ticketing/ticketing_only_program.sql (+4/-6)
+  - Tests (2 specs nuevos):
+    - ticketing-event-query.spec.ts (+80)
+    - ticketing-program-query.spec.ts (+62)
+
+  Cross-codebase search:
+  - `hasStatusFilter` / `statusFilter`: 4 archivos cada uno (todos los que
+    el PR mismo modifica/limpia). Search index stale, desaparecen post-merge.
+  - `TicketingFilters`: 3 archivos (type + 2 specs). Las specs solo importan
+    como tipo, ninguna consume `.status` directamente.
+
+  No modificados pero potencialmente afectados:
+  - TicketingProgramPipeline / TicketingEventPipeline: solo propagan
+    fromDate/toDate desde PipelineContext. Sin acoplamiento con status.
+  - Otros queries del pipeline (museum-offer, exhibition, pos-purchase,
+    etc.): distintos dominios, sin shared params con ticketing.
+
+  Inconsistencia tecnica nueva (no riesgo bloqueante pero debe documentarse):
+  - `ticketing_only_program.sql` post-fix: date filters HARDCODED a 0/NULL.
+    El extractor sigue enviando `hasDateFilterFrom`, `hasDateFilterTo`,
+    `dateFilterFrom`, `dateFilterTo` como bindings. SQL las ignora.
+    Resultado: bindings dead enviadas pero nunca consumidas en program.
+  - `ticketing_only_event.sql` post-fix: date filters mantienen bind params
+    activos.
+  - Inconsistencia: program y event difieren en como manejan date filters.
+    Decisiones validas:
+      A) Restaurar bind params en program.sql (alinear con event).
+      B) Hardcodear tambien event.sql y remover bindings de ambos
+         extractors.
+      C) Aceptar la inconsistencia como costo del cleanup conservador.
+    No bloquea el merge pero conviene decidir antes del cutover.
+
+  Conclusion: touch radius bien delimitado en la cadena ticketing.
+  Sin acoplamiento con otros dominios. Cleanup es safe a nivel de regresion.
+
+results:
+  - testCaseId: 53249417-6bf8-4b4d-85ec-70b11e6c4021
+    testCaseKey: TC-29
+    testCaseTitle: "Ticketing program/event extractor cleanup: removal of dead @hasStatusFilter / @statusFilter parameters"
+    testCaseFilePath: test-cases/IM-792/IM-792-TC-29-ticketing-status-filter-cleanup.testcase.yml
+    scenarioTitle: "Side-by-side confirma los cambios de codigo del cleanup"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-05-26T12:55:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado via gh pr view 118: 7 archivos cambiados (+148/-15), 4 commits. 4 archivos de production code + 2 query-regression specs nuevos + 1 type definition."
+        phase: given
+        text: "el PR 118 declara 7 archivos cambiados (+148/-15): 4 archivos de codigo production + 2 query-regression specs nuevos + 1 type definition"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmados los archivos modificados: ticketing_only_program.sql (+4/-6), ticketing_only_event.sql (-2), ticketing-program.extractor.ts (+1/-3), ticketing-event.extractor.ts (+1/-3)."
+        phase: given
+        text: "los 4 archivos de production son: ticketing_only_program.sql, ticketing_only_event.sql, ticketing-program.extractor.ts, ticketing-event.extractor.ts"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Descargados via curl raw las versiones pre (merge-base acf73ebffe26ba440d707c291b4435ae8bb9dfb4) y post (PR head 513f532426db31b98523de8fd2c0ce529bc99de6) de los 5 archivos. Files saved en attachments/tr-046-tc-29/pre-post-diff/. Side-by-side ejecutado via diff -u."
+        phase: when
+        text: "QA descarga las versiones pre (merge-base acf73eb) y post (PR head 513f532) de cada archivo afectado del repo MigrationToolETL"
+        attachments:
+          - name: pre-ticketing_only_program.sql
+            path: attachments/tr-046-tc-29/pre-post-diff/pre-ticketing_only_program.sql
+            mimeType: application/sql
+          - name: post-ticketing_only_program.sql
+            path: attachments/tr-046-tc-29/pre-post-diff/post-ticketing_only_program.sql
+            mimeType: application/sql
+          - name: pre-ticketing_only_event.sql
+            path: attachments/tr-046-tc-29/pre-post-diff/pre-ticketing_only_event.sql
+            mimeType: application/sql
+          - name: post-ticketing_only_event.sql
+            path: attachments/tr-046-tc-29/pre-post-diff/post-ticketing_only_event.sql
+            mimeType: application/sql
+      - order: 4
+        status: passed
+        actual: |
+          Diff de ticketing_only_program.sql:
+            - Removido: DECLARE @useStatus BIT = IIF(@hasStatusFilter = 1, 1, 0);
+            - Removido: AND (@useStatus = 0 OR so.STATUS = @statusFilter)
+            - CAMBIO ADICIONAL: los DECLAREs de date filters cambian a HARDCODE:
+                * DECLARE @useDateFrom = IIF(0 = 1, 1, 0) -> siempre 0
+                * DECLARE @useDateTo = IIF(0 = 1, 1, 0) -> siempre 0
+                * DECLARE @filterDateFrom = CAST(NULL AS DATE) -> hardcoded NULL
+                * DECLARE @filterDateTo = CAST(NULL AS DATE) -> hardcoded NULL
+          El extractor sigue enviando estos bindings (no removidas), creando
+          inconsistencia: el SQL ignora bindings que el extractor sigue
+          enviando.
+        phase: then
+        text: "`ticketing_only_program.sql` post-fix: removida la linea `DECLARE @useStatus BIT = IIF(@hasStatusFilter = 1, 1, 0);` y la clausula `AND (@useStatus = 0 OR so.STATUS = @statusFilter)` del WHERE. Adicionalmente, los DECLAREs de date filters quedan HARDCODED a 0/NULL (`IIF(0 = 1, 1, 0)` y `CAST(NULL AS DATE)`) — scope adicional no declarado en los ACs"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Diff de ticketing_only_event.sql: -2 lineas (DECLARE @useStatus + clausula WHERE). Los date filters mantienen bind params activos (DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0); ...). Inconsistencia: program.sql hardcodea date filters, event.sql NO."
+        phase: then
+        text: "`ticketing_only_event.sql` post-fix: removida la linea `DECLARE @useStatus` y la clausula del WHERE. Los date filters siguen consumiendo bind params (`@hasDateFilterFrom`, etc.) — inconsistencia con program.sql"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Confirmado en pre-post diff de ticketing-filters.type.ts: -1 linea removida (`status?: string;`). Post-fix solo expone `fromDate?: Date;` y `toDate?: Date;`."
+        phase: then
+        text: "`TicketingFilters` en `ticketing-filters.type.ts` post-fix solo expone `fromDate?: Date` y `toDate?: Date` (sin `status`)"
+        attachments:
+          - name: pre-ticketing-filters.type.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/pre-ticketing-filters.type.ts
+            mimeType: application/typescript
+          - name: post-ticketing-filters.type.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/post-ticketing-filters.type.ts
+            mimeType: application/typescript
+      - order: 7
+        status: passed
+        actual: "Confirmado en pre-post diff de ambos extractors: la destructuracion de `status` removida del `const { fromDate, toDate, status }` y las 2 bindings (`hasStatusFilter: status ? 1 : 0`, `statusFilter: status ?? ''`) removidas del return object. Mismos cambios en program y event."
+        phase: then
+        text: "Ambos extractors (`ticketing-program.extractor.ts` y `ticketing-event.extractor.ts`) post-fix removen la destructuracion de `status` + las bindings `hasStatusFilter` y `statusFilter` del `mergeFilters`"
+        attachments:
+          - name: pre-ticketing-program.extractor.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/pre-ticketing-program.extractor.ts
+            mimeType: application/typescript
+          - name: post-ticketing-program.extractor.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/post-ticketing-program.extractor.ts
+            mimeType: application/typescript
+          - name: pre-ticketing-event.extractor.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/pre-ticketing-event.extractor.ts
+            mimeType: application/typescript
+          - name: post-ticketing-event.extractor.ts
+            path: attachments/tr-046-tc-29/pre-post-diff/post-ticketing-event.extractor.ts
+            mimeType: application/typescript
+      - order: 8
+        status: passed
+        actual: "Confirmado en gh pr view: 2 nuevos spec files agregados — ticketing-program-query.spec.ts (+62 lineas, nuevo) y ticketing-event-query.spec.ts (+80 lineas, nuevo). Ambos lockean el cleanup con casos de regression para validar que las bindings de status no se vuelven a introducir."
+        phase: then
+        text: "2 query-regression specs nuevos agregados: `ticketing-program-query.spec.ts` (+62) y `ticketing-event-query.spec.ts` (+80), lockeando el cleanup con casos de regression"
+        attachments: []
+    notes: |
+      Side-by-side limpio. Hallazgos importantes:
+        - AC3 declarado en IM-791 ("event extractor and SQL unchanged")
+          esta VIOLADO en el PR — event tambien se limpia. Scope creep
+          coherente pero contradice el ticket.
+        - Hardcode de date filters en program.sql es scope creep adicional
+          no declarado en los ACs. Inconsistencia program vs event.
+    attachments: []
+    defects: []
+
+  - testCaseId: 53249417-6bf8-4b4d-85ec-70b11e6c4021
+    testCaseKey: TC-29
+    testCaseTitle: "Ticketing program/event extractor cleanup: removal of dead @hasStatusFilter / @statusFilter parameters"
+    testCaseFilePath: test-cases/IM-792/IM-792-TC-29-ticketing-status-filter-cleanup.testcase.yml
+    scenarioTitle: "Behavioral diff: pre = post output identico contra Tucson"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-05-26T13:00:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado en pre-extractor: `hasStatusFilter: status ? 1 : 0` — como ningun front-end / API setea `status` en TicketingFilters, el extractor SIEMPRE pasaba `0`. El predicate `(@useStatus = 0 OR so.STATUS = @statusFilter)` con `@useStatus = 0` evalua a `(TRUE OR ...)` = TRUE = no-op."
+        phase: given
+        text: "el predicate eliminado evaluaba a TRUE siempre porque el extractor SIEMPRE bindeaba `@hasStatusFilter = 0` (no hay path front-end que pase un status real)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado en diff: ambos archivos (program y event) contenian el mismo predicate. Mecanica identica."
+        phase: given
+        text: "tanto el query active de program como el de event contenian el mismo predicate dead"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "safesql run contra tucson_db_1 con im791-behavioral-diff.sql: 5 result sets ejecutados (STATUS distribution + post-fix count + pre-fix simulado + cancelled rows count + delta assertion). Resultado en attachments/tr-046-tc-29/im791-behavioral-diff-tucson-output-2026-05-26.json."
+        phase: when
+        text: "QA ejecuta dos versiones del query contra Tucson: una con el predicate dead (simulando el extractor pre-fix con `@hasStatusFilter = 0`) y otra sin el predicate (simulando el query patched post-fix)"
+        attachments:
+          - name: im791-behavioral-diff.sql
+            path: attachments/tr-046-tc-29/im791-behavioral-diff.sql
+            mimeType: application/sql
+          - name: im791-behavioral-diff-tucson-output-2026-05-26.json
+            path: attachments/tr-046-tc-29/im791-behavioral-diff-tucson-output-2026-05-26.json
+            mimeType: application/json
+      - order: 4
+        status: passed
+        actual: "Resultado del comparator: prefix_total_rows_no_op = 311,419 sales orders con linkage a SALESORDERITEM + SALESORDERITEMTICKET + PROGRAM. Match con el universo de tickets program."
+        phase: then
+        text: "row count pre-fix simulando @useStatus=0 = **311,419** sales orders ticketing"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Resultado: postfix_total_rows = 311,419. Match EXACT con pre-fix."
+        phase: then
+        text: "row count post-fix (sin el predicate) = **311,419** — match EXACT"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "delta_pre_to_post = 0. Confirmacion empirica de que el filter era no-op puro. Equivalente al hallazgo de IM-782 (exhibition capacity cleanup): predicate dead, cero impacto behavioral."
+        phase: then
+        text: "delta = 0 — confirma que el filter era no-op puro"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Cancelled rows en universe = 27 (de 311,419 total = 0.0087%). Pre-fix count INCLUIA esas 27 cancelled rows porque el filter era no-op. La afirmacion del Dev 'Cancelled rows now appear in the result set as expected with the filter removed' es engañosa — ya aparecian siempre. El cleanup es defensivo, no funcional."
+        phase: then
+        text: "cancelled rows = 27 (de 311,419 total) ya aparecian pre-fix; la afirmacion 'Cancelled rows now appear' del Dev es engañosa: cero impacto behavioral"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "STATUS distribution Tucson: Complete 310555, Pending 657, Finalized 134, Confirmed 27, Cancelled 27, Unresolved 15, Reserved 3, Tentative 1. Total = 311,419. Sin cambios entre pre y post."
+        phase: then
+        text: "STATUS distribution post-fix: Complete 310,555 / Pending 657 / Finalized 134 / Confirmed 27 / Cancelled 27 / Unresolved 15 / Reserved 3 / Tentative 1 — sin cambios"
+        attachments: []
+    notes: |
+      Behavioral diff confirma: el cleanup es no-op puro en Tucson. Cero
+      impacto behavioral. Las cancelled rows ya aparecian pre-fix. La
+      afirmacion del Dev en la descripcion de IM-791 ("Cancelled rows now
+      appear in the result set as expected with the filter removed") es
+      engañosa — no es que aparecen "now"; siempre aparecieron.
+
+      Comparable a IM-782 (exhibition capacity cleanup): mismo patron de
+      "remove dead predicate" con cero delta behavioral.
+    attachments: []
+    defects: []
+
+  - testCaseId: 53249417-6bf8-4b4d-85ec-70b11e6c4021
+    testCaseKey: TC-29
+    testCaseTitle: "Ticketing program/event extractor cleanup: removal of dead @hasStatusFilter / @statusFilter parameters"
+    testCaseFilePath: test-cases/IM-792/IM-792-TC-29-ticketing-status-filter-cleanup.testcase.yml
+    scenarioTitle: "Touch radius limpio: ningun otro consumer en el codebase"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-05-26T13:10:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado en post-diff: ticketing-filters.type.ts post-fix expone solo `fromDate?: Date` y `toDate?: Date` (sin status). Las dos extractors (program + event) removen bindings de status."
+        phase: given
+        text: "el cleanup elimina `TicketingFilters.status` y los binding params `hasStatusFilter` / `statusFilter`"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Verificado via curl raw de specifications post-fix (ticketing-event.specification.ts + ticketing-program.specification.ts): solo importan `TicketingFilters` como tipo (`import { TicketingFilters } from './ticketing-filters.type';`). Ningun acceso a `.status` en su codigo."
+        phase: given
+        text: "TicketingProgramSpecification y TicketingEventSpecification solo importan `TicketingFilters` como tipo, sin consumir `.status` directamente"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "gh search code MigrationToolETL: `hasStatusFilter` 4 archivos, `statusFilter` 4 archivos, `TicketingFilters` 3 archivos. Resultados detallados en notes del scenario."
+        phase: when
+        text: "QA busca via gh search code todas las referencias a `hasStatusFilter`, `statusFilter`, y `TicketingFilters` en el repo MigrationToolETL"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "`hasStatusFilter` y `statusFilter` aparecen solo en los 4 archivos que el PR mismo modifica/limpia: ticketing-event.extractor.ts, ticketing-program.extractor.ts, ticketing_only_event.sql, ticketing_only_program.sql. Search index stale; estas referencias desaparecen post-merge."
+        phase: then
+        text: "`hasStatusFilter` y `statusFilter` solo aparecen en los 4 archivos que el PR mismo modifica/limpia (search index stale, desaparecen post-merge)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "`TicketingFilters` aparece en 3 archivos: ticketing-filters.type.ts (definicion), ticketing-event.specification.ts, ticketing-program.specification.ts. Las 2 specs solo lo importan como tipo y pasan `filters: TicketingFilters = {}` al constructor. Ningun acceso a `.status` queda colgante."
+        phase: then
+        text: "`TicketingFilters` referenciado en 3 archivos: el type, y las 2 specifications (event + program). Ambas specs lo usan solo como tipo, sin acceder a `.status`"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Verificado: ninguna referencia a `hasStatusFilter` / `statusFilter` / `TicketingFilters.status` queda en dominios distintos (museum-offer, exhibition-and-event, pos-purchase, etc.). El cleanup queda completamente aislado a ticketing."
+        phase: then
+        text: "sin acoplamiento con otros dominios (museum-offer, exhibition, pos-purchase, etc.) — el cleanup queda aislado a ticketing"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "AC3 declarado en IM-791 dice literalmente: 'Existing ticketing-program tests pass; ticketing_only_event.sql and its extractor are unchanged.' El PR SI modifica event extractor + event SQL (removiendo el mismo dead predicate de status). El scope creep es COHERENTE (mismo principio aplicado a ambos) pero contradice el AC tal como esta redactado. Recomendable actualizar la descripcion de IM-791 para reflejar el scope real (event + program), o splittear en 2 PRs si se quiere mantener el AC original."
+        phase: then
+        text: "AC3 del ticket (`ticketing_only_event.sql` and its extractor are unchanged) queda VIOLADO en el PR — event tambien se limpia. El scope creep es coherente (mismo principio) pero contradice el AC; recomendable actualizar la descripcion del ticket para reflejar el scope real"
+        attachments: []
+    notes: |
+      Touch radius limpio. Sin acoplamiento con otros dominios.
+
+      Hallazgo recomendado actualizar:
+        - Descripcion de IM-791 dice "event unchanged"; el PR SI cambia
+          event. Escalar al autor del ticket para confirmar si:
+            a) El scope creep es intencional (actualizar descripcion).
+            b) Split en 2 PRs (uno program-only, otro event-only).
+          Recomendacion QA: opcion (a) — el cleanup completo es mas
+          coherente que dejar deuda en event.
+
+      Hallazgo secundario (sin impacto a touch radius, pero relevante para
+      cutover):
+        - Inconsistencia program vs event en como manejan date filters
+          post-fix. Program hardcodea, event mantiene bind params.
+          Recomendacion: alinear ambos antes del cutover.
+    attachments: []
+    defects:
+      - id: im791-ac3-scope-violation
+        title: "AC3 de IM-791 violado: PR limpia event extractor+SQL cuando AC declaraba 'unchanged'"
+        severity: low
+        scope: ticket-description
+        jiraKey: "IM-792"
+        url: "https://veevart.atlassian.net/browse/IM-792"
+        notes: "El PR 118 limpia ticketing_only_event.sql y ticketing-event.extractor.ts (removiendo el mismo dead predicate). El AC3 de IM-791 dice literalmente 'ticketing_only_event.sql and its extractor are unchanged'. Scope creep coherente pero contradice el AC. Recomendacion: actualizar descripcion de IM-791 para reflejar scope real (event+program ambos), o splittear PR. No bloquea merge."
+      - id: im791-program-date-filter-hardcode
+        title: "ticketing_only_program.sql post-fix hardcodea date filters, creando inconsistencia con event.sql"
+        severity: low
+        scope: technical-debt
+        jiraKey: "IM-792"
+        url: "https://veevart.atlassian.net/browse/IM-792"
+        notes: "Post-fix, program.sql hardcodea @useDateFrom/To=0 y @filterDateFrom/To=NULL. El extractor sigue enviando los bindings (hasDateFilterFrom, etc.) pero el SQL ya no las consume. Inconsistencia: event.sql mantiene bind params activos. Decisiones validas: (A) restaurar bind params en program.sql; (B) hardcodear tambien event.sql + remover bindings de ambos extractors; (C) aceptar inconsistencia. No bloquea merge pero conviene decidir antes del cutover."
+
+summary:
+  total: 3
+  passed: 3
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: "started"
+    timestamp: "2026-05-26T12:50:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Strict review flow aplicado a PR 118: side-by-side de 5 archivos + scope-fit contra los 4 ACs + touch radius via gh search + behavioral diff contra Tucson"
+  - action: "completed"
+    timestamp: "2026-05-26T13:15:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "3 scenarios PASS. Cleanup behavioral cero-impacto (delta 0 en Tucson). AC1+AC2+AC4 cumplidos. AC3 VIOLADO por scope creep coherente (event tambien limpiado). 2 defects de severity low documentados (AC3 violation + program date-filter hardcode inconsistency). PR 118 mergeable con observaciones"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-26T13:15:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-26T13:15:00.000Z"
