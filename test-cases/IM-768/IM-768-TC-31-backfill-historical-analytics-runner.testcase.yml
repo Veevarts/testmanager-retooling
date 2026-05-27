@@ -1,0 +1,158 @@
+schemaVersion: "1.0"
+
+id: "ef6478b6-bdd5-4e7f-8e4c-5ad3d0a0c065"
+key: "TC-31"
+title: "Backfill historical analytics runner: dry-run + CLI validation + secret safety + sequential execution"
+description: |
+  Cobertura QA de IM-768 (PR 26 en VeevartAnalytics) bajo el epic IM-505
+  KPI Automation. Valida el script operacional para backfill historico
+  progresivo de marketing analytics sobre ~10 anios de periodos mensuales,
+  154 subscriber orgs, calling controlled batches del endpoint
+  POST /prod/analytics/manual-runs.
+
+  El runner es un script CommonJS standalone en
+  veevart-analytics/scripts/backfill-manual-analytics-runs.cjs que:
+
+  - Acepta exactamente una fuente de orgs (--org-file o --subscriber-org-ids)
+  - Genera 1 periodo mensual por payload (NUNCA multi-month range)
+  - Soporta order newest-first / oldest-first
+  - Sequential execution: arranca 1 manual-run, espera el executionArn via
+    AWS Step Functions DescribeExecution hasta status terminal (SUCCEEDED,
+    FAILED, TIMED_OUT, ABORTED), luego continua
+  - Persiste progress en JSON local (default
+    backfill-manual-analytics-runs.progress.json) con period, batch hash,
+    executionArn, status, timestamps, pollCount, failure
+  - Resume skipea SUCCEEDED records; falla/incomplete reintentan segun
+    failure-policy (stop | continue)
+  - NUNCA acepta API key via CLI; solo via env var MANUAL_EXTRACTION_API_KEY
+  - Region AWS se infiere del executionArn si no se pasa --aws-region
+
+  Constantes clave (verificadas en el head SHA ddc3877):
+  - Endpoint: https://dcaxoa4js4.execute-api.us-east-1.amazonaws.com/prod/analytics/manual-runs
+  - API key env: MANUAL_EXTRACTION_API_KEY
+  - Org batch size default: 10
+  - Delay default: 5_000 ms
+  - Poll interval default: 30_000 ms
+  - Execution timeout default: 6 horas (21_600_000 ms)
+  - Failure policy default: stop
+  - Org ID regex: /\b00D[a-zA-Z0-9]{12}(?:[a-zA-Z0-9]{3})?\b/g
+  - Terminal statuses SFN: {SUCCEEDED, FAILED, TIMED_OUT, ABORTED}
+
+  Referencias:
+  - PR: https://github.com/Veevarts/VeevartAnalytics/pull/26
+  - Branch: task/backfill-historical-analytics-progressively-IM-768
+  - Issue: https://veevart.atlassian.net/browse/IM-768
+  - QA sub-task: pendiente de creacion
+  - Spec: openspec/changes/backfill-historical-analytics-progressively/specs/backfill-manual-runs/spec.md
+  - Design: openspec/changes/backfill-historical-analytics-progressively/design.md
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Node.js >= 20 instalado localmente para correr el script y los tests unitarios (node --test)"
+  - "Para los scenarios behavioral (dry-run + invalid args + secret safety): no se requiere API key ni AWS creds; el dry-run no llama la API"
+  - "Para el scenario real (Scenario 4): MANUAL_EXTRACTION_API_KEY env var con el secret aprobado + AWS_PROFILE con permiso states:DescribeExecution + dependencia @aws-sdk/client-sfn instalada via pnpm install"
+  - "Org list source disponible: /Users/joseangarita/Developer/tmp/sf-report-org-ids/org_ids_copyable.js (308 IDs raw, 154 unicos esperados) o un archivo equivalente con orgs validos"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 26 confirman arquitectura del runner"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 26 declara 11 archivos cambiados (+1373/-1): 1 script production (581 lineas) + 1 archivo de tests (346 lineas) + 5 archivos openspec + README + package.json + .gitignore"
+      - "PR estado: OPEN, mergeable=CONFLICTING (requiere rebase con main antes del merge)"
+    when:
+      - "QA descarga del PR head (SHA ddc3877) el script, los tests, el spec.md, design.md y tasks.md"
+    then:
+      - "Script principal (backfill-manual-analytics-runs.cjs, 581 lineas) exporta 21 helpers para testability: parseArgs, normalizeConfig, generateMonthlyPeriods, resolveOrgIds, planWorkItems, buildManualRunRequest, waitForExecution, executeWorkItems, loadProgress, writeProgress, isSucceededRecord, buildPlan, etc."
+      - "Tests file (.test.cjs, 346 lineas) tiene 16 tests cubriendo: dedupe + dry-run, monthly periods order, invalid dates, secret rejection en CLI, direct org IDs, multiple org sources rejection, manual-runs request shape, resume skips, sequential wait, terminal failure recording, dependency preflight, ARN-based region inference"
+      - "spec.md declara 5 Requirements con scenarios Gherkin: Org list ingestion + dedupe / Date range + period ordering / Sequential execution with SFN wait / Resume-safe progress / Secret credential safety"
+      - "tasks.md tiene las 4 fases del implementation plan completas (Contract + Foundation, Planning + Progress, Sequential Execution + Waiting, Tests + Documentation) — todas las 23 tasks marcadas [x]"
+      - "README incluye seccion 'Historical Backfill Runner (IM-768)' con operator checklist (6 steps) + 3 example commands (dry-run con --org-file, dry-run con --subscriber-org-ids, non-dry-run con env vars)"
+
+  - title: "CLI validation + secret safety: dry-run con dupes + invalid args + API key forbidden en CLI"
+    tags:
+      - functional
+      - cli-validation
+      - secret-safety
+      - dry-run
+    given:
+      - "Node.js 25.4.0 disponible en /usr/local/bin/node"
+      - "Script descargado del PR head a /tmp/im768-source/backfill-manual-analytics-runs.cjs"
+      - "Archivo test con 8 org IDs (5 unicos): /tmp/im768-test/org-ids-with-dupes.js"
+    when:
+      - "QA ejecuta el script con --dry-run + org-file con dupes + multi-month range (AC1 + AC2)"
+      - "QA ejecuta el script con argumentos invalidos: missing --start-date, end < start, invalid order, multiple org sources, invalid date format (AC7)"
+      - "QA intenta pasar la API key via --api-key flag (AC6)"
+    then:
+      - "AC1 PASS: dry-run reporta 'Unique org IDs: 5' (dedupe de 8) y 'Planned manual-runs calls: N' sin llamar el endpoint. Stdout confirma 'no API or AWS calls were made'"
+      - "AC2 PASS: con --start-date 2026-03-01 --end-date 2026-05-31, dry-run reporta 'Periods: 3 (2026-05 -> 2026-03, newest-first)' — un periodo por mes, ningun multi-month range emitido"
+      - "AC7 PASS: 5 invalid-arg scenarios fail-fast con mensaje de error claro y exit code no-cero, BEFORE cualquier API o AWS call. Mensajes verificados: '--start-date is required.', 'startDate must be before or equal to endDate.', '--order must be newest-first or oldest-first.', 'Use only one org source...', 'startDate must be an ISO date in YYYY-MM-DD format.'"
+      - "AC6 PASS: pasar --api-key SECRET_TO_LEAK produce error 'Do not pass API keys via --api-key; use MANUAL_EXTRACTION_API_KEY.' y el valor SECRET_TO_LEAK NO aparece en stdout/stderr. Fast fail antes de procesamiento"
+
+  - title: "Sequential execution + resume + progress recording (cubierto por unit tests del script)"
+    tags:
+      - regression
+      - sequential-execution
+      - resume
+      - progress-file
+      - unit-tests
+    given:
+      - "El archivo de tests (.test.cjs) usa node --test (no Jest, contrario al design.md) y tiene 16 tests cubriendo los flows criticos"
+      - "Sin credenciales AWS reales disponibles para QA, validar end-to-end real es out-of-scope de esta corrida; los tests unitarios cubren el comportamiento esperado con fetchFn / describeExecutionFn / sleepFn mockeados"
+    when:
+      - "QA inspecciona el codigo de los 16 tests y los matchea contra los 5 Requirements del spec.md"
+    then:
+      - "AC4 PASS por construccion: test 'extracts and dedupes org ids without exposing raw ids in progress planning metadata' valida que el progress no logguea org IDs raw. test 'builds manual-runs request with fixed endpoint, x-api-key header, monthly payload, and no CLI API key' confirma estructura de la request"
+      - "AC5 PASS por unit test: test 'skips succeeded resume records and executes pending records only' confirma resume skips. test 'resumes polling an existing execution ARN instead of starting a duplicate API call' confirma idempotencia de re-runs"
+      - "Sequential execution PASS por unit test: test 'does not start the next API call until DescribeExecution reaches terminal status' valida el strict sequential loop con mock de fetch + describeExecution + sleep"
+      - "Failure handling PASS por unit test: test 'records terminal failure and stops by default' valida que failure-policy stop detiene el run y persiste el failure"
+      - "Dependency preflight PASS por unit test: test 'preflights Step Functions dependency before non-dry-run API calls' confirma assertRuntimeDependencies"
+      - "Region inference PASS por unit test: test 'infers Step Functions region from execution arn' confirma inferRegionFromExecutionArn"
+      - "Observacion (no defect): el dry-run NO visualiza el skip count del resume file. Si un operador corre dry-run despues de un backfill parcial, ve el total planeado, no el restante. Resume filter solo aplica en executeWorkItems (real run). UX gap menor pero documentar"
+
+  - title: "Real backfill execution end-to-end (BLOCKED hasta operator-approved run con credenciales)"
+    tags:
+      - functional
+      - real-execution
+      - blocked
+      - awaiting-credentials
+    given:
+      - "PR 26 esta en estado mergeable=CONFLICTING — requiere rebase antes del merge a main"
+      - "Ejecutar el runner contra el endpoint real /prod/analytics/manual-runs requiere: (a) approval explicito del comando exacto + scope + side effects + rollback plan; (b) MANUAL_EXTRACTION_API_KEY env var con el secret aprobado; (c) AWS_PROFILE con states:DescribeExecution para la cuenta 287043460717; (d) pnpm install para resolver @aws-sdk/client-sfn"
+    when:
+      - "Un operador autorizado ejecuta el runner contra prod con scope acotado (e.g., 2 orgs y 1 mes) como smoke test"
+      - "El operador verifica: (a) HTTP 202 + executionArn devuelto por el endpoint, (b) state machine MonthlyKpiExtractionStateMachine ejecuta el flow completo, (c) DescribeExecution polling termina en SUCCEEDED, (d) progress file actualizado con el record, (e) cleanup de records en Salesforce si fue smoke test"
+    then:
+      - "API response HTTP 202 con executionArn valido (formato arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-...:manual-...)"
+      - "Progress file contiene el record con shape: {id: 'YYYY-MM::batch-NNNN', period: {periodKey, periodStart, periodEnd}, orgBatch: {index, size, hash}, executionArn, status: 'succeeded', startedAt, stoppedAt, pollCount, failure: null}"
+      - "Re-ejecutar el comando con el mismo resume-file skipea el work item ya SUCCEEDED (no llama la API de nuevo)"
+      - "Marketing_Metrics__c records aparecen en veevart-prod org para las orgs del batch + periodo solicitado (validable via comparador del IM-790)"
+
+tags:
+  - im-768
+  - im-505
+  - veevart-analytics
+  - backfill
+  - manual-runs
+  - step-functions
+  - cli-script
+  - dry-run
+  - sequential-execution
+  - secret-safety
+  - resume
+  - pr-26
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-27T16:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-27T16:30:00Z"
+  version: 1
