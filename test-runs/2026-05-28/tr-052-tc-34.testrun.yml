@@ -13,9 +13,11 @@ scopeFit: 'Strict review de PR 29 (head bd65f0b2). Side-by-side + scope-fit ejec
   Scenario 3 (functional/deploy/reconciliacion) segun disponibilidad de entorno.
 
 
-  VERDICT: Fix limpio. Los 5 ACs cubiertos por unit tests con regression CAD real (Textile Museum of Canada). AC4 falla visiblemente
-  (no fallback a USD). Verdict: codigo listo; pendiente confirmacion en records reales post-deploy (Scenario 3). Nota: el enforcement
-  de AC4 vive solo en el infra handler — confirmar que es el unico path de publish.'
+  VERDICT: Fix limpio. Los 5 ACs cubiertos por unit tests con regression CAD. Evidencia observacional (SOQL read-only 2026-05-28): el
+  record que era el bug (Textile 2026-01) YA muestra CAD + recientes/backfill en CAD. PERO 90 records modificados el 2026-05-27 (pre-deploy
+  del PR) siguen con moneda incorrecta (USD en cuentas CAD/EUR/GBP/AUD). Verdict: el codigo es correcto; pendiente (a) PRUEBA CONTROLADA
+  end-to-end (run -> verificar currency del output, la ejecuta el QA/operator + screenshot) y (b) REMEDIACION de los 90 records pre-deploy
+  via re-publish.'
 touchRadius: PR 29 acotado a VeevartAnalytics. Ver descripcion del TC para el detalle de archivos production/tests/docs. Sin acoplamiento
   con otros repos del runtime (excepto IM-794 que ademas REQUIERE metadata Salesforce VeevartHub no entregada).
 results:
@@ -66,7 +68,17 @@ results:
       Bajo riesgo, test-supported'
   notes: ''
   attachments: []
-  defects: []
+  defects:
+  - id: im728-pre-deploy-currency-mismatch-records
+    severity: medium
+    scope: data-remediation
+    title: 90 records pre-deploy con moneda incorrecta (USD en cuentas no-USD) requieren re-publish
+    jiraKey: IM-800
+    url: https://veevart.atlassian.net/browse/IM-800
+    notes: 'Mismatch detector (SOQL read-only 2026-05-28): 90 Marketing_Metrics__c modificados THIS_MONTH con CurrencyIsoCode=USD vs
+      Account no-USD (72 CAD, 8 EUR, 6 GBP, 4 AUD). Todos modificados el 2026-05-27, ANTES del merge del PR 29 (2026-05-28). No es defecto
+      del codigo (el fix corrige en create/update); son records pre-fix-deploy. Requieren re-publish post-deploy para corregir la moneda.
+      Evidencia: attachments/tr-052-tc-34/im728-soql-observational.txt'
 - testCaseId: cfa07efd-f3a4-4bd5-9082-fbe14e2fdd61
   testCaseKey: TC-34
   testCaseTitle: Marketing Metrics record currency uses destination Account CurrencyIsoCode (no USD default)
@@ -120,7 +132,7 @@ results:
   testCaseKey: TC-34
   testCaseTitle: Marketing Metrics record currency uses destination Account CurrencyIsoCode (no USD default)
   testCaseFilePath: test-cases/IM-728/IM-728-TC-34-marketing-metrics-account-currency.testcase.yml
-  scenarioTitle: 'Functional UI: el Marketing_Metrics__c automatico muestra la moneda correcta en VeevartHub (Textile Museum CAD)'
+  scenarioTitle: 'Functional controlled run: disparar el pipeline para una cuenta no-USD y validar la moneda del output en VeevartHub'
   scenarioIndex: 2
   status: not-run
   stepResults:
@@ -128,49 +140,61 @@ results:
     status: not-run
     actual: ''
     phase: given
-    text: el fix desplegado y un run mensual ejecutado para una cuenta no-USD (Textile Museum of Canada, CAD, Account 001f200001dlZQVAA2)
+    text: el fix de IM-728 desplegado al ambiente de analytics prod
   - order: 2
     status: not-run
     actual: ''
     phase: given
-    text: QA tiene acceso de lectura a Marketing_Metrics__c en VeevartHub prod (https://veevart.lightning.force.com/)
+    text: una cuenta destino no-USD para la prueba (ej. Textile Museum of Canada, CAD, Account 001f200001dlZQVAA2)
   - order: 3
     status: not-run
     actual: ''
-    phase: when
-    text: QA abre el record Marketing_Metrics__c automatico de Textile Museum en Lightning (https://veevart.lightning.force.com/lightning/r/Marketing_Metrics__c/<id>/view)
-      y captura screenshot del campo CurrencyIsoCode + Account + Metric_Period_Key__c
+    phase: given
+    text: QA tiene MANUAL_EXTRACTION_API_KEY + scope aprobado para disparar un run (write a VeevartHub prod) y acceso de lectura a Marketing_Metrics__c
   - order: 4
     status: not-run
     actual: ''
-    phase: when
-    text: QA abre, lado a lado, el record manual del mismo account/periodo y captura screenshot para comparar la moneda
+    phase: given
+    text: '(evidencia observacional ya capturada por QA-codex 2026-05-28 via SOQL read-only): el record que era el bug original (Textile
+      2026-01, a3wVs000001soDlIAI) YA muestra CAD; periodos 2026-01..05 todos CAD. Ver attachments/tr-052-tc-34/im728-soql-observational.txt'
   - order: 5
     status: not-run
     actual: ''
     phase: when
-    text: '(opcional) QA corre en Developer Console un mismatch detector: SELECT Id, Account__r.CurrencyIsoCode, CurrencyIsoCode FROM
-      Marketing_Metrics__c WHERE Account__r.CurrencyIsoCode != CurrencyIsoCode AND CreatedDate = THIS_MONTH y captura el resultado'
+    text: QA dispara el pipeline (manual-runs o monthly run) para la cuenta no-USD en un periodo objetivo
   - order: 6
     status: not-run
     actual: ''
-    phase: then
-    text: 'el record automatico de Textile Museum muestra CurrencyIsoCode=CAD (no USD), igual que el manual. [SCREENSHOT: im728-textile-auto-record-cad.png]'
+    phase: when
+    text: una vez la execution termina, QA abre el Marketing_Metrics__c resultante en Lightning (https://veevart.lightning.force.com/lightning/r/Marketing_Metrics__c/<id>/view)
   - order: 7
     status: not-run
     actual: ''
-    phase: then
-    text: 'el record manual del mismo account/periodo tambien muestra CAD (comparacion lado a lado). [SCREENSHOT: im728-textile-manual-vs-auto.png]'
+    phase: when
+    text: QA captura screenshot del record mostrando CurrencyIsoCode + Account + Metric_Period_Key__c
   - order: 8
     status: not-run
     actual: ''
     phase: then
-    text: 'el mismatch detector retorna 0 rows (ningun record automatico con moneda distinta a su Account). [SCREENSHOT: im728-mismatch-detector-zero.png]'
+    text: 'el record recien generado por el run tiene CurrencyIsoCode = la moneda del Account destino (ej. CAD), NO USD por default.
+      [SCREENSHOT: im728-controlled-run-record-currency.png] — esta es la prueba end-to-end (input run -> output verificado)'
   - order: 9
     status: not-run
     actual: ''
     phase: then
-    text: 'una cuenta USD de control sigue con CurrencyIsoCode=USD en su record automatico (no regresion). [SCREENSHOT: im728-usd-control-record.png]'
+    text: una cuenta USD de control mantiene CurrencyIsoCode=USD en su run (no regresion)
+  - order: 10
+    status: not-run
+    actual: ''
+    phase: then
+    text: '(opcional) mismatch detector post-run retorna 0 para los records de ese run: SELECT Id, Account__r.CurrencyIsoCode, CurrencyIsoCode
+      FROM Marketing_Metrics__c WHERE Account__r.CurrencyIsoCode != CurrencyIsoCode AND LastModifiedDate = TODAY'
+  - order: 11
+    status: not-run
+    actual: ''
+    phase: then
+    text: 'NOTA QA: el run controlado lo ejecuta el QA/operator; este escenario queda armado para que se monte el screenshot del output.
+      La evidencia observacional previa (records ya en CAD) es soporte, no reemplaza la prueba controlada'
   notes: ''
   attachments: []
   defects: []
