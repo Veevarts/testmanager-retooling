@@ -135,6 +135,19 @@ Scenario: <Same title as the heading>
 
 Headings use `##` and `###`. Gherkin blocks use triple-backtick `gherkin` fences. Do not use the legacy Jira `h2.` syntax - the Atlassian MCP renders markdown directly.
 
+## Jira Issue Review Workflow (default when the user asks to "review an issue")
+
+When the user says "revisemos el IM-XXX", "revisa este issue", or "arma el plan de pruebas" for a Jira issue with a PR, run the FULL end-to-end flow (not just plan + testcase). This extends the bundle with strict review, a test run, and commit/push:
+
+1. **Strict review flow**: side-by-side pre/post of the PR + scope-fit (each AC → PR lines → evidence) + touch radius + behavioral/functional diff against real data where possible. Flag AC contradictions, scope creep, and incomplete implementations explicitly — do not soften them.
+2. **Create the `.testcase.yml`** (this skill's core) AND a matching **`.testrun.yml`** under `test-runs/<YYYY-MM-DD>/<tr-key>-<tc-key>.testrun.yml`. Use `testrun-generator` conventions. The user wants the test run too, not only the test case. Add a `.testplan.yml` when it adds value.
+3. **QA Sub-task description MUST contain the full Gherkin scenarios** (the `## Escenarios funcionales` section with ```gherkin``` blocks) — NEVER replace them with a summary table. A findings/verdict summary may be ADDED, but the Gherkin scenarios themselves are mandatory in every QA sub-task.
+4. **Functional scenarios only where the result is observable** (a Salesforce record, a web page, a UI) — give them screenshot placeholders the user fills in. Pure **backend** work (e.g. credential loading, secret parsing) gets NO functional UI scenario; validate it by unit tests + code review only. Ask/decide per issue.
+5. **Defect schema**: every defect inside a `.testrun.yml` MUST include `id`, `title`, `severity`, `scope`, `jiraKey`, `url`, `notes`. TestManager remote REJECTS defects missing `jiraKey`/`url` ("Validation error: results.N.defects.M.jiraKey: Required"). Point `jiraKey` at the QA sub-task (or a follow-up ticket).
+6. **Commit + push** to `origin/main` (repo convention is direct push to main) and bump the counters in `.testmanager.yml`. Stash unrelated WIP before rebasing; if the TestManager remote linter reformats a TR after you push (adds uploaded screenshots), take the remote version on conflict.
+
+This workflow is the user's validated default — trigger it without re-asking for the steps.
+
 ## Rules
 
 1. **One QA Sub-task per parent story**. If multiple QA Sub-tasks exist, ask which one to update.
@@ -182,6 +195,8 @@ Before reporting completion, verify:
 - [ ] Every documented missing edge case has a `missing-doc` scenario or is explicitly listed in `## Riesgos abiertos del ticket`.
 - [ ] `.testcase.yml` passes the `testcase-generator` validation checklist (UUID v4, unique key, valid gherkin, ISO-8601 timestamps).
 - [ ] Jira description starts with `## Plan de pruebas QA` and contains all 8 required sections.
+- [ ] Jira description includes the FULL `## Escenarios funcionales` Gherkin blocks (NOT a summary table replacing them).
+- [ ] If a `.testrun.yml` was created, every defect has `jiraKey` + `url` (TestManager remote rejects otherwise).
 - [ ] Jira description ends with the `## Test case asociado` line pointing to the new file.
 - [ ] Summary message includes Jira URL, file path, scenario count and any flagged risks.
 
