@@ -5,40 +5,41 @@ key: "TC-35"
 title: "Marketing Metrics date/name field alignment (Date_Entered__c, Date__c, Name = Metric_Period_Key__c)"
 description: |
   Cobertura QA de IM-794 (PR 28 en VeevartAnalytics) bajo el epic IM-506
-  KPI Automation. Valida el alineamiento de los campos de fecha/nombre en
-  el payload de upsert de Marketing_Metrics__c.
+  KPI Automation. Valida el alineamiento de los campos de fecha/nombre del
+  Marketing_Metrics__c (Account Metrics) en VeevartHub.
 
   Comportamiento esperado por AC (ejemplo run 2026-05-27, periodo 2026-03):
-  - Date_Entered__c = fecha de registro/publish (2026-05-27)
-  - Date__c = ultimo dia del mes del periodo (2026-03-31)
-  - Metric_Period_Key__c = sin cambios (2026-03)
+  - Date_Entered__c (label "Date Entered") = fecha de registro/publish (2026-05-27)
+  - Date__c (label "Date") = ultimo dia del mes del periodo (2026-03-31)
+  - Metric_Period_Key__c (label "Metric Period Key") = sin cambios (2026-03)
   - Name = igual a Metric_Period_Key__c (2026-03)
-  - + cambio de formula/config Salesforce VeevartHub para el campo Date
   - Caso leap-year: periodo 2024-02 -> Date 2024-02-29
 
-  Mecanica confirmada (code review head SHA f9039045):
+  Mecanica confirmada (code review PR 28 head f9039045 + schema VeevartHub prod):
 
   - `marketing-metrics-publish.service.ts`: buildMarketingMetricsUpsertCommand
-    setea Name: args.metricPeriodKey (Name === Metric_Period_Key__c). OK.
+    setea Name: args.metricPeriodKey (Name === Metric_Period_Key__c).
   - `publish-marketing-metrics.handler.ts`: upsertMarketingMetricsRecord
     setea Date_Entered__c = formatSalesforceDate(new Date()) (fecha de
-    publish, system clock). Se elimino el viejo
-    Date_Entered__c = args.targetPeriod.periodEnd.
+    publish). Se elimino el viejo Date_Entered__c = args.targetPeriod.periodEnd.
+  - `Date__c` (label "Date") es un **formula field en Salesforce VeevartHub**
+    (no se setea desde el payload TypeScript). La formula deriva el ultimo
+    dia del mes desde Metric_Period_Key__c:
+      DATE(year[+1 si dic], month+1, 1) - 1  => ultimo dia del mes del periodo
+    Maneja el rollover de diciembre y es leap-year-safe por construccion
+    (DATE(2024,3,1)-1 = 2024-02-29). La formula YA esta desplegada en prod.
 
-  HALLAZGO MAYOR DE SCOPE-FIT (3 de 5 ACs SIN CUMPLIR):
-  - `Date__c` NO se setea en ningun lado. El string "Date__c" no aparece
-    en los archivos de production. NO hay computo de last-day-of-month ni
-    manejo de leap-year. El valor period-end que antes iba a
-    Date_Entered__c se removio, NO se re-ruteo a Date__c.
-  - El caso leap-year (2024-02 -> 2024-02-29) NO tiene test ni codigo.
-  - El cambio de formula/config Salesforce VeevartHub NO esta en el PR
-    (TypeScript-only, sin .object-meta.xml ni .field-meta.xml).
-  - Hipotesis: Date__c se pretendia derivar via la formula de Salesforce
-    (que es dependencia dura no entregada). Por eso el AC de la formula es
-    bloqueante, no opcional.
+  IMPORTANTE (correccion 2026-05-28): la revisión inicial juzgó solo el PR
+  28 (TypeScript-only, sin metadata XML) y concluyó erróneamente que
+  faltaba Date__c + la formula. Al verificar el record real en VeevartHub
+  (Casa del Herrero, periodo 2026-01) se confirmó que Date__c = 2026-01-31
+  (ultimo dia de enero) — la formula Salesforce SI esta desplegada y
+  funciona. El split es: payload TS (Name + Date_Entered__c) + formula
+  Salesforce (Date__c). Los 5 ACs se cumplen.
 
-  Solo se entregaron: Name=Metric_Period_Key__c + Date_Entered__c=publish
-  date (2 de 5 ACs).
+  Nota menor (no bloqueante): no hay unit test del caso leap-year en el
+  repo de analytics; la cobertura de bisiesto descansa en la formula
+  Salesforce, no en TypeScript.
 
   Referencias:
   - PR: https://github.com/Veevarts/VeevartAnalytics/pull/28
@@ -52,59 +53,56 @@ status: active
 preconditions:
   - "Repo VeevartAnalytics en main (incluye PR 28 mergeado, head f9039045)"
   - "Node + pnpm para unit tests"
-  - "Para validar Date__c / leap-year / formula: requiere el deploy de la metadata Salesforce VeevartHub (NO incluida en este PR) + inspeccion de records reales"
+  - "Acceso de lectura a Marketing_Metrics__c (Account Metrics) en VeevartHub prod (https://veevart.lightning.force.com/) para verificar Date__c en records reales"
 
 format: gherkin
 scenarios:
-  - title: "Side-by-side y scope-fit del PR 28 + flag de los 3 ACs sin cumplir"
+  - title: "Side-by-side y scope-fit del PR 28 (payload TS + formula Salesforce para Date__c)"
     tags:
       - data-review
       - side-by-side
       - scope-fit
     given:
-      - "PR 28 mergeado, 4 archivos (+139/-39): 2 production TS + 2 specs, sin metadata Salesforce"
+      - "PR 28 mergeado, 4 archivos (+139/-39): 2 production TS + 2 specs. La formula de Date__c vive en Salesforce VeevartHub (config declarativa), no en el PR"
     when:
-      - "QA descarga del head f9039045 el publish handler + publish service + specs y busca el campo Date__c"
+      - "QA descarga del head f9039045 el publish handler + publish service + specs, y consulta el schema de Marketing_Metrics__c en VeevartHub (sf sobject describe)"
     then:
       - "Name = args.metricPeriodKey confirmado (Name === Metric_Period_Key__c) — AC de Name CUMPLIDO"
       - "Date_Entered__c = formatSalesforceDate(new Date()) (publish date) confirmado; el viejo Date_Entered__c = periodEnd se elimino — AC de Date_Entered__c CUMPLIDO"
-      - "FLAG: `Date__c` NO se setea en ningun archivo de production. No hay computo last-day-of-month ni leap-year. AC de Date__c=2026-03-31 SIN CUMPLIR"
-      - "FLAG: caso leap-year (2024-02 -> 2024-02-29) SIN codigo ni test"
-      - "FLAG: el cambio de formula/config Salesforce VeevartHub NO esta en el PR (TypeScript-only). El AC de la formula (bloqueante) SIN CUMPLIR"
-      - "Conclusion: 3 de 5 ACs sin cumplir. La pieza Date__c probablemente depende de la formula Salesforce no entregada. Escalar como implementacion INCOMPLETA — no cerrar IM-794 hasta entregar Date__c + formula + leap-year"
+      - "Date__c (label 'Date') es un formula field en VeevartHub que deriva el ultimo dia del mes desde Metric_Period_Key__c: DATE(year[+1 si dic], month+1, 1) - 1. La formula YA esta desplegada en prod — AC de Date__c CUMPLIDO (lado Salesforce, no TypeScript)"
+      - "la formula es leap-year-safe: para 2024-02 calcula DATE(2024,3,1)-1 = 2024-02-29 — AC de leap-year CUMPLIDO por construccion"
+      - "split de implementacion: payload TS aporta Name + Date_Entered__c; formula Salesforce aporta Date__c. Los 5 ACs quedan cubiertos entre ambos sistemas"
 
-  - title: "Unit test coverage de lo que SI se entrego (Name + Date_Entered__c)"
+  - title: "Unit test coverage del payload (Name + Date_Entered__c)"
     tags:
       - regression
       - unit-tests
     given:
-      - "los specs cubren solo la porcion entregada (Name + Date_Entered__c); NO hay test de Date__c ni leap-year"
+      - "los specs cubren la porcion TS (Name + Date_Entered__c). La logica de Date__c esta en la formula Salesforce, fuera del repo"
     when:
       - "QA corre `pnpm --dir veevart-analytics test` y revisa los tests de date/name"
     then:
       - "test 'uses the metric period key as the Salesforce record name' (asserta Name:'2025-12') — valida el AC de Name"
       - "test 'overwrites Date_Entered__c when an existing record already has it' (2026-04-15 -> 2026-05-27 con setSystemTime) — valida Date_Entered__c=publish date"
-      - "NO existe test con 2024-02 ni 02-29 (leap-year sin cobertura)"
-      - "NO existe test ni assert de Date__c (last-day-of-month sin cobertura)"
+      - "nota menor: no hay unit test del caso leap-year en el repo (la cobertura de Date__c/bisiesto recae en la formula Salesforce). Sugerencia no bloqueante: agregar un test Apex/formula o documentar la validacion de bisiesto"
 
-  - title: "Functional UI: campos de fecha/nombre del Marketing_Metrics__c en VeevartHub (Name + Date_Entered__c OK; Date__c gap)"
+  - title: "Functional UI: campos de fecha/nombre del Account Metrics en VeevartHub"
     tags:
       - functional
       - ui-evidence
       - screenshots
       - salesforce
-      - incomplete-implementation
     given:
-      - "el fix desplegado y un run ejecutado que genere un Marketing_Metrics__c reciente (ej. periodo 2026-03)"
-      - "QA tiene acceso de lectura a Marketing_Metrics__c en VeevartHub prod (https://veevart.lightning.force.com/)"
+      - "un Marketing_Metrics__c (Account Metrics) generado por un run (ej. Casa del Herrero, periodo 2026-01)"
+      - "QA tiene acceso de lectura en VeevartHub prod (https://veevart.lightning.force.com/)"
     when:
-      - "QA abre el record Marketing_Metrics__c en Lightning y captura screenshot de los campos Name, Date_Entered__c, Date__c y Metric_Period_Key__c"
+      - "QA abre el record Account Metrics en Lightning y captura screenshot de los campos Date Entered, Date, Metric Period Key y el Name (header)"
     then:
-      - "Name == Metric_Period_Key__c (ej. ambos '2026-03'). [SCREENSHOT: im794-record-name-equals-periodkey.png] — AC CUMPLIDO"
-      - "Date_Entered__c == la fecha del run/publish (ej. 2026-05-27), no el period-end. [SCREENSHOT: im794-record-date-entered.png] — AC CUMPLIDO"
-      - "FLAG Date__c: verificar si muestra el last-day-of-month del periodo (2026-03-31). Dado que el payload NO setea Date__c y la formula Salesforce NO se entrego, lo esperado es que Date__c este vacio o incorrecto. [SCREENSHOT: im794-record-date-c-gap.png] — AC SIN CUMPLIR (evidencia del gap)"
-      - "FLAG leap-year: para un periodo 2024-02, Date__c deberia ser 2024-02-29 pero no hay fuente que lo produzca. No verificable hasta entregar Date__c/formula"
-      - "Conclusion functional: la evidencia UI confirma que solo Name + Date_Entered__c estan correctos; Date__c queda como gap visible. Este scenario sirve para EVIDENCIAR la implementacion incompleta, no para aprobar"
+      - "Name == Metric_Period_Key__c (ej. ambos '2026-01', visible en el header 'Account Metrics 2026-01'). [SCREENSHOT: im794-record-name-periodkey.png]"
+      - "Date Entered (Date_Entered__c) == la fecha del run/publish (ej. 5/28/2026). [SCREENSHOT incluido]"
+      - "Date (Date__c) == ultimo dia del mes del periodo (periodo 2026-01 -> 1/31/2026). [SCREENSHOT: im794-record-date-lastday.png]"
+      - "para un periodo de febrero bisiesto (2024-02) el campo Date muestra 2024-02-29 (validacion de leap-year, si hay un record de ese periodo disponible)"
+      - "evidencia confirmada 2026-05-28: record Casa del Herrero 2026-01 muestra Date Entered 5/28/2026, Date 1/31/2026, Metric Period Key 2026-01, Name 2026-01 — los 5 ACs OK"
 
 tags:
   - im-794
@@ -113,7 +111,8 @@ tags:
   - marketing-metrics
   - date-fields
   - salesforce-formula
-  - incomplete-implementation
+  - functional
+  - ui-evidence
   - pr-28
 
 estimatedDuration: 20
@@ -122,5 +121,5 @@ metadata:
   createdBy: "codex"
   createdAt: "2026-05-28T15:00:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-28T15:40:00Z"
-  version: 2
+  updatedAt: "2026-05-28T18:00:00Z"
+  version: 3
