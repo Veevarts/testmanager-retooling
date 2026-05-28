@@ -1,0 +1,218 @@
+schemaVersion: "1.0"
+
+id: "10ad6cc3-c655-460d-8043-0e2ae61278b7"
+key: "TC-32"
+title: "My Day control tower (mock-only): priorización, filtros, overdue, empty state y acciones de task"
+description: |
+  Cobertura QA de IM-599 (PR 47 en MigrationAppFrontend) bajo el epic
+  IM-588 Turn recommendations into daily operational work. Valida el
+  MyDayPage como vista de entrada por defecto del CSM, renderizado con
+  FIXTURE (mock-only, Fase 1). El swap a data real (GET /api/csm/my-day)
+  vive en la historia sucesora N37 (Fase 3) — fuera de scope aqui.
+
+  El enfoque del plan es FUNCTIONAL con evidencia de UI (screenshots): el
+  tester ejecuta cada scenario en el frontend desplegado en staging y
+  adjunta capturas a los steps `then` correspondientes.
+
+  Mecanica confirmada por code review del PR head SHA 0c810131:
+
+  - Fixture `src/features/csm/api/__fixtures__/myDay.ts` tiene 6 tasks
+    cross-account:
+      1. task-100 Vizcaya       critical 2026-05-23 score 98 suggested
+      2. task-101 Lotusland     critical 2026-05-24 score 87 new
+      3. task-102 Vizcaya       high     2026-05-24 score 95 in-progress
+      4. task-103 Nasher        high     2026-05-25 score 91 suggested
+      5. task-104 Lotusland     medium   2026-05-28 score 84 new
+      6. task-105 Kiewit        medium   2026-05-29 score 80 suggested
+  - Sorting (compareTasks en MyDayPage.tsx): urgency desc
+    (critical>high>medium>low) -> due date asc -> score desc. Orden
+    esperado: task-100, 101, 102, 103, 104, 105.
+  - Overdue (isOverdue): dueDate < today. Como hoy es 2026-05-27, las
+    tasks con due 05-23/05-24/05-24/05-25 (task-100, 101, 102, 103)
+    quedan OVERDUE (resaltadas); task-104 (05-28) y task-105 (05-29) NO.
+    NOTA: el set de overdue depende de la fecha de ejecucion; recalcular
+    al correr el test.
+  - Filtros (MyDayFilters.tsx): state multi-select (suggested/new/
+    in-progress), account (single), urgency ("all"|critical|high|medium|
+    low).
+  - Empty state: "All caught up — no pending actions" + subtexto "Change
+    the quick filters if you want to inspect archived mock work."
+  - Task detail (MyDayTaskDetail.tsx): click en task abre detalle inline
+    con acciones approve/edit/reject (via IM-595 mock), mark in-progress,
+    postpone (edita draft dueDate/urgency), y open Account Detail.
+  - Reject remueve la task de la lista (removedTaskIds state).
+
+  Scope expansion observado (mas alla del mock MyDay declarado en los
+  ACs): el PR tambien trae shell CSM completo (Navbar +233/-39 con
+  workspace switching, MainLayout, FeedbackBanner), scaffolds de pages
+  CSM (AccountDetailPage, AccountsPage, PortfolioPage, ToolsAgentsPage),
+  y refresh de branding (VeevartLogo/Favicon/Icon SVGs). Coherente con
+  la direccion del epic pero excede el scope literal de IM-599.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationAppFrontend/pull/47
+  - Branch: story/launch-my-day-control-tower-mocks-IM-599
+  - Issue: https://veevart.atlassian.net/browse/IM-599
+  - Parent epic: https://veevart.atlassian.net/browse/IM-588
+  - QA sub-task: https://veevart.atlassian.net/browse/IM-795
+  - Dependencias: IM-603 (platform baseline, ya validado en TC-30), IM-595 (action mock)
+  - Sucesor wire-to-real: N37 (Fase 3)
+  - Staging: https://migration.dev.rtl.veevartapp.com/
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "PR 47 desplegado en staging (https://migration.dev.rtl.veevartapp.com/)"
+  - "Usuario test del grupo Cognito `csm-team` con credenciales conocidas (mismo del TC-30 / IM-603)"
+  - "Navegador con DevTools (Chrome / Brave) para capturar screenshots y, si aplica, inspeccionar el DOM"
+  - "Sesion limpia (logout / clear cookies) antes de la primera corrida para validar el redirect post-login"
+  - "Fecha de ejecucion conocida: el set de tasks overdue depende de `today` vs el dueDate del fixture (fixture tiene fechas 2026-05-23 a 2026-05-29)"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 47 confirman la implementacion mock de My Day"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 47 declara 43 archivos cambiados (+2116/-101), estado OPEN, mergeable=MERGEABLE"
+      - "los 6 ACs de IM-599 son mock-only: default route, sorting, filtros, empty state, overdue highlight, click-to-detail"
+    when:
+      - "QA descarga del PR head (SHA 0c810131) los archivos core de My Day: MyDayPage.tsx, useMyDay.ts, schemas/myDay.ts, fixture myDay.ts, MyDayFilters.tsx, MyDayTaskCard.tsx, routes.tsx"
+    then:
+      - "el fixture `__fixtures__/myDay.ts` tiene 6 tasks cross-account (Vizcaya x2, Lotusland x2, Nasher, Kiewit) con los campos del contrato N17 (id, accountId, accountName, taskText, justification, dueDate, state, urgency, score)"
+      - "el schema zod `myDay.ts` valida state enum (suggested/new/in-progress), urgency enum (critical/high/medium/low) y score number — alineado con el shape esperado de GET /api/csm/my-day"
+      - "`useMyDay` hook carga el fixture via getMyDay() con isLoading/error states; no consume API real (mock-only confirmado)"
+      - "`compareTasks` en MyDayPage implementa el sort de 3 niveles: urgency desc -> due date asc -> score desc"
+      - "`isOverdue` compara dueDate < today; MyDayTaskCard recibe prop `overdue` para el resaltado"
+      - "scope expansion documentado: el PR trae ademas shell CSM (Navbar workspace switching, MainLayout, FeedbackBanner), scaffolds de pages (Account/Portfolio/Tools) y branding refresh — excede el scope literal de IM-599 pero es coherente con el epic IM-588"
+
+  - title: "Landing post-login csm-team + orden de priorizacion del fixture (AC1 + AC2)"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - sorting
+      - ac1
+      - ac2
+    given:
+      - "QA tiene sesion limpia y abre https://migration.dev.rtl.veevartapp.com/"
+    when:
+      - "QA hace login con el usuario del grupo `csm-team`"
+      - "QA observa la URL post-login y la lista de tasks renderizada en MyDayPage"
+      - "QA captura screenshot de la lista completa"
+    then:
+      - "AC1: la URL post-login es `/csm/my-day` (default route del grupo csm-team). [SCREENSHOT: my-day-landing.png]"
+      - "AC2: las 6 tasks del fixture aparecen en este orden exacto (urgency desc -> due asc -> score desc): (1) Vizcaya 'Approve next-week executive check-in prep' critical; (2) Lotusland 'Draft renewal talking points' critical; (3) Vizcaya 'Confirm training follow-up owners' high; (4) Nasher 'Review campaign import blockers' high; (5) Lotusland 'Prepare adoption summary' medium; (6) Kiewit 'Triage box office reconciliation' medium. [SCREENSHOT: my-day-sorted-list.png]"
+      - "cada task card muestra: account name, task text, justification, due date, state badge y urgency badge. [SCREENSHOT incluido en my-day-sorted-list.png]"
+
+  - title: "Items overdue resaltados en color (AC5)"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - overdue
+      - ac5
+    given:
+      - "QA esta en `/csm/my-day` con las 6 tasks visibles"
+      - "la fecha de ejecucion determina el set overdue: con today >= 2026-05-26, las tasks con due 2026-05-23/24/24/25 (task-100, 101, 102, 103) estan overdue"
+    when:
+      - "QA identifica visualmente cuales task cards tienen el resaltado de overdue (color distinto, badge, o borde)"
+      - "QA captura screenshot mostrando el contraste entre tasks overdue y no-overdue"
+    then:
+      - "las tasks con dueDate < today aparecen resaltadas en color (las primeras 4 del fixture si la corrida es >= 2026-05-26). [SCREENSHOT: my-day-overdue-highlight.png]"
+      - "las tasks con dueDate >= today (Lotusland 'Prepare adoption summary' 05-28, Kiewit 'Triage box office' 05-29) NO tienen el resaltado overdue"
+      - "el numero de tasks overdue observado coincide con el calculo dueDate < fecha-de-ejecucion (documentar la fecha exacta de la corrida en el resultado)"
+
+  - title: "Filtros rapidos: state multi-select, account, urgency (AC3)"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - filters
+      - ac3
+    given:
+      - "QA esta en `/csm/my-day` con las 6 tasks visibles"
+    when:
+      - "QA aplica el filtro de state multi-select seleccionando solo 'suggested' y captura screenshot"
+      - "QA limpia el filtro de state, aplica el filtro de account seleccionando 'Vizcaya Museum & Gardens' y captura screenshot"
+      - "QA limpia el filtro de account, aplica el filtro de urgency seleccionando 'critical' y captura screenshot"
+    then:
+      - "filtro state='suggested': la lista muestra solo las 3 tasks suggested (task-100 Vizcaya, task-103 Nasher, task-105 Kiewit). [SCREENSHOT: my-day-filter-state-suggested.png]"
+      - "filtro account='Vizcaya Museum & Gardens': la lista muestra solo las 2 tasks de Vizcaya (task-100 'Approve next-week...', task-102 'Confirm training...'). [SCREENSHOT: my-day-filter-account-vizcaya.png]"
+      - "filtro urgency='critical': la lista muestra solo las 2 tasks critical (task-100 Vizcaya, task-101 Lotusland). [SCREENSHOT: my-day-filter-urgency-critical.png]"
+      - "los filtros se pueden combinar y el conteo de resultados refleja la interseccion de los filtros activos"
+
+  - title: "Empty state 'All caught up' cuando los filtros no devuelven resultados (AC4)"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - empty-state
+      - ac4
+    given:
+      - "QA esta en `/csm/my-day` con las 6 tasks visibles"
+    when:
+      - "QA aplica una combinacion de filtros que no matchea ninguna task (por ejemplo account='Kiewit Luminarium' + urgency='critical', dado que la unica task de Kiewit es medium)"
+      - "QA captura screenshot del empty state"
+    then:
+      - "la lista queda vacia y se muestra el mensaje celebratorio 'All caught up — no pending actions'. [SCREENSHOT: my-day-empty-state.png]"
+      - "se muestra el subtexto 'Change the quick filters if you want to inspect archived mock work.'"
+      - "al limpiar los filtros, las tasks reaparecen (el empty state es por filtro, no por estado destructivo)"
+
+  - title: "Task detail inline + acciones approve/edit/reject/in-progress/postpone + open Account Detail (AC6 + acciones)"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - task-detail
+      - actions
+      - ac6
+      - im-595
+    given:
+      - "QA esta en `/csm/my-day` con las 6 tasks visibles"
+    when:
+      - "QA hace click en la primera task (Vizcaya 'Approve next-week executive check-in prep')"
+      - "QA observa el detalle inline (MyDayTaskDetail) con las acciones disponibles y captura screenshot"
+      - "QA prueba editar la task (cambiar draft due date y/o urgency) y captura screenshot"
+      - "QA prueba marcar una task in-progress y captura screenshot"
+      - "QA prueba posponer una task (postpone) y captura screenshot"
+      - "QA prueba rechazar (reject) una task y captura screenshot del antes/despues"
+      - "QA prueba el boton/link de open Account Detail y captura screenshot"
+    then:
+      - "AC6: click en la task abre el detalle inline (MyDayTaskDetail) mostrando task text, justification completa, due date, state, urgency y los controles de accion. [SCREENSHOT: my-day-task-detail.png]"
+      - "editar la task actualiza el draft (due date / urgency) en el detalle; el cambio se refleja en la card al guardar (mock via IM-595). [SCREENSHOT: my-day-task-edit.png]"
+      - "marcar in-progress cambia el state badge de la task a 'In Progress'. [SCREENSHOT: my-day-task-in-progress.png]"
+      - "posponer (postpone) modifica el due date de la task. [SCREENSHOT: my-day-task-postpone.png]"
+      - "rechazar (reject) remueve la task de la lista (removedTaskIds); el conteo de la lista disminuye en 1. [SCREENSHOT: my-day-task-reject-before-after.png]"
+      - "open Account Detail navega a la vista de detalle de la cuenta asociada (Account Detail panel / page del scaffold CSM). [SCREENSHOT: my-day-open-account-detail.png]"
+      - "todas las acciones son mock (no persisten en backend real; IM-595 mock + fixture en memoria). Al refrescar la pagina el estado vuelve al fixture original"
+
+tags:
+  - im-599
+  - im-588
+  - im-795
+  - im-595
+  - im-603
+  - frontend
+  - migrationappfrontend
+  - csm
+  - my-day
+  - control-tower
+  - mock-only
+  - fixture
+  - functional
+  - ui-evidence
+  - pr-47
+
+estimatedDuration: 45
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-27T17:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-27T17:00:00Z"
+  version: 1
