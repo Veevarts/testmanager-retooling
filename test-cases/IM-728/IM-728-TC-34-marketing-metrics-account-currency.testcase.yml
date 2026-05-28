@@ -1,0 +1,120 @@
+schemaVersion: "1.0"
+
+id: "cfa07efd-f3a4-4bd5-9082-fbe14e2fdd61"
+key: "TC-34"
+title: "Marketing Metrics record currency uses destination Account CurrencyIsoCode (no USD default)"
+description: |
+  Cobertura QA de IM-728 (PR 29 en VeevartAnalytics) bajo el epic IM-506
+  KPI Automation. BUG: los registros automaticos Marketing_Metrics__c se
+  creaban con CurrencyIsoCode=USD por default en vez de la moneda del
+  Account destino en VeevartHub (ej. CAD para Textile Museum of Canada).
+
+  Evidencia del bug (Textile Museum of Canada, periodo 2026-01):
+  - Account 001f200001dlZQVAA2 / Org 00D2E00000139NKUAY
+  - Manual record a3wVs000001duMjIAI: CurrencyIsoCode=CAD
+  - Automated record a3wVs000001soDlIAI: CurrencyIsoCode=USD (bug)
+
+  Mecanica del fix confirmada (code review head SHA bd65f0b2):
+
+  - `publish-marketing-metrics.handler.ts`: funcion
+    `upsertMarketingMetricsRecord` ahora setea
+    `fields.CurrencyIsoCode = currencyIsoCode` para create Y update
+    (AC3). El valor viene del guard
+    `requireDestinationAccountCurrencyIsoCode(account)` que lee
+    account.currencyIsoCode?.trim().
+  - AC4 (currency unavailable): FALLA VISIBLEMENTE. El guard lanza
+    "Destination Account <id> is missing CurrencyIsoCode; cannot publish
+    Marketing_Metrics__c without an explicit record currency." ANTES de
+    cualquier create/update. No hay fallback a USD en el handler.
+  - Flujo de la moneda: `load-runnable-accounts.handler.ts` agrega
+    CurrencyIsoCode al SOQL del Hub + enrichDestinationAccountsWithCurrency
+    (back-fill via SELECT Id, CurrencyIsoCode con escapeSoqlString). La
+    moneda se propaga por plan-query-batches -> persiste en
+    payload_json.destinationAccountCurrencyIsoCode -> rehidrata en
+    extract-raw-source-rows.
+
+  Nota de riesgo: el path application-service
+  (marketing-metrics-publish.service.ts) NO hace throw (solo conditional
+  spread). El enforcement de AC4 vive SOLO en el infra handler. Confirmar
+  que el infra handler es el unico path de publish.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/VeevartAnalytics/pull/29
+  - Issue: https://veevart.atlassian.net/browse/IM-728
+  - Epic: https://veevart.atlassian.net/browse/IM-506
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Repo VeevartAnalytics en main (incluye PR 29 mergeado, head bd65f0b2)"
+  - "Node + pnpm para correr unit tests"
+  - "Para validacion real (opcional): acceso de lectura a Marketing_Metrics__c en VeevartHub prod + comparador (skill marketing-metrics)"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 29"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 29 mergeado, 14 archivos (+438/-5): 8 production + 5 specs + README"
+    when:
+      - "QA descarga del head bd65f0b2 el publish handler, load-runnable-accounts handler y los specs"
+    then:
+      - "upsertMarketingMetricsRecord setea CurrencyIsoCode desde requireDestinationAccountCurrencyIsoCode(account) para create y update"
+      - "AC4: el guard lanza error visible si falta la moneda, ANTES de publicar, sin fallback a USD"
+      - "la moneda se obtiene del Hub Account via SOQL (CurrencyIsoCode agregado al SELECT) + enrichDestinationAccountsWithCurrency con escapeSoqlString (injection-safe)"
+      - "la moneda se propaga end-to-end: load-runnable -> plan-query-batches -> persist payload_json -> extract rehydrate -> publish"
+      - "scope creep menor: el error formatter ahora unwrap error.message + recordSyncRunStep asserta detailsJson con correlationId/periodKey. Bajo riesgo, test-supported"
+
+  - title: "Unit test coverage valida CAD/USD/missing-currency"
+    tags:
+      - regression
+      - unit-tests
+    given:
+      - "los specs tienen tests con jsforce/SOQL mockeado cubriendo los 5 ACs"
+    when:
+      - "QA corre `pnpm --dir veevart-analytics test` y mapea cada test a su AC"
+    then:
+      - "AC1/AC5 (CAD): test 'creates Marketing Metrics records with the destination Account currency' (Textile Museum of Canada, CAD)"
+      - "AC3 (update CAD): test 'updates existing Marketing Metrics records with the destination Account currency'"
+      - "AC4 (fail visible): test 'fails visibly before publishing when the destination Account currency is unavailable' (rejects.toThrow, create/update NO llamados, recordSyncRunStep status failed errorCode publish_marketing_metrics_failed)"
+      - "AC2 (USD preservado): el test existente de USD update asserta CurrencyIsoCode:'USD' preservado"
+      - "currency propagation: tests en load-runnable-accounts (enriches con Hub currency, SOQL contiene SELECT Id, CurrencyIsoCode), extract-raw-source-rows (preserves account currency al rehidratar), plan-query-batches (CAD/USD/EUR)"
+
+  - title: "Validacion real post-deploy: Marketing_Metrics__c automaticos llevan la moneda correcta (Textile Museum CAD)"
+    tags:
+      - functional
+      - salesforce
+      - blocked-without-deploy
+    given:
+      - "el fix desplegado y un run mensual ejecutado para una cuenta no-USD (Textile Museum of Canada, CAD)"
+    when:
+      - "QA consulta en VeevartHub: SELECT Id, Account__c, Account__r.CurrencyIsoCode, CurrencyIsoCode, Metric_Period_Key__c FROM Marketing_Metrics__c WHERE Account__c = '001f200001dlZQVAA2'"
+      - "(opcional) QA corre un mismatch detector: WHERE Account__r.CurrencyIsoCode != CurrencyIsoCode"
+    then:
+      - "el record automatico de Textile Museum tiene CurrencyIsoCode=CAD (no USD), igual que el manual"
+      - "el mismatch detector retorna 0 rows (ningun record automatico con moneda distinta a su Account)"
+      - "cuentas USD siguen con CurrencyIsoCode=USD (no regresion)"
+
+tags:
+  - im-728
+  - im-506
+  - veevart-analytics
+  - marketing-metrics
+  - currency
+  - bug-fix
+  - salesforce
+  - pr-29
+
+estimatedDuration: 20
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-28T15:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-28T15:00:00Z"
+  version: 1

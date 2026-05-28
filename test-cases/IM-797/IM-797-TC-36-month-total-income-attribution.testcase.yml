@@ -1,0 +1,129 @@
+schemaVersion: "1.0"
+
+id: "3d7f8bef-e399-4767-9ac6-cf74ca61e061"
+key: "TC-36"
+title: "Month Total income attribution: ClientPurchase Total2 + refunded reservation inclusion"
+description: |
+  Cobertura QA de IM-797 (PR 30 en VeevartAnalytics) bajo el epic IM-506
+  KPI Automation. BUG: Month_Total_Income__c sub-reportaba por 2 causas:
+  (A) shop_income usaba el campo deprecated
+  Auctifera__ClientPurchase__c.Auctifera__Total__c (label "(DEPRECATED)
+  Total") en vez del current Auctifera__Total2__c.
+  (B) registros de ticket/group reservation Refunded con actividad de pago
+  se excluian del Month Total pero estaban en el volumen de credit-card.
+
+  Gap Textile Museum April 2026: 1,377.03 total
+  = 1,053.75 (ClientPurchase deprecated field) + 226.00 (refunded
+  reservations) + 97.30 (charge/refund edge cases).
+
+  Mecanica del fix confirmada (code review head SHA d8e05efc):
+
+  - `extract-raw-source-rows.queries.ts` buildClientPurchaseQuery: edit de
+    la candidate-list de findCandidateField. Removidos los deprecated
+    (Auctifera__Total__c, Auctifera__Total_Amount__c) y Auctifera__Total2__c
+    promovido a primero:
+      findCandidateField(fields, ['Auctifera__Total2__c', 'Total__c'])
+    NO es schema/label-aware; es ordering + omision. SOQL widened a
+    WHERE Auctifera__Status__c IN ('Sold','Refunded').
+  - `metric-fact-computation.service.ts`: Option A (INCLUDE) elegida — la
+    decision de producto SE RESOLVIO en el PR. Status split:
+      GROUP_RESERVATION_RECOGNIZED_INCOME_STATUSES = {Sold,Confirmed,Refunded}
+      GROUP_RESERVATION_ATTENDANCE_STATUSES = {Sold,Confirmed}
+      CLIENT_PURCHASE_RECOGNIZED_INCOME_STATUSES = {Sold,Refunded}
+    Metricas de income (ticketing/groups/courses/waiting_list/shop/shopify)
+    gatean con el set recognized-income (Refunded cuenta); metricas de
+    attendance/count (visitors/tickets_sold/groups_sold/courses_sold) gatean
+    con el set attendance (Refunded excluido). Sin nuevo field persistido.
+
+  Limitacion AC5: la reconciliacion Textile recupera 1,053.75 (Total2) +
+  226.00 (refunded), pero el 97.30 (charge/refund edge: duplicate/retry/
+  blank-status charges) queda OUT OF SCOPE, diferido a un fix futuro sobre
+  Total_Income_of_Credit_Card_Transactions__c. Month Total se reconcilia;
+  la paridad credit-card-volume NO.
+
+  Riesgo: la proteccion de deprecated fields es fragil (ordering-only). Si
+  alguna org expone un futuro deprecated rankeado sobre Total2, el edit de
+  lista no protege. El guardrail label-aware recomendado en el exploration
+  report NO se implemento.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/VeevartAnalytics/pull/30
+  - Issue: https://veevart.atlassian.net/browse/IM-797
+  - Epic: https://veevart.atlassian.net/browse/IM-506
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Repo VeevartAnalytics en main (incluye PR 30 mergeado, head d8e05efc)"
+  - "Node + pnpm para unit tests"
+  - "Para reconciliacion real (opcional): safesql/SOQL contra el source org de Textile Museum (00D2E00000139NKUAY) para April 2026"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 30 (ClientPurchase Total2 + refunded Option A)"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 30 mergeado, 8 archivos (+703/-42): 2 production (+31/-30) + 3 specs (+128/-12) + 3 docs/tooling (+544)"
+    when:
+      - "QA descarga del head d8e05efc el queries.ts, metric-fact-computation.service.ts y los specs"
+    then:
+      - "buildClientPurchaseQuery: candidate-list editada a findCandidateField(fields, ['Auctifera__Total2__c','Total__c']); deprecated Auctifera__Total__c y Auctifera__Total_Amount__c removidos. SOQL widened a IN ('Sold','Refunded'). AC1 cubierto por ordering+omision"
+      - "Option A (INCLUDE refunded) elegida — decision de producto resuelta en el PR. Status split en 3 sets: RECOGNIZED_INCOME (con Refunded) vs ATTENDANCE (sin Refunded). Income metrics cuentan Refunded; count metrics no"
+      - "FLAG (AC3 parcial): la avoidance de deprecated es ordering-only, NO schema/label-aware. El guardrail label-aware recomendado en el exploration report NO se implemento. Si un futuro deprecated se rankea sobre Total2, no hay proteccion"
+      - "FLAG (AC5 parcial): el 97.30 (charge/refund edge case) queda OUT OF SCOPE, diferido. Month Total se reconcilia (1,053.75 + 226.00) pero la paridad credit-card-volume NO"
+      - "scope creep colateral: removidos constants/funciones muertas (DONATION_RECORD_TYPE, ONLINE_LEAD_SOURCE, disputeCreatedOrUpdatedDuringPeriod) + dropped npe03__Total__c del recurring-donation candidate list. Regression glance sobre recurring-donation income recomendada"
+
+  - title: "Unit test coverage: Total2 selection + refunded inclusion numerica"
+    tags:
+      - regression
+      - unit-tests
+    given:
+      - "los specs tienen 4 tests nuevos + ajustes de expectations con jsforce describe/query mockeado"
+    when:
+      - "QA corre `pnpm --dir veevart-analytics test` y mapea los tests a los ACs"
+    then:
+      - "AC1: test 'selects Total2 for client purchase totals' (asserta fieldMap.totalField === 'Auctifera__Total2__c', SOQL con Total2 + IN ('Sold','Refunded'))"
+      - "AC1 negativo: test 'fails client purchase extraction when Total2 is absent' (rejects con required-fields error)"
+      - "AC4/AC5: fixtures refunded — row-9a group-reservation Refunded total 226 -> ticketing_income/groups_income; row-19b ClientPurchase Refunded total 25 -> shop_income. Deltas: attributed 86->90, ticketing_income 255->481 (+226), shop_income 130->155 (+25)"
+      - "FLAG AC2: NO hay test directo de 'Total__c negativo/stale vs Total2__c valido' (precedencia). AC2 cubierto solo implicitamente via el ordering test. AC3 'skip deprecated cuando existe supported' cubierto solo por omision de la lista, sin test que alimente ambos"
+
+  - title: "Reconciliacion real Textile Museum April 2026 (opcional, requiere source org data)"
+    tags:
+      - functional
+      - reconciliation
+      - blocked-without-data
+    given:
+      - "el fix desplegado + extraction re-ejecutada para Textile Museum (00D2E00000139NKUAY) April 2026"
+    when:
+      - "QA compara el Marketing_Metrics__c resultante: Shop_Income__c, Month_Total_Income__c, Total_Income_of_Credit_Card_Transactions__c vs el periodo pre-fix"
+    then:
+      - "Shop_Income__c aumenta para reflejar el total basado en Auctifera__Total2__c (recupera el 1,053.75 que faltaba)"
+      - "Month_Total_Income__c ya no sub-reporta por el ClientPurchase deprecated field + incluye los 226.00 de refunded reservations"
+      - "el gap residual de 97.30 (charge/refund edge) PERSISTE — es out-of-scope de este PR, diferido a un fix futuro. QA documenta que el credit-card-volume parity NO se logra aqui"
+
+tags:
+  - im-797
+  - im-506
+  - veevart-analytics
+  - marketing-metrics
+  - month-total-income
+  - shop-income
+  - client-purchase
+  - deprecated-fields
+  - refunded-reservations
+  - bug-fix
+  - pr-30
+
+estimatedDuration: 25
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-28T15:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-28T15:00:00Z"
+  version: 1

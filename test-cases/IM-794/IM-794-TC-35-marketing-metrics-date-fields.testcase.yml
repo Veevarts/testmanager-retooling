@@ -1,0 +1,121 @@
+schemaVersion: "1.0"
+
+id: "d8fbb5c2-61bc-4a4a-b27e-d9f8f87d36ed"
+key: "TC-35"
+title: "Marketing Metrics date/name field alignment (Date_Entered__c, Date__c, Name = Metric_Period_Key__c)"
+description: |
+  Cobertura QA de IM-794 (PR 28 en VeevartAnalytics) bajo el epic IM-506
+  KPI Automation. Valida el alineamiento de los campos de fecha/nombre en
+  el payload de upsert de Marketing_Metrics__c.
+
+  Comportamiento esperado por AC (ejemplo run 2026-05-27, periodo 2026-03):
+  - Date_Entered__c = fecha de registro/publish (2026-05-27)
+  - Date__c = ultimo dia del mes del periodo (2026-03-31)
+  - Metric_Period_Key__c = sin cambios (2026-03)
+  - Name = igual a Metric_Period_Key__c (2026-03)
+  - + cambio de formula/config Salesforce VeevartHub para el campo Date
+  - Caso leap-year: periodo 2024-02 -> Date 2024-02-29
+
+  Mecanica confirmada (code review head SHA f9039045):
+
+  - `marketing-metrics-publish.service.ts`: buildMarketingMetricsUpsertCommand
+    setea Name: args.metricPeriodKey (Name === Metric_Period_Key__c). OK.
+  - `publish-marketing-metrics.handler.ts`: upsertMarketingMetricsRecord
+    setea Date_Entered__c = formatSalesforceDate(new Date()) (fecha de
+    publish, system clock). Se elimino el viejo
+    Date_Entered__c = args.targetPeriod.periodEnd.
+
+  HALLAZGO MAYOR DE SCOPE-FIT (3 de 5 ACs SIN CUMPLIR):
+  - `Date__c` NO se setea en ningun lado. El string "Date__c" no aparece
+    en los archivos de production. NO hay computo de last-day-of-month ni
+    manejo de leap-year. El valor period-end que antes iba a
+    Date_Entered__c se removio, NO se re-ruteo a Date__c.
+  - El caso leap-year (2024-02 -> 2024-02-29) NO tiene test ni codigo.
+  - El cambio de formula/config Salesforce VeevartHub NO esta en el PR
+    (TypeScript-only, sin .object-meta.xml ni .field-meta.xml).
+  - Hipotesis: Date__c se pretendia derivar via la formula de Salesforce
+    (que es dependencia dura no entregada). Por eso el AC de la formula es
+    bloqueante, no opcional.
+
+  Solo se entregaron: Name=Metric_Period_Key__c + Date_Entered__c=publish
+  date (2 de 5 ACs).
+
+  Referencias:
+  - PR: https://github.com/Veevarts/VeevartAnalytics/pull/28
+  - Issue: https://veevart.atlassian.net/browse/IM-794
+  - Epic: https://veevart.atlassian.net/browse/IM-506
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Repo VeevartAnalytics en main (incluye PR 28 mergeado, head f9039045)"
+  - "Node + pnpm para unit tests"
+  - "Para validar Date__c / leap-year / formula: requiere el deploy de la metadata Salesforce VeevartHub (NO incluida en este PR) + inspeccion de records reales"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 28 + flag de los 3 ACs sin cumplir"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 28 mergeado, 4 archivos (+139/-39): 2 production TS + 2 specs, sin metadata Salesforce"
+    when:
+      - "QA descarga del head f9039045 el publish handler + publish service + specs y busca el campo Date__c"
+    then:
+      - "Name = args.metricPeriodKey confirmado (Name === Metric_Period_Key__c) — AC de Name CUMPLIDO"
+      - "Date_Entered__c = formatSalesforceDate(new Date()) (publish date) confirmado; el viejo Date_Entered__c = periodEnd se elimino — AC de Date_Entered__c CUMPLIDO"
+      - "FLAG: `Date__c` NO se setea en ningun archivo de production. No hay computo last-day-of-month ni leap-year. AC de Date__c=2026-03-31 SIN CUMPLIR"
+      - "FLAG: caso leap-year (2024-02 -> 2024-02-29) SIN codigo ni test"
+      - "FLAG: el cambio de formula/config Salesforce VeevartHub NO esta en el PR (TypeScript-only). El AC de la formula (bloqueante) SIN CUMPLIR"
+      - "Conclusion: 3 de 5 ACs sin cumplir. La pieza Date__c probablemente depende de la formula Salesforce no entregada. Escalar como implementacion INCOMPLETA — no cerrar IM-794 hasta entregar Date__c + formula + leap-year"
+
+  - title: "Unit test coverage de lo que SI se entrego (Name + Date_Entered__c)"
+    tags:
+      - regression
+      - unit-tests
+    given:
+      - "los specs cubren solo la porcion entregada (Name + Date_Entered__c); NO hay test de Date__c ni leap-year"
+    when:
+      - "QA corre `pnpm --dir veevart-analytics test` y revisa los tests de date/name"
+    then:
+      - "test 'uses the metric period key as the Salesforce record name' (asserta Name:'2025-12') — valida el AC de Name"
+      - "test 'overwrites Date_Entered__c when an existing record already has it' (2026-04-15 -> 2026-05-27 con setSystemTime) — valida Date_Entered__c=publish date"
+      - "NO existe test con 2024-02 ni 02-29 (leap-year sin cobertura)"
+      - "NO existe test ni assert de Date__c (last-day-of-month sin cobertura)"
+
+  - title: "Validacion Date__c + leap-year + formula Salesforce (BLOCKED — depende de metadata no entregada)"
+    tags:
+      - functional
+      - salesforce
+      - blocked
+      - incomplete-implementation
+    given:
+      - "el cambio de formula/config Salesforce VeevartHub para Date__c NO esta en el PR 28"
+    when:
+      - "QA intentaria verificar en un record real: periodo 2026-03 -> Date__c=2026-03-31; periodo 2024-02 -> Date__c=2024-02-29; que la formula no sobreescriba Date_Entered__c"
+    then:
+      - "BLOCKED: sin el deploy de la metadata Salesforce, Date__c no tiene fuente. No se puede validar el last-day-of-month ni el leap-year en records reales"
+      - "Recomendacion: el dev debe (a) implementar Date__c en el payload (last-day-of-month con manejo de leap-year) O (b) entregar la formula Salesforce que lo derive, + agregar el test de leap-year. Hasta entonces, AC de Date__c/leap-year/formula quedan FAILED/BLOCKED"
+
+tags:
+  - im-794
+  - im-506
+  - veevart-analytics
+  - marketing-metrics
+  - date-fields
+  - salesforce-formula
+  - incomplete-implementation
+  - pr-28
+
+estimatedDuration: 20
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-05-28T15:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-05-28T15:00:00Z"
+  version: 1
