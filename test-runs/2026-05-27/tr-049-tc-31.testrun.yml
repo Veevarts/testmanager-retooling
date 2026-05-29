@@ -111,9 +111,9 @@ touchRadius: |
 
   Sin acoplamiento con otros modulos del repo. Touch radius CLEAN.
 
-  FLAG IMPORTANTE: PR 26 esta en estado mergeable=CONFLICTING. Necesita
-  rebase con main antes del merge. El dev debe resolverlo. No bloquea la
-  QA pero si bloquea el merge.
+  FLAG (RESUELTO 2026-05-29): PR 26 estaba en estado mergeable=CONFLICTING
+  al review. Ya fue mergeado a main (merge commit 7688119; main HEAD
+  df707b4). El blocker de rebase quedo cerrado.
 
 results:
   - testCaseId: ef6478b6-bdd5-4e7f-8e4c-5ad3d0a0c065
@@ -133,7 +133,7 @@ results:
         attachments: []
       - order: 2
         status: passed
-        actual: "Confirmado en gh pr view JSON: mergeable=CONFLICTING. Necesita rebase con main antes del merge."
+        actual: "Al review (2026-05-27): gh pr view JSON mergeable=CONFLICTING. Update 2026-05-29: PR 26 ahora MERGED a main (merge commit 7688119; main HEAD df707b4). El blocker de rebase quedo resuelto."
         phase: given
         text: "PR estado: OPEN, mergeable=CONFLICTING (requiere rebase con main antes del merge)"
         attachments: []
@@ -203,7 +203,7 @@ results:
         scope: pr-status
         jiraKey: "IM-768"
         url: "https://veevart.atlassian.net/browse/IM-768"
-        notes: "El PR esta en estado CONFLICTING (gh pr view 26 JSON.mergeable). El dev debe rebase contra main antes del merge. No bloquea la QA del codigo; bloquea el merge mecanico."
+        notes: "El PR estaba en estado CONFLICTING (gh pr view 26 JSON.mergeable) al momento del review (2026-05-27). RESUELTO 2026-05-29: PR 26 mergeado a main (merge commit 7688119; main HEAD df707b4). Ya no requiere rebase; el blocker mecanico del merge quedo cerrado."
 
   - testCaseId: ef6478b6-bdd5-4e7f-8e4c-5ad3d0a0c065
     testCaseKey: TC-31
@@ -416,12 +416,12 @@ results:
         status: not-run
         actual: ""
         phase: given
-        text: "PR 26 esta en estado mergeable=CONFLICTING — requiere rebase antes del merge a main"
+        text: "PR 26 MERGEADO a main (commit 7688119) — el runner ya vive en veevart-analytics/scripts/backfill-manual-analytics-runs.cjs; @aws-sdk/client-sfn ya resoluble (no requiere pnpm install)"
       - order: 2
         status: not-run
         actual: ""
         phase: given
-        text: "Ejecutar el runner contra el endpoint real /prod/analytics/manual-runs requiere: (a) approval explicito del comando exacto + scope + side effects + rollback plan; (b) MANUAL_EXTRACTION_API_KEY env var con el secret aprobado; (c) AWS_PROFILE con states:DescribeExecution para la cuenta 287043460717; (d) pnpm install para resolver @aws-sdk/client-sfn"
+        text: "Ejecutar el runner contra el endpoint real /prod/analytics/manual-runs requiere: (a) approval explicito del comando exacto + scope + side effects + rollback plan; (b) MANUAL_EXTRACTION_API_KEY env var con el secret aprobado; (c) AWS_PROFILE con states:DescribeExecution para la cuenta 287043460717"
       - order: 3
         status: not-run
         actual: ""
@@ -454,14 +454,35 @@ results:
         text: "Marketing_Metrics__c records aparecen en veevart-prod org para las orgs del batch + periodo solicitado (validable via comparador del IM-790)"
     notes: |
       Pendiente: ejecucion real contra /prod/analytics/manual-runs
-      requiere operator-approval + creds. Smoke test sugerido:
-        --start-date 2026-05-01 --end-date 2026-05-31
-        --subscriber-org-ids '["00DKb000000O5y6MAC","00Dao00001NqAGrEAN"]'
-        --org-batch-size 2 (un solo work item: 1 mes x 1 batch de 2 orgs)
-        --resume-file /tmp/im768-smoke.progress.json
-      Estima ~5-10 min depending del Step Functions execution time.
-      Adjuntar evidencia: terminal output + progress file + comparator
-      check para confirmar Marketing_Metrics__c records en veevart-prod.
+      requiere operator-approval + creds (MANUAL_EXTRACTION_API_KEY +
+      AWS con states:DescribeExecution en cuenta 287043460717). Estos
+      credenciales no estan disponibles en el entorno QA, por eso el
+      run real lo dispara el operador.
+
+      Update 2026-05-29: prep del smoke test completado contra main
+      mergeado. Dry-run con scope acotado RE-CONFIRMADO:
+        node scripts/backfill-manual-analytics-runs.cjs --dry-run
+          --start-date 2026-04-01 --end-date 2026-04-30
+          --subscriber-org-ids "00D2E00000139NKUAY,00D60000000KdOJEA0"
+          --org-batch-size 10
+        Output: Unique org IDs: 2 / Periods: 1 (2026-04 -> 2026-04,
+        newest-first) / Planned manual-runs calls: 1 / no API or AWS
+        calls were made. @aws-sdk/client-sfn resoluble (deps OK).
+
+      Comando exacto del run real (operador con creds):
+        cd ~/Desktop/VeevartAnalytics/veevart-analytics
+        export MANUAL_EXTRACTION_API_KEY='<secret-aprobado>'
+        node scripts/backfill-manual-analytics-runs.cjs \
+          --start-date 2026-04-01 --end-date 2026-04-30 \
+          --subscriber-org-ids "00D2E00000139NKUAY,00D60000000KdOJEA0" \
+          --org-batch-size 10 \
+          --aws-region us-east-1 --aws-profile <perfil-aws> \
+          --resume-file smoke-im768.progress.json
+      Estima ~5-10 min segun el Step Functions execution time.
+      Adjuntar evidencia: terminal output (HTTP 202 + executionArn) +
+      progress file (status succeeded) + re-run idempotente +
+      comparator check (IM-790) para confirmar Marketing_Metrics__c en
+      veevart-prod para abril 2026.
     attachments: []
     defects: []
 
@@ -481,9 +502,15 @@ history:
     from: "planned"
     to: "in-progress"
     reason: "Strict review flow aplicado a PR 26 (backfill historical analytics runner IM-768): side-by-side + scope-fit + touch radius + behavioral test dry-run+invalid args+secret safety en Node local"
+  - action: "updated"
+    timestamp: "2026-05-29T00:00:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "in-progress"
+    reason: "Rev. ultima: PR 26 MERGEADO a main (commit 7688119) — defect pr-26-mergeable-conflicting resuelto. Smoke test (scenario 4) prep contra main: dry-run re-confirmado (2 orgs, abril 2026, 1 call) + comando exacto del run real documentado. Scenario 4 sigue NOT-RUN: requiere creds del operador (no disponibles en QA)"
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-05-27T16:40:00.000Z"
   updatedBy: "codex"
-  updatedAt: "2026-05-27T16:40:00.000Z"
+  updatedAt: "2026-05-29T00:00:00.000Z"
