@@ -1,0 +1,56 @@
+{
+  "org": "IllinoisTrainingsSandbox",
+  "executedAt": "2026-06-04T17:55:37Z",
+  "fixtureExternalIds": {
+    "catalog_item": "IM-809-CI-001",
+    "pos_purchase_impl_ext_id": "IM-809-POSPURCH-001",
+    "pos_purchase_transaction_id": "IM-809-TXN-001",
+    "client_purchase_transaction_id": "IM-809-CP-001",
+    "sale_item_external_id": "IM-809-SI-001",
+    "pos_discount_impl_ext_id": "IM-809-POSDISC-001"
+  },
+  "salesforceIds": {
+    "catalog_item": "a1MWI00000QBKm12AH",
+    "pos_purchase": "a2PWI000004PFHh2AO",
+    "client_purchase": "a1PWI00006iPRBt2AO",
+    "sale_item": "a2wWI000001PjUPYA0",
+    "pos_discount": "a2OWI000009SZqT2AW"
+  },
+  "salesforceNames": {
+    "client_purchase": "P-0008",
+    "pos_purchase": "POS-0026",
+    "pos_discount": "D-0004",
+    "sale_item": "S-0007"
+  },
+  "actualVsExpected": {
+    "pos_discount": {
+      "expected": {"Discount_Type": "Amount", "Value": 18.00, "Discount_Value": 1.80, "Discount_Amount": -1.80, "Discount_Source": "Custom"},
+      "actual": {"Discount_Type": "Amount", "Value": 18.00, "Discount_Value": 1.80, "Discount_Amount": -1.80, "Discount_Source": "Custom"},
+      "match": true
+    },
+    "sale_item": {
+      "expected": {"Item_Price": 18.00, "Price_Without_Tax": 16.20, "Amount": 17.86},
+      "actual": {"Item_Price": 18.00, "Price_Without_Tax": 18.00, "Amount": 19.845, "Discount_Type": "Percentage", "Discount_Value": 0, "Discount_Amount": 0},
+      "match": false,
+      "note": "Item_Price GROSS preserved (PR sale_item.sql change validated). Per-line propagation NOT observed: Price_Without_Tax stays 18.00 (expected 16.20), Amount stays 19.845 (expected 17.86), Discount fields reset to Percentage/0 (matches dev's documented behavior: 'A per-Sale-Item Discount_Type/Value does not survive an active-trigger load')."
+    },
+    "client_purchase": {
+      "expected": {"Total2": 17.86, "Total": 17.86},
+      "actual": {"Total": 18.05, "Total2": 19.85, "Subtotal": 18.00, "Total_Discount_Amount": -1.80},
+      "match": false,
+      "note": "Total_Discount_Amount=-1.80 IS rolled up correctly from POS_Discount. Total=18.05 subtracts discount from subtotal but does NOT recalculate tax on net (19.85-1.80=18.05). Total2=19.85 stays at gross+tax. Expected per dev story: Total2=17.86 via propagateDiscount netting Sale_Items."
+    },
+    "pos_purchase": {
+      "expected": {"Total": 17.86},
+      "actual": {"Total": 19.85, "Subtotal": 18.00, "Shop_Discount_Amount": 0.00},
+      "match": false,
+      "note": "POS_Purchase.Shop_Discount_Amount stays 0 — the POS_Discount is not rolled up to POS_Purchase. Total stays at gross+tax."
+    }
+  },
+  "triggerPropagationProbe": {
+    "method": "After insert, multiple touches: update ClientPurchase / POS_Purchase / POS_Discount / Sale_Item; set POS_Discount.Sale_Item__c link; set POS_Discount.Value__c=18",
+    "result": "Sale_Item Discount fields never updated. No propagateDiscount AsyncApexJob queued. AsyncApexJob query for TODAY shows only RelateStockToLocationBatch and CatalogItemTriggerHandler.createAppliedTaxes — no propagateDiscount or POSDiscountTriggerHandler activity.",
+    "apex_classes_present": ["Auctifera.ClientPurchaseTriggerHandler", "Auctifera.POSDiscountTriggerHandler", "vnfp.ClientPurchaseTriggerHandler", "vnfp.POSDiscountTriggerHandler"],
+    "finding": "Both Auctifera and vnfp namespaces have ClientPurchaseTriggerHandler and POSDiscountTriggerHandler installed in IllinoisTrainingsSandbox. Triggers exist but propagateDiscount did not fire under our fixture. Either (a) the package version installed has the handler disabled/stubbed, (b) the trigger requires a different setup (Purchase_Source picklist value, Discount_Source != 'Custom', a Discount_Code__c lookup, or post-insert async work), or (c) the dev story's sandbox test relied on a setup detail not documented in IM-866."
+  }
+}
