@@ -1,0 +1,258 @@
+schemaVersion: "1.0"
+
+id: "5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01"
+key: "TC-39"
+title: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+description: |
+  Cobertura QA de IM-811 (PR 123 en Veevarts/MigrationToolETL) bajo el
+  epic IM-70 Altru Queries. Valida que la migracion de refunds de
+  membresia ahora emite los refunds asociados a memberships non-POS
+  (credit-item memberships sin SALESORDER en su linaje) cuyo
+  fund-assignment se perdia silenciosamente cuando la query exigia un
+  Sales Order obligatorio.
+
+  Cliente reportado: Illinois (IHM). Sara reporto Lookup ID 31830,
+  refund -$64 (2017-06-22) faltante en Salesforce. El issue original
+  tambien menciono dos discrepancias adicionales por -$12.60 y -$40
+  (2019) en Family-OLD; el dev confirmo en el comentario del 2026-06-03
+  que este PR tiene root cause distinto y solo aplica al caso non-POS
+  (Individual-OLD para el -$64 y un segundo refund Family por -$120 en
+  2018, total -$184).
+
+  Implementacion (verificada en PR 123 head 1c2e0574, 4 archivos, +103/-6):
+
+  - `queries/fund-assignment/fund_assignments_membership_refunds.sql`:
+    se ELIMINA del WHERE la condicion
+    `COALESCE(membership_so.ID, addon_so.ID, original_so.ID,
+              payment_so.ID, refund_so.ID) IS NOT NULL`.
+    El COALESCE permanece en el SELECT para poblar
+    `vnfp__Opportunity_POS_Purchase__c` cuando hay SO; deja de
+    discriminar inclusion. Se mantienen los gates de evidencia
+    line-level (IM-562) y de resolucion de oportunidad (IM-561):
+    `source_rse.APPLICATION IN ('Membership','Membership add-on') OR
+    cimf.MembershipTransactionID IS NOT NULL OR mt.ID IS NOT NULL OR
+    ma.MEMBERSHIPTRANSACTIONID IS NOT NULL OR
+    rgi.RecurringInstallmentID IS NOT NULL`.
+
+  - `query-regression/fund-assignment-refunds-query-fixture.ts`:
+    agrega Scenario 4 IM-811 — refund de membership credit-item sin
+    SALESORDER en ningun punto del linaje (CREDITITEMMEMBERSHIP +
+    mt-on-source = 0 + cim_match = 1). Mirror exacto del caso real
+    Illinois $64.
+
+  - `fund-assignment-refunds-query.integration.spec.ts`: nuevo
+    `describe IM-811` con un test que asserta que el Scenario 4 emite
+    con `vnfp__Opportunity__c = MT_C1_ID` (resuelto via cimf),
+    `vnfp__Opportunity_POS_Purchase__c = null`, `LookUp_ID_Legacy =
+    null`, `Auctifera__Donated_Amount__c = -64`,
+    `Auctifera__Specific_Fund__c = 'Membership_Fund'`,
+    `Auctifera__Status__c = 'Refunded'`. Sube el total de escenarios
+    emitidos en la suite de 3 a 4.
+
+  - `fund-assignment-refunds-query.spec.ts`: flip estatico — el test
+    "requires a resolved sales order" se renombra a
+    "does NOT require a resolved sales order (IM-811)" y asserta que
+    la cadena `COALESCE(...) IS NOT NULL` NO esta en el query, mientras
+    que la cadena `COALESCE(...)` SI esta (para poblar POS_Purchase).
+
+  Validacion ejecutada por QA contra source illinois_2 (16:41 UTC,
+  2026-06-04, query SHA 11b7336bef31):
+
+  - Post-fix: 8 filas membership-refund 2017-2019, total -$564
+    (Donated_Amount__c).
+  - Filas con POS null (las recuperadas por el fix): 2, total -$184.
+    Exactamente el conteo y monto declarados por el PR.
+  - Filas con POS no-null (las que ya existian pre-fix): 6, total
+    -$380. Confirma que el cambio no toca refunds SO-backed
+    (no-regression sobre el universo pre-fix).
+  - Detalle de las 2 recuperadas (query SHA 84e8f70301b2):
+      * -$64.00, 2017-06-22, membership LOOKUPID 8-10003475,
+        Annual Membership / Individual - OLD, SO = null.
+      * -$120.00, 2018-05-23, membership LOOKUPID 8-10005476,
+        Annual Membership / Family, SO = null.
+    El -$64 reconcilia con el "Lookup ID 31830 / Refund missing 64"
+    reportado por Sara en el screenshot (Member: 8-10003475 = Lookup
+    ID externo 31830 segun la marca interna de Altru). El -$120 es
+    el segundo caso non-POS que el dev menciono en su comentario
+    Family-not-OLD nivel.
+
+  Out of scope de este PR (siguen abiertos en IM-811):
+  - -$12.60 (2019-10-28, member 8-10636744). No es non-POS. Root cause
+    distinto, no resuelto por PR 123.
+  - -$40.00 (member 8-10397724 segun la descripcion del issue). Root
+    cause aun por confirmar; no se resuelve con este fix.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/123
+  - Branch: fix/im811-membership-refund-no-so
+  - Head SHA: 1c2e0574945570238a1aef47727f45df17ead144
+  - Issue: https://veevart.atlassian.net/browse/IM-811
+  - QA sub-task: https://veevart.atlassian.net/browse/IM-871
+  - Epic: https://veevart.atlassian.net/browse/IM-70
+  - Related (dues side, contexto de simetria):
+    fund_assignment_memberships.sql:250-253 (ya emite dues con SO
+    null).
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Acceso de lectura a Altru source DB Illinois_db_2 (profile safesql `illinois_2`) via bastion + keychain"
+  - "Sandbox Salesforce IllinoisTrainingsSandbox disponible para validacion (savepoint+rollback) si se requiere reconciliar contra Auctifera__Fund_Donation_Assignment__c"
+  - "Acceso de lectura al Illinois target org (Lightning) para validacion functional post-load tras el re-migration run"
+  - "Para la behavioral del query: Node + safesql instalado (`~/tools/safesql/safesql.mjs`)"
+  - "PR 123 (head 1c2e0574) checkout-eable o gh CLI autenticado para inspeccion del diff"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 123 confirman fix quirurgico minimo (1 WHERE-clause eliminada + 1 fixture S4 + 2 spec flips)"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+      - ac-1
+    given:
+      - "PR 123 estado: OPEN, mergeable=MERGEABLE, 4 archivos cambiados (+103/-6) sobre branch `fix/im811-membership-refund-no-so` head `1c2e0574`"
+    when:
+      - "QA descarga el diff completo del PR 123 (head 1c2e0574) y mapea el AC implicito de IM-811 (los refunds non-POS de membership deben migrarse) contra las lineas tocadas"
+    then:
+      - "`fund_assignments_membership_refunds.sql`: UNA condicion ELIMINADA del WHERE — `AND COALESCE(membership_so.ID, addon_so.ID, original_so.ID, payment_so.ID, refund_so.ID) IS NOT NULL`. Comentario inline IM-811 documenta el racional y la simetria con `fund_assignment_memberships.sql:250-253` (lado dues, ya emite con SO null). Las otras 5 ramas del WHERE quedan intactas: IM-562 line-level evidence gate (cimf / mt / ma / rgi / source_rse), y el opportunity-resolution gate `COALESCE(rgi, mt, ma, direct_order_membership, order_membership, cimf) IS NOT NULL`. El COALESCE de SO sigue en el SELECT (linea 141) para poblar `vnfp__Opportunity_POS_Purchase__c` cuando exista — solo deja de gatekeepear la inclusion"
+      - "`fund-assignment-refunds-query-fixture.ts`: Scenario 4 IM-811 agregado (lineas +59). FT de payment `PAYMENT_FT_CIM_ID` sin SALESORDER, REVENUESPLIT_EXT.APPLICATION='Membership', CREDITITEMMEMBERSHIP linkea la dues line al membership, MEMBERSHIPTRANSACTION.REVENUESPLITID=NULL (mt-on-source=0), refund FT `REFUND_FT_CIM_ID` con CREDITPAYMENT a la payment original. Mirror exacto del lineage real Illinois (member 8-10003475, -$64)"
+      - "`fund-assignment-refunds-query.integration.spec.ts`: nuevo `describe('IM-811 — non-POS credit-item membership refund (no sales order)')` con un test que asserta sobre la fila S4 (RLI_C1_ID): `vnfp__Opportunity__c = MT_C1_ID` (cimf), `vnfp__Opportunity_POS_Purchase__c = null`, `LookUp_ID_Legacy = null`, `Auctifera__Donated_Amount__c = -64`, `Auctifera__Specific_Fund__c = 'Membership_Fund'`, `Auctifera__Status__c = 'Refunded'`. Suite total ahora 4 filas (1 mixed SO + 2 multi SO + 0 ticket-only SO + 1 no-SO credit-item) en lugar de 3"
+      - "`fund-assignment-refunds-query.spec.ts`: el test estatico `requires a resolved sales order to include the row` se renombra a `does NOT require a resolved sales order to include the row (IM-811)`. Asserta `expect(query).not.toContain('COALESCE(membership_so.ID, ...) IS NOT NULL')` y simultaneamente `expect(query).toContain('COALESCE(membership_so.ID, ...)')` para preservar el poblar de POS_Purchase. El blast radius del spec flip es justo este test — los otros 15 se mantienen"
+      - "Touch radius limpio: 4 archivos tocados (1 SQL del extractor + 3 specs/fixtures de regresion). NO toca pipelines, entities, mappers, extractors, migration-object.enum, ni triggers Auctifera. NO toca `fund_assignment_memberships.sql` (lado dues, ya emite con SO null — la simetria del fix viene de ahi)"
+
+  - title: "Source illinois_2 aggregate confirma el claim 6 -> 8 refunds + null POS = 2 / -$184 declarado por el PR"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - ac-2
+    given:
+      - "Profile `illinois_2` disponible en safesql (host bastion, password en keychain, db `Illinois_db_2`)"
+      - "Query agregada `/tmp/im811-postfix-agg.sql` replica el WHERE post-fix del PR 123 (sin la condicion SO IS NOT NULL) sobre el universo 2017-01-01..2019-12-31, y cuenta separadamente las filas con POS null (las recuperadas por el fix) y las filas con POS no-null (las pre-fix)"
+    when:
+      - "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-postfix-agg.sql`"
+    then:
+      - "Resultado (1 fila): `post_fix_rows=8`, `post_fix_total_amount=-564`, `rows_with_null_pos=2`, `amount_with_null_pos=-184`, `pre_fix_rows_so_backed=6`, `pre_fix_amount_so_backed=-380`"
+      - "Match exacto con la declaracion del PR (`emitted rows 6 -> 8`, los 2 nuevos `null POS purchase`, los 2 nuevos suman -$184, el -$64 incluido)"
+      - "No-regression sobre universo pre-fix: las 6 SO-backed quedan intactas (mismo count y mismo total -$380). Confirma que el cambio es estrictamente additive sobre filas previamente emitidas"
+      - "Evidencia: `attachments/tr-057-tc-39/safesql/illinois_2-aggregate-2017-2019.json` (SHA 11b7336bef31)"
+
+  - title: "Detalle source de los 2 refunds recuperados: -$64 (2017-06-22, Individual-OLD) y -$120 (2018-05-23, Family), ambos con SO null"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - regression-evidence
+      - illinois-holocaust-museum
+      - ac-3
+    given:
+      - "Profile `illinois_2` disponible"
+      - "Query detalle `/tmp/im811-nopos-detail.sql` extrae cada refund 2017-2019 que pasa los gates de evidencia/oportunidad y tiene SO null, con `membership.LOOKUPID`, `MEMBERSHIPPROGRAM.NAME` y `MEMBERSHIPLEVEL.NAME` joineados via la rama cimf"
+    when:
+      - "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-nopos-detail.sql`"
+    then:
+      - "Fila 1: `donated_amount=-64.00`, `refund_date=2017-06-22`, `membership_lookup_id=8-10003475`, `membership_program=Annual Membership`, `membership_level=Individual - OLD`, `so_id=null`. Reconcilia con la marca `Lookup ID 31830 / Refund missing 64` reportada por Sara, y con la declaracion del dev (`Individual – OLD, not Family – OLD`)"
+      - "Fila 2: `donated_amount=-120.00`, `refund_date=2018-05-23`, `membership_lookup_id=8-10005476`, `membership_program=Annual Membership`, `membership_level=Family`, `so_id=null`. Segundo refund non-POS recuperado, completa el -$184 declarado"
+      - "Ambas filas confirman: SO null + Membership level activo + opportunity resolvable via cimf. Estas son las 2 filas exactas que la suite integration spec S4 modela en su fixture (mt-on-source = 0, cim_match = 1)"
+      - "Evidencia: `attachments/tr-057-tc-39/safesql/illinois_2-nopos-detail.json` (SHA 84e8f70301b2)"
+      - "FLAG (informativo, no defect): el dev marco el -$120 como Family (no Family-OLD). Sara no reporto explicitamente este segundo caso — el fix lo recupera silenciosamente como mejora colateral del root cause non-POS"
+
+  - title: "Regression-gate: los gates IM-561 line-level y IM-562 evidence siguen activos y bloquean orphans"
+    tags:
+      - regression
+      - edge-cases
+      - ac-4
+    given:
+      - "Post-fix `fund_assignments_membership_refunds.sql` mantiene 2 gates aparte del SO eliminado: opportunity-resolution gate (linea 185) y line-level evidence gate (lineas 209-215)"
+    when:
+      - "QA inspecciona el query post-fix y la suite de specs para confirmar que (a) un refund que no resuelva opportunity sigue siendo droppeado; (b) un refund con SO pero sin evidencia line-level (caso IM-562: ticket refund que comparte SO con membership) sigue siendo droppeado"
+    then:
+      - "Linea 185 del query (`COALESCE(rgi, mt, ma, direct_order_membership, order_membership, cimf) IS NOT NULL`): intacta. Un refund sin opportunity-resolution sigue quedando fuera"
+      - "Lineas 209-215 del query (gate IM-562 line-level evidence): intactas. Un refund de ticket que comparte SO con una membership NO califica solo por `direct_order_membership`/`order_membership`; necesita `source_rse.APPLICATION IN ('Membership','Membership add-on') OR cimf OR mt OR ma OR rgi`"
+      - "Spec estatico (`fund-assignment-refunds-query.spec.ts`): los 15 tests pre-existentes siguen pasando segun el PR. El unico flip es el que ahora asserta la AUSENCIA del SO gate"
+      - "Spec integration (`fund-assignment-refunds-query.integration.spec.ts`): los escenarios IM-561 (mixed SO + multi SO) y IM-562 (ticket-only SO emite 0 filas) siguen verdes; el conteo total sube de 3 a 4 con el nuevo S4 IM-811"
+      - "Implicacion: el cambio no abre la puerta a falsos positivos. Solo expone a la salida los refunds que ya cumplian los 2 gates restantes pero quedaban escondidos por el SO gate"
+
+  - title: "Sandbox reconciliation: insertar un Refund Fund Assignment con POS null en IllinoisTrainingsSandbox debe quedar persistido y readable (savepoint+rollback)"
+    tags:
+      - functional
+      - sandbox
+      - salesforce
+      - reconciliation
+    given:
+      - "Sandbox IllinoisTrainingsSandbox accesible con permisos de insert sobre `Auctifera__Fund_Donation_Assignment__c` y triggers activos"
+      - "Un record de prueba que mirror del -$64: `Auctifera__Donated_Amount__c=-64`, `Auctifera__Status__c='Refunded'`, `Auctifera__Accounting_Status__c='Posted'`, `Auctifera__Specific_Fund__c='Membership_Fund'`, `vnfp__Opportunity__c` ligado a un membership opportunity existente (test data), `vnfp__Opportunity_POS_Purchase__c=null`, `LookUp_ID_Legacy=null`, `vnfp__Implementation_External_ID__c=<UUID test>`"
+    when:
+      - "QA (o el dev en su evidencia) abre savepoint, hace insert via Apex / Workbench, lee el record de vuelta, y rollback"
+    then:
+      - "Insert succeeds (los triggers Auctifera no requieren POS Purchase no-null para refunds membership; simetria con el lado dues ya cargado con POS null)"
+      - "Read back devuelve el record con `vnfp__Opportunity_POS_Purchase__c=null`, `LookUp_ID_Legacy=null`, `Auctifera__Donated_Amount__c=-64`, `Auctifera__Status__c='Refunded'`"
+      - "Rollback elimina el record de prueba — no residuo. Evidencia esperada: screenshot del record en sandbox antes del rollback + log SOQL del read-back"
+      - "PR 123 declara haber hecho exactamente este check en IllinoisTrainingsSandbox antes de abrir el PR; este scenario lo replica como QA gate para cerrar la corrida cuando QA tenga acceso de insert"
+
+  - title: "Functional UI: validacion post-load del -$64 (member 8-10003475) y -$120 (member 8-10005476) en IHM target org tras re-migration"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - salesforce
+      - post-load
+      - illinois-holocaust-museum
+    given:
+      - "Re-migration ejecutada en IHM target org con la nueva version del migration tool (PR 123 mergeado y `dist/` reconstruido)"
+      - "QA tiene acceso de lectura al Illinois target org en Lightning"
+    when:
+      - "QA busca los 2 Refund Fund Assignment recuperados: por external ID (line item UUID) o por membership LOOKUPID 8-10003475 y 8-10005476"
+      - "QA captura screenshots del record detail + related list Refund Fund Assignment del membership"
+    then:
+      - "Refund Fund Assignment para 8-10003475: `Donated Amount = -$64.00`, `Posted Date = 2017-06-22`, `Status = Refunded`, `Specific Fund = Membership_Fund`, `Opportunity POS Purchase = (empty)`, `Lookup ID Legacy = (empty)`, `Opportunity = (membership opportunity ligado)`. [SCREENSHOT: im811-refund-64-detail.png]"
+      - "Refund Fund Assignment para 8-10005476: `Donated Amount = -$120.00`, `Posted Date = 2018-05-23`, `Status = Refunded`, todos los demas valores analogos. [SCREENSHOT: im811-refund-120-detail.png]"
+      - "Reporte agregado de Membership Refunds 2017-2019 en IHM target org: total records 1,338 (era 1,337 pre-fix? validar contra el reporte original adjunto al issue), total amount `(amount pre-fix - $12.60 + recuperados $184)`. La discrepancia original de $12.60 sigue abierta y debe quedar explicita en el reporte (NO se resuelve con PR 123)"
+      - "Spot-check de los 6 refunds 2017-2019 SO-backed pre-existentes: deben quedar identicos (mismo Total, mismo POS Purchase). [SCREENSHOT: im811-spotcheck-so-backed.png]"
+
+  - title: "Post-load reconciliation: reporte de Membership Refunds 2017-2019 en Salesforce vs Altru tras la re-migration"
+    tags:
+      - functional
+      - reconciliation
+      - salesforce
+      - post-load
+      - illinois-holocaust-museum
+    given:
+      - "Re-migration completada y los 2 refunds non-POS visibles en IHM target org"
+      - "Altru source de comparacion: el reporte adjunto al issue (`Captura 2026-06-01 ...`) declara: 826 + 510 = 1,336 records, $57,870 + $60,800 = $118,670 (2017+2018+2019, totales por anio)"
+      - "Pre-fix Salesforce reporto: 1,337 records, $118,657.40 (con discrepancias -$12.60 y +1 record)"
+    when:
+      - "QA re-ejecuta el reporte Membership Refunds 2017-2019 en IHM target org post-load y compara contra Altru"
+    then:
+      - "Records totales esperados: 1,337 + 2 (recuperados) = 1,339 (vs Altru 1,336). Delta de +3 records sobre Altru: el +1 original (refund duplicado / fuera-de-scope segun el issue) + los 2 nuevos non-POS"
+      - "Amount esperado: $118,657.40 + $184.00 = $118,841.40 (vs Altru $118,670). Delta de +$171.40 sobre Altru: $12.60 (caso fuera-de-scope) + $184 - $12.60 = $171.40 si el -$12.60 sigue siendo refund fantasma; valida que el -$12.60 sigue abierto y no se resuelve con PR 123"
+      - "FLAG (no defect, scope): el delta residual entre Salesforce y Altru tras este fix debe documentarse en IM-811 como `pendiente -$12.60 (root cause distinto, no resuelto por PR 123)` antes de cerrar la historia. Los -$40 (member 8-10397724) tambien siguen pendientes y deben ser verificados aparte"
+
+tags:
+  - im-811
+  - im-871
+  - im-70
+  - migration-tool-etl
+  - altru-queries
+  - membership-refund
+  - fund-assignment
+  - sql-server
+  - salesforce
+  - sandbox
+  - pr-123
+  - illinois-holocaust-museum
+  - non-pos-membership
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-04T16:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-04T16:50:00Z"
+  version: 1

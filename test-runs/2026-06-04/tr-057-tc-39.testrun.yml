@@ -1,0 +1,590 @@
+schemaVersion: "1.0"
+id: tr-7c1b8e60-3a4d-4f5b-92e7-1cd5b4a07f12
+key: TR-057
+title: "Run TC-39: Membership refund migration without SO gate (IM-811 / PR 123) — strict review + auto-execute source aggregates against illinois_2"
+status: in-progress
+environment:
+  name: local-safesql + Veevarts-MigrationToolETL PR 123 head + IHM Illinois target org (pending re-migration)
+  url: https://github.com/Veevarts/MigrationToolETL/pull/123
+  buildVersion: "PR 123 head 1c2e0574945570238a1aef47727f45df17ead144 + safesql illinois_2 profile + Node v25.4.0"
+startedAt: "2026-06-04T16:50:00.000Z"
+
+scopeFit: |
+  Scope-fit del PR 123 vs los AC implicitos de IM-811:
+
+  AC 1 - "El refund de Lookup ID 31830 (-$64, 2017-06-22) debe
+         migrarse a Salesforce"
+  -> PR lines: fund_assignments_membership_refunds.sql elimina
+     `AND COALESCE(membership_so.ID, addon_so.ID, original_so.ID,
+                   payment_so.ID, refund_so.ID) IS NOT NULL`
+     del WHERE. Conserva el COALESCE en el SELECT (linea 141) para
+     poblar vnfp__Opportunity_POS_Purchase__c cuando exista SO.
+  -> Coverage: Scenario 1 (scope-fit) + Scenario 2 (source agg) +
+     Scenario 3 (detail) + Scenario 6 (functional UI post-load).
+  -> Status: PASS por scope-fit y por source aggregate (-$64 en
+     fila 1 confirmado en illinois_2). Scenario 6 NOT-RUN (post-load
+     pending).
+
+  AC 2 - "No alterar refunds membership SO-backed pre-existentes"
+  -> PR lines: el COALESCE de SO en el SELECT queda intacto. La
+     resolucion de oportunidad (rgi/mt/ma/direct/order/cimf) sigue
+     igual. Solo se elimina la condicion de inclusion `IS NOT NULL`.
+  -> Coverage: Scenario 2 (pre_fix_rows_so_backed = 6 / -$380 sin
+     cambio) + Scenario 4 (gates IM-561/IM-562 vigentes).
+  -> Status: PASS.
+
+  AC 3 - "Recuperar todos los refunds de membresia non-POS en el
+         rango 2017-2019"
+  -> PR lines: el filtro `BETWEEN '2017-01-01' AND '2019-12-31'`
+     en la query agregada confirma 2 filas con SO=null. Ambas
+     resuelven via la rama cimf (CreditItemMembershipFallback).
+  -> Coverage: Scenario 2 + Scenario 3.
+  -> Status: PASS.
+
+  AC 4 - "Garantizar que el cambio no abre la puerta a falsos
+         positivos (ticket refunds, orphans)"
+  -> PR lines: las lineas 209-215 (gate IM-562 line-level evidence)
+     no se tocan. La linea 185 (opportunity-resolution gate)
+     tampoco. El spec estatico flipea 1 sola assertion; los otros
+     15 tests + la suite integration siguen verdes (declarado por
+     el PR; no se reejecuta localmente — Docker MSSQL fuera del
+     scope de esta corrida QA).
+  -> Coverage: Scenario 4.
+  -> Status: PASS por scope-fit + declaracion del PR.
+
+touchRadius: |
+  Touch radius del PR 123 (Veevarts/MigrationToolETL):
+
+  Codigo modificado (production):
+  - queries/fund-assignment/fund_assignments_membership_refunds.sql:
+    UNA condicion eliminada del WHERE (8 lineas de comentario inline
+    documentan el racional). El COALESCE de SO en el SELECT queda.
+
+  Tests modificados/nuevos (regresion):
+  - query-regression/fund-assignment-refunds-query-fixture.ts:
+    Scenario 4 IM-811 agregado (+59 lineas). Mirror del lineage
+    real Illinois $64.
+  - query-regression/fund-assignment-refunds-query.integration.spec.ts:
+    nuevo `describe('IM-811 ...')` con test que asserta la nueva
+    fila S4 emite con POS null. Suite total 3 -> 4 filas.
+  - query-regression/fund-assignment-refunds-query.spec.ts: 1
+    assertion estatica flipeada (SO gate AUSENTE en lugar de
+    presente). Los otros 15 tests intactos.
+
+  No tocados pero criticamente relacionados:
+  - fund_assignment_memberships.sql:250-253 (lado dues): ya emite
+    con SO null. El fix simetriza el lado refunds para que coincida.
+  - pipelines / entities / mappers / extractors / migration-object.enum
+    / Auctifera triggers: NO tocados. El cambio es puramente SQL.
+  - dist/: requiere `nest build` post-merge para refrescar los .sql
+    assets antes del proximo migration run (declarado por el PR).
+
+  Touch radius CLEAN. Cambio quirurgico: 1 condicion WHERE +
+  3 archivos de regresion. Sin colateral runtime.
+
+results:
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Side-by-side y scope-fit del PR 123 confirman fix quirurgico minimo (1 WHERE-clause eliminada + 1 fixture S4 + 2 spec flips)"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-06-04T16:50:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado via `gh pr view 123 --repo Veevarts/MigrationToolETL`: state=OPEN, mergeable=MERGEABLE, baseRefName=main, headRefName=fix/im811-membership-refund-no-so, headRefOid=1c2e0574945570238a1aef47727f45df17ead144, additions=103, deletions=6, changedFiles=4."
+        phase: given
+        text: "PR 123 estado: OPEN, mergeable=MERGEABLE, 4 archivos cambiados (+103/-6) sobre branch `fix/im811-membership-refund-no-so` head `1c2e0574`"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Diff completo descargado via `gh pr diff 123 --repo Veevarts/MigrationToolETL`. 4 archivos verificados linea por linea contra los 4 AC implicitos de IM-811."
+        phase: when
+        text: "QA descarga el diff completo del PR 123 (head 1c2e0574) y mapea el AC implicito de IM-811 (los refunds non-POS de membership deben migrarse) contra las lineas tocadas"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "`fund_assignments_membership_refunds.sql` linea 186: condicion `AND COALESCE(membership_so.ID, addon_so.ID, original_so.ID, payment_so.ID, refund_so.ID) IS NOT NULL` ELIMINADA. Reemplazada por 8 lineas de comentario IM-811 (lineas 186-193) documentando: simetria con `fund_assignment_memberships.sql:250-253`, no-regresion sobre SO-backed (su COALESCE ya era non-null), y que los otros 2 gates (opportunity-resolution + line-level evidence) bloquean orphans. COALESCE preservado en SELECT linea 141 (vnfp__Opportunity_POS_Purchase__c)."
+        phase: then
+        text: "`fund_assignments_membership_refunds.sql`: UNA condicion ELIMINADA del WHERE — `AND COALESCE(membership_so.ID, addon_so.ID, original_so.ID, payment_so.ID, refund_so.ID) IS NOT NULL`. Comentario inline IM-811 documenta el racional y la simetria con `fund_assignment_memberships.sql:250-253` (lado dues, ya emite con SO null). Las otras 5 ramas del WHERE quedan intactas: IM-562 line-level evidence gate (cimf / mt / ma / rgi / source_rse), y el opportunity-resolution gate `COALESCE(rgi, mt, ma, direct_order_membership, order_membership, cimf) IS NOT NULL`. El COALESCE de SO sigue en el SELECT (linea 141) para poblar `vnfp__Opportunity_POS_Purchase__c` cuando exista — solo deja de gatekeepear la inclusion"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "`fund-assignment-refunds-query-fixture.ts` verificado: +59 lineas bajo `// Scenario 4 — IM-811`. IDs UUID nuevos: PAYMENT_FT_CIM_ID, LINE_C1_ID, MT_C1_ID, MEMBERSHIP_C1_ID, REFUND_FT_CIM_ID, RLI_C1_ID. INSERTs: FT payment (no SO), FTLI dues con SOURCELINEITEMID=NULL, REVENUESPLIT_EXT APPLICATION='Membership', CREDITITEMMEMBERSHIP link, MEMBERSHIPTRANSACTION con REVENUESPLITID=NULL (asegura mt-on-source=0), refund FT + FTLI + CREDITPAYMENT. Confirma mirror exacto del lineage non-POS Illinois (member 8-10003475)."
+        phase: then
+        text: "`fund-assignment-refunds-query-fixture.ts`: Scenario 4 IM-811 agregado (lineas +59). FT de payment `PAYMENT_FT_CIM_ID` sin SALESORDER, REVENUESPLIT_EXT.APPLICATION='Membership', CREDITITEMMEMBERSHIP linkea la dues line al membership, MEMBERSHIPTRANSACTION.REVENUESPLITID=NULL (mt-on-source=0), refund FT `REFUND_FT_CIM_ID` con CREDITPAYMENT a la payment original. Mirror exacto del lineage real Illinois (member 8-10003475, -$64)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "`fund-assignment-refunds-query.integration.spec.ts` verificado: nuevo `describe('IM-811 — non-POS credit-item membership refund (no sales order)')` con el test `emits the refund even though no sales order resolves, with a null POS purchase`. Asserciones presentes: `vnfp__Opportunity__c === MT_C1_ID`, `vnfp__Opportunity_POS_Purchase__c === null`, `LookUp_ID_Legacy === null`, `Auctifera__Donated_Amount__c === -64`, `Auctifera__Specific_Fund__c === 'Membership_Fund'`, `Auctifera__Status__c === 'Refunded'`. Linea 326: `expect(rows).toHaveLength(4)` (era `toHaveLength(3)`). Imports MT_C1_ID, RLI_C1_ID agregados."
+        phase: then
+        text: "`fund-assignment-refunds-query.integration.spec.ts`: nuevo `describe('IM-811 — non-POS credit-item membership refund (no sales order)')` con un test que asserta sobre la fila S4 (RLI_C1_ID): `vnfp__Opportunity__c = MT_C1_ID` (cimf), `vnfp__Opportunity_POS_Purchase__c = null`, `LookUp_ID_Legacy = null`, `Auctifera__Donated_Amount__c = -64`, `Auctifera__Specific_Fund__c = 'Membership_Fund'`, `Auctifera__Status__c = 'Refunded'`. Suite total ahora 4 filas (1 mixed SO + 2 multi SO + 0 ticket-only SO + 1 no-SO credit-item) en lugar de 3"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "`fund-assignment-refunds-query.spec.ts` verificado: el test linea 77 cambia de `requires a resolved sales order to include the row` a `does NOT require a resolved sales order to include the row (IM-811)`. Asserciones: `expect(query).not.toContain('COALESCE(membership_so.ID, addon_so.ID, original_so.ID, payment_so.ID, refund_so.ID) IS NOT NULL')` + `expect(query).toContain('COALESCE(membership_so.ID, addon_so.ID, original_so.ID, payment_so.ID, refund_so.ID)')`. Las otras 15 it() del describe quedan intactas (line-specific mt.ID ranking, dedup, etc.)."
+        phase: then
+        text: "`fund-assignment-refunds-query.spec.ts`: el test estatico `requires a resolved sales order to include the row` se renombra a `does NOT require a resolved sales order to include the row (IM-811)`. Asserta `expect(query).not.toContain('COALESCE(membership_so.ID, ...) IS NOT NULL')` y simultaneamente `expect(query).toContain('COALESCE(membership_so.ID, ...)')` para preservar el poblar de POS_Purchase. El blast radius del spec flip es justo este test — los otros 15 se mantienen"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Confirmado: 4 archivos tocados (1 SQL + 3 specs/fixtures). NO toca pipelines, entities, mappers, extractors, migration-object.enum, ni triggers Auctifera. NO toca `fund_assignment_memberships.sql` (la simetria viene del lado dues que ya emite con SO null). Touch radius CLEAN."
+        phase: then
+        text: "Touch radius limpio: 4 archivos tocados (1 SQL del extractor + 3 specs/fixtures de regresion). NO toca pipelines, entities, mappers, extractors, migration-object.enum, ni triggers Auctifera. NO toca `fund_assignment_memberships.sql` (lado dues, ya emite con SO null — la simetria del fix viene de ahi)"
+        attachments: []
+    notes: |
+      Scope-fit limpio. PR 123 implementa el fix exactamente como
+      describe el comentario del dev en IM-811 (2026-06-03): elimina
+      el SO gate del WHERE, conserva el COALESCE en el SELECT,
+      simetriza con el lado dues. Sin colateral.
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Source illinois_2 aggregate confirma el claim 6 -> 8 refunds + null POS = 2 / -$184 declarado por el PR"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-06-04T16:41:26.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Profile `illinois_2` operativo (bastion + keychain). Query corrio en 1.5s sin errores."
+        phase: given
+        text: "Profile `illinois_2` disponible en safesql (host bastion, password en keychain, db `Illinois_db_2`)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Query escrita en `/tmp/im811-postfix-agg.sql`. Replica las 5 CTEs del query post-fix (CreditPaymentPerRefund, SalesOrdersByPayment, OrderBackedMembershipPerSalesOrder, DirectMembershipOpportunityPerSalesOrder, RecurringInstallments, RefundLineItems, CreditItemMembershipFallback) + el SELECT con todos los joins de SO + WHERE post-fix (sin SO gate) + filtro de fecha 2017-01-01..2019-12-31 + dedup. Agregado: cuenta separadamente rows_with_null_pos (las recuperadas) y rows_so_backed (las pre-fix)."
+        phase: given
+        text: "Query agregada `/tmp/im811-postfix-agg.sql` replica el WHERE post-fix del PR 123 (sin la condicion SO IS NOT NULL) sobre el universo 2017-01-01..2019-12-31, y cuenta separadamente las filas con POS null (las recuperadas por el fix) y las filas con POS no-null (las pre-fix)"
+        attachments:
+          - name: im811-postfix-agg.sql
+            path: attachments/tr-057-tc-39/safesql/im811-postfix-agg.sql
+            mimeType: text/x-sql
+      - order: 3
+        status: passed
+        actual: |
+          Comando: `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-postfix-agg.sql`
+          query_sha=11b7336bef31, started_at=2026-06-04T16:41:26.678Z, 1 fila devuelta.
+        phase: when
+        text: "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-postfix-agg.sql`"
+        attachments:
+          - name: illinois_2-aggregate-2017-2019.json
+            path: attachments/tr-057-tc-39/safesql/illinois_2-aggregate-2017-2019.json
+            mimeType: application/json
+      - order: 4
+        status: passed
+        actual: |
+          Resultado exacto:
+          - post_fix_rows = 8
+          - post_fix_total_amount = -564 (Money)
+          - rows_with_null_pos = 2
+          - amount_with_null_pos = -184
+          - pre_fix_rows_so_backed = 6
+          - pre_fix_amount_so_backed = -380
+        phase: then
+        text: "Resultado (1 fila): `post_fix_rows=8`, `post_fix_total_amount=-564`, `rows_with_null_pos=2`, `amount_with_null_pos=-184`, `pre_fix_rows_so_backed=6`, `pre_fix_amount_so_backed=-380`"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Match exacto con la declaracion del PR (`Source (safesql, patched query, 2017-2019): emitted rows 6 -> 8; the -$64 for member 31830 now included; the 2 new rows carry a null POS purchase`). Tambien match con el `Affects 2 membership refunds in 2017-2019, totaling -$184` del comentario del 2026-06-03."
+        phase: then
+        text: "Match exacto con la declaracion del PR (`emitted rows 6 -> 8`, los 2 nuevos `null POS purchase`, los 2 nuevos suman -$184, el -$64 incluido)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "No-regresion sobre universo pre-fix confirmada: 6 filas SO-backed con total -$380, identico a lo que el query antiguo (con SO gate) hubiera emitido. El cambio es estrictamente additive sobre filas previamente emitidas — no toca, no remueve, no altera valores existentes."
+        phase: then
+        text: "No-regression sobre universo pre-fix: las 6 SO-backed quedan intactas (mismo count y mismo total -$380). Confirma que el cambio es estrictamente additive sobre filas previamente emitidas"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Evidencia guardada: attachments/tr-057-tc-39/safesql/illinois_2-aggregate-2017-2019.json (SHA 11b7336bef31, 1 result-set, 1 row con los 6 agregados)."
+        phase: then
+        text: "Evidencia: `attachments/tr-057-tc-39/safesql/illinois_2-aggregate-2017-2019.json` (SHA 11b7336bef31)"
+        attachments:
+          - name: illinois_2-aggregate-2017-2019.json
+            path: attachments/tr-057-tc-39/safesql/illinois_2-aggregate-2017-2019.json
+            mimeType: application/json
+    notes: |
+      PASS rotundo. Numeros del PR confirmados al peso: 6 -> 8 rows,
+      -$184 recuperado, -$380 SO-backed inalterado. La cifra
+      pre_fix=6 es el "baseline re-confirmed at 6" que el PR cita.
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Detalle source de los 2 refunds recuperados: -$64 (2017-06-22, Individual-OLD) y -$120 (2018-05-23, Family), ambos con SO null"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-06-04T16:44:11.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Profile illinois_2 operativo (mismo del Scenario 2)."
+        phase: given
+        text: "Profile `illinois_2` disponible"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Query escrita en `/tmp/im811-nopos-detail.sql`. Replica el query post-fix proyectando donated_amount, refund_date, refund_revenue_id, membership.LOOKUPID, MEMBERSHIPPROGRAM.NAME, MEMBERSHIPLEVEL.NAME via los joins membership_so/original_so/payment_so/refund_so + cimf -> MEMBERSHIP -> MEMBERSHIPLEVEL -> MEMBERSHIPPROGRAM. Filtra WHERE `COALESCE(membership_so.ID, original_so.ID, payment_so.ID, refund_so.ID) IS NULL` para aislar exactamente las recuperadas, y aplica BETWEEN 2017-2019. (Nota: el join a CONSTITUENT se removio — la tabla MEMBERSHIP de Illinois no tiene CONSTITUENTID directo; el LOOKUPID 31830 es del constituent, no de la membership)."
+        phase: given
+        text: "Query detalle `/tmp/im811-nopos-detail.sql` extrae cada refund 2017-2019 que pasa los gates de evidencia/oportunidad y tiene SO null, con `membership.LOOKUPID`, `MEMBERSHIPPROGRAM.NAME` y `MEMBERSHIPLEVEL.NAME` joineados via la rama cimf"
+        attachments:
+          - name: im811-nopos-detail.sql
+            path: attachments/tr-057-tc-39/safesql/im811-nopos-detail.sql
+            mimeType: text/x-sql
+      - order: 3
+        status: passed
+        actual: |
+          Comando: `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-nopos-detail.sql`
+          query_sha=84e8f70301b2, started_at=2026-06-04T16:44:11.815Z, 2 filas devueltas.
+        phase: when
+        text: "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im811-nopos-detail.sql`"
+        attachments:
+          - name: illinois_2-nopos-detail.json
+            path: attachments/tr-057-tc-39/safesql/illinois_2-nopos-detail.json
+            mimeType: application/json
+      - order: 4
+        status: passed
+        actual: |
+          Fila 1 (file evidence, full row): donated_amount=-64, refund_date=2017-06-22T00:00:00.000Z, refund_revenue_id="" (vacio en source), membership_lookup_id="8-10003475", membership_program="Annual Membership", membership_level="Individual - OLD", so_id=null.
+          Match con la marca de Sara (Lookup ID 31830 = constituent owner del membership 8-10003475; el -$64 es el "Refund missing 64" reportado en su comentario del 2026-06-02). Match con la declaracion del dev: "this -$64 is on the Individual – OLD level, not Family – OLD".
+        phase: then
+        text: "Fila 1: `donated_amount=-64.00`, `refund_date=2017-06-22`, `membership_lookup_id=8-10003475`, `membership_program=Annual Membership`, `membership_level=Individual - OLD`, `so_id=null`. Reconcilia con la marca `Lookup ID 31830 / Refund missing 64` reportada por Sara, y con la declaracion del dev (`Individual – OLD, not Family – OLD`)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: |
+          Fila 2 (file evidence, full row): donated_amount=-120, refund_date=2018-05-23T00:00:00.000Z, refund_revenue_id="", membership_lookup_id="8-10005476", membership_program="Annual Membership", membership_level="Family", so_id=null.
+          Match con el "2 membership refunds in 2017-2019, totaling -$184" del comentario del dev (-$64 + -$120 = -$184). NO mencionado por Sara — es la mejora colateral del fix.
+        phase: then
+        text: "Fila 2: `donated_amount=-120.00`, `refund_date=2018-05-23`, `membership_lookup_id=8-10005476`, `membership_program=Annual Membership`, `membership_level=Family`, `so_id=null`. Segundo refund non-POS recuperado, completa el -$184 declarado"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Ambas filas confirman: so_id=null (4 ramas SO no resuelven), Membership active (LOOKUPID + LEVEL + PROGRAM presentes), opportunity resolvable solo via cimf (mt-on-source=0 en ambas). Coincide exactamente con el modelo S4 del fixture integration spec (mt-on-source=0, cim_match=1)."
+        phase: then
+        text: "Ambas filas confirman: SO null + Membership level activo + opportunity resolvable via cimf. Estas son las 2 filas exactas que la suite integration spec S4 modela en su fixture (mt-on-source = 0, cim_match = 1)"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "JSON guardado en attachments/tr-057-tc-39/safesql/illinois_2-nopos-detail.json (SHA 84e8f70301b2, 1 result-set, 2 rows con todos los campos)."
+        phase: then
+        text: "Evidencia: `attachments/tr-057-tc-39/safesql/illinois_2-nopos-detail.json` (SHA 84e8f70301b2)"
+        attachments:
+          - name: illinois_2-nopos-detail.json
+            path: attachments/tr-057-tc-39/safesql/illinois_2-nopos-detail.json
+            mimeType: application/json
+      - order: 8
+        status: passed
+        actual: "FLAG documentado (no defect): el -$120 (member 8-10005476, Family, 2018-05-23) no fue reportado por Sara. El fix lo recupera silenciosamente. Recomendado: notificar al cliente este caso adicional antes del load para evitar sorpresas en el delta del reporte 2017-2019."
+        phase: then
+        text: "FLAG (informativo, no defect): el dev marco el -$120 como Family (no Family-OLD). Sara no reporto explicitamente este segundo caso — el fix lo recupera silenciosamente como mejora colateral del root cause non-POS"
+        attachments: []
+    notes: |
+      PASS. Los 2 refunds non-POS quedan completamente caracterizados
+      con LOOKUPID, programa, nivel y fecha. El -$64 reconcilia 1:1
+      con la marca de Sara. El -$120 es un hallazgo colateral del
+      fix que conviene comunicar al cliente antes del load.
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Regression-gate: los gates IM-561 line-level y IM-562 evidence siguen activos y bloquean orphans"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-06-04T16:50:30.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Verificado en el archivo descargado: `fund_assignments_membership_refunds.sql` head 1c2e0574, linea 185 (`COALESCE(rgi, mt, ma, direct_order_membership, order_membership, cimf) IS NOT NULL`) y lineas 209-215 (`AND (source_rse.APPLICATION IN ('Membership', 'Membership add-on') OR cimf.MembershipTransactionID IS NOT NULL OR mt.ID IS NOT NULL OR ma.MEMBERSHIPTRANSACTIONID IS NOT NULL OR rgi.RecurringInstallmentID IS NOT NULL)`). Ambos gates intactos, sin diff."
+        phase: given
+        text: "Post-fix `fund_assignments_membership_refunds.sql` mantiene 2 gates aparte del SO eliminado: opportunity-resolution gate (linea 185) y line-level evidence gate (lineas 209-215)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Inspeccion del query post-fix completa. El comentario inline IM-562 (lineas 195-208) sigue presente y explica explicitamente: 'A refund with no line-level membership evidence is dropped even when its SO has an order-backed (SOIM without MT) membership; the tradeoff is intentional...'. Confirma el contrato del gate IM-562 no se debilita."
+        phase: when
+        text: "QA inspecciona el query post-fix y la suite de specs para confirmar que (a) un refund que no resuelva opportunity sigue siendo droppeado; (b) un refund con SO pero sin evidencia line-level (caso IM-562: ticket refund que comparte SO con membership) sigue siendo droppeado"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Linea 185 verificada palabra por palabra: `COALESCE(rgi.RecurringInstallmentID, mt.ID, ma.MEMBERSHIPTRANSACTIONID, direct_order_membership.MembershipTransactionID, order_membership.OrderMembershipItemID, cimf.MembershipTransactionID) IS NOT NULL`. Identica al pre-fix."
+        phase: then
+        text: "Linea 185 del query (`COALESCE(rgi, mt, ma, direct_order_membership, order_membership, cimf) IS NOT NULL`): intacta. Un refund sin opportunity-resolution sigue quedando fuera"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Lineas 209-215 verificadas: gate IM-562 con las 5 ramas (source_rse.APPLICATION, cimf, mt, ma, rgi). El diff confirma 0 cambios en estas lineas."
+        phase: then
+        text: "Lineas 209-215 del query (gate IM-562 line-level evidence): intactas. Un refund de ticket que comparte SO con una membership NO califica solo por `direct_order_membership`/`order_membership`; necesita `source_rse.APPLICATION IN ('Membership','Membership add-on') OR cimf OR mt OR ma OR rgi`"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Spec estatico verificado en el diff: 1 sola assertion flipeada (`it('does NOT require a resolved sales order')`). Los otros 15 it() bloques en el mismo describe no aparecen en el diff -> sin cambios. El PR declara `Static spec: 16/16 pass` en la seccion Validation."
+        phase: then
+        text: "Spec estatico (`fund-assignment-refunds-query.spec.ts`): los 15 tests pre-existentes siguen pasando segun el PR. El unico flip es el que ahora asserta la AUSENCIA del SO gate"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Spec integration verificado en el diff: los escenarios pre-existentes (IM-561 mixed/multi SO + IM-562 ticket-only SO) no se tocan; solo se agrega el nuevo describe IM-811 + se actualiza `expect(rows).toHaveLength(4)`. El PR declara `Docker MSSQL integration: 8/8 pass — new IM-811 scenario green, existing IM-561/IM-562 scenarios unchanged` en la seccion Validation."
+        phase: then
+        text: "Spec integration (`fund-assignment-refunds-query.integration.spec.ts`): los escenarios IM-561 (mixed SO + multi SO) y IM-562 (ticket-only SO emite 0 filas) siguen verdes; el conteo total sube de 3 a 4 con el nuevo S4 IM-811"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "Implicacion confirmada. El cambio expone refunds que ya cumplian los 2 gates restantes (opportunity-resolution via cimf + line-level evidence via source_rse='Membership' o cimf no-null) pero quedaban descartados por el SO gate. Falsos positivos imposibles sin pasar antes los otros 2 gates."
+        phase: then
+        text: "Implicacion: el cambio no abre la puerta a falsos positivos. Solo expone a la salida los refunds que ya cumplian los 2 gates restantes pero quedaban escondidos por el SO gate"
+        attachments: []
+    notes: |
+      PASS por inspeccion estatica + declaracion del PR. El cambio
+      es minimo y bien gateado. No se reejecutan los specs Docker
+      MSSQL aqui (fuera del scope de la corrida QA actual); se
+      confia en el `8/8 pass` declarado en la seccion Validation del
+      PR. Si fuera necesario reabrir esta evidencia: levantar el
+      Docker MSSQL local y correr `nest test query-regression`.
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Sandbox reconciliation: insertar un Refund Fund Assignment con POS null en IllinoisTrainingsSandbox debe quedar persistido y readable (savepoint+rollback)"
+    scenarioIndex: 4
+    status: not-run
+    executedAt: null
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Sandbox IllinoisTrainingsSandbox accesible con permisos de insert sobre `Auctifera__Fund_Donation_Assignment__c` y triggers activos"
+        attachments: []
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Un record de prueba que mirror del -$64: `Auctifera__Donated_Amount__c=-64`, `Auctifera__Status__c='Refunded'`, `Auctifera__Accounting_Status__c='Posted'`, `Auctifera__Specific_Fund__c='Membership_Fund'`, `vnfp__Opportunity__c` ligado a un membership opportunity existente (test data), `vnfp__Opportunity_POS_Purchase__c=null`, `LookUp_ID_Legacy=null`, `vnfp__Implementation_External_ID__c=<UUID test>`"
+        attachments: []
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA (o el dev en su evidencia) abre savepoint, hace insert via Apex / Workbench, lee el record de vuelta, y rollback"
+        attachments: []
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Insert succeeds (los triggers Auctifera no requieren POS Purchase no-null para refunds membership; simetria con el lado dues ya cargado con POS null)"
+        attachments: []
+    notes: |
+      PENDIENTE DE TU PARTE — accion manual requerida.
+
+      Que hacer:
+      1. Abrir IllinoisTrainingsSandbox en Workbench (o ejecutar
+         Anonymous Apex con Database.setSavepoint + Database.rollback).
+      2. Insert un Auctifera__Fund_Donation_Assignment__c con:
+         - Auctifera__Donated_Amount__c = -64
+         - Auctifera__Status__c = 'Refunded'
+         - Auctifera__Accounting_Status__c = 'Posted'
+         - Auctifera__Specific_Fund__c = 'Membership_Fund'
+         - vnfp__Opportunity__c = <Id de una membership opportunity
+           existente en el sandbox; tomar una del lado dues no-POS>
+         - vnfp__Opportunity_POS_Purchase__c = null
+         - LookUp_ID_Legacy = null
+         - vnfp__Implementation_External_ID__c = UUID nuevo
+      3. SOQL read-back para confirmar campos.
+      4. Rollback al savepoint.
+      5. Capturar:
+         - Screenshot del record creado en el sandbox antes del rollback
+         - Log de Apex (System.debug) con el SObject leido
+         - Confirmacion de que el rollback dejo 0 records con el UUID
+
+      Donde dejar la evidencia:
+      - attachments/tr-057-tc-39/sandbox/im811-insert-screenshot.png
+      - attachments/tr-057-tc-39/sandbox/im811-readback-debug.log
+      - attachments/tr-057-tc-39/sandbox/im811-rollback-confirm.txt
+
+      Alternativa de cierre: el PR 123 ya declara haber hecho esta
+      validacion en IllinoisTrainingsSandbox antes de abrir
+      ("uploaded the resulting refund fund assignment (-$64, Refunded,
+      external id, opportunity linked, no POS purchase) — insert
+      succeeded and read back correctly; validation record deleted").
+      Si QA confirma con el dev (Camilo) que el screenshot/log de
+      esa validacion sigue disponible, se puede cerrar este scenario
+      apuntando a esa evidencia y este TR se actualiza a passed.
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Functional UI: validacion post-load del -$64 (member 8-10003475) y -$120 (member 8-10005476) en IHM target org tras re-migration"
+    scenarioIndex: 5
+    status: not-run
+    executedAt: null
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Re-migration ejecutada en IHM target org con la nueva version del migration tool (PR 123 mergeado y `dist/` reconstruido)"
+        attachments: []
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "QA tiene acceso de lectura al Illinois target org en Lightning"
+        attachments: []
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA busca los 2 Refund Fund Assignment recuperados: por external ID (line item UUID) o por membership LOOKUPID 8-10003475 y 8-10005476"
+        attachments: []
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA captura screenshots del record detail + related list Refund Fund Assignment del membership"
+        attachments: []
+    notes: |
+      PENDIENTE DE TU PARTE — bloqueado por re-migration.
+
+      Prerequisitos:
+      1. PR 123 mergeado a main.
+      2. `nest build` ejecutado para refrescar `dist/` con el .sql
+         asset actualizado.
+      3. Re-migration ejecutada en el IHM target org (full o
+         incremental que toque el rango 2017-2019 membership refunds).
+
+      Que hacer post-re-migration:
+      1. Abrir el IHM target org en Lightning.
+      2. Buscar el membership con LOOKUPID 8-10003475 (Individual-OLD).
+         - Verificar el related list `Refund Fund Assignments`:
+           debe aparecer 1 record con Donated Amount = -$64.00,
+           Posted Date = 2017-06-22, Status = Refunded,
+           Specific Fund = Membership_Fund, Opportunity POS Purchase = (empty),
+           Lookup ID Legacy = (empty).
+         - Screenshot del record detail.
+      3. Buscar el membership con LOOKUPID 8-10005476 (Family).
+         - Verificar el related list Refund Fund Assignments:
+           debe aparecer 1 record con Donated Amount = -$120.00,
+           Posted Date = 2018-05-23, todos los demas campos analogos.
+         - Screenshot del record detail.
+      4. Spot-check de 3-5 refunds 2017-2019 SO-backed pre-existentes
+         (cualquiera de los 6): confirmar que su Total y POS Purchase
+         siguen identicos a pre-fix. Screenshot.
+
+      Donde dejar la evidencia:
+      - attachments/tr-057-tc-39/post-load/im811-refund-64-detail.png
+      - attachments/tr-057-tc-39/post-load/im811-refund-120-detail.png
+      - attachments/tr-057-tc-39/post-load/im811-spotcheck-so-backed.png
+      - attachments/tr-057-tc-39/post-load/im811-summary.md (lista
+        de los 8 records vistos con LOOKUPID y montos)
+    attachments: []
+    defects: []
+
+  - testCaseId: 5f9bc1ad-7a2e-4f1d-9d8e-2a7b4c1e6f01
+    testCaseKey: TC-39
+    testCaseTitle: "Membership refund fund-assignment migration (Altru -> Veevart): emit non-POS credit-item refunds with null POS_Purchase IM-811 / PR 123"
+    testCaseFilePath: test-cases/IM-811/IM-811-TC-39-membership-refund-no-so-migration.testcase.yml
+    scenarioTitle: "Post-load reconciliation: reporte de Membership Refunds 2017-2019 en Salesforce vs Altru tras la re-migration"
+    scenarioIndex: 6
+    status: not-run
+    executedAt: null
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Re-migration completada y los 2 refunds non-POS visibles en IHM target org"
+        attachments: []
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Altru source de comparacion: el reporte adjunto al issue (`Captura 2026-06-01 ...`) declara: 826 + 510 = 1,336 records, $57,870 + $60,800 = $118,670 (2017+2018+2019, totales por anio)"
+        attachments: []
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA re-ejecuta el reporte Membership Refunds 2017-2019 en IHM target org post-load y compara contra Altru"
+        attachments: []
+    notes: |
+      PENDIENTE DE TU PARTE — bloqueado por re-migration + acceso
+      al reporte en el target org.
+
+      Que hacer:
+      1. Identificar el reporte Membership Refunds 2017-2019 en el
+         IHM target org (el mismo que produjo la captura de Sara
+         con 1,337 / $118,657.40 pre-fix).
+      2. Re-ejecutarlo post-re-migration.
+      3. Confirmar los nuevos totales:
+         - Records esperados: 1,339 (1,337 + 2 recuperados).
+         - Amount esperado: $118,841.40 ($118,657.40 + $184.00).
+      4. Comparar contra Altru (1,336 / $118,670):
+         - Delta records = +3 (el +1 fantasma pre-existente + 2 recuperados).
+         - Delta amount = +$171.40 ($12.60 ghost + $184 recuperado - $12.60 = $171.40
+           si el -$12.60 sigue siendo refund fantasma).
+      5. Documentar en IM-811 que las discrepancias residuales
+         (-$12.60 member 8-10636744 y -$40 member 8-10397724)
+         NO se resuelven con PR 123 y requieren root-cause investigation
+         separado. Sin esa nota, no cerrar la historia.
+
+      Donde dejar la evidencia:
+      - attachments/tr-057-tc-39/post-load/im811-sf-report-postfix.png
+      - attachments/tr-057-tc-39/post-load/im811-altru-vs-sf-reconciliation.md
+
+      FLAG: el delta esperado de +3 records / +$171.40 asume que el
+      -$12.60 sigue siendo refund fantasma post-re-migration (no se
+      toca por el fix). Si el re-migration tambien limpia ese -$12.60
+      por algun side-effect, recalcular. Si el cliente no entiende
+      por que sigue habiendo delta, el comentario del 2026-06-03
+      del dev explica que son root causes distintos.
+    attachments: []
+    defects: []
+
+defects: []
+
+summary:
+  total: 7
+  passed: 4
+  failed: 0
+  blocked: 0
+  notRun: 3
+  passRate: 0.5714
+  notes: |
+    4 escenarios PASS auto-ejecutables (scope-fit + 2 corridas
+    safesql + regresion-gate). 3 escenarios NOT-RUN pendientes de
+    accion manual: sandbox reconciliation (handoff posible con la
+    evidencia del PR), functional UI post-load (bloqueado por
+    re-migration en IHM), reconciliation final del reporte
+    Salesforce-vs-Altru (bloqueado por re-migration).
+
+    Hallazgos sin defect:
+    - El -$120 (member 8-10005476, Family, 2018-05-23) es una
+      recuperacion colateral del fix no reportada explicitamente por
+      el cliente. Comunicar antes del load para evitar sorpresas.
+    - Discrepancias residuales -$12.60 (member 8-10636744) y -$40
+      (member 8-10397724) NO se resuelven con PR 123. Mantener
+      explicitas en IM-811 antes de cerrar la historia.
+
+history: []
