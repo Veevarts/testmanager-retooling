@@ -1,0 +1,200 @@
+schemaVersion: "1.0"
+
+id: "996c7637-845d-4a1f-860d-6c8de0ae3dd8"
+key: "TC-37"
+title: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+description: |
+  Cobertura QA de IM-809 (PR 121 en Veevarts/MigrationToolETL) bajo el
+  epic IM-70 Altru Queries. Valida que la migracion incorpora los
+  descuentos de orden Shop como POS_Discount__c en VeevartHub para que
+  los totales en Veevart (Client Purchase.Total2, POS_Purchase.Total)
+  reconcilien contra Altru.
+
+  Issue reportado (Illinois Holocaust Museum, IHM): algunas transacciones
+  Shop migradas no cuadran con Altru porque los descuentos no se
+  trasladaron. Ejemplo de referencia: Altru SALESORDER 12520367 ->
+  Veevart Client Purchase P-30881. Altru total $17.86 = $18.00 (gross
+  item) - $1.80 (discount) + $1.66 (10.25% tax). En Veevart sin
+  descuento el Total quedaba inflado.
+
+  Implementacion (verificada en PR 121 head a49696c):
+
+  - Nuevo query `queries/shop/pos_discount_only_shop.sql` (84 lineas):
+    1 fila por shop SALESORDER con `total_discount > 0` (INNER JOIN con
+    SALESORDERITEMMERCHANDISE -> solo merch). Emite Value__c (gross
+    subtotal pre-discount/pre-tax), Discount_Type='Amount',
+    Discount_Value (positivo), Discount_Amount (negativo),
+    Discount_Source='Custom'. Linkea a Purchase__r + POS_Purchase__r
+    por Implementation_External_ID__c.
+  - Nuevo migration object pos-discount-shop (pipeline + entity +
+    mapper + extractor + specification + wiring en
+    migration-object.enum, extractor.registry, data-migration.module).
+    Escribe `pos-discount-shop.csv`.
+  - Cambio critico en `sale_item.sql`: `Item_Price__c` ahora usa
+    `COALESCE(soi.TOTAL,0)` (GROSS) en lugar de
+    `COALESCE(us.amount_paid_after_discount, soi.TOTAL,0)` (net). El
+    trigger `ClientPurchaseTriggerHandler.propagateDiscount` aplica el
+    descuento via POS_Discount__c sobre Sale Items; si Item_Price
+    fuera neto el descuento se aplicaria 2 veces.
+
+  Validacion del autor (PR 121):
+  - Source illinois_2: 10,330 shop orders con descuento, $65,025 total.
+    SALESORDER 12520367 -> Value=18.00, Discount_Value=1.80,
+    Discount_Amount=-1.80.
+  - Sandbox IllinoisTrainingsSandbox (triggers activos, savepoint+rollback):
+    POS_Discount(Value=18, Amount=1.80) -> Sale Item
+    Price_Without_Tax=16.20, Amount~17.86; Client Purchase Total2=17.86;
+    POS Purchase Total=17.86 (matches Altru, $18.00 - $1.80 + 10.25%
+    tax = $17.86).
+  - Multi-line order test: 30 - 3 + tax = 29.77.
+  - Cross-profile 8 source DBs: query total == merchandise discount en
+    todos los perfiles (e.g. tucson = $24 merch incluido, $1.52M no-merch
+    excluido).
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/121
+  - Branch: fix/shop-missing-discounts-IM-809
+  - Head SHA: a49696c
+  - Issue: https://veevart.atlassian.net/browse/IM-809
+  - Dev story (hermana): https://veevart.atlassian.net/browse/IM-866
+  - Epic: https://veevart.atlassian.net/browse/IM-70
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Acceso de lectura a Altru source DB (illinois_2 para IHM, o tucson para sanity cross-profile) via safesql"
+  - "Sandbox Salesforce Illinois (IllinoisTrainingsSandbox) con triggers Auctifera activos disponible para validacion sandbox"
+  - "Acceso a VeevartHub prod / Illinois target org para validacion functional UI tras el load"
+  - "Para la behavioral del query: Node + safesql instalado (~/tools/safesql/safesql.mjs)"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 121 confirman arquitectura del fix"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+    given:
+      - "PR 121 estado: OPEN, mergeable=MERGEABLE, 11 archivos cambiados (+475/-1) con un solo commit en `fix/shop-missing-discounts-IM-809`"
+    when:
+      - "QA descarga del head a49696c el diff completo y mapea los AC del issue IM-809 (totales Shop = Altru tras migrar descuentos) a las lineas del PR"
+    then:
+      - "Nuevo query `queries/shop/pos_discount_only_shop.sql` (+84) emite 1 POS_Discount__c por SALESORDER con `total_discount > 0`, INNER JOIN con SALESORDERITEMMERCHANDISE garantiza scope merch-only"
+      - "Value__c = gross_subtotal (SUM de soi.TOTAL pre-descuento/pre-tax); Discount_Type='Amount'; Discount_Value=total_discount; Discount_Amount=-total_discount; Discount_Source='Custom'; linkea Purchase__r + POS_Purchase__r via Implementation_External_ID__c"
+      - "Nuevo migration object completo (pipeline, entity, mapper, extractor, specification) sigue patron de los otros shop objects; wiring en migration-object.enum (POS_DISCOUNT_SHOP), extractor.registry, data-migration.module (4 puntos)"
+      - "Cambio quirurgico en `sale_item.sql`: linea 66 `Item_Price__c` cambia de `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` (net) a `COALESCE(soi.TOTAL, 0)` (gross) con comentario explicativo. Resto del query sin tocar"
+      - "Spec de regresion del query nuevo: `query-regression/shop-discount-query.spec.ts` (+62), provee suite de prueba para el SQL"
+      - "Scope-fit limpio: no toca client_purchase.sql ni sales_order_only_shop.sql (intencional, revertidos a HEAD); el efecto sobre Total/Total2 viene del rollup que Salesforce hace via los triggers"
+
+  - title: "Cross-profile sanity: agregado del query nuevo contra source tucson coincide con declaracion del PR"
+    tags:
+      - data-review
+      - cross-profile
+      - safesql
+      - behavioral
+    given:
+      - "Profile tucson disponible en safesql (uno de los 8 perfiles que el PR declara haber validado)"
+      - "Query agregado /tmp/IM-809-shop-discount-agg.sql replica las 4 CTEs (item_discount_summary, order_discount_summary, unit_summary, merchandise_lines, order_totals) del PR para extraer counts, sum_discount y sum_gross"
+    when:
+      - "QA ejecuta `node ~/tools/safesql/safesql.mjs run tucson /tmp/IM-809-shop-discount-agg.sql`"
+    then:
+      - "Resultado: orders_with_discount=2, sum_total_discount=$24, sum_gross_subtotal=$110, min_discount=$9, max_discount=$15"
+      - "Match exacto con la declaracion del PR ('tucson includes $24 merch and excludes $1.52M non-merch'). Cross-profile claim verificada"
+      - "Evidence: attachments/tr-055-tc-37/safesql/tucson-agg.json"
+      - "Implicacion: el INNER JOIN merchandise filtra correctamente; en tucson el orden de magnitud $24/$1.52M demuestra que descuentos no-merch quedan fuera"
+
+  - title: "Behavioral validation en source IHM (declarada por el autor; QA no tiene acceso directo a illinois_2)"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+    given:
+      - "Profile illinois_2 NO esta disponible en el safesql del entorno QA"
+      - "El PR declara: 10,330 shop orders con descuento, $65,025 total discount, SALESORDER 12520367 -> Value=18.00, Discount_Value=1.80, Discount_Amount=-1.80"
+    when:
+      - "QA toma esta evidencia del PR como autoridad (acceso a illinois_2 esta fuera de scope del entorno QA actual)"
+    then:
+      - "Si en una corrida futura el operator obtiene acceso a illinois_2: ejecutar el query y confirmar SALESORDER 12520367 produce exactamente (Value=18.00, Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom')"
+      - "Confirmar que SUM(Discount_Value) sobre todos los rows del query = $65,025 (cifra declarada por el PR)"
+      - "FLAG (no defect): la behavioral source IHM no es reproducible desde el entorno QA actual. Recomendado: agregar perfil safesql illinois_2 cuando se haga el load real para cerrar esta corrida con evidencia directa"
+
+  - title: "Sandbox reconciliation: POS_Discount -> Sale Item -> Client Purchase / POS_Purchase totals match Altru"
+    tags:
+      - functional
+      - sandbox
+      - reconciliation
+      - salesforce
+    given:
+      - "Sandbox IllinoisTrainingsSandbox con triggers Auctifera activos (POSDiscountTriggerHandler, ClientPurchaseTriggerHandler.propagateDiscount, SaleItem trigger). Usar savepoint+rollback para no dejar residuo"
+      - "Test order anonimizado equivalente al SALESORDER 12520367 (1 line, qty 1, gross $18.00, discount $1.80, 10.25% tax) cargado en orden: ClientPurchase -> POS_Purchase -> SaleItem -> POS_Discount"
+    when:
+      - "QA (o el dev en su evidencia) inserta el POS_Discount__c via el flujo de carga (Sale Item con Item_Price gross $18.00 luego POS_Discount Value=18, Discount_Type='Amount', Discount_Value=1.80)"
+      - "Triggers se ejecutan: ClientPurchaseTriggerHandler.propagateDiscount convierte el discount en % y lo baja al Sale Item; SaleItem trigger neto: Price_Without_Tax = 16.20"
+    then:
+      - "POS_Discount__c persiste con Value=18, Discount_Type='Amount', Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom'"
+      - "Sale Item: Price_Without_Tax = 16.20 ($18.00 - $1.80), Amount ~ $17.86 ($16.20 + 10.25% tax). Verificacion: el descuento se aplica UNA sola vez (no doble) gracias al cambio Item_Price gross"
+      - "ClientPurchase.Total2 = 17.86 (rollup desde Sale Items)"
+      - "POS_Purchase.Total = 17.86 (rollup paralelo)"
+      - "Match exacto con Altru $17.86. Reconciliation PASS"
+      - "Multi-line test: orden con 30 + 30 + 30 = $90 gross, $9 descuento total, distribucion proporcional por el package -> ClientPurchase.Total2 = $90 - $9 + 10.25% tax = $89.21. PR declara $29.77 para una variante 30-3+tax (consistente)"
+      - "Cleanup: savepoint+rollback elimina los demo records tras la validacion"
+
+  - title: "Functional UI: validacion post-load del SALESORDER 12520367 / P-30881 en IHM target org"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - salesforce
+      - post-load
+    given:
+      - "Carga ejecutada en IHM target org con la nueva version del migration tool (PR 121 mergeado)"
+      - "QA tiene acceso de lectura al Illinois target org en Lightning"
+    when:
+      - "QA abre el record Auctifera Client Purchase P-30881 (Altru SALESORDER 12520367) en Lightning"
+      - "QA captura screenshot del Total2 / Total + los Sale Items asociados + el record POS_Discount__c asociado"
+    then:
+      - "Client Purchase P-30881: Total2 = $17.86 (match Altru). [SCREENSHOT: im809-client-purchase-total.png]"
+      - "POS_Purchase asociado: Total = $17.86. [SCREENSHOT: im809-pos-purchase-total.png]"
+      - "Sale Item del shop: Price_Without_Tax = $16.20, Amount = $17.86. [SCREENSHOT: im809-sale-item.png]"
+      - "POS_Discount__c asociado: Value=18, Discount_Type='Amount', Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom'. [SCREENSHOT: im809-pos-discount.png]"
+      - "Marketing_Metrics__c Shop_Income__c del periodo refleja el ingreso reconciliado (validable via comparador IM-790 si aplica)"
+      - "Spot-check de 5-10 ordenes adicionales con descuento en IHM: todos los Total2 deben coincidir con sus Altru source counts"
+
+  - title: "Regression check: ordenes Shop sin descuento, no-merchandise, edge cases"
+    tags:
+      - regression
+      - edge-cases
+    given:
+      - "El query nuevo filtra `total_discount > 0` (excluye ordenes sin descuento) y `INNER JOIN SALESORDERITEMMERCHANDISE` (excluye ticket/membership)"
+    when:
+      - "QA verifica via safesql cross-profile que: (a) ordenes sin descuento no aparecen en el output; (b) ordenes solo de tickets/memberships no aparecen; (c) ordenes mixtas (merch + ticket) solo emiten el descuento de la porcion merch"
+    then:
+      - "PR declara: 'query total == merchandise discount on every profile; non-merch discount fully excluded' (e.g. tucson $24 merch incluido, $1.52M non-merch excluido)"
+      - "Confirmar que el sale_item.sql con Item_Price gross NO afecta a ordenes sin descuento (Item_Price gross == net cuando no hay descuento)"
+      - "FLAG (no defect): No hay unit test agregado en el PR para el sale_item.sql gross switch. La cobertura del comportamiento gross descansa en query-regression/shop-discount-query.spec.ts + la sandbox del PR. Sugerencia no bloqueante: agregar un caso en el regression spec validando que sale_item.Item_Price emite gross en presencia de POS_Discount"
+
+tags:
+  - im-809
+  - im-866
+  - im-70
+  - migration-tool-etl
+  - altru-queries
+  - shop
+  - pos-discount
+  - sale-item
+  - sql-server
+  - salesforce
+  - sandbox
+  - pr-121
+  - illinois-holocaust-museum
+
+estimatedDuration: 35
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-03T20:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-03T20:00:00Z"
+  version: 1

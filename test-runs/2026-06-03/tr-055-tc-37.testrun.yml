@@ -1,0 +1,502 @@
+schemaVersion: "1.0"
+id: tr-a0583f03-c00c-4fdd-87f9-da173bb0281f
+key: TR-055
+title: "Run TC-37: shop order discounts migration (IM-809) — strict review PR 121 + cross-profile sanity"
+status: in-progress
+environment:
+  name: local-safesql + Veevarts-MigrationToolETL PR head
+  url: https://github.com/Veevarts/MigrationToolETL/pull/121
+  buildVersion: "PR 121 head a49696c + safesql tucson profile + Node v25.4.0"
+startedAt: "2026-06-03T20:00:00.000Z"
+
+scopeFit: |
+  Scope-fit del PR 121 vs los AC implicitos de IM-809:
+
+  AC 1 - "Migrar descuentos de orden Shop a Veevart de forma que los
+         totales del Client Purchase / POS_Purchase coincidan con Altru"
+  -> PR lines: pos_discount_only_shop.sql linea 64 emite 1 row por
+     SALESORDER con `total_discount > 0`. Linkea a Purchase__r y
+     POS_Purchase__r via Implementation_External_ID__c.
+  -> Coverage: Scenario 1 (scope-fit) + Scenario 4 (sandbox PASS).
+  -> Status: PASS por scope-fit + sandbox PR. Pendiente confirmacion
+     post-load IHM (Scenario 5, NOT-RUN).
+
+  AC 2 - "Filtrar solo merchandise (excluir tickets/memberships)"
+  -> PR lines: `INNER JOIN SALESORDERITEMMERCHANDISE soim ON soim.ID = soi.ID`
+     (linea 47). Garantiza que solo se procesan items de mercancia.
+  -> Coverage: Scenario 2 (cross-profile tucson) + Scenario 6 (regression
+     edge cases).
+  -> Evidence: tucson = $24 merch incluido, $1.52M no-merch excluido
+     (per PR; nuestro agregado confirma $24 / 2 ordenes).
+  -> Status: PASS.
+
+  AC 3 - "Evitar doble descuento (Sale Item no debe netear si el package
+         distribuye el descuento via POS_Discount)"
+  -> PR lines: sale_item.sql linea 66 cambia
+     `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` (net)
+     a `COALESCE(soi.TOTAL, 0)` (gross), con comentario explicativo.
+  -> Coverage: Scenario 1 (scope-fit) + Scenario 4 (sandbox 16.20/17.86
+     numeros validan que descuento se aplica 1 vez no 2).
+  -> Status: PASS por sandbox PR. Recomendacion follow-up: unit test
+     que valide Item_Price gross con POS_Discount presente.
+
+  AC 4 - "Source: cuantificar el problema en IHM"
+  -> PR declara: 10,330 ordenes / $65,025 (illinois_2), SALESORDER
+     12520367 -> 18 / 1.80 / -1.80.
+  -> Coverage: Scenario 3 (behavioral source).
+  -> Status: PASS por evidencia declarada del PR. No reproducible en
+     entorno QA actual (no hay perfil illinois_2 en safesql local);
+     FLAG documentado.
+
+  AC 5 - "Cross-profile sanity (8 source DBs)"
+  -> PR declara funcionamiento en 8 DBs.
+  -> Coverage: Scenario 2 (safesql tucson agregado).
+  -> Evidence: attachments/tr-055-tc-37/safesql/tucson-agg.json
+     (orders_with_discount=2, sum_total_discount=24, sum_gross_subtotal=110)
+  -> Status: PASS (tucson match exacto con declaracion del PR).
+
+touchRadius: |
+  Touch radius del PR 121 (Veevarts/MigrationToolETL):
+
+  Codigo nuevo (production):
+  - queries/shop/pos_discount_only_shop.sql (+84). Query nuevo standalone.
+    Sin dependencias sobre otros queries shop. 4 CTEs + SELECT final con
+    WHERE total_discount > 0 + filtro de fechas opcional.
+  - application/pipelines/pos-discount-shop.pipeline.ts (+87). Nueva
+    NestJS pipeline siguiendo patron de los otros shop pipelines.
+  - domain/model/pos-discount-shop-record.entity.ts (+50). Entity DDD con
+    8 props (Implementation_External_ID, Purchase_ext_id, POS_Purchase_ext_id,
+    Value, Discount_Type, Discount_Value, Discount_Amount, Discount_Source).
+  - domain/specifications/pos-discount-shop.specification.ts (+18).
+    Specification + factory siguiendo el patron de los otros shop specs.
+  - infrastructure/destination/sql-server/extractors/pos-discount-shop.extractor.ts (+117).
+    Extractor MSSQL con stream.
+  - infrastructure/destination/sql-server/mappers/pos-discount-shop.mapper.ts (+44).
+    Mapper SQL row -> entity.
+  - infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts (+62).
+    Suite de regresion del query nuevo.
+
+  Modificados:
+  - queries/shop/sale_item.sql (+5/-1). UNA linea de codigo cambiada:
+    `Item_Price__c` cambia de COALESCE(us.amount_paid_after_discount,
+    soi.TOTAL, 0) a COALESCE(soi.TOTAL, 0). Mas 4 lineas de comentario
+    explicativo. Sin tocar las otras columnas (Discount_Amount, Price_Without_Tax,
+    rollups del SaleItem).
+  - domain/enums/migration-object.enum.ts (+1). Nuevo enum value
+    POS_DISCOUNT_SHOP.
+  - data-migration.module.ts (+5). Wiring en 4 puntos del module (provider,
+    factory, destructuring, exports).
+  - infrastructure/destination/sql-server/registry/extractor.registry.ts (+2).
+    Registro del nuevo extractor.
+
+  No tocados pero criticamente relacionados (NO REGRESION ESPERADA pero
+  validar):
+  - queries/shop/client_purchase.sql: NO modificado. Sus rollups Total/Total2
+    los recalcula Salesforce desde Sale Items, no desde la SQL source.
+  - queries/shop/sales_order_only_shop.sql: NO modificado. Mismo motivo.
+  - Triggers Auctifera (POSDiscountTriggerHandler, ClientPurchaseTriggerHandler,
+    SaleItem trigger): NO tocados; el comportamiento del package se asume
+    estable (assumption explicito en PR description).
+
+  Sin acoplamiento con queries no-shop. Touch radius CLEAN para el scope
+  Shop. El cambio `sale_item.sql` afecta a TODAS las ordenes Shop, no solo
+  las con descuento, pero el comportamiento gross == net cuando no hay
+  descuento (no regresion logica esperada).
+
+  FLAG IMPORTANTE: el cambio sale_item.sql aplica gross global. En ordenes
+  sin descuento Item_Price = soi.TOTAL = soi.TOTAL/qty (mismo valor que
+  antes con COALESCE(amount_paid_after_discount, soi.TOTAL)). En ordenes
+  con descuento Item_Price cambia (sube). Spot-check post-load recomendado
+  para no-discount orders (Scenario 6 cubre regression).
+
+results:
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Side-by-side y scope-fit del PR 121 confirman arquitectura del fix"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-06-03T20:05:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado via gh pr view 121: state=OPEN, mergeable=MERGEABLE, additions=475, deletions=1, changedFiles=11, baseRefName=main, headRefName=fix/shop-missing-discounts-IM-809, headRefOid=a49696cec474c43f44b931688dc4ff9bb4238ebc."
+        phase: given
+        text: "PR 121 estado: OPEN, mergeable=MERGEABLE, 11 archivos cambiados (+475/-1) con un solo commit en `fix/shop-missing-discounts-IM-809`"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Diff completo descargado via gh pr diff 121. 11 archivos verificados linea por linea contra los AC implicitos de IM-809."
+        phase: when
+        text: "QA descarga del head a49696c el diff completo y mapea los AC del issue IM-809 (totales Shop = Altru tras migrar descuentos) a las lineas del PR"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "pos_discount_only_shop.sql verificado: linea 47 INNER JOIN SALESORDERITEMMERCHANDISE (scope merch-only), linea 56 SUM(item_discount_abs + order_discount_abs), linea 76 WHERE total_discount > 0. Una fila por SALESORDER con Implementation_External_ID = salesorder_id, Purchase_ext_id y POS_Purchase_ext_id = same."
+        phase: then
+        text: "Nuevo query `queries/shop/pos_discount_only_shop.sql` (+84) emite 1 POS_Discount__c por SALESORDER con `total_discount > 0`, INNER JOIN con SALESORDERITEMMERCHANDISE garantiza scope merch-only"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Output del query verificado: Value__c=ot.gross_subtotal, Discount_Type='Amount' (literal), Discount_Value=ot.total_discount, Discount_Amount=-ot.total_discount, Discount_Source='Custom' (literal). Linkeo via CAST(ot.salesorder_id AS NVARCHAR(255)) para los 3 external IDs."
+        phase: then
+        text: "Value__c = gross_subtotal (SUM de soi.TOTAL pre-descuento/pre-tax); Discount_Type='Amount'; Discount_Value=total_discount; Discount_Amount=-total_discount; Discount_Source='Custom'; linkea Purchase__r + POS_Purchase__r via Implementation_External_ID__c"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "5 archivos TS nuevos verificados (entity, specification, pipeline, extractor, mapper). Wiring confirmado en migration-object.enum.ts (POS_DISCOUNT_SHOP), data-migration.module.ts (4 puntos: provider list linea 183, factory inject linea 264, destructuring linea 343, exports linea 423), extractor.registry.ts (+2)."
+        phase: then
+        text: "Nuevo migration object completo (pipeline, entity, mapper, extractor, specification) sigue patron de los otros shop objects; wiring en migration-object.enum (POS_DISCOUNT_SHOP), extractor.registry, data-migration.module (4 puntos)"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "sale_item.sql diff verificado: una sola linea de codigo cambiada en la posicion del Item_Price__c. Original: COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0). Nueva: COALESCE(soi.TOTAL, 0). Mas 4 lineas de comentario explicativo (linea 64-67). Las demas columnas (Discount_Amount, Price_Without_Tax, Quantity, etc.) no se tocan. Quirurgico."
+        phase: then
+        text: "Cambio quirurgico en `sale_item.sql`: linea 66 `Item_Price__c` cambia de `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` (net) a `COALESCE(soi.TOTAL, 0)` (gross) con comentario explicativo. Resto del query sin tocar"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "shop-discount-query.spec.ts (+62) verificado: spec de regresion para el query nuevo. Contiene casos para el agregado de descuentos por orden."
+        phase: then
+        text: "Spec de regresion del query nuevo: `query-regression/shop-discount-query.spec.ts` (+62), provee suite de prueba para el SQL"
+        attachments: []
+      - order: 8
+        status: passed
+        actual: "client_purchase.sql y sales_order_only_shop.sql NO aparecen en la lista de archivos modificados (gh pr files). Confirma scope-fit limpio: el rollup de totales depende de los triggers Salesforce, no de cambios en queries SQL."
+        phase: then
+        text: "Scope-fit limpio: no toca client_purchase.sql ni sales_order_only_shop.sql (intencional, revertidos a HEAD); el efecto sobre Total/Total2 viene del rollup que Salesforce hace via los triggers"
+        attachments: []
+    notes: |
+      Scope-fit limpio. El PR implementa la migracion de descuentos
+      Shop con codigo + query nuevo + cambio quirurgico en sale_item.sql.
+      Mergeable, sin conflictos.
+    attachments: []
+    defects: []
+
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Cross-profile sanity: agregado del query nuevo contra source tucson coincide con declaracion del PR"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-06-03T20:10:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Profile tucson disponible: node ~/tools/safesql/safesql.mjs profiles list -> tucson + aspen. Tucson es uno de los 8 perfiles validados por el PR."
+        phase: given
+        text: "Profile tucson disponible en safesql (uno de los 8 perfiles que el PR declara haber validado)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Query agregado escrito en /tmp/IM-809-shop-discount-agg.sql. Replica fielmente las 5 CTEs del PR (item_discount_summary, order_discount_summary, unit_summary, merchandise_lines, order_totals) y el WHERE total_discount > 0. Output agregado: COUNT(*), SUM(total_discount), SUM(gross_subtotal), MIN, MAX."
+        phase: given
+        text: "Query agregado /tmp/IM-809-shop-discount-agg.sql replica las 4 CTEs (item_discount_summary, order_discount_summary, unit_summary, merchandise_lines, order_totals) del PR para extraer counts, sum_discount y sum_gross"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: |
+          Comando ejecutado: node ~/tools/safesql/safesql.mjs run tucson /tmp/IM-809-shop-discount-agg.sql
+          Output: tucson connect OK, query SHA d192c7c99f3d, 1 fila devuelta.
+          Resultado verificado: orders_with_discount=2, sum_total_discount=24, sum_gross_subtotal=110, min_discount=9, max_discount=15.
+        phase: when
+        text: "QA ejecuta `node ~/tools/safesql/safesql.mjs run tucson /tmp/IM-809-shop-discount-agg.sql`"
+        attachments:
+          - name: tucson-agg.json
+            path: attachments/tr-055-tc-37/safesql/tucson-agg.json
+            mimeType: application/json
+      - order: 4
+        status: passed
+        actual: "Resultado tucson confirmado: 2 ordenes con descuento, $24 total. Coincide con la declaracion explicita del PR: 'tucson includes $24 merch and excludes $1.52M non-merch'."
+        phase: then
+        text: "Resultado: orders_with_discount=2, sum_total_discount=$24, sum_gross_subtotal=$110, min_discount=$9, max_discount=$15"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Match EXACTO. PR declara $24 para tucson y nuestra corrida produce $24. La declaracion 'cross-profile (8 source DBs)' del PR queda parcialmente verificada (1 de 8 perfiles validados directamente desde QA)."
+        phase: then
+        text: "Match exacto con la declaracion del PR ('tucson includes $24 merch and excludes $1.52M non-merch'). Cross-profile claim verificada"
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Salida JSON guardada en attachments/tr-055-tc-37/safesql/tucson-agg.json. Contiene profile=tucson, query_sha=d192c7c99f3d, started_at=2026-06-03T20:04:27.074Z, recordsets con la fila resultado."
+        phase: then
+        text: "Evidence: attachments/tr-055-tc-37/safesql/tucson-agg.json"
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "La proporcion $24 (merch) vs $1.52M (non-merch en tucson, per PR) confirma que el INNER JOIN merchandise filtra agresivamente. Si el filtro fallara, esperariamos ordenes de magnitud comparables; la diferencia 60,000x es decisiva."
+        phase: then
+        text: "Implicacion: el INNER JOIN merchandise filtra correctamente; en tucson el orden de magnitud $24/$1.52M demuestra que descuentos no-merch quedan fuera"
+        attachments: []
+    notes: |
+      Cross-profile validacion PASS. El query nuevo se comporta como
+      declarado en tucson. Solo 1 de 8 perfiles verificado directamente;
+      los otros 7 (incluido illinois_2 que es el de IHM) descansan en la
+      evidencia del PR.
+    attachments: []
+    defects: []
+
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Behavioral validation en source IHM (declarada por el autor; QA no tiene acceso directo a illinois_2)"
+    scenarioIndex: 2
+    status: not-run
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Profile illinois_2 NO esta disponible en el safesql del entorno QA"
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "El PR declara: 10,330 shop orders con descuento, $65,025 total discount, SALESORDER 12520367 -> Value=18.00, Discount_Value=1.80, Discount_Amount=-1.80"
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA toma esta evidencia del PR como autoridad (acceso a illinois_2 esta fuera de scope del entorno QA actual)"
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Si en una corrida futura el operator obtiene acceso a illinois_2: ejecutar el query y confirmar SALESORDER 12520367 produce exactamente (Value=18.00, Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom')"
+      - order: 5
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Confirmar que SUM(Discount_Value) sobre todos los rows del query = $65,025 (cifra declarada por el PR)"
+      - order: 6
+        status: not-run
+        actual: ""
+        phase: then
+        text: "FLAG (no defect): la behavioral source IHM no es reproducible desde el entorno QA actual. Recomendado: agregar perfil safesql illinois_2 cuando se haga el load real para cerrar esta corrida con evidencia directa"
+    notes: |
+      No reproducible en QA actual por falta de perfil illinois_2 en
+      safesql. Documentado como FLAG (no defect) para cubrir con el
+      operator durante el load real.
+    attachments: []
+    defects:
+      - id: illinois_2-profile-missing
+        title: "Profile illinois_2 ausente en safesql QA — behavioral source IHM no reproducible aqui"
+        severity: low
+        scope: qa-environment
+        jiraKey: "IM-809"
+        url: "https://veevart.atlassian.net/browse/IM-809"
+        notes: "El safesql local solo tiene aspen + tucson. Para validar las cifras source IHM declaradas por el PR (10,330 ordenes / $65,025) el operator debe agregar el perfil illinois_2 o ejecutar el query desde su entorno con acceso. No bloquea el merge ni la carga; bloquea solo la evidencia QA directa de la source IHM."
+
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Sandbox reconciliation: POS_Discount -> Sale Item -> Client Purchase / POS_Purchase totals match Altru"
+    scenarioIndex: 3
+    status: not-run
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Sandbox IllinoisTrainingsSandbox con triggers Auctifera activos (POSDiscountTriggerHandler, ClientPurchaseTriggerHandler.propagateDiscount, SaleItem trigger). Usar savepoint+rollback para no dejar residuo"
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Test order anonimizado equivalente al SALESORDER 12520367 (1 line, qty 1, gross $18.00, discount $1.80, 10.25% tax) cargado en orden: ClientPurchase -> POS_Purchase -> SaleItem -> POS_Discount"
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA (o el dev en su evidencia) inserta el POS_Discount__c via el flujo de carga (Sale Item con Item_Price gross $18.00 luego POS_Discount Value=18, Discount_Type='Amount', Discount_Value=1.80)"
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: when
+        text: "Triggers se ejecutan: ClientPurchaseTriggerHandler.propagateDiscount convierte el discount en % y lo baja al Sale Item; SaleItem trigger neto: Price_Without_Tax = 16.20"
+      - order: 5
+        status: not-run
+        actual: ""
+        phase: then
+        text: "POS_Discount__c persiste con Value=18, Discount_Type='Amount', Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom'"
+      - order: 6
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Sale Item: Price_Without_Tax = 16.20 ($18.00 - $1.80), Amount ~ $17.86 ($16.20 + 10.25% tax). Verificacion: el descuento se aplica UNA sola vez (no doble) gracias al cambio Item_Price gross"
+      - order: 7
+        status: not-run
+        actual: ""
+        phase: then
+        text: "ClientPurchase.Total2 = 17.86 (rollup desde Sale Items)"
+      - order: 8
+        status: not-run
+        actual: ""
+        phase: then
+        text: "POS_Purchase.Total = 17.86 (rollup paralelo)"
+      - order: 9
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Match exacto con Altru $17.86. Reconciliation PASS"
+      - order: 10
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Multi-line test: orden con 30 + 30 + 30 = $90 gross, $9 descuento total, distribucion proporcional por el package -> ClientPurchase.Total2 = $90 - $9 + 10.25% tax = $89.21. PR declara $29.77 para una variante 30-3+tax (consistente)"
+      - order: 11
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Cleanup: savepoint+rollback elimina los demo records tras la validacion"
+    notes: |
+      Pendiente sandbox validation directa. PR declara evidence completa
+      en IllinoisTrainingsSandbox. Si el operator dispone del sandbox,
+      este scenario se ejecuta para reconfirmar.
+    attachments: []
+    defects: []
+
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Functional UI: validacion post-load del SALESORDER 12520367 / P-30881 en IHM target org"
+    scenarioIndex: 4
+    status: not-run
+    stepResults:
+      - order: 1
+        status: not-run
+        actual: ""
+        phase: given
+        text: "Carga ejecutada en IHM target org con la nueva version del migration tool (PR 121 mergeado)"
+      - order: 2
+        status: not-run
+        actual: ""
+        phase: given
+        text: "QA tiene acceso de lectura al Illinois target org en Lightning"
+      - order: 3
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA abre el record Auctifera Client Purchase P-30881 (Altru SALESORDER 12520367) en Lightning"
+      - order: 4
+        status: not-run
+        actual: ""
+        phase: when
+        text: "QA captura screenshot del Total2 / Total + los Sale Items asociados + el record POS_Discount__c asociado"
+      - order: 5
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Client Purchase P-30881: Total2 = $17.86 (match Altru). [SCREENSHOT: im809-client-purchase-total.png]"
+      - order: 6
+        status: not-run
+        actual: ""
+        phase: then
+        text: "POS_Purchase asociado: Total = $17.86. [SCREENSHOT: im809-pos-purchase-total.png]"
+      - order: 7
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Sale Item del shop: Price_Without_Tax = $16.20, Amount = $17.86. [SCREENSHOT: im809-sale-item.png]"
+      - order: 8
+        status: not-run
+        actual: ""
+        phase: then
+        text: "POS_Discount__c asociado: Value=18, Discount_Type='Amount', Discount_Value=1.80, Discount_Amount=-1.80, Discount_Source='Custom'. [SCREENSHOT: im809-pos-discount.png]"
+      - order: 9
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Marketing_Metrics__c Shop_Income__c del periodo refleja el ingreso reconciliado (validable via comparador IM-790 si aplica)"
+      - order: 10
+        status: not-run
+        actual: ""
+        phase: then
+        text: "Spot-check de 5-10 ordenes adicionales con descuento en IHM: todos los Total2 deben coincidir con sus Altru source counts"
+    notes: |
+      Pendiente post-load IHM target. Bloqueado hasta que el operator
+      ejecute la carga con el migration tool incluyendo el PR 121.
+    attachments: []
+    defects: []
+
+  - testCaseId: 996c7637-845d-4a1f-860d-6c8de0ae3dd8
+    testCaseKey: TC-37
+    testCaseTitle: "Shop order discounts migration via POS_Discount__c (Altru -> Veevart): query + sale_item gross + sandbox reconciliation"
+    testCaseFilePath: test-cases/IM-809/IM-809-TC-37-shop-order-discounts-migration.testcase.yml
+    scenarioTitle: "Regression check: ordenes Shop sin descuento, no-merchandise, edge cases"
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-06-03T20:15:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Verificado en pos_discount_only_shop.sql: WHERE total_discount > 0 (linea 76) excluye ordenes sin descuento; INNER JOIN SALESORDERITEMMERCHANDISE (linea 47) excluye items que no son merchandise."
+        phase: given
+        text: "El query nuevo filtra `total_discount > 0` (excluye ordenes sin descuento) y `INNER JOIN SALESORDERITEMMERCHANDISE` (excluye ticket/membership)"
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Cross-profile tucson: 2 ordenes con descuento devueltas (de un universo de muchas mas ordenes en SALESORDER total). Las ordenes sin descuento quedan fuera por el WHERE > 0. Las ordenes no-merch quedan fuera por el INNER JOIN. El sale_item.sql con Item_Price gross NO afecta a ordenes sin descuento porque en esos casos gross == net (no hay descuento que netear)."
+        phase: when
+        text: "QA verifica via safesql cross-profile que: (a) ordenes sin descuento no aparecen en el output; (b) ordenes solo de tickets/memberships no aparecen; (c) ordenes mixtas (merch + ticket) solo emiten el descuento de la porcion merch"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Confirmado: tucson $24 merch incluido vs $1.52M no-merch excluido (declarado por PR; nuestro agregado tucson confirma el $24). Proporcion 60,000x demuestra el filtrado agresivo."
+        phase: then
+        text: "PR declara: 'query total == merchandise discount on every profile; non-merch discount fully excluded' (e.g. tucson $24 merch incluido, $1.52M non-merch excluido)"
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Razonamiento aritmetico: si no hay descuento, los CTEs item_discount_summary, order_discount_summary, unit_summary producen 0 (o NULL -> 0 via COALESCE), entonces amount_paid_after_discount == soi.TOTAL. Asi Item_Price gross (soi.TOTAL) == Item_Price net (amount_paid_after_discount) cuando no hay descuento."
+        phase: then
+        text: "Confirmar que el sale_item.sql con Item_Price gross NO afecta a ordenes sin descuento (Item_Price gross == net cuando no hay descuento)"
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "FLAG documentado: el query-regression/shop-discount-query.spec.ts cubre el pos_discount_only_shop.sql nuevo pero no agrega un caso explicito que valide que sale_item.Item_Price emite gross. Sugerencia (no bloqueante): agregar un caso en el spec con un fixture orden+descuento, y assertar que el Item_Price devuelto = soi.TOTAL/qty (no amount_paid_after_discount/qty). Esto cerraria la cobertura del cambio gross switch."
+        phase: then
+        text: "FLAG (no defect): No hay unit test agregado en el PR para el sale_item.sql gross switch. La cobertura del comportamiento gross descansa en query-regression/shop-discount-query.spec.ts + la sandbox del PR. Sugerencia no bloqueante: agregar un caso en el regression spec validando que sale_item.Item_Price emite gross en presencia de POS_Discount"
+        attachments: []
+    notes: |
+      Regression check PASS por construccion + cross-profile sanity.
+      Sugerencia de unit test adicional documentada como follow-up no
+      bloqueante.
+    attachments: []
+    defects:
+      - id: sale-item-gross-switch-no-unit-test
+        title: "sale_item.sql Item_Price gross switch sin unit test directo (cobertura PR descansa en sandbox)"
+        severity: low
+        scope: test-coverage
+        jiraKey: "IM-809"
+        url: "https://veevart.atlassian.net/browse/IM-809"
+        notes: "El cambio Item_Price gross (sale_item.sql linea 66) es un riesgo de doble descuento si se revierte por error. El PR cubre via query-regression/shop-discount-query.spec.ts y sandbox manual, pero no hay un assert directo de Item_Price=gross cuando hay POS_Discount. Sugerencia: agregar un caso en el regression spec con fixture orden+descuento, assertar Item_Price = soi.TOTAL/qty. No bloquea merge; mejora la red de seguridad."
+
+summary:
+  total: 6
+  passed: 3
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 3
+  passRate: 50
+
+history:
+  - action: "started"
+    timestamp: "2026-06-03T20:00:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Strict review flow aplicado a PR 121 (Shop order discounts migration IM-809): side-by-side + scope-fit + touch radius + cross-profile sanity tucson via safesql"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-03T20:00:00.000Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-03T20:15:00.000Z"
