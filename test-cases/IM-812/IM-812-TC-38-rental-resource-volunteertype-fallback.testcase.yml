@@ -1,0 +1,213 @@
+schemaVersion: "1.0"
+
+id: "121790b8-1595-470e-b265-06d131db1951"
+key: "TC-38"
+title: "Rental Resource item-staff lineage backfill (Altru -> Veevart): TYPECODE=11 resource lookup via ITINERARYITEMSTAFFRESOURCE.VOLUNTEERTYPEID"
+description: |
+  Cobertura QA de IM-812 (PR 122 en Veevarts/MigrationToolETL) bajo el
+  epic IM-70 Altru Queries. Valida el fix quirurgico de
+  `queries/rental-resource/rental_resource.sql` que agrega el join faltante
+  `ITINERARYITEMSTAFFRESOURCE` y extiende el fallback de
+  `Auctifera__Resource__c` para `SALESORDERITEM.TYPECODE = 11` (item-staff
+  resource rows).
+
+  Issue reportado (Illinois): 7,314 filas Rental Resource del CSV adjunto
+  emitidas con `Auctifera__Ticketing__c`, `Auctifera__Resource__c` y
+  `Auctifera__Location__c` en blanco. Todas las filas son
+  `TYPECODE = 11`. Ejemplo canonico: Altru Order 12793276 (6 items: 2
+  ticket, 1 facility/location, 2 itinerary staff, 1 itinerary item staff
+  -> esta ultima es la que no tenia recurso proyectado).
+
+  Implementacion (verificada en PR 122 head b9933f9):
+
+  - `rental_resource.sql`: 2 lineas de codigo cambiadas.
+    * Linea 30-35: `Auctifera__Resource__c` para TYPECODE 8/9/10/11
+      cambia de `COALESCE(iir.RESOURCEID, ir.RESOURCEID, isr.VOLUNTEERTYPEID)`
+      a `COALESCE(iir.RESOURCEID, ir.RESOURCEID, isr.VOLUNTEERTYPEID,
+      iisr.VOLUNTEERTYPEID)`. La nueva ultima rama cubre item-staff.
+    * Linea 136: nuevo `LEFT JOIN ITINERARYITEMSTAFFRESOURCE iisr
+      ON iisr.ID = soiistaff.ITINERARYITEMSTAFFRESOURCEID`. Provee la
+      tabla de la que cuelga `iisr.VOLUNTEERTYPEID`.
+  - `query-regression/rental-resource-query.spec.ts`: nuevo spec (+31)
+    con 2 it: (a) confirma que el LEFT JOIN y el `iisr.VOLUNTEERTYPEID`
+    estan en el query; (b) confirma que la rama del COALESCE incluye
+    iisr.VOLUNTEERTYPEID pero NO incluye un fallback de orden-level
+    (proteccion contra over-backfilling).
+  - `docs/altru-model-context.md` (+8): documenta la regla reusable de
+    lineage para item-staff resources.
+  - 3 archivos openspec en `openspec/changes/im-812-illinois-rental-resource-lineage/`
+    (exploration, tasks, verify-report) — meta, no afecta runtime.
+
+  Validacion declarada por el autor (PR 122 + IM-812 description):
+  - Source illinois (safesql) baseline SHA `d980e545a2fb`: 34,927 filas
+    Rental Resource, 9,520 ordenes distintas, 7,314 con las 3 lookup en
+    blanco, TODAS bajo TYPECODE = 11.
+  - Source illinois proposed SHA `4ea437302c75`: filas Rental Resource
+    siguen en 34,927; external IDs distintos siguen en 34,927;
+    missing-all-three baja de 7,314 a 0; missing-resource baja de
+    25,169 a 17,855 (las restantes son ticket/location rows donde resource
+    no aplica).
+  - CSV attached reconciliation SHA `c6442be9efd3`: las 7,314 filas del
+    CSV adjunto reciben Resource y todas linkean a `VOLUNTEERTYPE.ID`
+    emitidos por `resource_service.sql`.
+  - Missing-join audit SHA `1f798178ea28`: para Illinois no quedan filas
+    con lookup intendido faltante por item type.
+  - Order 12793276: 1 fila TYPECODE 11 paso de 0 a 1 resource proyectado.
+
+  Severidad declarada en Jira: 2 - Critical (Compliance / Financial Loss
+  / Data Corruption). Priority: High.
+
+  Referencias:
+  - PR: https://github.com/Veevarts/MigrationToolETL/pull/122
+  - Branch: bug/error-en-migracion-de-rental-resources-registros-IM-812
+  - Head SHA: b9933f9
+  - Issue: https://veevart.atlassian.net/browse/IM-812
+  - QA Sub-task: https://veevart.atlassian.net/browse/IM-872
+  - Epic: https://veevart.atlassian.net/browse/IM-70
+  - Source: Illinois (safesql profile illinois_2)
+  - CSV adjunto: error060126012436885.csv (1.6MB, 7,314 filas)
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Acceso de lectura a Altru source DB (illinois_2) via safesql"
+  - "Acceso al CSV adjunto en IM-812 (error060126012436885.csv) o capacidad de listar las 7,314 Implementation_External_ID__c que reporto el load"
+  - "Sandbox Salesforce Illinois (IllinoisTrainingsSandbox) o target org Illinois disponible para la validacion functional UI post-load"
+  - "Node + safesql instalado (~/tools/safesql/safesql.mjs) para correr los queries de evidencia"
+  - "Acceso al PR 122 en GitHub para revisar el diff: `gh pr diff 122 --repo Veevarts/MigrationToolETL`"
+
+format: gherkin
+scenarios:
+  - title: "Side-by-side y scope-fit del PR 122 confirman fix quirurgico minimo"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+      - ac-1
+    given:
+      - "PR 122 (`fix(rental-resource): link item staff resources IM-812`) estado MERGED, mergeable previo, 7 archivos cambiados (+176/-1) en branch `bug/error-en-migracion-de-rental-resources-registros-IM-812` head `b9933f9`"
+      - "Issue IM-812 declara: 7,314 filas Rental Resource Illinois con `Auctifera__Ticketing__c`, `Auctifera__Resource__c`, `Auctifera__Location__c` en blanco; todas TYPECODE 11; lineage source disponible via `SALESORDERITEMITINERARYITEMSTAFFRESOURCE.ITINERARYITEMSTAFFRESOURCEID -> ITINERARYITEMSTAFFRESOURCE.VOLUNTEERTYPEID`"
+    when:
+      - "QA descarga el diff completo del PR 122 head b9933f9 y mapea cada AC del issue a las lineas del PR"
+      - "QA verifica el cambio en `rental_resource.sql` y el spec de regresion nuevo"
+    then:
+      - "`rental_resource.sql` agrega UN solo LEFT JOIN nuevo (linea ~136): `LEFT JOIN ITINERARYITEMSTAFFRESOURCE iisr ON iisr.ID = soiistaff.ITINERARYITEMSTAFFRESOURCEID`"
+      - "`rental_resource.sql` extiende el COALESCE de `Auctifera__Resource__c` para TYPECODE 8/9/10/11 agregando `iisr.VOLUNTEERTYPEID` como ultima rama, sin tocar las otras tres ramas existentes ni el filtro TYPECODE"
+      - "`query-regression/rental-resource-query.spec.ts` nuevo (+31) cubre 2 invariantes: (a) presencia del LEFT JOIN y de `iisr.VOLUNTEERTYPEID`; (b) ausencia de fallback orden-level (no se permite backfilling amplio)"
+      - "Documentacion `docs/altru-model-context.md` (+8) registra la regla reusable del lineage item-staff"
+      - "No se modifica el grain del query (siguen siendo non-ticket rows directas + 1 fila agregada por ticket grouping); no se cambian otras columnas"
+      - "Touch radius limpio: solo SQL del extractor + spec + docs + openspec meta. No toca pipelines, entities, mappers ni triggers Auctifera"
+
+  - title: "Source IHM agregado en illinois_2: las 7,314 filas TYPECODE 11 quedan en 0 missing tras el fix"
+    tags:
+      - behavioral-source
+      - safesql
+      - ac-1
+      - ac-3
+      - illinois
+    given:
+      - "Profile safesql illinois_2 disponible y configurado (host bastion, password en keychain, db Illinois_db_2)"
+      - "QA tiene el query equivalente al rental_resource.sql proposed (post-fix) replicando los CTEs en una version agregada (count, distinct external IDs, missing-all-three)"
+    when:
+      - "QA ejecuta el query agregado proposed contra illinois_2: `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/IM-812-rental-resource-proposed-agg.sql`"
+      - "QA ejecuta el query agregado baseline (rama anterior) sobre el mismo profile para comparar"
+    then:
+      - "Resultado baseline: total_rows=34,927; distinct_external_ids=34,927; missing_all_three=7,314 (match exacto con la cifra declarada por el PR)"
+      - "Resultado proposed: total_rows=34,927 (UNCHANGED); distinct_external_ids=34,927 (UNCHANGED); missing_all_three=0; missing_resource baja de 25,169 a 17,855"
+      - "Match exacto con el SHA `d980e545a2fb` (baseline) y SHA `4ea437302c75` (proposed) que el PR declara"
+      - "Evidencia guardada en `attachments/tr-NNN-tc-38/safesql/illinois_2-baseline-agg.json` y `illinois_2-proposed-agg.json`"
+
+  - title: "Resource values generados son VOLUNTEERTYPE.ID validos emitidos por resource_service.sql"
+    tags:
+      - cross-query-consistency
+      - ac-2
+      - safesql
+    given:
+      - "Profile safesql illinois_2 disponible"
+      - "QA tiene el query proposed `rental_resource.sql` que ahora emite `Auctifera__Resource__c` para TYPECODE 11"
+      - "QA tiene `resource_service.sql` (mismo repo) que es la query autoritativa de Resource Service y emite filas con `External_ID__c = VOLUNTEERTYPE.ID` para la rama VOLUNTEERTYPE"
+    when:
+      - "QA ejecuta una query de set-difference: TYPECODE 11 rows con resource recien generado -> verifica que cada `Auctifera__Resource__c` aparece como External_ID de un Resource Service row tipo VOLUNTEERTYPE"
+    then:
+      - "Match: el 100% de las 7,314 filas Rental Resource TYPECODE 11 referencian un `VOLUNTEERTYPE.ID` que existe en el output de `resource_service.sql` (cero huerfanos)"
+      - "Match exacto con la declaracion del PR (SHA `c6442be9efd3`): las 7,314 filas del CSV adjunto reciben Resource y todas linkean a Resource Service `VOLUNTEERTYPE` records"
+      - "No hay huerfanos: si quedara alguno, indicaria que el VOLUNTEERTYPE no esta siendo emitido por resource_service.sql -> seria un defecto cross-query"
+
+  - title: "Grain check: row count y distinct external IDs no cambian tras agregar el LEFT JOIN"
+    tags:
+      - regression
+      - ac-3
+      - safesql
+    given:
+      - "Mismo profile illinois_2 y mismas dos versiones del query (baseline vs proposed) del Scenario 2"
+    when:
+      - "QA compara COUNT(*) y COUNT(DISTINCT Implementation_External_ID__c) entre baseline y proposed"
+    then:
+      - "Row count baseline=proposed=34,927 exacto"
+      - "Distinct external IDs baseline=proposed=34,927 exacto (sin duplicados emergentes por el nuevo LEFT JOIN)"
+      - "Confirma que el LEFT JOIN agregado no multiplica filas. Si subiera, indicaria multiples ITINERARYITEMSTAFFRESOURCE por SALESORDERITEMITINERARYITEMSTAFFRESOURCE.ITINERARYITEMSTAFFRESOURCEID (que seria un bug del schema)"
+
+  - title: "Missing-join audit por TYPECODE: facility tiene location, resource-backed tiene resource, sin huecos en Illinois"
+    tags:
+      - behavioral-source
+      - ac-4
+      - safesql
+      - illinois
+    given:
+      - "Profile illinois_2 disponible"
+      - "QA tiene el query audit que agrega Rental Resource rows post-fix por TYPECODE y reporta missing por columna lookup correspondiente"
+    when:
+      - "QA ejecuta el audit query proposed contra illinois_2"
+    then:
+      - "TYPECODE 7 (ticket): rows agregadas, missing Ticketing = 0 (o el conteo esperado documentado)"
+      - "TYPECODE 8/9 (facility location): rows con Auctifera__Location__c poblado, missing Location = 0 para facility rows"
+      - "TYPECODE 10/11 (staff/itemstaff resource): rows con Auctifera__Resource__c poblado, missing Resource = 0 para las filas resource-backed"
+      - "Match con la declaracion del PR (SHA `1f798178ea28`): no remaining missing intended lookup by rental item type for Illinois"
+      - "Si algun TYPECODE queda con missing > 0 en su lookup intendido, levantar defect (out-of-scope para IM-812 pero seria hallazgo legitimo)"
+
+  - title: "Functional UI: verificar Rental Resource records en Lightning post-load con Resource lookup poblado"
+    tags:
+      - functional-ui
+      - evidence-capture
+      - post-load
+      - ac-1
+      - ac-2
+    given:
+      - "Carga ejecutada en IHM Illinois sandbox o target org con el migration tool incluyendo PR 122 mergeado (head b9933f9 o posterior)"
+      - "QA tiene acceso de lectura Lightning al org cargado"
+      - "QA tiene la lista de Implementation_External_ID__c de las 7,314 filas (CSV adjunto en IM-812) y la lista del ejemplo Order 12793276"
+    when:
+      - "QA abre Lightning, busca un Rental Resource del Order 12793276 (TYPECODE 11) por Implementation_External_ID__c"
+      - "QA captura screenshot del record mostrando el campo `Auctifera__Resource__c` poblado con el VOLUNTEERTYPE ID correspondiente"
+      - "QA hace spot-check de 10 IDs aleatorios de las 7,314 del CSV adjunto: abre cada record y captura screenshot mostrando `Auctifera__Resource__c` no-blank"
+      - "QA navega al record Auctifera__Resource__c lookup target y captura screenshot del Resource Service record que esta siendo referenciado"
+    then:
+      - "Rental Resource del Order 12793276 muestra `Auctifera__Resource__c` poblado en Lightning. [SCREENSHOT: im812-order-12793276-rental-resource.png]"
+      - "Los 10 spot-checks aleatorios muestran `Auctifera__Resource__c` poblado, sin blank. [SCREENSHOTS: im812-spotcheck-01..10.png]"
+      - "El lookup target abre un Resource Service record valido (tipo VOLUNTEERTYPE). [SCREENSHOT: im812-resource-service-target.png]"
+      - "Conteo en list view filtrada por `Auctifera__Is_Ticket__c = false AND TYPECODE = 11 AND Auctifera__Resource__c = null` para Illinois: 0 (o el numero declarado como aceptable post-fix)"
+      - "Si alguna fila del spot-check queda con Resource blank, capturar screenshot y abrir defect bloqueante"
+
+tags:
+  - im-812
+  - im-872
+  - im-70
+  - altru
+  - migration
+  - rental-resource
+  - illinois
+  - typecode-11
+  - salesforce
+  - volunteertype
+  - safesql
+
+estimatedDuration: 180
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-04T13:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-04T13:30:00Z"
+  version: 1
