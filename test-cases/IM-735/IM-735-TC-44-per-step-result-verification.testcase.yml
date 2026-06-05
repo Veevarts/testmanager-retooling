@@ -1,0 +1,108 @@
+schemaVersion: "1.0"
+
+id: "8e508f03-76c9-4f5b-8891-6bb2806844b9"
+key: "TC-44"
+title: "Per-step result verification — Apex result.success gate, self-verify (case 3.12) VerifyException, transport-error retry policy"
+description: |
+  Cobertura QA de Feature 6 del Deliverable 1 (Notion QA Deliverables —
+  T6 implementation case end-to-end / AWS dev real Step Functions),
+  bajo el epic IM-735 (DataMigration AppFrontend).
+
+  El exito de un step refleja el resultado real en la org, no solo que
+  el Lambda devolvio. Tres aristas:
+  1. Apex compile/runtime failure (result.success=false) -> step FAILED
+     via ReportToolFailure
+  2. Self-verifying flagship case 3.12 v3 -> VerifyException si Company
+     Information o Mock Contact ausente; COMPLETED solo si query-back
+     pasa
+  3. Transport error transitorio -> Retry policy de SingleShot-SM
+     (NO falla el step inmediatamente)
+
+  Tickets relacionados del epic IM-735:
+  - IM-748 W4-2 T6 Apex Anonymous Lambda + Tooling REST adapter
+  - IM-808 W3-4 Per-step result verification — gate on Apex success + self-verify 3.12
+
+  Fuente Gherkin: Notion · QA Deliverables · Deliverable 1 · Feature 6
+  https://app.notion.com/p/37302267648e81808620e072114f9a67
+
+  Reference cases:
+  - 3.12 (v3) Company Info & Mock Contact: T6 Apex con self-verify block
+    (query-back y throw VerifyException si falta primary Company Info o
+    Mock Contact)
+  - 5.04 (v2) Opportunity Stages: T6 Apex idempotente (re-run no
+    duplica), via self-callout Data API; no tiene verify block
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "AWS dev con real Step Functions (LOCAL_DEV_MODE unset)"
+  - "T6 Apex Anonymous Lambda deployed"
+  - "Catalogo con case 3.12 v3 seeded"
+  - "Org Salesforce \"active\" conectada"
+  - "Capacidad de inducir failures controlados (case modificado o org cleanup) para Scenario 1 y 2"
+
+format: gherkin
+scenarios:
+  - title: "Apex logic failure marks the step FAILED"
+    tags:
+      - negative
+      - ac-1
+      - apex-failure
+      - choice-evaluation
+    given:
+      - "a T6 step whose Apex fails to compile or throws at runtime (result.success = false)"
+    when:
+      - "the step runs through SingleShot-SM"
+    then:
+      - "the EvaluateResult choice routes to ReportToolFailure"
+      - "the StepRun is reported FAILED (not COMPLETED) with the compileProblem / exceptionMessage"
+      - "the PlanRun terminal state is FAILED"
+
+  - title: "Self-verifying flagship (case 3.12) confirms the end state"
+    tags:
+      - happy-path
+      - ac-2
+      - self-verify
+      - case-3-12
+    given:
+      - "case 3.12 v3"
+    when:
+      - "it runs but the primary Company Information (by name) or the Mock Contact is absent"
+    then:
+      - "the verify block throws VerifyException and the step is FAILED"
+      - "the step is COMPLETED only after the query-back assertions pass"
+
+  - title: "Transport error retries (distinct from a logic failure)"
+    tags:
+      - edge-case
+      - ac-3
+      - transport-retry
+    given:
+      - "a transient transport error while invoking the tool"
+    when:
+      - "SingleShot-SM dispatches the step"
+    then:
+      - "SingleShot-SM retries per its Retry policy rather than failing the step immediately"
+
+tags:
+  - im-735
+  - im-748
+  - im-808
+  - datamigration-appfrontend
+  - notion-qa-deliverables
+  - deliverable-1
+  - verification
+  - t6-apex
+  - case-3-12
+  - case-5-04
+
+estimatedDuration: 40
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-05T13:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-05T13:00:00Z"
+  version: 1

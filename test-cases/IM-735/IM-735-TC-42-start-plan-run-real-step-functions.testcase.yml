@@ -1,0 +1,95 @@
+schemaVersion: "1.0"
+
+id: "67f66c7f-568d-4fa5-bd41-fee03d672e60"
+key: "TC-42"
+title: "Start a Plan Run — async spawn via outbox, Run-SM execution, T6 step dispatch via SingleShot-SM"
+description: |
+  Cobertura QA de Feature 4 del Deliverable 1 (Notion QA Deliverables —
+  T6 implementation case end-to-end / AWS dev real Step Functions),
+  bajo el epic IM-735 (DataMigration AppFrontend).
+
+  El spawn es async via outbox; orchestration corre en Step Functions
+  reales (`Run-SM → SingleShot-SM → T6 Apex`) en AWS dev. Reference
+  case 3.12 (T6 happy path con self-verify).
+
+  Tickets relacionados del epic IM-735:
+  - IM-738 W1-3 Step Functions skeleton + SAM resources
+  - IM-742 W2-3 StartRun use case + first end-to-end run (case 3.02)
+  - IM-748 W4-2 T6 Apex Anonymous Lambda + Tooling REST adapter
+  - IM-805 W3-2 Deploy to AWS dev + run 3.12 via real Step Functions (smoke)
+
+  Fuente Gherkin: Notion · QA Deliverables · Deliverable 1 · Feature 4
+  https://app.notion.com/p/37302267648e81808620e072114f9a67
+
+  Restricciones criticas para reproducir:
+  - `LOCAL_DEV_MODE` MUST be unset on the deployed Lambda (sino el run
+    double-drives in-process Y via outbox)
+  - `RUN_SM_ARN` resuelve non-empty
+  - Solo T6 (Apex Anonymous) corre; T1-T5, T7, T8, T10, T13 no estan
+    construidos; MetadataDeploy-SM y HybridCase-SM son Noop stubs
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "AWS dev con real Step Functions (LOCAL_DEV_MODE unset)"
+  - "Implementations feature deployed; `RUN_SM_ARN` non-empty"
+  - "Org Salesforce \"active\" conectada (TC-39 PASS)"
+  - "Catalogo seeded con case 3.12 v3 (TC-40 PASS)"
+  - "T6 Apex Anonymous Lambda + Tooling REST adapter deployed (IM-748)"
+
+format: gherkin
+scenarios:
+  - title: "Spawn a run for a T6 single-case plan"
+    tags:
+      - happy-path
+      - ac-1
+      - step-functions
+      - outbox
+    given:
+      - "an \"active\" connected org"
+      - "a T6-only plan (e.g. case 3.12)"
+    when:
+      - "the IE starts the run"
+    then:
+      - "a PlanRun is created in status PENDING"
+      - "an SFN_START_EXECUTION outbox row is written and dispatched (deleted on success)"
+      - "a Run-SM execution named after the planRunId is started"
+      - "the PlanRun transitions PENDING → RUNNING → COMPLETED"
+
+  - title: "Each step runs via SingleShot-SM → T6"
+    tags:
+      - happy-path
+      - ac-2
+      - step-functions
+      - t6-apex
+    given:
+      - "a running PlanRun"
+    when:
+      - "Run-SM resolves the ready steps"
+    then:
+      - "each T6 step is dispatched through SingleShot-SM to the T6 Apex Lambda"
+      - "the StepRun transitions to COMPLETED on success"
+
+tags:
+  - im-735
+  - im-738
+  - im-742
+  - im-748
+  - im-805
+  - datamigration-appfrontend
+  - notion-qa-deliverables
+  - deliverable-1
+  - step-functions
+  - t6-apex
+  - aws-dev
+
+estimatedDuration: 45
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-05T13:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-05T13:00:00Z"
+  version: 1
