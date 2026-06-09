@@ -1,0 +1,167 @@
+schemaVersion: "1.0"
+
+id: "f92e695e-ac5f-459a-af63-dc3658f2fe0d"
+key: "TC-51"
+title: "Veevart Data Migration Skill — intake, mapping reuse, blocking gates, write confirmation, distribución VeevartAIHub"
+description: |
+  Cobertura QA de IM-788 "Create local migration template skill" via
+  PR Veevarts/VeevartAIHub#35 (branch
+  task/create-local-migration-template-skill-IM-788, head 39993e5).
+
+  La skill `veevart-data-migration-skill` (en VeevartAIHub) reemplaza
+  el flujo de plantillas de Obvious.ai para Tessitura y Raiser's Edge
+  con un orchestrator local ETL-oriented donde Veevart siempre es el
+  target. El plan QA valida que la skill cumple los 5 ACs del padre
+  y respeta los safety gates declarados.
+
+  Tickets relacionados:
+  - IM-788 padre (Historia, Is Ready For QA, Medium)
+  - IM-637 — Create Tessitura template in Obvious.ai (clones)
+  - IM-729 — Create Raiser's Edge template in Obvious.ai (clones)
+  - IM-889 — QA Sub-task
+
+  Fuente: PR body en https://github.com/Veevarts/VeevartAIHub/pull/35
+  + user/skills/veevart-data-migration-skill/SKILL.md (head 39993e5)
+
+  Cobertura por AC:
+  - AC1 → Scenario 1 (intake guiado + routing a sources/tessitura.md)
+  - AC2 → Scenario 2 (preservación de mappings Tessitura + Raiser's Edge)
+  - AC3 → Scenario 3 (intake incompleto bloquea staging/extraction)
+  - AC4 → Scenario 4 (write al target exige confirmación exacta con 7 campos)
+  - AC5 → Scenario 5 (sync-agent-assets.sh distribuye a roots Claude/Codex)
+
+  Riesgos abiertos del PR (a vigilar durante la ejecución):
+  - PR grande (44k líneas / 146 archivos). Mucho de eso es data
+    (SQL queries, CSVs); el QA se enfoca en la lógica de skill.
+  - Cero tests automatizados. Solo `python3` frontmatter sanity + sync.
+  - External ID provisioning y metadata deploys SON writes reales —
+    validar que el gate documentado en SKILL.md se aplica.
+  - Vite dashboard declarado read-only — verificar que no leak
+    credenciales/PII y no escribe a Salesforce.
+
+  Limitaciones (NO levantar como bug):
+  - La skill no ejecuta migraciones reales en este test plan. Cualquier
+    paso de "load" se valida solo hasta el punto de confirmación, sin
+    correr el script en la org real.
+  - Provider "new-provider" y "veevart-instance" no están en el scope
+    del AC; solo Tessitura y Raiser's Edge se validan funcionalmente.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Clone local de Veevarts/VeevartAIHub con branch `task/create-local-migration-template-skill-IM-788` checkout"
+  - "Claude Code / Codex CLI instalado y conectado al user skill root"
+  - "Acceso a una org Salesforce sandbox de prueba (NO producción) para validar Email Deliverability + connected user lock check"
+  - "Salesforce CLI (`sf` o `sfdx`) configurado con alias para la sandbox"
+  - "Sample de Tessitura ZIP export disponible (o mock) para Scenario 1 y 2"
+  - "Sample de Raiser's Edge backup/export disponible (o mock) para Scenario 2"
+  - "El sync script `scripts/sync-agent-assets.sh` se puede correr localmente"
+
+format: gherkin
+scenarios:
+  - title: "Intake guiado en Tessitura: la skill pide los 14 inputs y rutea a sources/tessitura.md"
+    tags:
+      - happy-path
+      - ac-1
+      - intake
+      - tessitura
+    given:
+      - "una sesión limpia de Claude/Codex con la skill `veevart-data-migration-skill` cargada"
+      - "un workspace local vacío y un Tessitura ZIP export disponible"
+    when:
+      - "el specialist invoca la skill mencionando que la fuente es Tessitura"
+    then:
+      - "la skill pregunta por los 14 inputs del Start-of-Migration Intake (provider type, target org, environment class, load volume, transactional date policy, scope, static/reference policy, PII policy, currency policy, Email Deliverability, connected user lock, trigger bypass, execution mode, client website)"
+      - "la skill rutea a `sources/tessitura.md` para playbook source-specific"
+      - "la skill NO procede a extraction ni staging sin las respuestas capturadas o marcadas \"unknown\" explícitamente"
+
+  - title: "Mapping reuse: las decisiones de IM-637 (Tessitura) e IM-729 (Raiser's Edge) están preservadas en mappings comiteados"
+    tags:
+      - happy-path
+      - ac-2
+      - mapping-reuse
+      - tessitura
+      - raisers-edge
+    given:
+      - "los archivos `mappings/tessitura.md`, `mappings/raisers-edge-backup.md`, `providers/tessitura/mappings/*` comiteados en el PR"
+      - "una referencia conocida de los template flows de IM-637 e IM-729 (Obvious.ai legacy)"
+    when:
+      - "QA hace sample-check de 5 mappings clave de Tessitura y 5 de Raiser's Edge contra el template legacy"
+    then:
+      - "los target field names y transform rules del legacy coinciden con los baseline mappings comiteados"
+      - "las decisiones documentadas (ej. row-grain, external IDs, parent-first order) se preservan"
+      - "`references/obvious-ai-lessons.md` documenta explícitamente las lecciones aprendidas que originaron el cambio a skill local"
+
+  - title: "Bloqueo de implementation-ready: intake incompleto detiene staging/extraction"
+    tags:
+      - negative
+      - ac-3
+      - blocking-gate
+      - intake
+    given:
+      - "una sesión de skill con intake parcial (faltan: target org alias, Email Deliverability check, y connected user lock check)"
+    when:
+      - "el specialist intenta avanzar a extract/transform/stage o pedir que la skill marque la migración como \"implementation-ready\""
+    then:
+      - "la skill HALTA explícitamente y enumera los inputs faltantes"
+      - "la skill NO genera staging files, NO ejecuta describe en el target, NO escribe scripts de load"
+      - "la skill ofrece marcar inputs como \"unknown\" como vía explícita para registrar el gap, en vez de avanzar"
+
+  - title: "Write confirmation gate: load al target exige los 7 campos antes de ejecutar el script"
+    tags:
+      - negative
+      - ac-4
+      - safety-gate
+      - shared-environment-write
+    given:
+      - "una sesión con mapping aprobado y staging files generados para `Auctifera__POS_Purchase__c` en una sandbox"
+    when:
+      - "el specialist pide a la skill ejecutar el load script contra la sandbox"
+    then:
+      - "la skill exige confirmación exacta que incluye: target org/resource, operation, object API name, row count, payload path, side effects, verification/rollback plan"
+      - "si falta CUALQUIERA de los 7 campos, la skill RECHAZA ejecutar y pide completarlo"
+      - "la skill chequea Email Deliverability y el flag `Auctifera__Bypass_POS_Transaction_Lock__c` del connected user ANTES de avanzar, y bloquea si están en estado inseguro sin override aprobado"
+      - "si la skill aplica trigger bypass (`Auctifera__Disable_Trigger__c = true` en el payload), lo loggea con setting/field, user, object/handler y start/end time"
+
+  - title: "Distribución por sync: la skill aparece en roots Claude/Codex tras correr sync-agent-assets.sh"
+    tags:
+      - happy-path
+      - ac-5
+      - distribution
+      - sync-script
+    given:
+      - "un host local sin la skill `veevart-data-migration-skill` instalada en los skill roots de Claude y Codex"
+      - "el clone de VeevartAIHub en branch `task/create-local-migration-template-skill-IM-788`"
+    when:
+      - "QA ejecuta `bash scripts/sync-agent-assets.sh` desde la raíz del repo"
+    then:
+      - "el script termina con exit code 0 sin errores"
+      - "la skill `veevart-data-migration-skill` queda disponible en el skill root de Claude (`~/.claude/skills/` o equivalente per el layout del repo)"
+      - "la skill queda disponible en el skill root de Codex (`~/.codex/skills/` o equivalente per el layout del repo)"
+      - "una nueva sesión de Claude (y de Codex) puede invocar la skill por nombre y ver la descripción del frontmatter"
+      - "`user/skills/agents.override.md` y `README.md` listan la skill en el catálogo distribuido"
+
+tags:
+  - im-788
+  - im-889
+  - im-637
+  - im-729
+  - veevartaihub
+  - veevart-data-migration-skill
+  - data-migration
+  - tessitura
+  - raisers-edge
+  - local-skill
+  - veemap
+  - pr-35
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-09T12:57:44Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-09T12:57:44Z"
+  version: 1
