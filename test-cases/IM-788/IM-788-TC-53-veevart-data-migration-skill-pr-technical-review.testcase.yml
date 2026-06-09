@@ -1,0 +1,155 @@
+schemaVersion: "1.0"
+
+id: "095b411f-9896-4767-bfe2-cc5c3785ab8b"
+key: "TC-53"
+title: "PR VeevartAIHub#35 technical review — frontmatter, cross-refs, sync script, write-confirmation contract, dashboard data contract"
+description: |
+  Cobertura QA TÉCNICA del PR Veevarts/VeevartAIHub#35 que entrega la
+  skill `veevart-data-migration-skill` (IM-788).
+
+  Estos chequeos son los que el QA reviewer (codex) ejecuta DIRECTAMENTE
+  contra el contenido del PR (sin invocar la skill desde Claude/Codex):
+  frontmatter, cross-referencias entre `SKILL.md` y los `references/`,
+  `sources/`, `products/`, sintaxis del sync script + paths de
+  distribución, y consistencia interna de los contratos declarados.
+
+  La cobertura FUNCIONAL (cómo el specialist USA la skill end-to-end +
+  la app Vite que se despliega) está en
+  [[IM-788-TC-51-veevart-data-migration-skill]].
+
+  Estos 7 chequeos fueron ejecutados en TR-059 con resultados registrados.
+
+  Tickets relacionados:
+  - IM-788 padre
+  - IM-889 — QA Sub-task consolidada
+  - IM-874 (cross-link metodológico)
+
+  Fuente:
+  - PR head 39993e5 de `task/create-local-migration-template-skill-IM-788`
+  - `user/skills/veevart-data-migration-skill/SKILL.md`
+  - `scripts/sync-agent-assets.sh`
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Clone local de Veevarts/VeevartAIHub con branch del PR checkout"
+  - "Bash + grep disponibles (ejecución del review es shell-only)"
+  - "`bash -n` para syntax check (sin ejecutar el script)"
+
+format: gherkin
+scenarios:
+  - title: "T1 — Frontmatter de SKILL.md es válido (name + description presentes y no vacíos)"
+    tags:
+      - happy-path
+      - technical
+      - frontmatter
+    given:
+      - "el archivo `user/skills/veevart-data-migration-skill/SKILL.md` en el head del PR"
+    when:
+      - "el reviewer extrae las primeras 5 líneas con `head -5`"
+    then:
+      - "las líneas 1, 3 (name), y 4-5 (description) cumplen el formato `---\\nname: ...\\ndescription: ...\\n---`"
+      - "`name` = `veevart-data-migration-skill` (no vacío)"
+      - "`description` describe el propósito ETL en >100 chars, mencionando Veevart, Altru, Tessitura, Raiser's Edge, new provider"
+
+  - title: "T2 — Todos los `references/*.md` mencionados en SKILL.md existen en el PR"
+    tags:
+      - happy-path
+      - technical
+      - cross-references
+    given:
+      - "SKILL.md con menciones a `references/<nombre>.md`"
+    when:
+      - "el reviewer extrae cada `references/X.md` y verifica que el archivo existe"
+    then:
+      - "el resultado del diff es vacío (todos existen): 0 missing"
+
+  - title: "T3 — Todos los `sources/*.md` mencionados en SKILL.md existen en el PR"
+    tags:
+      - happy-path
+      - technical
+      - cross-references
+    given:
+      - "SKILL.md menciona los playbooks de sources"
+    when:
+      - "el reviewer verifica que cada `sources/X.md` existe en el filesystem del PR"
+    then:
+      - "el resultado del diff es vacío: `sources/veevart-instance.md`, `sources/altru-backup.md`, `sources/tessitura.md`, `sources/raisers-edge-backup.md`, `sources/new-provider.md` están todos presentes"
+
+  - title: "T4 — Todos los `products/*.md` mencionados en SKILL.md existen en el PR"
+    tags:
+      - happy-path
+      - technical
+      - cross-references
+    given:
+      - "SKILL.md tiene una tabla de Product Sub-Skill Routing"
+    when:
+      - "el reviewer verifica cada `products/X.md`"
+    then:
+      - "los 6 playbooks de products existen: common-foundation, fundraising, membership, ticketing, shop, rentals"
+
+  - title: "T5 — `scripts/sync-agent-assets.sh` tiene sintaxis válida y distribuye la skill a los 4 agent roots esperados"
+    tags:
+      - happy-path
+      - technical
+      - sync-script
+      - distribution
+    given:
+      - "el archivo `scripts/sync-agent-assets.sh` en el PR"
+    when:
+      - "el reviewer corre `bash -n scripts/sync-agent-assets.sh`"
+      - "el reviewer grep-ea las variables de root para identificar los destinos"
+    then:
+      - "`bash -n` retorna exit 0 (syntax OK)"
+      - "el script define los 4 roots: `~/.codex/skills`, `~/.agents/skills` (OpenAI Codex native), `~/.claude/skills`, `~/.config/opencode/skills`"
+      - "cada root puede ser overrideado por env var (`CODEX_SKILLS_DIR`, `OPENAI_AGENTS_SKILLS_DIR`, `CLAUDE_SKILLS_DIR`, `OPENCODE_SKILLS_DIR`) para CI/test"
+
+  - title: "T6 — El contrato de write confirmation con 7 campos en SKILL.md es consistente con `references/etl-control-plane.md`"
+    tags:
+      - happy-path
+      - technical
+      - contract-consistency
+      - safety-gate
+    given:
+      - "SKILL.md sección \"Non-Negotiable Safety Rules\""
+      - "`references/etl-control-plane.md`"
+    when:
+      - "el reviewer extrae las menciones a confirmación exacta en ambos archivos"
+    then:
+      - "SKILL.md declara los 7 campos textualmente: target org/resource, operation, object API name, row count, payload path, side effects, verification/rollback plan"
+      - "`etl-control-plane.md` refuerza el concepto de \"exact confirmation\" para target writes/side effects (consistente con SKILL.md aunque no repita los 7 campos textualmente)"
+
+  - title: "T7 — El contrato de datos del dashboard (`vite-progress-dashboard.md`) es consistente con `etl-control-plane.md`"
+    tags:
+      - happy-path
+      - technical
+      - contract-consistency
+      - dashboard
+    given:
+      - "`references/vite-progress-dashboard.md` declara los inputs JSON/CSV"
+      - "`references/etl-control-plane.md` declara los Required Progress Files"
+    when:
+      - "el reviewer cross-checkea ambas listas"
+    then:
+      - "el dashboard lee al menos los siguientes outputs del control plane: `status/record-upload-status.json`, `dashboard/validation-checklist.json`, `mappings/project-field-map.json`, `mappings/mapping-diff.json`, `upload-runs/**/job.json`, `deferred-updates/deferred-update-ledger.json`"
+      - "no hay archivos referenciados por el dashboard que el control plane NO declare como generables (rompimiento del contrato)"
+
+tags:
+  - im-788
+  - im-889
+  - veevart-data-migration-skill
+  - pr-35
+  - technical
+  - review
+  - executed-by-codex
+
+estimatedDuration: 30
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-09T19:23:52Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-09T19:23:52Z"
+  version: 1
