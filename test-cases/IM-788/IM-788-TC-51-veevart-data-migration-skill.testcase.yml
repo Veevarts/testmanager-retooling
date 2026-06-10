@@ -2,172 +2,207 @@ schemaVersion: "1.0"
 
 id: "f92e695e-ac5f-459a-af63-dc3658f2fe0d"
 key: "TC-51"
-title: "Veevart Data Migration Skill — validación funcional de los 4 modos del router + safety gate"
+title: "Veevart Data Migration Skill — experiencia end-user del migration specialist (dashboard Vite local)"
 description: |
-  Cobertura QA FUNCIONAL de IM-788 "Create local migration template skill"
-  (PR Veevarts/VeevartAIHub#35, head 39993e5).
+  Cobertura QA FUNCIONAL de IM-788 desde la perspectiva del migration
+  specialist (end-user), no desde la perspectiva técnica (cubierta en
+  [[IM-788-TC-53-veevart-data-migration-skill-pr-technical-review]],
+  ejecutada en TR-061).
 
-  Validamos la skill `veevart-data-migration-skill` desde Claude Code
-  EN BASE A LO QUE LA SKILL REALMENTE HACE — no a lo que SKILL.md
-  documenta. La skill arranca con un router de 4 modos:
+  El valor real de la skill para el specialist es el **dashboard Vite
+  local** que se levanta en `http://127.0.0.1:5173/` (o el puerto que
+  asigne la skill por workspace). Las 16 vistas del dashboard están
+  declaradas en `references/vite-progress-dashboard.md` y son donde
+  el specialist:
+  - Configura y aprueba mappings sin tocar código
+  - Ve el progreso de la migración a nivel global y por objeto
+  - Identifica blockers que requieren su decisión
+  - Explora fallas con root cause + plan de retry
+  - Genera el acceptance report final para el cliente
 
-  1. Continue <cliente> — resume un workspace in-flight
-  2. Start a new migration — intake completo + scaffold workspace
-  3. Discovery / mapping only — no writes, inventario + mappings
-  4. Audit / report existing — solo resumen + retry CSVs
+  Estos 7 escenarios validan que el specialist puede HACER su trabajo
+  completo desde el dashboard, sin necesidad de leer SKILL.md ni
+  comandos en terminal después del intake inicial.
 
-  Cada escenario valida un modo, en aislamiento, con criterios PASS/FAIL
-  observables. El safety gate (write confirmation con 7 campos) se valida
-  como escenario propio.
+  La cobertura técnica (no-writes, intake forms, safety gate arquitectónico,
+  sync script, contratos internos) se ejecuta por codex y queda registrada
+  en TC-53 / TR-061.
 
   Tickets:
   - IM-788 padre
   - IM-889 — QA Sub-task consolidada
-  - IM-874 — companion (auditoría Maloof, [[IM-874-TC-52-maloof-etapestry-sample-deployment-audit]])
-  - Technical review del PR: [[IM-788-TC-53-veevart-data-migration-skill-pr-technical-review]] (ya ejecutado en TR-061)
+  - IM-874 — caso empírico Maloof (companion: TC-52)
+  - IM-637 / IM-729 — Tessitura / RE templates Obvious.ai
 
-  Limitaciones (NO levantar como bug):
-  - El modo "Continue <cliente>" sólo se puede validar si hay workspace
-    previo accesible (ej. artefactos de Maloof). Si no hay, el escenario
-    queda NOT-RUN, no FAIL.
-  - El modo "Start a new migration" requiere sandbox Salesforce
-    y un sample Tessitura o eTapestry para llegar al final.
-  - El safety gate se valida cuando la skill intenta cualquier acción
-    de escritura (filesystem o Salesforce), no requiere alcanzar un load.
+  Pre-condición de datos para Scenarios 2-7:
+  - Workspace poblado por la skill (Discovery / Mapping / Generate modes)
+  - O artefactos sintéticos en `<workspace>/upload-runs/` (ej. los
+    750WI*.csv de IM-812 Rentals que existen en el repo)
 
 type: functional
 priority: medium
 status: active
 
 preconditions:
-  - "Clone local de Veevarts/VeevartAIHub con branch `task/create-local-migration-template-skill-IM-788` checkout"
-  - "Sync ejecutado: `bash scripts/sync-agent-assets.sh` desde la raíz del repo (PASS heredado de TR-061)"
-  - "Claude Code instalado y operativo"
-  - "Skill visible en `~/.claude/skills/veevart-data-migration-skill/SKILL.md`"
+  - "Clone local de Veevarts/VeevartAIHub con branch del PR y skill sincronizada"
+  - "Claude Code con skill visible en `~/.claude/skills/veevart-data-migration-skill/SKILL.md`"
+  - "Node.js + npm disponibles para el dashboard Vite"
+  - "Browser con DevTools accesibles para verificar consola y network"
+  - "Workspace de migración creado (skill via intake o setup manual con sample)"
 
 format: gherkin
 scenarios:
-  - title: "Activación de la skill + router de 4 modos visible"
+  - title: "El specialist activa la skill y completa el intake guiado hasta tener un workspace listo"
     tags:
       - happy-path
-      - smoke
-      - router
+      - intake
       - activation
+      - end-user
     given:
-      - "Claude Code abierto en cualquier directorio local"
-      - "la skill `veevart-data-migration-skill` está distribuida en `~/.claude/skills/`"
+      - "Claude Code abierto en un directorio local"
+      - "la skill `veevart-data-migration-skill` distribuida en `~/.claude/skills/`"
     when:
-      - "el specialist invoca la skill (`/veevart-data-migration-skill` o un prompt con intent de migración)"
+      - "el specialist invoca la skill con `/veevart-data-migration-skill` o un prompt con intent de migración"
+      - "el specialist completa el intake form (Source / Mode / Target env / Volume / Submit — el orden y los steps pueden variar según contexto, la skill adapta)"
     then:
-      - "el runtime activa la skill (visible en la UI de Claude Code)"
-      - "la skill muestra el menú \"What do you want me to do with this migration skill right now?\""
-      - "el menú contiene exactamente estas 4 opciones: (1) Continue <cliente in-flight si aplica>, (2) Start a new migration, (3) Discovery / mapping only, (4) Audit / report existing"
-      - "cada opción incluye descripción de 1-2 líneas explicando qué hace"
-      - "el menú permite navegación con flechas + Enter, o cancelar con Esc"
+      - "la skill se activa visible en la UI de Claude Code"
+      - "la skill presenta opciones navegables con descripción de 1-3 líneas por opción"
+      - "la skill respeta el modo elegido (Discovery only NO genera staging/loads; Mapping only NO ejecuta loads)"
+      - "al terminar el intake la skill confirma qué va a hacer + crea/identifica un workspace local listo para que el specialist abra el dashboard"
 
-  - title: "Modo Discovery / mapping only — no writes y diagnóstico de artefactos existentes"
+  - title: "El specialist abre el dashboard Vite local y navega las 16 vistas sin errores"
     tags:
       - happy-path
-      - discovery
-      - safety-gate
-      - no-writes
-    given:
-      - "router visible (Scenario 1 PASS)"
-    when:
-      - "el specialist selecciona \"3. Discovery / mapping only\""
-      - "el specialist provee Source = Tessitura (o el que aplique) en el intake form"
-    then:
-      - "la skill abre un intake form de 4 pasos: Source → Scope → Access → Submit"
-      - "la skill NO ejecuta ninguna escritura (ni en filesystem ni en Salesforce)"
-      - "si encuentra artefactos locales relevantes, los lista y los clasifica por origen sin moverlos"
-      - "si el intake queda incompleto, la skill detiene el flujo y enumera los gaps; NO inventa datos"
-      - "al cerrar, la skill resume qué encontró + qué no hizo (sección \"what I did not do\")"
-
-  - title: "Modo Start a new migration — intake completo + workspace scaffold + dashboard Vite"
-    tags:
-      - happy-path
-      - start-new
-      - workspace-scaffold
       - dashboard
+      - navigation
+      - 16-views
+      - end-user
     given:
-      - "router visible (Scenario 1 PASS)"
-      - "directorio de workspace vacío (ej. `/tmp/migration-qa-YYYY-MM-DD/`)"
+      - "workspace de migración disponible con `dashboard/` scaffolded (Scenario 1 PASS)"
     when:
-      - "el specialist selecciona \"2. Start a new migration\""
-      - "el specialist completa el intake form (Source + Scope + Access + Submit)"
+      - "el specialist corre `npm install && npm run dev` dentro de `<workspace>/dashboard/`"
+      - "el specialist abre `http://127.0.0.1:5173/` (o el puerto que la skill asigne) en un browser"
+      - "el specialist abre DevTools → Console y revisa Network"
     then:
-      - "la skill crea el workspace con las subcarpetas: `raw/`, `staging/`, `mappings/`, `target-maps/`, `scripts/`, `upload-runs/`, `deferred-updates/`, `reports/`, `status/`, `dashboard/`"
-      - "la skill scaffold-ea el dashboard Vite React+TS en `dashboard/`"
-      - "el specialist puede correr `cd dashboard && npm install && npm run dev` y abrir el dashboard en `http://127.0.0.1:5173/` sin errores"
-      - "el dashboard muestra las 16 vistas declaradas en `references/vite-progress-dashboard.md` (aunque inicialmente vacías)"
+      - "la app carga sin errores rojos en consola del browser"
+      - "no hay requests fallidos (4xx/5xx) en Network durante la carga inicial"
+      - "las 16 vistas declaradas en `references/vite-progress-dashboard.md` aparecen como tabs/secciones navegables: Overall summary, Per-object progress, Operation manifest, Deferred updates, Upload runs, Failure explorer, Dependency graph, Global object map, Field-level mapping viewer, Full source data, Mandatory coverage, Fund domains, Sample staged, Website evidence, Validation checklist, New-provider control plane"
+      - "cada vista se carga sin error aunque esté vacía (empty state legible, no crash)"
 
-  - title: "Modo Audit / report existing — genera resumen sin nuevos loads"
+  - title: "El specialist entiende el estado global de la migración en menos de 30 segundos"
     tags:
       - happy-path
-      - audit
-      - reporting
-      - no-writes
+      - dashboard
+      - overall-summary
+      - per-object
+      - end-user
     given:
-      - "router visible (Scenario 1 PASS)"
-      - "un workspace con `upload-runs/` poblados (artefactos de un deployment previo)"
+      - "dashboard abierto en la vista Overall summary (Scenario 2 PASS)"
+      - "workspace con al menos staging o upload data poblada"
     when:
-      - "el specialist selecciona \"4. Audit / report existing\""
+      - "el specialist mira la vista Overall summary durante 30 segundos"
+      - "el specialist navega a Per-object progress"
     then:
-      - "la skill lee los artefactos existentes (status JSON, upload runs, validation checklist)"
-      - "la skill NO ejecuta ningún load nuevo (\"no new loads\" garantizado)"
-      - "la skill genera un resumen con: success/failed counts por objeto, root cause de los failed, CSVs de retry"
-      - "los outputs aparecen en `reports/` y son consultables por el specialist"
+      - "el Overall summary muestra al menos: total source rows, total staged, total uploaded, total failed, total pending — todos numéricos visibles"
+      - "Per-object progress muestra cada objeto target con su breakdown source/staged/uploaded/failed/pending"
+      - "los conteos en Overall summary son consistentes con la suma de Per-object progress (no hay drift)"
+      - "el specialist puede identificar cuáles objetos están \"green\" (uploaded == staged) y cuáles tienen failures, sin tener que abrir cada upload-run individualmente"
 
-  - title: "Modo Continue <cliente> — resume in-flight deployment"
+  - title: "El specialist identifica blockers y mandatory-field gaps que requieren su decisión"
     tags:
       - happy-path
-      - continue
-      - in-flight-resume
+      - dashboard
+      - validation-checklist
+      - mandatory-coverage
+      - blocking-gate
+      - end-user
     given:
-      - "router visible (Scenario 1 PASS)"
-      - "existe un workspace de cliente in-flight (ej. Maloof eTapestry) accesible"
+      - "dashboard con workspace donde hay al menos un blocker conocido (campo mandatory sin map, target sin Email Deliverability resuelto, fund classifier pendiente, etc.)"
     when:
-      - "el specialist selecciona la opción \"1. Continue <cliente>\""
+      - "el specialist navega a Validation Checklist y Mandatory Coverage"
     then:
-      - "la skill carga el workspace del cliente y reporta el estado actual"
-      - "la skill identifica los artefactos disponibles (success/failed records, status JSON)"
-      - "la skill ofrece acciones siguientes (retry, report, próxima fase) sin ejecutarlas hasta confirmar"
-      - "si el workspace path inferido no existe, la skill lo dice claramente en vez de inventarlo"
+      - "los blockers aparecen marcados como `BLOCKER` (rojo o equivalente visual) — NO como warning"
+      - "cada blocker incluye: descripción del gap, objeto afectado, campo o regla involucrada, y owner sugerido (specialist / data steward / cliente)"
+      - "la vista permite filtrar por severidad (Blocker / Warning / Info)"
+      - "el specialist puede entender qué bloquea avanzar a load sin tener que leer SKILL.md ni `references/etl-control-plane.md`"
 
-  - title: "Safety gate — write confirmation con 7 campos antes de cualquier escritura"
+  - title: "El specialist revisa los mappings field-by-field y aprueba con un click"
     tags:
-      - negative
-      - safety-gate
-      - write-confirmation
-      - shared-environment-write
+      - happy-path
+      - dashboard
+      - mapping-viewer
+      - approval
+      - end-user
     given:
-      - "la skill activa (cualquier modo)"
-      - "la skill llega a un punto donde necesita escribir (filesystem o Salesforce)"
+      - "dashboard con workspace que ya tiene mapping baseline cargado (Scenario 1 completó al menos Mapping only mode)"
     when:
-      - "la skill detecta una acción de escritura inminente (load, edit de archivo committeable, mover artefactos)"
+      - "el specialist navega a Field-level mapping viewer"
+      - "el specialist filtra por estado: `pending approval`"
+      - "el specialist selecciona un mapping y revisa los 3 layers (baseline provider mapping / project override / final approved)"
+      - "el specialist hace click en \"Approve\""
     then:
-      - "la skill exige confirmación exacta conteniendo los 7 campos: (1) target org/resource, (2) operation, (3) object API name (o file path), (4) row count (o file count), (5) payload path, (6) side effects, (7) verification/rollback plan"
-      - "si el specialist omite algún campo, la skill RECHAZA y pide completar"
-      - "para acciones menores (ej. editar .gitignore) la skill aplica un equivalente proporcional: muestra el diff propuesto + pide confirmación antes de ejecutar"
-      - "la skill nunca ejecuta una escritura sin esa confirmación, en ningún modo del router"
+      - "el viewer muestra por field: source name, transform rule, target field API name, target field type, relationship/external-ID resolution, operation classification, approval status"
+      - "los 3 layers (baseline / override / final) son distinguibles visualmente"
+      - "el botón Approve escribe la aprobación en `mappings/mapping-approvals.json` del workspace local"
+      - "el dashboard NO ofrece botones que muten directamente la org Salesforce — solo \"copyable command preview\" o \"export to apply script\""
+
+  - title: "El specialist explora una falla, entiende el root cause y planifica el retry"
+    tags:
+      - happy-path
+      - dashboard
+      - failure-explorer
+      - upload-runs
+      - end-user
+      - retry-path
+    given:
+      - "dashboard con al menos un upload-run con failed records (puede usarse los 750WI*.csv de IM-812 como sample sintético)"
+    when:
+      - "el specialist navega a Upload runs y selecciona un run con failures"
+      - "el specialist navega a Failure explorer filtrando por ese job ID"
+      - "el specialist revisa un failed record"
+    then:
+      - "Upload runs lista cada job con: job ID, objeto, success count, failed count, fecha, duración"
+      - "Failure explorer permite filtrar por job ID, objeto, mensaje de error, y deduplica errores similares"
+      - "cada failed record muestra el mensaje crudo de Salesforce + un root cause interpretado (ej. \"missing required parent Account/Contact\" o \"Per-Item fee model with empty Charge\")"
+      - "Failure explorer ofrece exportar el set de failures como CSV de retry (compatible con re-upload via `sf data import`)"
+      - "el dashboard NO ejecuta el retry directamente — solo prepara el CSV; el load es decisión explícita del specialist"
+
+  - title: "El specialist genera un acceptance report listo para entregar al cliente"
+    tags:
+      - happy-path
+      - dashboard
+      - acceptance-report
+      - validation-checklist
+      - end-user
+    given:
+      - "dashboard con un sample/wave de migración completado (Scenarios 2-6 con datos)"
+    when:
+      - "el specialist solicita la generación del acceptance report desde el dashboard (botón o comando preview)"
+    then:
+      - "se genera `reports/final-sample-acceptance-report.md` con totales por objeto, success/failed counts, blockers pendientes, deferred updates, y follow-ups"
+      - "el report es legible por un cliente no técnico (sin API names crudos como variables principales — usa labels de Veevart)"
+      - "Validation Checklist marca el item \"sample deployment acceptance\" como PASS si todos los conteos coinciden, o pending si hay deferred updates explícitos"
+      - "el specialist puede compartir el report .md/.pdf con el cliente sin tener que post-procesarlo"
 
 tags:
   - im-788
   - im-889
   - im-874
+  - im-637
+  - im-729
   - veevart-data-migration-skill
   - veevartaihub
   - pr-35
   - data-migration
-  - router
-  - safety-gate
+  - dashboard-vite
+  - end-user
   - functional
 
-estimatedDuration: 90
+estimatedDuration: 120
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-06-09T12:57:44Z"
   updatedBy: "codex"
-  updatedAt: "2026-06-09T21:15:00Z"
-  version: 3
+  updatedAt: "2026-06-10T05:30:00Z"
+  version: 5
