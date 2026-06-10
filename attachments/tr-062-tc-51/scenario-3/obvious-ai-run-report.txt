@@ -1,0 +1,86 @@
+=== Obvious.ai migration — Tessitura → veevartd ===
+Date: 2026-06-10
+Org: Tucson Botanical Gardens — tucsonbotanical--trainings.sandbox
+Prefijo de aislación: tess-obvious-
+Wall clock: ~300s (4m 57s) incluyendo retry de Contacts
+
+=== CONEXIÓN ===
+Auth method: Client Credentials Flow vía External Client App
+App name in SF: Obvious AI QA Integration
+Run-As User: admin.veevart@tucsonbotanical.org.trainings
+Instance URL: https://tucsonbotanical--trainings.sandbox.my.salesforce.com
+
+=== SAFETY GATE (pre-load discovery por Obvious.ai) ===
+✅ Org confirmado: Tucson Botanical Gardens · Sandbox = True
+✅ RecordType HH_Account 012al000005HgnxAAC — match exacto
+✅ RecordType Donation 012al000005Hi9xAAC — match exacto
+✅ RecordType Membership 012al000005Hi9yAAC — match exacto
+✅ 5 External ID fields validados (externalId=true, unique=true):
+   - Account.Auctifera__Implementation_External_ID__c
+   - Contact.Auctifera__Implementation_External_ID__c
+   - npsp__Address__c.vnfp__Implementation_External_ID__c
+   - Opportunity.vnfp__Implementation_External_ID__c
+   - npe01__OppPayment__c.vnfp__Implementation_External_ID__c
+✅ Opportunity npe01__Membership_Start_Date__c / End_Date__c existen
+❌ Opportunity vnfp__Membership_Start_Date__c / End_Date__c NO existen (Obvious.ai
+   lo detectó automáticamente y corrigió al campo npe01__ correcto)
+✅ npsp__Address__c.npsp__Household_Account__c / MailingStreet / City / State /
+   PostalCode / Country / Address_Type / Default_Address / Implementation_ExtID — todos
+✅ Pre-existing tess-obvious-% records: 0 — pizarrón limpio
+
+=== EJECUCIÓN ===
+Orden de carga (dependency-ordered): Account → Contact → Address → Opp(Donation) →
+Opp(Membership) → OppPayment
+
+Resultado por objeto:
+  Object                      | Loaded | Failed | Match staging
+  ----------------------------|--------|--------|---------------
+  Account                     |   10   |   0    | ✅ 10/10
+  Contact                     |   10   |   0    | ✅ 10/10 (retry incluido)
+  npsp__Address__c            |   17   |   0    | ✅ 17/17
+  Opportunity (Donation)      |   41   |   0    | ✅ 41/41
+  Opportunity (Membership)    |   36   |   0    | ✅ 36/36
+  npe01__OppPayment__c        |   10   |   0    | ✅ 10/10
+  ----------------------------|--------|--------|---------------
+  TOTAL                       |  124   |   0    | ✅ 124/124
+
+Side effects NPSP observados (idénticos a skill):
+- +62 npe01__OppPayment__c auto-creados por trigger NPSP de Opportunity Closed Won
+- npsp__Address__c auto-sincronizados desde Contact MailingAddress (NPSP trigger)
+
+=== ROLLBACK PLAN ===
+DELETE WHERE Auctifera__Implementation_External_ID__c LIKE 'tess-obvious-%'
+DELETE WHERE vnfp__Implementation_External_ID__c LIKE 'tess-obvious-%'
+(Filtros LIKE 'tess-obvious-%' aíslan completamente la carga de Obvious.ai del resto del org y de la carga del skill)
+
+=== VERIFICACIÓN SOQL POST-LOAD (replicada por skill para confirmar) ===
+Objeto                     tess-obvious-   tess-skill-   Delta
+Account                    10              10            0
+Contact                    10              10            0
+npsp__Address__c           17              17            0
+Opportunity (Donation)     41              41            0
+Opportunity (Membership)   36              36            0
+npe01__OppPayment__c       10              10            0
+TOTAL                      124             124           0
+
+=== DIFERENCIAS NOTABLES vs SKILL (auto-reportadas por Obvious.ai) ===
+1. Contact.HomePhone: Obvious.ai detectó que el campo no existe en este org
+   y omitió el mapping. (Skill staging CSV incluye columna HomePhone pero la
+   columna se ignora al cargar — Bulk API silent-ignores unknown fields.
+   Resultado equivalente: HomePhone no se persiste en ninguno de los 2 loads.)
+
+2. Autenticación: Client Credentials Flow vía External Client App (Obvious.ai)
+   vs sf CLI / OAuth user-context (skill).
+
+3. Payment auto-creation: +62 npe01__OppPayment__c (idéntico al skill — confirma
+   que ambas herramientas cumplen el contrato "NPSP triggers fire on load").
+
+4. Payment_Method='Conversion' → Other (Obvious.ai mapeo). Skill no documentó
+   transformación específica para este valor.
+
+5. Payment linkage strategy:
+   - Obvious.ai: por PAYMENT_ID → linkea a DON más temprano por CUST_ID
+   - Skill: por CUST_ID directo (decision #5 warn: "0/10 donation_id match → linked
+     a customer's earliest donation")
+   - Resultado funcional: ambos arrastran 10/10 payments. Convergen al mismo CUST_ID;
+     la diferencia es la heurística interna documentada como decision en cada tool.
