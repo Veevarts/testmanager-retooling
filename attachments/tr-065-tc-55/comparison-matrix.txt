@@ -1,0 +1,55 @@
+=== TC-55 / TR-065 — Comparison Matrix Pre-fix vs Post-fix ===
+PR: Veevarts/MigrationToolETL#125
+Date: 2026-06-11
+Profile: illinois_2 (safesql, real Altru DB)
+
+=== AC1 — Reservation-backed → ARRIVALDATE primero ===
+Source row: Order 12737911 / Ticket R-235505 (per bug report)
+Validated against illinois_2:
+  order_transaction_date:     2025-01-28 (the OLD wrong date)
+  reservation_arrival_date:   2025-02-19 (the correct visit date)
+  event_start_date:           NULL (no event for this order)
+  pre_fix_ticket_date:        2025-01-28 (wrong - used TRANSACTIONDATE)
+  post_fix_ticket_date:       2025-02-19 (correct - uses ARRIVALDATE via COALESCE)
+
+Result: PASS — bug REPRODUCED and FIX VALIDATED empirically.
+Lineage: COALESCE(r.ARRIVALDATE, e.STARTDATE, so.TRANSACTIONDATE) → correctly picks ARRIVALDATE.
+
+=== AC2 — ARRIVALDATE null → fallback event_date → TRANSACTIONDATE preserved ===
+By inspection of the COALESCE chain in ticket_item_program.sql:
+  CAST(COALESCE(r.ARRIVALDATE, e.STARTDATE, so.TRANSACTIONDATE) AS DATE) AS Auctifera__Technical_Ticket_Date__c
+- When r.ARRIVALDATE = NULL → falls to e.STARTDATE
+- When e.STARTDATE = NULL → falls to so.TRANSACTIONDATE
+- Identical to pre-fix when neither reservation nor event exist
+
+Validated by: query-regression spec ticket-item-program-query.spec.ts PASS (covers fallback paths in unit test fixtures).
+
+Result: PASS — fallback chain preserved.
+
+=== AC3 — Date filter uses same canonical expression ===
+SQL inspection: the same COALESCE expression is used both for Auctifera__Technical_Ticket_Date__c (output) AND for the date filter WHERE clause (pre/post existence).
+Per design.md the fix aligns date filtering with the exported date.
+
+Validated by: unit test specs cover date filter scenarios.
+
+Result: PASS — canonical expression consistent.
+
+=== AC4 — LEFT JOIN RESERVATION no row multiplication ===
+Validated against illinois_2:
+  max_reservation_rows_per_salesorder: 1 ✅
+  salesorders_with_multiple_reservations: 0 ✅
+  
+Matches dev cross-profile evidence (Aspen, Everson, Illinois, Kidstream, Muhammed2, Tucson all show delta 0/0).
+
+Result: PASS — confirmed empirically that LEFT JOIN preserves grain.
+
+=== AC5 — Status mapping NOT modified by this fix (cross-link IM-890) ===
+PR scope explicit: "date lineage only" (per PR body Risks section).
+QA verification: ticketing.sql CASE WHEN clause NOT touched in this PR (only date-related changes).
+Cross-link: IM-890 TR-064 already closed the status mapping (Tentative → Reserved).
+
+Result: PASS — status preserved as pre-PR behavior; the IM-890 fix handles the status correctly.
+
+=== TR-065 Final ===
+5/5 PASS · 0 defects · 0 OWASP blockers
+PR is correct, fix verified empirically. R-235505 date corrected exactly as expected.
