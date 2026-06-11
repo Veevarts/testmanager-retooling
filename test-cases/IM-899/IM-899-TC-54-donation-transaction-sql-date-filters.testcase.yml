@@ -1,0 +1,168 @@
+schemaVersion: "1.0"
+
+id: "39e8cf1e-f604-4022-ab4f-c67ca587805f"
+key: "TC-54"
+title: "donation_transaction.sql — filtros de fecha al grain de transacción + alineación con fund_assignment_donations.sql"
+description: |
+  Cobertura QA funcional de IM-899 "Support date filters in donation
+  opportunity extraction (donation_transaction.sql)".
+
+  Antes de IM-899, `donation_transaction.sql` ignoraba el filtro de fecha
+  del run; cualquier corrida scoped (ej. un único fiscal year) exportaba
+  toda la historia de donaciones. La historia adopta el patrón estándar
+  de las demás queries de extracción: bloque de parámetros
+  `@hasDateFilterFrom` / `@hasDateFilterTo` / `@dateFilterFrom` /
+  `@dateFilterTo`, aplicado al `CloseDate` agregado para que las
+  transacciones multi-línea se mantengan o se descarten enteras (nunca
+  truncadas en monto). Además, el wire pasa por
+  `DonationTransactionFilters` → `PipelineContext.fromDate/toDate` →
+  binding del extractor.
+
+  La ventana debe quedar alineada con `fund_assignment_donations.sql`
+  (que filtra en `ft.CALCULATEDDATE`) para que opportunities y fund
+  assignments referencien el mismo conjunto.
+
+  Tickets relacionados:
+  - IM-899 padre (Historia, In QA Review, Medium, reporter Camilo Salguero)
+  - IM-903 — QA Sub-task de IM-899
+
+  Cobertura por AC (todos en gherkin nativo del ticket):
+  - AC1 → Scenario 1 (run sin dateFilter = full export, sin regresión)
+  - AC2 → Scenario 2 (ventana custom: ambos bounds inclusive, filtro al grain de transacción)
+  - AC3 → Scenario 3 (multi-line transactions se mantienen enteras; Amount = full SUM)
+  - AC4 → Scenario 4 (alineación con fund_assignment_donations.sql: cada FDA exportado referencia una donation exportada)
+  - Edge → Scenario 5 (ventana sin matches → resultado vacío, sin errores)
+
+  Limitaciones (NO levantar como bug):
+  - El acceso a la SQL Server fuente del migration es por el extractor
+    del pipeline (no se ejecuta `sqlcmd` directo). La validación es por
+    casos integration sobre runs reales del pipeline o mock equivalente.
+  - La regression coverage técnica del PR (static query-shape spec +
+    pipeline unit spec) es cobertura del developer, NO de este TC.
+    Este TC valida el COMPORTAMIENTO end-to-end del extractor.
+
+  Out of scope para este TC:
+  - Performance del query bajo ventanas grandes.
+  - Validación de otras queries de extracción (la alineación con
+    `fund_assignment_donations.sql` se valida en Scenario 4, no se
+    re-prueba aquí la lógica interna de FDA).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Pipeline ejecutable en un entorno con SQL Server fuente accesible (o mock equivalente para integration tests)"
+  - "Dataset de prueba con: (a) donaciones single-line, (b) donaciones multi-line con CloseDate agregado conocido, (c) fund assignments asociados con CALCULATEDDATE conocido, en ventanas estratégicas (antes/dentro/después de un rango de prueba)"
+  - "Branch del PR de IM-899 desplegado en el entorno de prueba con `donation_transaction.sql` actualizado + `DonationTransactionFilters` + binding del extractor"
+  - "Acceso a logs del pipeline para validar que los parámetros se bindean a la query"
+
+format: gherkin
+scenarios:
+  - title: "Run sin dateFilter se mantiene como full export (sin regresión)"
+    tags:
+      - happy-path
+      - ac-1
+      - no-filter
+      - regression-baseline
+      - donation-transaction-sql
+    given:
+      - "un run de DonationTransaction migration sin `dateFilter` (ni `fromDate` ni `toDate`)"
+      - "el dataset fuente con N donaciones eligibles"
+    when:
+      - "el pipeline ejecuta `donation_transaction.sql` con `@hasDateFilterFrom=false` y `@hasDateFilterTo=false`"
+    then:
+      - "se exportan las N donaciones eligibles (count exacto)"
+      - "los amounts por transacción coinciden con SUM(NetAmount) del fuente sin truncamiento"
+      - "el resultado es idéntico al export pre-IM-899 (no hay regresión funcional)"
+
+  - title: "Ventana custom (fromDate + toDate) filtra al grain de transacción con ambos bounds inclusive"
+    tags:
+      - happy-path
+      - ac-2
+      - date-window
+      - inclusive-bounds
+      - donation-transaction-sql
+    given:
+      - "un run con `dateFilter` `fromDate=2024-02-10` y `toDate=2024-02-28`"
+      - "el dataset fuente contiene donaciones con CloseDate agregado en `2024-02-09` (fuera), `2024-02-10` (boundary inferior), `2024-02-15` (dentro), `2024-02-28` (boundary superior), `2024-03-01` (fuera)"
+    when:
+      - "el pipeline ejecuta `donation_transaction.sql` con `@hasDateFilterFrom=true`, `@hasDateFilterTo=true`, `@dateFilterFrom='2024-02-10'`, `@dateFilterTo='2024-02-28'`"
+    then:
+      - "se exportan ÚNICAMENTE las transacciones con CloseDate agregado en `[2024-02-10, 2024-02-28]` (3 de 5 en el dataset de ejemplo)"
+      - "las donaciones con CloseDate `2024-02-09` y `2024-03-01` NO aparecen en el export"
+      - "las donaciones de boundary (`2024-02-10` y `2024-02-28`) SÍ aparecen (bounds inclusive)"
+      - "el filtro se aplica al CloseDate agregado de la transacción, NO a líneas individuales"
+
+  - title: "Transacciones multi-line se mantienen o se descartan enteras; Amount = SUM completa"
+    tags:
+      - happy-path
+      - ac-3
+      - multi-line
+      - grain-integrity
+      - donation-transaction-sql
+    given:
+      - "una transacción multi-line con 3 líneas y NetAmounts `100, 200, 300` (SUM = 600) y CloseDate agregado `2024-02-15`"
+      - "una transacción multi-line con 2 líneas y NetAmounts `50, 75` (SUM = 125) y CloseDate agregado `2024-01-30`"
+      - "filtro aplicado `fromDate=2024-02-10`, `toDate=2024-02-28`"
+    when:
+      - "el pipeline ejecuta `donation_transaction.sql` con el filtro"
+    then:
+      - "la transacción del `2024-02-15` se exporta como UN solo registro con `Amount = 600` (SUM completa de las 3 líneas)"
+      - "la transacción del `2024-01-30` NO se exporta (fuera de ventana) — se descarta entera, no se exporta sólo 1 de sus 2 líneas"
+      - "NUNCA aparece una transacción multi-line con `Amount` parcial (ej. 300 en vez de 600 por filtro a nivel línea)"
+      - "el grain de exporta es transacción, no línea"
+
+  - title: "Alineación con fund_assignment_donations.sql: cada FDA exportado referencia una donation exportada (mismo dateFilter)"
+    tags:
+      - happy-path
+      - ac-4
+      - cross-query-alignment
+      - fund-assignment
+      - donation-transaction-sql
+    given:
+      - "un run con el mismo `dateFilter` aplicado a `donation_transaction.sql` y `fund_assignment_donations.sql`"
+      - "el dataset fuente con donaciones D1 (CloseDate `2024-02-15`, dentro) y D2 (CloseDate `2024-01-30`, fuera), y fund assignments FDA1 (CALCULATEDDATE `2024-02-15`, referencia D1) y FDA2 (CALCULATEDDATE `2024-01-30`, referencia D2)"
+    when:
+      - "el pipeline ejecuta ambas queries con `fromDate=2024-02-10`, `toDate=2024-02-28`"
+    then:
+      - "el export de donations contiene D1; NO contiene D2"
+      - "el export de fund assignments contiene FDA1; NO contiene FDA2"
+      - "cada FDA exportado tiene un donation export referenciable (foreign key satisfecho en el conjunto exportado)"
+      - "no hay FDAs huérfanos (referenciando una donation que NO fue exportada)"
+      - "no hay donations huérfanas en el sentido inverso si el FDA fue filtrado fuera (alineación bidireccional)"
+
+  - title: "Ventana sin matches devuelve resultado vacío sin errores"
+    tags:
+      - edge-case
+      - empty-result
+      - donation-transaction-sql
+    given:
+      - "un run con `dateFilter` `fromDate=2030-01-01` y `toDate=2030-12-31` (ventana sin datos en el fuente)"
+    when:
+      - "el pipeline ejecuta `donation_transaction.sql` con esa ventana"
+    then:
+      - "el pipeline completa sin error"
+      - "el export resultante tiene 0 transacciones"
+      - "el extractor reporta 0 rows extraídos, no falla por dataset vacío"
+      - "el run no genera artefactos parcial-corruptos (CSV con headers + 0 rows es aceptable)"
+
+tags:
+  - im-899
+  - im-903
+  - im-788
+  - donation-transaction-sql
+  - sql-server
+  - date-filter
+  - pipeline
+  - extractor
+  - migration
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-10T23:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-10T23:50:00Z"
+  version: 1

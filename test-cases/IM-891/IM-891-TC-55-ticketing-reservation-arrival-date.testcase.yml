@@ -1,0 +1,181 @@
+schemaVersion: "1.0"
+
+id: "b667a89d-90d4-4058-a8ee-0d4c27b30f16"
+key: "TC-55"
+title: "Ticketing reservation date lineage — RESERVATION.ARRIVALDATE precede a SALESORDER.TRANSACTIONDATE en ticketing.sql + ticket_item_*.sql"
+description: |
+  Cobertura QA del bug IM-891: Illinois ticket R-235505 se migró con
+  `Date = 2025-01-28` (fecha del Order #12737911) en vez de la fecha
+  correcta `2025-02-19` del Ticket (Altru). Causa raíz: el lineage de
+  fecha de ticketing usaba `SALESORDER.TRANSACTIONDATE` cuando no había
+  event date disponible, ignorando la `RESERVATION.ARRIVALDATE` cuando
+  la sales order es reservation-backed.
+
+  Fix esperado: las queries `ticketing.sql` + `ticketing_only_program.sql`
+  + `ticketing_only_event.sql` + `ticket_item_program.sql` +
+  `ticket_item_event.sql` resuelven el ticket date como:
+  `COALESCE(RESERVATION.ARRIVALDATE, event_date, SALESORDER.TRANSACTIONDATE)`,
+  usando `LEFT JOIN RESERVATION r ON r.ID = SALESORDER.ID`.
+
+  Scope EXCLUSIVO: lineage de fecha. El status mismatch reportado en
+  el mismo bug (Altru `Tentative` vs SF `Sold/Pending`) NO se cubre
+  aquí — eso es scope de [[IM-890-TC-56...]].
+
+  Tickets relacionados:
+  - IM-891 padre (Error, In QA Review, Medium, reporter Sara Montenegro)
+  - IM-902 — QA Sub-task de IM-891
+  - IM-70 — Epic "Altru Queries"
+  - IM-890 — Status mapping del mismo bug original (cubre el "Tentative" issue)
+  - PR draft: Veevart/MigrationToolETL#125
+
+  Evidencia previa del developer (safesql cross-profile, completado pre-QA):
+  - Aspen: 7,514 rows / $104,472 (delta 0/0)
+  - Everson: 96,538 rows / $1,382,835.98 (delta 0/0)
+  - Illinois: 349,358 rows / $6,178,300.70 (delta 0/0)
+  - Kidstream: 4 rows / $0 (delta 0/0)
+  - Muhammed2: 214,306 rows / $8,888,002.83 (delta 0/0)
+  - Tucson: 421,480 rows / $8,396,640.55 (delta 0/0)
+  - En todos: SalesOrdersWithMultipleReservationRows = 0, MaxReservationRowsPerSalesOrder = 1
+  - High Desert + Mattress Factory: NO completados (timeouts) → riesgo abierto
+
+  Cobertura por AC (5 ACs en gherkin nativo en el ticket):
+  - AC1 → Scenario 1 (reservation-backed → ARRIVALDATE primero)
+  - AC2 → Scenario 2 (ARRIVALDATE null → fallback event date → TRANSACTIONDATE)
+  - AC3 → Scenario 3 (filtros de fecha usan la misma expresión canónica)
+  - AC4 → Scenario 4 (LEFT JOIN no duplica row count ni Total_Amount__c)
+  - AC5 → Scenario 5 (status comportamiento sin cambios; cross-link a IM-890)
+
+  Limitaciones (NO levantar como bug):
+  - High Desert + Mattress Factory no validados aún por timeouts del safesql.
+    Se marcan como riesgo abierto, NO como blocker QA.
+  - No se ejecuta migración end-to-end contra Salesforce live; se validan
+    los exports SQL (CSV/JSON) y el row-grain check.
+
+  Out of scope:
+  - Status mapping (cubierto por TC-56 / IM-890).
+  - Validación de queries no-ticketing.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Branch IM-891 checked-out en MigrationToolETL con queries actualizadas"
+  - "Acceso a safesql profiles Illinois + Aspen + Everson + Kidstream + Muhammed2 + Tucson (los 6 verificados por dev)"
+  - "Acceso al row reportado en el bug: Illinois Order 12737911 / Ticket R-235505"
+  - "Capacidad de correr aggregate diagnostics sobre RESERVATION joined a SALESORDER"
+
+format: gherkin
+scenarios:
+  - title: "Reservation-backed sales order — ticketing usa RESERVATION.ARRIVALDATE en vez de SALESORDER.TRANSACTIONDATE"
+    tags:
+      - happy-path
+      - ac-1
+      - reservation-backed
+      - date-lineage
+      - illinois
+      - bug-reproduction
+    given:
+      - "el row reportado: Illinois Altru Order 12737911 / Ticket R-235505 con RESERVATION.ARRIVALDATE = 2025-02-19 y SALESORDER.TRANSACTIONDATE = 2025-01-28"
+      - "branch IM-891 con `ticketing.sql` + `ticket_item_*.sql` actualizados"
+    when:
+      - "el operador ejecuta el ticketing export contra el safesql profile Illinois para Order 12737911"
+    then:
+      - "el row exportado para R-235505 tiene `Auctifera__Date__c = 2025-02-19` (RESERVATION.ARRIVALDATE)"
+      - "el row exportado NO tiene `2025-01-28` (que es la SALESORDER.TRANSACTIONDATE)"
+      - "el lineage aplicado es `COALESCE(r.ARRIVALDATE, event_date, so.TRANSACTIONDATE)` con `LEFT JOIN RESERVATION r ON r.ID = so.ID`"
+      - "la corrección elimina la discrepancia reportada en Attendance validation entre enero 28 y febrero 19"
+
+  - title: "Sin RESERVATION.ARRIVALDATE — fallback existente a event date y luego SALESORDER.TRANSACTIONDATE se preserva"
+    tags:
+      - happy-path
+      - ac-2
+      - fallback
+      - regression-baseline
+      - date-lineage
+    given:
+      - "rows del export con RESERVATION.ARRIVALDATE = NULL en un profile reachable (ej. Tucson o Aspen)"
+      - "branch IM-891 desplegado"
+    when:
+      - "el operador ejecuta el ticketing export para rows sin reservation arrival date"
+    then:
+      - "el row exportado usa event date cuando está disponible"
+      - "el row exportado cae al SALESORDER.TRANSACTIONDATE cuando no hay event date"
+      - "el comportamiento es idéntico al pre-IM-891 para todos los rows non-reservation/non-event (sin regresión)"
+
+  - title: "Filtro de fecha usa la misma expresión canónica que el ticket date exportado — sin desalineación"
+    tags:
+      - happy-path
+      - ac-3
+      - date-window
+      - canonical-expression
+      - date-lineage
+    given:
+      - "un run con `dateFilter` aplicado al export de ticketing"
+      - "el dataset incluye un row reservation-backed con ARRIVALDATE = 2025-02-19 y TRANSACTIONDATE = 2025-01-28"
+      - "ventana del filtro: `fromDate=2025-02-01`, `toDate=2025-02-28`"
+    when:
+      - "el operador ejecuta el ticketing export con el filtro"
+    then:
+      - "el row se exporta (ARRIVALDATE 2025-02-19 está dentro de [2025-02-01, 2025-02-28])"
+      - "el filtro se aplica sobre la misma expresión canónica que se exporta (no sobre TRANSACTIONDATE de un campo, ARRIVALDATE en otro)"
+      - "si invierto el filtro a `fromDate=2025-01-01`, `toDate=2025-01-31` (ventana de la fecha incorrecta) el row NO se exporta — confirma que el filtro usa ARRIVALDATE y no TRANSACTIONDATE"
+
+  - title: "LEFT JOIN RESERVATION no duplica row count ni inflates Auctifera__Total_Amount__c"
+    tags:
+      - happy-path
+      - ac-4
+      - row-grain
+      - join-integrity
+      - illinois
+    given:
+      - "evidencia del developer (safesql cross-profile): SalesOrdersWithMultipleReservationRows = 0 y MaxReservationRowsPerSalesOrder = 1 en los 6 profiles validados"
+      - "branch IM-891 con el LEFT JOIN aplicado"
+    when:
+      - "el operador corre row count + SUM(Auctifera__Total_Amount__c) en `ticket_item_program` para Illinois (profile con mayor volumen post-fix)"
+    then:
+      - "el row count Illinois post-fix = 349,358 (idéntico al pre-fix, delta 0)"
+      - "SUM(Auctifera__Total_Amount__c) Illinois post-fix = $6,178,300.70 (idéntico al pre-fix, delta 0)"
+      - "ningún profile validado muestra incremento por el join (deltas 0/0 en Aspen, Everson, Illinois, Kidstream, Muhammed2, Tucson)"
+      - "el grain del export sigue siendo `ticket_item_program` row por row (no se duplica por RESERVATION rows)"
+
+  - title: "Status mapping NO se modifica por este fix — el status mismatch reportado queda como scope de IM-890"
+    tags:
+      - happy-path
+      - ac-5
+      - scope-boundary
+      - status-unchanged
+      - cross-link-im-890
+    given:
+      - "el bug original reportó dos issues: (a) fecha incorrecta + (b) status `Tentative` en Altru vs `Sold/Pending` en SF"
+      - "IM-891 (este TC) cubre SOLO la fecha; IM-890 cubre el status mapping"
+    when:
+      - "el operador inspecciona el row R-235505 post-fix"
+    then:
+      - "la fecha está correcta (2025-02-19, validado en Scenario 1)"
+      - "el status del row SIGUE siendo el comportamiento pre-IM-891 (Sold/Pending) — IM-891 no toca status"
+      - "el status correcto (Tentative → Reserved) será cubierto por la implementación de IM-890 / TC-56"
+      - "queda documentado en evidencia que IM-891 cierra parcialmente el bug original; IM-890 cierra el resto"
+
+tags:
+  - im-891
+  - im-902
+  - im-70
+  - im-890
+  - altru
+  - ticketing
+  - reservation
+  - date-lineage
+  - migration-tool-etl
+  - sql-server
+  - illinois
+  - bug-fix
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-11T00:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-11T00:30:00Z"
+  version: 1

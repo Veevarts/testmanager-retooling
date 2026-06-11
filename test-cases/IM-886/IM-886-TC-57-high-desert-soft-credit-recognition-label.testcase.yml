@@ -1,0 +1,172 @@
+schemaVersion: "1.0"
+
+id: "22734e3c-4810-433e-9393-2c253100587e"
+key: "TC-57"
+title: "soft_credit_recognition.sql — soporta tanto 'FF Soft Credit' (Tucson) como 'Soft Credit' (High Desert) sin perder grain ni duplicar rows"
+description: |
+  Cobertura QA del bug IM-886: el query `soft_credit_recognition.sql`
+  filtraba EXCLUSIVAMENTE `REVENUERECOGNITIONTYPECODE.DESCRIPTION =
+  'FF Soft Credit'`. High Desert NO usa esa label — usa
+  `'Soft Credit'` para el mismo concepto. Resultado: High Desert
+  retornaba 0 rows del query, perdiendo 4,094 valid soft credit
+  recognition rows (3,273 Partial + 821 Account).
+
+  Fix esperado: la predicate del query incluye AMBOS labels
+  (`'FF Soft Credit'` Y `'Soft Credit'`) — o usa un mecanismo
+  profile-aware si la lista amplia no es segura cross-profile.
+
+  Tickets relacionados:
+  - IM-886 padre (Error, In QA Review, Medium, reporter Jose Angarita)
+  - IM-900 — QA Sub-task de IM-886
+  - IM-70 — Epic "Altru Queries"
+  - IM-707 — Soft credit query original (Tucson / FF Soft Credit)
+  - IM-783 — Follow-up NPSP soft credit rollups (post-load)
+
+  Evidencia previa del developer (safesql High Desert 2026-06-05):
+  - REVENUERECOGNITION rows totales: 632,258
+  - Rows con `'FF Soft Credit'`: 0
+  - Rows que retornaba el query pre-fix: 0
+  - Rows con `'Soft Credit'`: 8,859
+  - Rows que pasan los gates (application + recognized constituent): 4,094
+  - Split esperado post-fix: 3,273 → npsp__Partial_Soft_Credit__c (individual recognized contacts) + 821 → npsp__Account_Soft_Credit__c (organizations/groups)
+
+  Cobertura por AC (5 ACs en gherkin nativo en el ticket):
+  - AC1 → Scenario 1 (High Desert con 'Soft Credit' → query retorna 4,094 rows válidas)
+  - AC2 → Scenario 2 (Tucson con 'FF Soft Credit' sigue funcionando + grain preservado)
+  - AC3 → Scenario 3 (split correcto Partial / Account según tipo de recognized constituent)
+  - AC4 → Scenario 4 (regression coverage cubre ambos labels sin duplicar rows)
+  - AC5 → Scenario 5 (docs/altru-model-context.md documenta la diferencia tenant)
+
+  Limitaciones (NO levantar como bug):
+  - El conteo exacto de 4,094 depende del estado del safesql profile
+    en la fecha de validación QA; tolerancia ±0.5% aceptable si la
+    fecha de captura difiere de 2026-06-05.
+
+  Out of scope:
+  - Cambios en NPSP soft credit rollups (cubierto por IM-783).
+  - Implementación de profile-aware configuration (si el dev eligió
+    el approach del predicate amplio, este TC valida ese approach).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Branch IM-886 checked-out en MigrationToolETL con `soft_credit_recognition.sql` actualizado"
+  - "Acceso a safesql profiles `high-desert` + `tucson` (los 2 con tenants opuestos)"
+  - "Capacidad de correr el query con `--no-date-filter` para reproducir la evidencia base"
+  - "Acceso a `docs/altru-model-context.md` para validar la documentación AC5"
+
+format: gherkin
+scenarios:
+  - title: "High Desert con label 'Soft Credit' — query retorna las 4,094 rows válidas (vs 0 pre-fix)"
+    tags:
+      - happy-path
+      - ac-1
+      - high-desert
+      - soft-credit-label
+      - bug-reproduction
+    given:
+      - "safesql profile `high-desert` con 8,859 REVENUERECOGNITION rows con DESCRIPTION='Soft Credit' y 0 con 'FF Soft Credit'"
+      - "branch IM-886 con `soft_credit_recognition.sql` actualizado para incluir ambos labels"
+    when:
+      - "el operador ejecuta el query sin date filter contra `high-desert`"
+    then:
+      - "el query retorna las rows que pasan los gates existentes (standard line item + application en Donation/Recurring gift/Planned gift/Matching gift + recognized constituent exists)"
+      - "el conteo retornado = 4,094 rows válidas (±0.5% tolerancia si la captura difiere de 2026-06-05)"
+      - "el query NO retorna 0 rows (comportamiento pre-fix)"
+      - "el grain del resultado es 1 row por REVENUERECOGNITION.ID (no se aplica aggregation por el cambio de label)"
+
+  - title: "Tucson con label 'FF Soft Credit' — sigue funcionando + grain preservado (sin regresión)"
+    tags:
+      - happy-path
+      - ac-2
+      - tucson
+      - regression-baseline
+      - row-grain
+    given:
+      - "safesql profile `tucson` con rows usando DESCRIPTION='FF Soft Credit' (el label original que IM-707 ya cubría)"
+      - "branch IM-886 desplegado"
+    when:
+      - "el operador ejecuta el query contra `tucson` sin date filter"
+    then:
+      - "el conteo de rows retornado por Tucson es IDÉNTICO al pre-IM-886 (delta 0; mismo número de rows que retornaba el query con sólo 'FF Soft Credit')"
+      - "el grain sigue siendo 1 row por REVENUERECOGNITION.ID"
+      - "no aparecen rows duplicadas por el cambio de predicate (UNION/OR no duplica)"
+      - "el comportamiento Tucson es backward-compatible (IM-707 no se regresa)"
+
+  - title: "Split por target object — Partial Soft Credit (individuals) vs Account Soft Credit (organizations/groups)"
+    tags:
+      - happy-path
+      - ac-3
+      - split-target
+      - npsp-mapping
+      - high-desert
+    given:
+      - "el output del query para `high-desert` (Scenario 1 PASS) con las 4,094 rows válidas"
+      - "evidencia previa: split esperado 3,273 Partial + 821 Account"
+    when:
+      - "el operador agrupa el output por target object basándose en el tipo de recognized constituent"
+    then:
+      - "3,273 rows van a `npsp__Partial_Soft_Credit__c` (recognized constituent = individual contact)"
+      - "821 rows van a `npsp__Account_Soft_Credit__c` (recognized constituent = organization/group)"
+      - "la suma 3,273 + 821 = 4,094 reconcilia con el conteo total del Scenario 1"
+      - "la lógica de split por target es la misma que funciona para Tucson (no se introduce ramificación tenant-specific en esta capa)"
+
+  - title: "Query regression cubre ambos labels sin duplicar rows — npm test verifica"
+    tags:
+      - happy-path
+      - ac-4
+      - regression-coverage
+      - automation
+      - quality-gate
+    given:
+      - "branch IM-886 con regression spec actualizada"
+    when:
+      - "el operador corre `npm test -- --runInBand query-regression`"
+    then:
+      - "las suites pasan sin fallos (verde)"
+      - "existe al menos un test que cubre el label `'FF Soft Credit'` activo"
+      - "existe al menos un test que cubre el label `'Soft Credit'` activo"
+      - "no hay duplicación de rows cuando ambos labels existen simultáneamente en un mismo dataset de prueba (caso sintético)"
+
+  - title: "Documentación tenant-specific — docs/altru-model-context.md registra la diferencia Tucson vs High Desert"
+    tags:
+      - happy-path
+      - ac-5
+      - documentation
+      - tenant-mapping
+    given:
+      - "branch IM-886 con `docs/altru-model-context.md` actualizado"
+    when:
+      - "el operador inspecciona `docs/altru-model-context.md`"
+    then:
+      - "el doc menciona explícitamente que `Tucson` usa `'FF Soft Credit'` como soft credit recognition source label"
+      - "el doc menciona explícitamente que `High Desert` usa `'Soft Credit'` (sin prefijo FF)"
+      - "el doc deja claro que ambos labels son aceptados por `soft_credit_recognition.sql` post-IM-886"
+      - "si en el futuro aparece un tenant con un tercer label distinto, el doc orienta a sumarlo al predicate o introducir profile-aware config"
+
+tags:
+  - im-886
+  - im-900
+  - im-70
+  - im-707
+  - im-783
+  - altru
+  - soft-credit
+  - recognition
+  - high-desert
+  - tucson
+  - migration-tool-etl
+  - sql-server
+  - bug-fix
+  - tenant-mapping
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-11T00:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-11T00:30:00Z"
+  version: 1

@@ -1,0 +1,186 @@
+schemaVersion: "1.0"
+
+id: "a64c8e36-b8ad-4f53-9fef-1dbecf6cf4c1"
+key: "TC-56"
+title: "Status mapping ticketing — Tentative (Altru) → Reserved (SF) en ticketing.sql + ticket_item_*.sql, preservando Canceled/Refunded child outcomes"
+description: |
+  Cobertura QA del bug IM-890: Altru ticketing program reservations con
+  parent `SALESORDER.STATUS = 'Tentative'` / `STATUSCODE = 2` se exportan
+  como `Pending` o `Tentative` raw, y los reports de Salesforce NO los
+  cuentan contra capacity. En el row reportado Illinois (Altru Order
+  12770281), 47 ticket-item quantities se pierden en el conteo: Altru
+  reporta 103 sold, SF muestra 56 → 47 tentative invisibles.
+
+  Fix esperado: 5 queries (`ticketing.sql`, `ticketing_only_program.sql`,
+  `ticketing_only_event.sql`, `ticket_item_program.sql`,
+  `ticket_item_event.sql`) mapean `Tentative` parent → `Reserved` en
+  `Auctifera__Status__c`. En `ticket_item_program.sql`, se preserva
+  terminal child-ticket outcome (`Canceled`, `Refunded`) ANTES de
+  aplicar el parent tentative mapping (no se sobrescribe estado terminal).
+
+  Scope: ticketing + ticket-item SQL queries. POS purchase status mapping
+  + SF report changes son out of scope.
+
+  Tickets relacionados:
+  - IM-890 padre (Error, In QA Review, Medium, reporter Sara Montenegro)
+  - IM-901 — QA Sub-task de IM-890
+  - IM-70 — Epic "Altru Queries"
+  - IM-891 — Fecha del mismo bug original (cubre el "Date" issue)
+
+  Evidencia previa del developer:
+  - Illinois Altru Order sequence 12770281: STATUS='Tentative' / STATUSCODE=2
+  - 2 SALESORDERITEMTICKET rows con 47 ticket quantity total, sin child TICKET rows
+  - Misma program/date source: 103 total quantity, 56 non-tentative, 47 tentative
+  - npm run lint:check ✅
+  - npm test -- --runInBand query-regression: 22 suites passed, 9 docker-gated skipped, 185 tests passed ✅
+  - npm run build ✅
+  - Cross-profile scan: tentative rows program-only, no event-registration tentative rows en reachable profiles
+
+  Cobertura por AC (5 ACs en gherkin nativo en el ticket):
+  - AC1 → Scenario 1 (program ticketing parent Tentative → Reserved)
+  - AC2 → Scenario 2 (ticket_item sin child TICKET + parent tentative → Reserved + grain preservado)
+  - AC3 → Scenario 3 (child Canceled/Refunded preservado, NO sobrescrito por Reserved)
+  - AC4 → Scenario 4 (event registration tentative → Reserved; non-tentative event → Sold)
+  - AC5 → Scenario 5 (Illinois 47 quantity validation reconcilia 103 = 56 + 47)
+
+  Limitaciones (NO levantar como bug):
+  - Event registration tentative rows no encontrados en reachable profiles;
+    el Scenario 4 valida la LÓGICA, no encuentra rows reales positivos.
+  - SF report changes out of scope; este TC valida el export SQL, no el report.
+
+  Out of scope:
+  - Fecha del row (cubierto por TC-55 / IM-891).
+  - POS purchase status mapping.
+  - Cambios en SF reports/dashboards.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Branch IM-890 checked-out en MigrationToolETL con las 5 queries actualizadas"
+  - "Acceso a safesql profile Illinois para reproducir el row Altru sequence 12770281"
+  - "Capacidad de aplicar la query a un dataset con: (a) tentative parent + no child TICKET, (b) tentative parent + child Canceled/Refunded, (c) non-tentative parent"
+  - "Acceso al row reportado: Altru sequence 12770281 con 47 tentative quantity + el program/date reconciliation source con 103 total"
+
+format: gherkin
+scenarios:
+  - title: "Program ticketing — parent SALESORDER Tentative (STATUSCODE=2) → Auctifera__Status__c = 'Reserved'"
+    tags:
+      - happy-path
+      - ac-1
+      - tentative-to-reserved
+      - program-ticketing
+      - illinois
+      - bug-reproduction
+    given:
+      - "Illinois Altru sales order sequence 12770281 con SALESORDER.STATUS='Tentative' y STATUSCODE=2"
+      - "branch IM-890 con `ticketing.sql` + `ticketing_only_program.sql` actualizados"
+    when:
+      - "el operador ejecuta el ticketing program export contra Illinois para sequence 12770281"
+    then:
+      - "el row exportado para el ticketing program tiene `Auctifera__Status__c = 'Reserved'`"
+      - "el row NO tiene `Tentative` raw ni `Pending` (comportamiento pre-fix)"
+      - "el mapping aplica al parent SALESORDER (no a un campo del item directamente)"
+      - "el cambio es consistente entre `ticketing.sql` y `ticketing_only_program.sql` (mismo source → mismo output status)"
+
+  - title: "ticket_item_program sin child TICKET + parent tentative → Reserved + row grain preservado (1 row por SALESORDERITEMTICKET)"
+    tags:
+      - happy-path
+      - ac-2
+      - tentative-no-child
+      - row-grain
+      - illinois
+    given:
+      - "Illinois sequence 12770281: 2 SALESORDERITEMTICKET rows totaling 47 ticket quantity + 0 child TICKET rows"
+      - "parent SALESORDER tentative (STATUSCODE=2)"
+      - "branch IM-890 con `ticket_item_program.sql` actualizado"
+    when:
+      - "el operador ejecuta el ticket_item_program export para sequence 12770281"
+    then:
+      - "se exportan EXACTAMENTE 2 rows (uno por SALESORDERITEMTICKET, grain preservado)"
+      - "ambos rows tienen `Auctifera__Status__c = 'Reserved'`"
+      - "los 2 rows NO se exportan como `Pending` (comportamiento pre-fix)"
+      - "el ticket quantity total exportado = 47 (sin pérdida ni multiplicación)"
+
+  - title: "ticket_item_program con child Canceled/Refunded — el terminal outcome se preserva, NO se sobrescribe por Reserved"
+    tags:
+      - happy-path
+      - ac-3
+      - terminal-outcome
+      - precedence
+      - edge-case
+    given:
+      - "un ticket_item con child TICKET rows todos canceled (terminal outcome `Canceled`) y parent SALESORDER tentative"
+      - "otro ticket_item con child TICKET rows todos refunded (terminal outcome `Refunded`) y parent SALESORDER tentative"
+      - "branch IM-890 con `ticket_item_program.sql` actualizado"
+    when:
+      - "el operador ejecuta el ticket_item_program export para ambos rows"
+    then:
+      - "el row con children canceled tiene `Auctifera__Status__c = 'Canceled'` (NO Reserved)"
+      - "el row con children refunded tiene `Auctifera__Status__c = 'Refunded'` (NO Reserved)"
+      - "el orden de precedencia es: terminal child outcome (Canceled, Refunded) > parent tentative mapping"
+      - "el fix NO destruye datos terminales históricos al introducir el Reserved mapping"
+
+  - title: "Event registration ticket_item con parent tentative → Reserved; non-tentative event sigue siendo Sold"
+    tags:
+      - happy-path
+      - ac-4
+      - event-registration
+      - tentative-mapping
+      - logic-validation
+    given:
+      - "un event registration ticket_item con parent SALESORDER tentative (sintético si no hay row real en reachable profiles)"
+      - "un event registration ticket_item con parent SALESORDER Sold/Confirmed (non-tentative)"
+      - "branch IM-890 con `ticketing_only_event.sql` + `ticket_item_event.sql` actualizados"
+    when:
+      - "el operador ejecuta el event ticket_item export para ambos rows"
+    then:
+      - "el row con parent tentative tiene `Auctifera__Status__c = 'Reserved'`"
+      - "el row con parent Sold/Confirmed tiene `Auctifera__Status__c = 'Sold'` (sin regresión)"
+      - "la lógica está implementada incluso si no hay rows reales positivos en reachable profiles (cobertura por unit test del developer + query-regression)"
+
+  - title: "Reconciliación Illinois — 103 total = 56 non-tentative + 47 tentative; con el fix capacity report cuenta los 103"
+    tags:
+      - happy-path
+      - ac-5
+      - reconciliation
+      - capacity-report
+      - illinois
+      - bug-resolution-validation
+    given:
+      - "el program/date source en Illinois con 103 total source quantity"
+      - "split previo al fix: 56 non-tentative (visibles en SF), 47 tentative (invisibles)"
+      - "branch IM-890 desplegado"
+    when:
+      - "el operador re-corre el ticket_item_program export y agrega por program/date source"
+    then:
+      - "47 tentative quantity rows ahora se exportan con `Auctifera__Status__c = 'Reserved'`"
+      - "los 56 non-tentative rows mantienen sus statuses pre-fix (`Sold`, `Confirmed`, `Pending`, `Canceled`, `Refunded` según corresponda)"
+      - "un capacity report que incluya los statuses `Reserved` + non-tentative ahora cuenta los 103 (full reconciliation con Altru)"
+      - "se elimina la necesidad de validación manual AI-asistida para estos casos"
+
+tags:
+  - im-890
+  - im-901
+  - im-70
+  - im-891
+  - altru
+  - ticketing
+  - status-mapping
+  - tentative
+  - reserved
+  - migration-tool-etl
+  - sql-server
+  - illinois
+  - bug-fix
+  - capacity
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-11T00:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-11T00:30:00Z"
+  version: 1
