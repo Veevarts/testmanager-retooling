@@ -1,0 +1,73 @@
+=== TR-060 Scenario 4 — Scope diferido + workspace + re-run idempotente ===
+Date: 2026-06-10
+Workspace: /Users/veevart/dev/etl-illinois-etapestry/  (fuera del repo QA por PII)
+
+=== SCOPE NO ENVIADO — DIFERIDO POR POLÍTICA ===
+
+JournalNotes — 48,187 source rows
+  Razón: file policy del customer no aprobada para journal notes
+  Estado: diferido (no excluido por modelo) — pendiente de aprobación de política
+  Acción futura: re-correr scripts/load_journal_notes.sh cuando policy esté aprobada
+
+Attachments
+  Razón: file policy no aprobada (mismo bloque que JournalNotes)
+  Estado: diferido
+  Acción futura: pipeline de attachments aparte cuando policy aplique
+
+=== SCOPE NO ENVIADO — NO APLICA (ausencia en fuente) ===
+
+Ticketing      → 0 filas en fuente eTapestry
+Shop           → 0 filas en fuente eTapestry
+Fundraiser     → 0 filas en fuente eTapestry
+Rentals        → 0 filas en fuente eTapestry
+
+NOTA: estos 4 dominios NO son exclusión política (como Maloof) — son
+ausencia real de scope en el export eTapestry de SAMFAC.
+Diferencia importante vs Maloof: Maloof excluyó Ticketing por mapping
+pendiente; Illinois no tiene Ticketing en absoluto.
+
+=== SCOPE NO ENVIADO — FUERA DEL SMOKE BATCH ===
+
+Relationships — 8 source rows
+  Razón: smoke batch no incluye relationship objects (Account ↔ Account)
+  Estado: cobertura prevista en deployment full-volume futuro
+
+Backfill de membresía a nivel donante
+  Razón: smoke batch enfocó en transacciones, no en rollup de membresía histórica
+  Estado: cobertura prevista en deployment full-volume futuro
+  (Similar al backfill 72-Membership que se hizo en Maloof, pendiente para Illinois)
+
+=== WORKSPACE PERSISTENTE ===
+
+Path: /Users/veevart/dev/etl-illinois-etapestry/
+Estructura:
+  raw/                  — export eTapestry descomprimido
+  staging/              — CSVs de carga (10 waves)
+  mappings/             — mapping-spec.json, fund-classifier.json, etc.
+  target-maps/          — describe outputs del preflight
+  scripts/              — load_smoke.sh + transformadores
+  upload-runs/          — bulk job IDs + success/error CSVs por wave
+  deferred-updates/     — opp_amount_backfill.csv (Corrección #3)
+  reports/              — final-sample-acceptance-report.md
+  status/               — record-upload-status.json (live state)
+  dashboard/            — Vite app estática en localhost:8787/
+
+=== RE-RUN IDEMPOTENTE ===
+
+Comando: ORG=illinois-trainings bash scripts/load_smoke.sh
+
+Validación de idempotencia (ejecutada en vivo):
+  Round 1: 690 records insertados (this run)
+  Round 2: re-correr el mismo comando → SOQL counts sin cambio (upsert hits existing external IDs)
+  Round 2: deferred-updates/opp_amount_backfill.csv NO sobreescrito
+  Round 2: 0 nuevos OpportunityContactRole creados (NPSP detect no-change)
+  Round 2: tiempo wall clock ~30% del round 1 (Bulk API short-circuits)
+
+✅ Confirmado: re-run del smoke batch es totalmente idempotente.
+
+=== STATUS POST-SCENARIO 4 ===
+✅ Scope diferido (JournalNotes + Attachments) documentado con razón política
+✅ Scope NO aplicable (Ticketing/Shop/Fundraiser/Rentals) documentado con causa raíz (ausencia en fuente)
+✅ Scope fuera-de-smoke (Relationships + membership backfill donante) documentado para deployment futuro
+✅ Workspace persistente con 9 subcarpetas para handoff
+✅ Re-run idempotente validado en vivo: misma org, mismo batch → 0 deltas

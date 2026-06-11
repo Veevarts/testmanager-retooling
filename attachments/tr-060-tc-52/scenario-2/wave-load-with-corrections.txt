@@ -1,0 +1,54 @@
+=== TR-060 Scenario 2 — Wave Load (parent-first, bulk upsert) + 3 correcciones en vivo ===
+Date: 2026-06-10
+Target: illinois-trainings · orgId 00DWI00000CIwZi2AL
+Approach: 10 waves parent-first · bulk upsert por external ID
+
+=== WAVE-BY-WAVE LOAD RESULT ===
+
+Wave  Objeto                                Records  External ID         Status
+1     Campaign                                   31  CMP-<CampaignRef>      ✅ 31/31
+1     Auctifera__Specific_Fund__c                20  FND-<FundRef>          ✅ 20/20 (post-fix)
+1     Auctifera__Membership_Programs__c          11  DVL-<DefinedValueRef>  ✅ 11/11
+2     Account                                    30  ENT-<EntityRef>        ✅ 30/30 (post-fix)
+3     Contact                                    18  ERL-<EntityRoleRef>    ✅ 18/18
+4     Auctifera__POS_Purchase__c                116  POS-<TransactionRef>   ✅ 116/116
+5     Opportunity                               116  TXN-<TransactionRef>   ✅ 116/116
+6     npe01__OppPayment__c                      116  TXN-<TransactionRef>   ✅ 116/116
+7     Auctifera__Charge__c                      116  TXN-<TransactionRef>   ✅ 116/116
+8     Auctifera__Fund_Donation_Assignment__c    116  TXN-<TransactionRef>   ✅ 116/116
+                                              -----
+                                          TOTAL 690 records · 0 fallos terminales
+
+Opportunity breakdown:
+  - 74 Membership
+  - 42 Donation
+
+=== 3 CORRECCIONES EN VIVO APLICADAS ===
+
+CORRECCIÓN #1 — Specific Fund rechazaba por validation rule
+  Síntoma:    Wave 1 Specific Fund upsert → validation rule rechaza payload sin Auctifera__Open__c
+  Diagnóstico: validation rule del org exige Auctifera__Open__c=true en creación
+  Fix aplicado: agregar Auctifera__Open__c=true al payload de Specific Fund
+  Resultado:   re-upsert → 20/20 Specific Fund cargados
+  Persistencia: fix integrado en mapping-spec.json para re-runs futuros
+
+CORRECCIÓN #2 — 2 emails inválidos en Account
+  Síntoma:    Wave 2 Account upsert → 2 rows rechazadas por formato de email
+  Diagnóstico: emails con whitespace + caracteres especiales no-RFC5322
+  Fix aplicado: sanitizador trim() + regex de validación RFC5322 sobre PersonEmail/Email
+  Resultado:   30/30 Accounts cargados (2 emails saneados, 28 sin tocar)
+  Persistencia: sanitizador agregado a scripts/transform/account_email_sanitizer.py
+
+CORRECCIÓN #3 — 5 Membership opps con Amount=0 por automatización NPSP
+  Síntoma:    Wave 5 Opportunity upsert → 5 Membership opps quedan con Amount=0 (sobreescritura)
+  Diagnóstico: automatización de membresía en el org sobrescribe Amount al insertar
+  Fix aplicado: backfill diferido — Amount original guardado en deferred-updates/opp_amount_backfill.csv
+                re-update post-load aplicado sobre los 5 IDs afectados
+  Resultado:   5/5 Membership opps con Amount correcto post-backfill
+  Persistencia: opp_amount_backfill.csv mantenido en deferred-updates/ para auditoría
+
+=== STATUS POST-SCENARIO 2 ===
+✅ 10 waves ejecutados parent-first sin abortar el flow
+✅ 690/690 records cargados · 0 fallos terminales
+✅ 3 correcciones aplicadas en vivo + documentadas
+✅ Bulk upsert por external ID confirmado idempotente (mismo wave re-corrido NO crea duplicados)

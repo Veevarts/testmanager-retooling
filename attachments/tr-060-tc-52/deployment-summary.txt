@@ -1,0 +1,86 @@
+=== TR-060 / TC-52 — Illinois Holocaust Museum eTapestry Sample Deployment ===
+Date: 2026-06-10
+Skill validated: veevart-data-migration-skill (IM-788)
+Customer: Illinois Holocaust Museum and Education Center (SAMFAC)
+Tickets: IM-874 (parent) · IM-788 (skill) · IM-889 (QA sub-task)
+
+=== ORG DESTINO ===
+Alias:     illinois-trainings
+Org name:  Illinois Holocaust Museum and Education Center (sandbox de trainings)
+Instance:  https://ilholocaustmuseum--trainings.sandbox.my.salesforce.com
+Org ID:    00DWI00000CIwZi2AL
+User:      adminveevart@ilhmec.org.trainings
+Write target: Veevart únicamente (eTapestry read-only)
+
+=== FUENTE ===
+Path:      ~/Downloads/BLACKBAUD-3073930D28 → SAMFAC_20260527-090150_csv.zip
+Cliente:   SAMFAC
+Generado:  2026-05-27
+Archivos:  48 CSVs
+
+Inventario:
+  EntityRoles      4,203
+  Transacciones    6,416  (99.9% Gift)
+  Fondos              20
+  Campañas            31
+  Defined values   2,942
+  Notas           48,187
+  Ticketing/Shop/Fundraiser/Rentals = 0 (no aplica en fuente)
+
+Perfil: fundraising-first
+
+=== SMOKE BATCH DETERMINISTA ===
+~30 entidades (mix Individual/Family/Business)
++ sus transacciones (Donation + Membership)
++ tope 8 txns/entidad → 116 transacciones
++ reference data completa
+
+=== RECORDS CARGADOS (10 waves parent-first, bulk upsert por external ID) ===
+Wave  Objeto                                  Records  External ID
+1     Campaign                                     31  CMP-<CampaignRef>
+1     Auctifera__Specific_Fund__c                  20  FND-<FundRef>
+1     Auctifera__Membership_Programs__c            11  DVL-<DefinedValueRef>
+2     Account                                      30  ENT-<EntityRef>
+3     Contact                                      18  ERL-<EntityRoleRef>
+4     Auctifera__POS_Purchase__c                  116  POS-<TransactionRef>
+5     Opportunity                                 116  TXN-<TransactionRef>
+6     npe01__OppPayment__c                        116  TXN-<TransactionRef>
+7     Auctifera__Charge__c                        116  TXN-<TransactionRef>
+8     Auctifera__Fund_Donation_Assignment__c      116  TXN-<TransactionRef>
+                                              -----
+                                          TOTAL  690 records · 0 fallos
+
+Opportunity breakdown: 74 Membership + 42 Donation
+NPSP side effect automático: 78 OpportunityContactRole primarios
+Reconciliación de montos: Opportunity = OppPayment = FDA = $44,489.96
+
+=== 3 CORRECCIONES EN VIVO ===
+1. Specific Fund validation rule → Auctifera__Open__c=true → 20/20 cargan
+2. 2 emails Account inválidos → trim/regex sanitizer → 30/30 cargan
+3. 5 Membership opps con Amount=0 (auto-NPSP) → backfill diferido persistido
+
+=== NO ENVIADO ===
+Diferido (file policy no aprobada):
+  - JournalNotes (48,187 rows)
+  - Attachments
+
+No aplica (0 rows en fuente):
+  - Ticketing, Shop, Fundraiser, Rentals
+
+Fuera del smoke batch:
+  - Relationships (8 rows)
+  - Backfill de membresía a nivel donante
+
+=== WORKSPACE ===
+Path: /Users/veevart/dev/etl-illinois-etapestry/  (fuera del repo QA por PII)
+Re-run idempotente: ORG=illinois-trainings bash scripts/load_smoke.sh
+Dashboard estático: http://localhost:8787/
+
+=== VEREDICTO ===
+✅ DEPLOYMENT EMPÍRICO EXITOSO en illinois-trainings
+✅ 690/690 records cargados · 0 fallos terminales · 3 correcciones en vivo aplicadas
+✅ Reconciliación SOQL 100% · paridad de montos exacta
+✅ NPSP side effects esperados confirmados (78 OpportunityContactRole)
+✅ Workspace persistente + re-run idempotente verificados
+✅ Skill veevart-data-migration-skill validada empíricamente sobre provider eTapestry
+   distinto a TC-51 (Tessitura). Control plane es provider-agnostic.
