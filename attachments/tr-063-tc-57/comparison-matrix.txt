@@ -1,0 +1,88 @@
+=== TC-57 Comparison Matrix — Baseline vs Post-fix ===
+PR: Veevarts/MigrationToolETL#126
+Date: 2026-06-11
+Evidence sources:
+  - QA-independent: 5 npm test categories run from local clone (lint, query-regression, soft-credit-recognition, build, audit)
+  - Dev evidence: safesql snapshots from 2026-06-05 (PR body) for high-desert + tucson row counts
+  - SQL diff inspection from /tmp/qa-tc57-evidence/full-diff.txt
+  - QA could NOT run safesql Tucson (bastion tunnel blocked); could NOT run safesql high-desert (profile absent)
+
+=== Scenario 1 — AC1: High Desert 'Soft Credit' returns ~4,094 rows ===
+Profile          | Baseline | Post-fix | Delta | AC ref | Verdict | Evidence
+high-desert      | 0        | 4,094    | +4,094 | AC1   | PASS    | Dev safesql snapshot 2026-06-05 (PR body). Logic verified via unit tests + integration spec docker run (mapper/entity/pipeline use both labels). Independent run blocked by missing high-desert safesql profile.
+
+Note: 4,094 split into 3,273 PSC (Partial Soft Credit, individuals) + 821 ASC (Account Soft Credit, organizations).
+
+=== Scenario 2 — AC2: Tucson 'FF Soft Credit' regression (RE-BASELINED per user Option A) ===
+Profile          | Baseline | Post-fix | Delta | AC ref | Verdict | Evidence
+tucson           | 1,784    | 1,965    | +181  | AC2   | PASS-rebaselined | Dev safesql snapshot 2026-06-05 (PR body) shows tucson 2,138 export rows → 1,965 targetable post-fix (split 1,793 PSC + 172 ASC; 173 excluded by unresolvable constituents).
+
+IMPORTANT: TC-57 Scenario 2 originally said "Tucson delta = 0". User chose Option A
+(re-baseline to 1,965) because the PR INTENTIONALLY adds Pledge application, which
+brings additional valid soft-credit rows (+181) that did not previously qualify.
+Documented in PR Risks & Mitigations section.
+
+Source breakdown of +181 (per docs/altru-model-context.md and design.md):
+  - Pledge application addition: net +181 in Tucson (the only label-change rows in Tucson are previously-zero 'Soft Credit' rows; Tucson already had 'FF Soft Credit' rows)
+  - Label widening to 'Soft Credit': contributes additional rows for tenants like Tucson that have both labels populated
+
+The exact split between "Pledge contribution" and "Soft Credit label contribution" cannot be measured without independent safesql access. Dev's measurement attributes the increase primarily to Pledge.
+
+=== Scenario 3 — AC3: split by target object (PSC individuals vs ASC orgs/groups) ===
+Profile          | Baseline | Post-fix | Delta | AC ref | Verdict | Evidence
+tucson PSC       | N/A (combined) | 1,793   | +1,793 | AC3 | PASS | Dev evidence + SQL diff confirms 2 separate query files now; each emits only its target object's columns.
+tucson ASC       | N/A (combined) | 172     | +172   | AC3 | PASS | Same as above; ASC query has explicit `(recognized_c.ISORGANIZATION = 1 OR recognized_c.ISGROUP = 1)` filter.
+high-desert PSC  | N/A      | 3,273    | +3,273 | AC3 | PASS | Dev safesql snapshot.
+high-desert ASC  | N/A      | 821      | +821   | AC3 | PASS | Dev safesql snapshot.
+
+PRE-FIX behavior: single combined query (`soft_credit_recognition.sql`) emitted both contact and account columns mixed in one result set. Pipeline mapper was responsible for the split into PSC and ASC outputs.
+
+POST-FIX behavior: split done in SQL itself. Mapper still produces 2 descriptors but no longer needs to split combined source. Operators running the SQL manually now get clean target-loadable CSVs.
+
+=== Scenario 4 — AC4: regression coverage for both labels without duplicates ===
+Profile          | Test suite | Result | AC ref | Verdict | Evidence
+all              | query-regression | 20 PASS, 9 skipped (docker-gated), 189 tests | AC4 | PASS | QA-independent run on PR branch (Node v25.4.0, npm 11.7.0)
+all              | soft-credit-recognition specific | 4 PASS, 1 skipped, 19 tests | AC4 | PASS | QA-independent run on PR branch
+all              | docker integration (soft-credit-recognition-query.integration.spec.ts) | Skipped in QA run (RUN_DOCKER_SQL_QUERY_TESTS not set) | AC4 | PASS-dev | Dev evidence reports PASS for docker integration with both labels + Pledge fixtures.
+
+Row grain preserved: design.md confirms "one logical row per REVENUERECOGNITION.ID — do not collapse". No deduplication or aggregation introduced. Predicate change is `OR`/`IN`, not `GROUP BY`.
+
+=== Scenario 5 — AC5: docs/altru-model-context.md documents tenant difference ===
+File             | Content | AC ref | Verdict | Evidence
+docs/altru-model-context.md | Explicit mention of: Tucson has both labels; High Desert/Everson/Illinois/Muhammed2 use 'Soft Credit' only; both labels in scope; Pledge added as application; Implementation_External_ID__c required pre-load | AC5 | PASS | Lines verified via grep "soft.credit\|recognition" on the docs file.
+
+Additionally: openspec/changes/im-886-high-desert-soft-credit-recognition-filter/design.md captures the design rationale (row grain, inclusion gate, split-by-target-object, manual-runnable goal, testing strategy).
+
+=== FINAL VERDICT ===
+Scenarios PASS: 5 of 5 (with one re-baselined per Option A)
+Scenarios FAIL: 0
+Scenarios not-run: 0
+
+Coverage gaps not impacting verdict:
+  - QA could not independently run safesql high-desert (profile absent); relies on dev's 2026-06-05 snapshot for Scenario 1.
+  - QA could not independently run safesql Tucson (tunnel blocked); relies on dev's snapshot + unit test coverage for Scenario 2.
+  - Docker integration suite for soft-credit-recognition-query.integration.spec.ts was skipped in QA local run (requires testcontainers docker setup); dev evidence reports PASS.
+
+Mattress Factory + Wisconsin not validated by dev (timeouts/unreachable); documented in design.md as follow-up. Not blocking for IM-886 acceptance per user scope.
+
+=== TECHNICAL REGRESSION RESULTS ===
+| # | Item | Verdict | Evidence |
+| T1 | LEFT→INNER JOIN | PASS (logically equivalent) | SQL diff: LEFT JOIN had `recognized_c.ID IS NOT NULL` filter that made it semantically equivalent to INNER JOIN; new INNER JOIN is more performant. |
+| T2 | Stale references to old filename | PASS | All `soft_credit_recognition.sql` references in diff are in docs/specs explaining the transition; no orphan code refs. |
+| T3 | Pipeline/extractor/mapper/entity reshape | PASS | QA-independent npm test confirms all soft-credit-recognition specs pass. |
+| T4 | Tucson row count re-baseline | PASS-rebaselined | User accepted Option A (1,784 → 1,965). |
+| T5 | Implementation_External_ID__c must exist on PSC/ASC sobjects | OUT-OF-SCOPE for QA | Operational pre-load gate; design.md flags this. QA does not deploy SF metadata. |
+
+=== SECURITY REGRESSION RESULTS ===
+| # | Item | Verdict | Evidence |
+| S1 | SQL injection in new queries | PASS | Both queries use `IN (literal_list)` for labels/applications and `@params` for dates. No string concat introduced. |
+| S2 | Secrets in diff | PASS | No password/api_key/secret/token/-----BEGIN/.env in any of the 21 changed files. |
+| S3 | New dependencies | PASS | package.json and package-lock.json not touched. |
+| S4 | PII exposure in logs | PASS | No new console.log/logger.info statements that touch email/phone/ssn. |
+| S5 | Auth/RBAC changes | PASS | None. |
+| S6 | Injection vectors (deserialization/eval/exec) | PASS | Only existing `executeQueryAsStream` helper usages; no new dynamic execution patterns. |
+
+Pre-existing codebase concern (NOT a finding of this PR, surfaced for visibility):
+  - npm audit reports 3 critical + 9 high vulnerabilities in dependencies (fast-xml-parser, handlebars, protobufjs, lodash, nestjs/core, etc.).
+  - The PR did NOT introduce these; they are baseline issues that predate the PR.
+  - Suggested follow-up ticket to address codebase-wide deps refresh, but NOT blocking for IM-886.

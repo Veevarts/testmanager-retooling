@@ -1,0 +1,82 @@
+=== TR-063 Scenario 2 — Tucson actual QA-executed counts ===
+Date: 2026-06-11
+Tucson DB: tucson_db_1 (production-equivalent backup via DataGrip)
+Query method: SSH tunnel via bastion.internal.veevartapp.com (same as safesql)
+Connection: DataGrip with same SSH config as safesql Tucson profile
+
+=== DIAGNOSTIC (Q1): Tucson recognition labels distribution ===
+recognition_label     | row_count
+----------------------|----------
+Donor                 |  262,334
+Household             |  121,691
+Spouse                |  113,457
+Soft Credit           |    5,197   <-- the new label captured by the fix
+FF Soft Credit        |      183   <-- the original label IM-707 covered
+FF Household          |        9
+Anonymous             |        2
+FF Spouse             |        2
+Matching              |        2
+
+KEY FINDING #1: Tucson DOES have 'Soft Credit' label populated (5,197 rows).
+  → Pre-fix query EXCLUDED these rows (only matched 'FF Soft Credit' = 183 rows).
+  → Post-fix query INCLUDES these rows.
+  → Confirms docs/altru-model-context.md: "Tucson has both labels".
+
+=== PRE-FIX (Q2): real Tucson baseline before PR ===
+SQL: matches main branch soft_credit_recognition.sql exactly
+  WHERE rrtc.DESCRIPTION = 'FF Soft Credit'
+    AND rse.APPLICATION IN ('Donation', 'Recurring gift', 'Planned gift', 'Matching gift')
+    AND recognized_c.ID IS NOT NULL
+Result: pre_fix_total = 161 rows
+
+=== POST-FIX (Q3): real Tucson result after PR ===
+SQL: matches npsp_partial_soft_credit + npsp_account_soft_credit unified
+  WHERE rrtc.DESCRIPTION IN ('FF Soft Credit', 'Soft Credit')
+    AND rse.APPLICATION IN ('Donation', 'Recurring gift', 'Planned gift', 'Matching gift', 'Pledge')
+Result:
+  post_fix_psc   = 1,793 (individuals → npsp__Partial_Soft_Credit__c)
+  post_fix_asc   =   172 (orgs/groups → npsp__Account_Soft_Credit__c)
+  post_fix_total = 1,965  ← perfect match with dev evidence in PR body
+
+=== DELTA ANALYSIS ===
+Real pre-fix:    161 rows
+Real post-fix: 1,965 rows
+Real delta:    +1,804 rows (+1,121% relative increase)
+
+=== KEY FINDING #2: PR body framing is misleading ===
+PR body says: "Tucson expected target rows increase from 1,784 to 1,965 after
+adding targetable Pledge rows" → implies +181 delta from Pledge.
+
+But the REAL change is +1,804 (from 161 to 1,965):
+  - Label widening (FF Soft Credit → both labels): +1,623 rows (90% of delta)
+  - Pledge application added:                      +181 rows  (10% of delta)
+  - TOTAL:                                         +1,804 rows
+
+The "1,784" in PR body corresponds to "hypothetical post-fix without Pledge"
+(label widening only). NOT the actual pre-fix state of main branch.
+
+This is NOT a code defect — both changes (label + Pledge) are intentional,
+documented in design.md, and produce correct results. But the PR communication
+DOWNPLAYS the label widening impact by 10x, presenting only the +181 delta.
+
+=== RECOMMENDATION (process, not blocker) ===
+Suggest dev clarify the PR body or the Risks section to state:
+  - True pre-fix Tucson: 161 rows (just FF Soft Credit + 4 applications)
+  - True post-fix Tucson: 1,965 rows
+  - Real delta: +1,804 rows
+  - Breakdown: +1,623 from label widening + +181 from Pledge addition
+
+For Implementation Engineers running this migration: the row count grows 12x,
+not 1.1x. Useful info for capacity planning, NPSP rollup load estimation, and
+post-load verification.
+
+=== AC2 VERDICT (TC-57 Scenario 2) ===
+TC-57 Scenario 2 was re-baselined per User Option A (1,784 → 1,965). The TC v2
+text aligned with PR body framing. Now with QA-executed evidence we know the
+REAL pre-fix was 161, not 1,784. PASS verdict UNCHANGED because:
+  - The fix works correctly
+  - The 1,965 post-fix matches dev expectation exactly
+  - Both label widening + Pledge are intentional and documented
+  
+But the magnitude of the change is far greater than PR communicated.
+Surfaced as QA finding for PR-body update (not a defect).

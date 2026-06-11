@@ -1,0 +1,82 @@
+=== TC-57 Regression Plan — Tech + Security ===
+Generated: 2026-06-11
+PR: Veevarts/MigrationToolETL#126 (bug/fix-high-desert-soft-credit-recognition-filter-IM-886)
+Classification: Mixed (SQL queries + Pipeline/extractor/mapper/entity + Docs)
+
+=== SOLUTION SUMMARY ===
+The PR replaces the combined `soft_credit_recognition.sql` (1 query, 14 raw columns)
+with 2 target-shaped queries:
+  - npsp_partial_soft_credit.sql  (individual recognized constituents)
+  - npsp_account_soft_credit.sql  (organizations/groups)
+
+Three semantic changes inside the queries:
+  1. Recognition label predicate widened: 'FF Soft Credit' → IN ('FF Soft Credit', 'Soft Credit')
+  2. Application predicate widened: + 'Pledge' added to {Donation, Recurring gift, Planned gift, Matching gift}
+  3. LEFT JOIN CONSTITUENT → INNER JOIN CONSTITUENT (equivalent given pre-existing IS NOT NULL filter)
+
+Pipeline/extractor/mapper/entity layers updated to emit target-shaped CSVs that load
+directly into npsp__Partial_Soft_Credit__c and npsp__Account_Soft_Credit__c via
+relationship-by-external-id headers (e.g., `[npsp__Account__r:Account-Auctifera__Implementation_External_ID__c]`).
+
+Implementation_External_ID__c preserved in both target outputs for idempotent re-loads.
+
+=== SCOPE DRIFT vs TICKET ===
+Ticket IM-886 scope: ONLY widen label predicate ('FF Soft Credit' → both labels).
+PR scope ALSO includes:
+  + Pledge application (discovered in Tucson reconciliation, documented in PR Risks).
+  + Query split into PSC + ASC files (operational improvement, documented in AGENTS.md).
+  + Target-shaped column rewrite (output now NPSP-loadable directly).
+
+Net effect on Tucson row count: 1,784 → 1,965 (+181, all attributable to Pledge).
+This is INTENTIONAL per PR Risks section, but TC-57 Scenario 2 baseline declares
+"Tucson delta 0" → scenario needs re-baseline to 1,965 OR will FAIL despite the
+fix being correct. Documented in step 8 verdict.
+
+=== TECHNICAL REGRESSION MATRIX ===
+| # | Item | Type | Risk | Check method | Verdict |
+|---|------|------|------|--------------|---------|
+| T1 | LEFT→INNER JOIN on CONSTITUENT in both queries | Technical | Low | safesql counts pre/post on high-desert + tucson; expect delta = 0 from join change alone (rows already required recognized_c.ID IS NOT NULL) | TBD until safesql runs |
+| T2 | Query filename rename + stale references | Technical | Low | grep for 'soft_credit_recognition.sql' across docs/code — all hits inside diff itself (docs explaining transition), no orphan refs | PASS |
+| T3 | Pipeline/extractor/mapper/entity reshape (target-loadable output) | Technical | Medium | run `npm test -- --runInBand soft-credit-recognition` per PR validation; dev reports PASS | PASS-dev (pending QA re-run with local clone) |
+| T4 | Tucson row count expectation re-baseline | Technical | Medium | safesql tucson post-fix → expect 1,965 (was 1,784); TC-57 Scenario 2 must be updated | TBD until safesql runs |
+| T5 | Implementation_External_ID__c field must exist on PSC/ASC sobjects before SF load | Technical | High (operational) | sf sobject describe on target org for both NPSP sobjects | TBD until SF access |
+
+=== SECURITY REGRESSION MATRIX ===
+| # | Item | Type | Risk | Check method | Verdict |
+|---|------|------|------|--------------|---------|
+| S1 | SQL injection in new queries | Security | High | Grep diff for string concat in dynamic SQL; both queries use @params for dates and IN (literal_list) for labels/applications | PASS — no concatenation; all bindings parameterized |
+| S2 | Secrets in diff | Security | Low | grep for password/api_key/secret/token/-----BEGIN/.env across all 21 changed files | PASS — none found |
+| S3 | New dependencies | Security | Low | check package.json + lockfile in diff | PASS — not touched (no new deps) |
+| S4 | PII exposure in logs | Security | Low | grep diff for console.log/logger.info touching email/phone/ssn | PASS — no new log statements that touch PII |
+| S5 | Auth/RBAC changes | Security | Low | check for profile/permission-set changes | PASS — none, this is SQL extraction only |
+| S6 | Injection vectors (deserialization/eval/exec) | Security | Low | grep for eval/new Function/exec/spawn/child_process | PASS — only mentions are existing `executeQueryAsStream` helper, no new patterns |
+
+=== UNIT TEST COVERAGE OBSERVED IN PR ===
+Files (5 specs):
+  - soft-credit-recognition.pipeline.spec.ts
+  - soft-credit-recognition-record.entity.spec.ts
+  - soft-credit-recognition.mapper.spec.ts
+  - soft-credit-recognition-query.spec.ts (unit/snapshot)
+  - soft-credit-recognition-query.integration.spec.ts (docker SQL)
+
+Assertion density: ~62 `it()/test()/expect()` additions across the spec files.
+Dev validation evidence (from PR body):
+  - npm run lint:check               PASS
+  - npm test query-regression        PASS
+  - npm test soft-credit-recognition PASS
+  - npm run build                    PASS
+  - docker integration spec          PASS
+  - git diff --check                 PASS
+
+QA cannot independently RUN these tests without local MigrationToolETL clone.
+
+=== AC ↔ TEST COVERAGE MATRIX ===
+AC1 (High Desert 'Soft Credit' → 4,094 rows): covered by query-regression + integration spec (fixture must include 'Soft Credit' rows; verify via clone or safesql).
+AC2 (Tucson 'FF Soft Credit' regression): covered by query-regression; HOWEVER ticket says "delta 0" — PR delivers +181 from Pledge. Re-baseline needed.
+AC3 (split target object PSC vs ASC): now baked into the SQL itself (2 files). Mapper/entity tests cover the shape transformation.
+AC4 (regression covers both labels without duplicates): query-regression spec assertions ~62 references should include both label paths. Cannot confirm specifics without reading spec content.
+AC5 (docs/altru-model-context.md documents tenant difference): docs file is in the PR. Scope-match check pending.
+
+Gaps detected:
+  - AC2 baseline obsolete due to Pledge addition (Tucson now +181). Needs re-baseline (not a bug in PR).
+  - QA cannot run dev tests independently without local clone → relies on dev validation evidence + safesql baseline vs post-fix as alternate evidence.
