@@ -32,8 +32,9 @@ If multiple TCs exist for the same parent → ask once.
 2. Evidence files under `attachments/tr-<NN>-tc-<NN>/` organized by scenario (`scenario-0-unit-tests/`, `scenario-1/`, …, plus `regression-plan.txt`, `regression-results.txt`, and `owasp-top10-scan.txt`).
 3. Defects raised in Jira (with `jiraKey` + `url`) linked to the parent ticket for every FAIL or High/Critical security finding (including OWASP Applicable+FAIL).
 4. Final summary message: classification, solution summary, unit tests status, technical regression status, security regression status, OWASP Top 10 status, pass rate, defects raised, and the "Pendiente de tu parte" section listing every `not-run` scenario.
+5. A commit + push to `main` containing the testcase, testrun, and attachments so TestManager can ingest the evidence (Step 12). Commit URL surfaced in the final summary.
 
-This skill DOES NOT commit / push. Leaves the working tree dirty for user review.
+This skill commits + pushes the QA artifacts to `main` after writing the TR — TestManager only ingests what it sees on `main`. Large files (>50 MB) are excluded from the commit and replaced by a `summary.json` substitute.
 
 ## Workflow
 
@@ -293,7 +294,7 @@ Persist the scan to `attachments/<run>/owasp-top10-scan.txt`:
    - `executedAt` is OMITTED on `not-run` scenarios (empty string fails zod validation).
 3. **Attach evidence**: every `then` step that produced a file references it under `attachments:` with `{name, path, mimeType, size}` objects.
 4. **Defects**: any FAIL or Security High/Critical → `mcp__atlassian__createJiraIssue` linked to the parent ticket. Capture the new key + url in the scenario's `defects` array as `{jiraKey, url, severity, summary}`.
-5. **DO NOT commit / push.** Leave the working tree dirty for the user to review.
+5. **Commit + push the QA artifacts so TestManager can ingest them.** See Step 12.
 6. **Final summary message** must include, in this exact order:
    - Test run key + path.
    - Classification (step 2) + Solution Summary (1-line from step 3).
@@ -304,6 +305,19 @@ Persist the scan to `attachments/<run>/owasp-top10-scan.txt`:
    - Pass rate: `<X>/<Y> scenarios PASS · <Z> not-run`.
    - Defects raised: list of Jira keys + URLs.
    - **"Pendiente de tu parte"** section: every `not-run` scenario, what the user must do to close it, what evidence to capture, where to drop it.
+
+### Step 12: Commit + push the QA artifacts (so TestManager can ingest them)
+
+The QA artifacts are useless to TestManager until they land on `main`. Always commit + push after the TR is written (and after the user has reviewed any FAIL scenarios that need their judgment).
+
+1. **What to commit**: `test-cases/<PARENT-KEY>/`, `test-runs/<date>/tr-<NN>-tc-<NN>.testrun.yml`, `attachments/tr-<NN>-tc-<NN>/`. NEVER `git add -A` — only add the QA artifacts explicitly.
+2. **Pre-commit hygiene**:
+   - Skip files > 50 MB on commit (push will warn and TestManager won't ingest them). For evidence files larger than 50 MB (e.g. full baseline/post-fix JSON dumps), keep them locally referenced from the comparison-matrix but exclude them from the commit. Replace with a smaller `summary.json` containing row count + first 20 sample rows.
+   - Re-run the TR key re-scan one more time (`grep -h "^key:" test-runs/**/*.testrun.yml | sort -V | tail`) — the UI may have committed a TR in the seconds since the last scan.
+3. **Commit message format**: `test(<PARENT-KEY>): TC-<NN> + TR-<NN> <pass>/<total> <verdict> for <1-line summary>` followed by a paragraph with the scenario-by-scenario verdicts. End with the standard `Co-Authored-By` line.
+4. **Push**: `git push origin main`.
+5. **Confirm TestManager can ingest**: include the GitHub commit URL or PR URL in the final summary. The user will trigger a re-import in the TestManager UI (or it polls main automatically).
+6. **If a FAIL or security blocker exists**: still commit (TestManager needs the artifact to show the failure), but in the final summary explicitly call out "QA verdict: FAIL — defect <JIRA-KEY> raised; do not transition the parent story until the defect is closed."
 
 ## Rules
 
@@ -317,7 +331,7 @@ Persist the scan to `attachments/<run>/owasp-top10-scan.txt`:
    - This applies both to the PR-surface regression items (step 5/8) AND the OWASP Top 10 scan (step 10). An OWASP Applicable + FAIL on A01/A03/A06/A07/A10 = Critical defect; A02/A05/A08 = High; A04/A09 = Medium. Never write the test run while any Applicable item has verdict `TBD`.
 8. **Auto-execute everything that doesn't need a human.** safesql queries, unit tests, regression checks, schema audits, security scans — all run without asking. Stop only when sandbox/SF write access is required, or when a security blocker fires, or when credentials are missing (memory: `feedback-execute-auto-flag-manual`).
 9. **Sandbox writes require 7-field confirmation.** No exceptions: target org, operation, object API name, row count, payload path, side effects, verification/rollback plan.
-10. **No commit, no push.** Same as bundle generator.
+10. **Always commit + push the QA artifacts after the TR is written.** Step 12 is mandatory: TestManager only sees what lands on `main`. Skip the commit only when a FAIL needs user adjudication first, but document explicitly why you stopped (and complete the commit immediately after the user approves).
 11. **One TR per execution session.** If the user re-runs the executor for the same TC, bump as a new TR with new key — never overwrite history.
 12. **Coverage gap is not auto-FAIL but always flagged.** If unit tests in the PR don't cover an AC, the scenario for that AC is still executed (via safesql / sandbox), but the gap is surfaced in the summary as "dev did not add coverage; QA covered via <evidence>".
 13. **State file is mandatory.** After EACH step in 1–10 completes, atomically write the `.skill-state.json` per the State management section. On invocation, ALWAYS check for an existing state file BEFORE starting step 1. Never silently overwrite an `in-progress` state without asking the user. This is what makes the skill survive harness compaction and allows re-invocation after a session restart.
@@ -343,6 +357,7 @@ Before reporting completion:
 - [ ] Run-level and scenario-level `status:` use the correct enums.
 - [ ] Final summary includes classification, solution summary, unit tests, technical regression, security regression, **OWASP Top 10 status**, pass rate, defects, "Pendiente de tu parte", and the path to the preserved state file.
 - [ ] State file marked `status: completed` and moved to `.skill-state-completed.json` for audit.
+- [ ] Artifacts (testcase + testrun + attachments) committed and pushed to `main` so TestManager can ingest them. Commit URL captured in the final summary. Large files (>50 MB) excluded with a `summary.json` substitute.
 
 ## Tooling reference
 
