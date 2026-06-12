@@ -1,0 +1,178 @@
+schemaVersion: "1.0"
+
+id: "092fccdd-19d1-49c3-b8df-80a6c32cd6c5"
+key: "TC-58"
+title: "fund_assignment_memberships.sql — Posted Date al grain del installment del recurring (no la fecha del root FT)"
+description: |
+  Cobertura QA funcional de IM-904 "Duplicado de Membresía 2150 Club —
+  Mismo Recurring de Diferente Año con Posted Date en el Mismo Período".
+
+  Antes de IM-904, `fund_assignment_memberships.sql` exportaba
+  `Auctifera__Posted_Date__c` usando la fecha del root FINANCIALTRANSACTION
+  del recurring, no la fecha de cada `RECURRINGGIFTINSTALLMENT`. Esto causaba
+  que un installment 2023 del mismo recurring apareciera con posted date
+  2022-07-16 en Salesforce, inflando el bucket del período jul/2022 y
+  generando "duplicados" aparentes (dos FAs del mismo programa con la misma
+  posted date pero de años distintos).
+
+  La fix cambia 1 expresión en `fund_assignment_memberships.sql` para que
+  `Auctifera__Posted_Date__c = COALESCE(rgi.InstallmentDate, FT date)`,
+  emitiendo cada FA al grain del `RecurringInstallmentID` con su fecha
+  propia. Refund FAs intencionalmente NO cambian (mantienen la fecha de
+  la transacción de refund).
+
+  Ejemplo canónico documentado en el ticket (Tucson Botanical Gardens,
+  recurring de Peter Fletcher):
+  - FD-1152056 → installment 2022 → posted 2022-07-16 (correcto, sin cambio)
+  - FD-939400  → installment 2023 → pre-fix posted 2022-07-16 (incorrecto);
+    post-fix posted 2023-07-16 (correcto, alineado con Altru source)
+
+  Impacto medido por el dev vía safesql cross-profile (en el PR):
+  - High Desert: 594 rows mueven posted date hacia adelante
+  - MOAD: 142 rows
+  - Tucson: 102 rows
+  - Todas las filas afectadas mueven FORWARD a la fecha del installment
+
+  Tickets relacionados:
+  - IM-904 padre (Historia, In QA Review, High, reporter Sara Montenegro)
+  - IM-908 — QA Sub-task de IM-904
+  - IM-906 — relates to (Prevent duplicate matching-gift fund assignments)
+  - PR: Veevarts/MigrationToolETL#129
+
+  Cobertura por AC:
+  - AC1 (Peter Fletcher installment 2023 con posted 2023-07-16) → Scenario 1
+  - AC2 (alineación con Altru source: 1 FA por installment, no duplicados) → Scenario 2
+  - Regresión técnica (refund FAs sin cambio) → Scenario 3
+  - Impacto cross-profile validado en magnitud esperada → Scenario 4
+  - Edge: recurring sin installments (FT root sin RGI) → Scenario 5
+
+  Limitaciones (NO levantar como bug):
+  - Muhammed2 profile no tiene conexión safesql disponible (limitación
+    documentada en el PR). Documentar como riesgo abierto, no como FAIL.
+  - El cambio es 1 sola expresión SQL; el regression spec del dev
+    (`fund-assignment-memberships-query.spec.ts`) cubre la regresión
+    estática del shape de la query. Este TC valida el comportamiento
+    end-to-end sobre datos reales.
+
+  Out of scope:
+  - Validar lógica interna de otros FA queries (donations, refunds, etc.).
+    La auditoría del dev (sibling-query audit en el PR) ya confirmó que
+    sólo membership FA tenía el mismatch.
+  - Performance del query bajo profiles grandes.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Branch del PR `story/duplicado-de-membresia-2150-club-mismo-recurring-IM-904` checkeada con el cambio en `src/data-migration/infrastructure/destination/sql-server/queries/fund-assignment/fund_assignment_memberships.sql`"
+  - "Acceso safesql a los profiles `tucson`, `high-desert`, `moad` (Muhammed2 no requerido — documentado como gap)"
+  - "Dataset Altru fuente con al menos un recurring membership de múltiples installments en años distintos (Tucson rev-10282478 confirmado)"
+  - "Acceso a logs de safesql para comparación baseline (rama base) vs post-fix"
+
+format: gherkin
+scenarios:
+  - title: "Tucson canonical — recurring rev-10282478: installment 2023 exporta con posted date 2023-07-16 (no 2022-07-16)"
+    tags:
+      - happy-path
+      - ac-1
+      - tucson
+      - canonical-example
+      - recurring-installment
+    given:
+      - "el recurring `rev-10282478` de Peter Fletcher en Tucson con installments en 2022 y 2023 (mismo recurring, distinto año)"
+      - "el branch base (pre-fix) exporta ambos FA con posted date `2022-07-16`"
+    when:
+      - "ejecutar `fund_assignment_memberships.sql` post-fix vía safesql sobre el profile `tucson` filtrando ese recurring"
+    then:
+      - "el FA del installment 2022 mantiene `Auctifera__Posted_Date__c = 2022-07-16`"
+      - "el FA del installment 2023 ahora tiene `Auctifera__Posted_Date__c = 2023-07-16` (NO 2022-07-16)"
+      - "ambos FAs siguen referenciando el mismo recurring root (`Auctifera__Recurring_Implementation_External_ID__c` igual)"
+      - "el amount de cada FA se mantiene en `$150.00` (la fix no toca amounts, solo posted date)"
+
+  - title: "Reconciliación de período jul/2022 Tucson: 1 FA por recurring (alineado con Altru source)"
+    tags:
+      - happy-path
+      - ac-2
+      - tucson
+      - period-reconciliation
+      - altru-source-alignment
+    given:
+      - "el período de reporte `2022-07-01` a `2022-07-31` para el programa `2150 Club 2150 Club (Annually)` en Tucson"
+      - "pre-fix: 2 FAs aparecen para el recurring de Peter Fletcher (uno correcto, uno desplazado del 2023)"
+      - "el reporte Altru `Total Revenue and Payments` muestra 1 recurring de Peter Fletcher de $150 en `2022-07-16`"
+    when:
+      - "ejecutar `fund_assignment_memberships.sql` post-fix y agrupar por recurring root + posted date dentro del período"
+    then:
+      - "el período `2022-07` contiene exactamente 1 FA del recurring de Peter Fletcher por $150 (no 2)"
+      - "el FA del installment 2023 NO aparece en el período `2022-07` (se movió a `2023-07`)"
+      - "el conteo de FAs por programa en el período coincide con el conteo Altru (3 recurrings distintos, según el ticket)"
+      - "el total $ del programa en el período baja en $150 vs pre-fix (de $300 a $150 para Peter Fletcher)"
+
+  - title: "Refund FAs sin cambio — sibling query mantiene la fecha de la transacción de refund (no regresión)"
+    tags:
+      - regression
+      - refund-preservation
+      - sibling-query-isolation
+    given:
+      - "fund assignments tipo refund en el dataset Tucson (queries hermanas a `fund_assignment_memberships.sql`)"
+      - "pre-fix: refund FAs tienen `Auctifera__Posted_Date__c` igual a la fecha del FINANCIALTRANSACTION del refund"
+    when:
+      - "ejecutar la query de refund FA post-fix sobre el mismo dataset"
+    then:
+      - "los refund FAs mantienen exactamente la misma posted date que en pre-fix (delta = 0 filas)"
+      - "el cambio NO se propagó a queries hermanas (donations, refunds, otros tipos de FA)"
+      - "no hay FAs de refund cuyo posted date haya cambiado a una InstallmentDate (la lógica de installment NO aplica fuera de membership dues)"
+
+  - title: "Impacto cross-profile coincide con magnitud declarada en el PR (Tucson 102 · High Desert 594 · MOAD 142, todos FORWARD)"
+    tags:
+      - regression-evidence
+      - cross-profile
+      - impact-scope-validation
+    given:
+      - "safesql conectado a los profiles `tucson`, `high-desert`, `moad`"
+      - "el PR declara: Tucson 102 rows, High Desert 594 rows, MOAD 142 rows cambian posted date"
+    when:
+      - "ejecutar `fund_assignment_memberships.sql` baseline (rama base) vs post-fix sobre cada profile y diff por `Implementation_External_ID + Posted_Date`"
+    then:
+      - "Tucson reporta ~102 filas con posted date distinta (±5%, tolerancia por concurrencia de datos)"
+      - "High Desert reporta ~594 filas con posted date distinta (±5%)"
+      - "MOAD reporta ~142 filas con posted date distinta (±5%)"
+      - "100% de las filas cambiadas mueven FORWARD (post-fix date > pre-fix date), nunca hacia atrás"
+      - "ninguna fila cambia de amount, recurring_external_id o constituent (sólo cambia posted date)"
+
+  - title: "Edge — recurring sin RECURRINGGIFTINSTALLMENT (RGI null) cae al fallback de la fecha del FT root"
+    tags:
+      - edge-case
+      - coalesce-fallback
+      - rgi-null
+    given:
+      - "un recurring membership cuyo FT root NO tiene fila en `RECURRINGGIFTINSTALLMENT` (caso defensivo del COALESCE)"
+    when:
+      - "ejecutar `fund_assignment_memberships.sql` post-fix sobre ese recurring"
+    then:
+      - "el FA exporta con `Auctifera__Posted_Date__c` igual a la fecha del FT root (fallback del `COALESCE(rgi.InstallmentDate, FT date)`)"
+      - "la query NO falla por NULL ni rompe el extractor"
+      - "el extractor reporta el FA sin warnings críticos (a lo sumo un info log)"
+
+tags:
+  - im-904
+  - im-908
+  - im-70
+  - tucson
+  - altru
+  - migration
+  - sql-server
+  - fund-assignment
+  - membership
+  - recurring-installment
+  - posted-date
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-12T15:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-12T15:50:00Z"
+  version: 1
