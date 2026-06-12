@@ -1,0 +1,188 @@
+schemaVersion: "1.0"
+
+id: "1303bb99-93fc-4854-b590-d6d1a6829a31"
+key: "TC-61"
+title: "donation_transaction.sql + donation_pledges.sql — RecordType slots driven by env var tokens (Matching/Stock/Property/Planned/In-Kind + Pledge In-Kind/Stock/Property)"
+description: |
+  Cobertura QA funcional de IM-784 "Altru Gift Record Types: extend
+  mapping to Matching Gifts, Major Gifts and Pledge in-kind (IM-767
+  follow-up)".
+
+  IM-767 / PR #112 introdujo el primer token de RecordTypeId para
+  In-Kind Gift en donations. IM-784 extiende ese patrón a 6 slots
+  lógicos en donations (Donation, In-Kind, Stock, Property, Matching
+  Gift, Planned Gift) y 4 slots en pledges (Pledge, Pledge In-Kind,
+  Pledge Stock, Pledge Property), todos configurables por env var, con
+  fail-fast cuando alguna env var requerida está ausente.
+
+  IMPORTANTE — Scope shift vs ticket original: el ticket original pedía
+  Matching Gift, Major Gift y Pledge in-kind. El PR #132 entrega Matching
+  Gift + Pledge in-kind, agrega Stock/Property/Planned, e
+  **intencionalmente NO entrega Major Gift, Grant ni Sponsorship**
+  porque el diagnóstico cross-profile no confirmó reglas
+  deterministas a nivel transaction. Esto queda como gap conocido a
+  re-scopear en un ticket separado (ver Riesgos abiertos).
+
+  Fuentes source-backed (Altru) para cada slot (per PR design):
+  - Matching Gift → REVENUEMATCHINGGIFT.ISACTIVE = 1 (active claim)
+  - In-Kind Gift → REVENUEPAYMENTMETHOD → GIFTINKINDPAYMENTMETHODDETAIL
+  - Stock Gift → REVENUEPAYMENTMETHOD → STOCK detail
+  - Property Gift → REVENUEPAYMENTMETHOD → PROPERTY detail
+  - Planned Gift → CHANGE THIS — confirmar con design.md (token reserved)
+  - Donation → fallback default
+
+  Pledge slots (donation_pledges.sql):
+  - Pledge In-Kind → same in-kind detail joined on pledge FT
+  - Pledge Stock / Property → equivalentes en source
+  - Pledge → fallback default
+
+  Tickets relacionados:
+  - IM-784 padre (Historia, In QA Review, Medium, reporter Evans)
+  - IM-914 — QA Sub-task de IM-784
+  - IM-767 — antecedente directo (In-Kind Gift, PR #112)
+  - PR: Veevarts/MigrationToolETL#132
+
+  Cobertura por AC (ticket original tenía 6 ACs):
+  - AC1 (Matching Gift Record Type) → Scenario 1
+  - AC2 (Major Gift Record Type) → NO SHIPPED → Riesgo abierto
+  - AC3 (Pledge in-kind Record Type) → Scenario 2
+  - AC4 (precedencia entre múltiples categorías) → Scenario 3
+  - AC5 (fail-fast env vars ausentes) → Scenario 4
+  - AC6 (query-regression suite cubre cada nuevo tipo + cross-type) → Scenario 5
+
+  Limitaciones (NO levantar como bug):
+  - Major Gift / Grant / Sponsorship sin implementar — decisión consciente
+    documentada en el PR. QA flag this as scope reduction, no blocker.
+  - Validación post-load en Lightning (RecordType realmente aparece en el
+    Opp Salesforce) queda como manual sobre sandbox veevartd.
+  - Cross-customer audit (otros profiles Altru) fuera de scope per
+    precedente IM-904 / IM-906 / IM-910.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Branch del PR Veevarts/MigrationToolETL#132 checkeada y compilable"
+  - "Acceso safesql al profile `tucson` (DB tucson_db_3)"
+  - "Las env vars `SF_MATCHING_GIFT_RECORD_TYPE_ID`, `SF_IN_KIND_GIFT_RECORD_TYPE_ID`, `SF_STOCK_GIFT_RECORD_TYPE_ID`, `SF_PROPERTY_GIFT_RECORD_TYPE_ID`, `SF_PLANNED_GIFT_RECORD_TYPE_ID`, `SF_PLEDGE_IN_KIND_RECORD_TYPE_ID`, `SF_PLEDGE_STOCK_RECORD_TYPE_ID`, `SF_PLEDGE_PROPERTY_RECORD_TYPE_ID` definidas con valores no vacíos en el entorno de prueba (cualquier string de 15 o 18 chars que parezca SF Id)"
+  - "Dataset Altru fuente con al menos 1 transaction por slot lógico cubierto (Matching/In-Kind/Stock/Property/Planned + pledge variants)"
+  - "Acceso a logs del pipeline para validar fail-fast con mensajes claros"
+
+format: gherkin
+scenarios:
+  - title: "donation_transaction.sql emite el RecordType slot correcto por source signal (Matching/Stock/Property/Planned/In-Kind/Donation)"
+    tags:
+      - happy-path
+      - ac-1
+      - ac-3
+      - donation-transaction-sql
+      - record-type-slots
+      - tucson
+    given:
+      - "el dataset Altru Tucson contiene al menos 1 transaction por cada slot lógico cubierto: Matching (REVENUEMATCHINGGIFT.ISACTIVE=1), In-Kind (GIFTINKINDPAYMENTMETHODDETAIL), Stock, Property, Planned, y Donation (fallback)"
+      - "las env vars de RecordTypeId tienen valores distintos por slot (ej. cada SF_*_RECORD_TYPE_ID con un Id sintético único)"
+    when:
+      - "ejecutar `donation_transaction.sql` post-fix sobre tucson vía el extractor (con sustitución de tokens)"
+    then:
+      - "cada transaction con active matching-gift claim exporta con `RecordTypeId = SF_MATCHING_GIFT_RECORD_TYPE_ID`"
+      - "cada transaction con in-kind payment detail exporta con `RecordTypeId = SF_IN_KIND_GIFT_RECORD_TYPE_ID`"
+      - "cada transaction con stock detail exporta con `RecordTypeId = SF_STOCK_GIFT_RECORD_TYPE_ID`"
+      - "cada transaction con property detail exporta con `RecordTypeId = SF_PROPERTY_GIFT_RECORD_TYPE_ID`"
+      - "cada transaction de Planned Gift exporta con `RecordTypeId = SF_PLANNED_GIFT_RECORD_TYPE_ID`"
+      - "el resto de transactions (Donation default) exporta con `RecordTypeId = SF_DONATION_RECORD_TYPE_ID` (el token existente de IM-767)"
+      - "ningún row exporta con RecordTypeId NULL o un literal de placeholder sin reemplazar (ej. `{{...}}`)"
+
+  - title: "donation_pledges.sql emite el Pledge RecordType slot correcto (Pledge In-Kind / Stock / Property / Pledge fallback)"
+    tags:
+      - happy-path
+      - ac-3
+      - donation-pledges-sql
+      - pledge-record-type-slots
+      - tucson
+    given:
+      - "el dataset Altru Tucson contiene al menos 1 pledge transaction por cada slot lógico: Pledge In-Kind, Pledge Stock, Pledge Property, y Pledge (fallback)"
+      - "las env vars `SF_PLEDGE_IN_KIND_RECORD_TYPE_ID`, `SF_PLEDGE_STOCK_RECORD_TYPE_ID`, `SF_PLEDGE_PROPERTY_RECORD_TYPE_ID` tienen valores distintos"
+    when:
+      - "ejecutar `donation_pledges.sql` post-fix sobre tucson vía el extractor"
+    then:
+      - "cada pledge con in-kind detail exporta con `RecordTypeId = SF_PLEDGE_IN_KIND_RECORD_TYPE_ID`"
+      - "cada pledge con stock detail exporta con `RecordTypeId = SF_PLEDGE_STOCK_RECORD_TYPE_ID`"
+      - "cada pledge con property detail exporta con `RecordTypeId = SF_PLEDGE_PROPERTY_RECORD_TYPE_ID`"
+      - "el resto de pledges exporta con el `RecordTypeId` de Pledge default (token existente)"
+      - "ningún pledge exporta con RecordTypeId NULL o un literal placeholder sin reemplazar"
+
+  - title: "Precedencia cuando una transaction cae en múltiples categorías (ej. Matching Gift + In-Kind)"
+    tags:
+      - edge-case
+      - ac-4
+      - precedence
+      - cross-type
+    given:
+      - "una transaction Altru que califica para 2 categorías a la vez (ej. un matching-gift claim que también es in-kind)"
+      - "la precedencia documentada en `design.md` / código (asumido orden: Matching Gift > Stock > Property > Planned > In-Kind > Donation; confirmar en PR)"
+    when:
+      - "ejecutar `donation_transaction.sql` post-fix sobre ese registro"
+    then:
+      - "la transaction exporta con el `RecordTypeId` correspondiente a la categoría de MAYOR precedencia documentada"
+      - "el resultado es determinista (no depende del orden de filas en source)"
+      - "la regression spec cubre al menos 1 caso cross-type y verifica que la categoría de mayor precedencia gana"
+
+  - title: "Fail-fast con mensaje claro cuando una env var requerida está ausente"
+    tags:
+      - negative
+      - ac-5
+      - fail-fast
+      - env-var-config
+    given:
+      - "una corrida del extractor con todas las env vars de RecordTypeId configuradas excepto `SF_MATCHING_GIFT_RECORD_TYPE_ID` (deliberadamente no configurada)"
+    when:
+      - "el operador inicia el extractor de donations"
+    then:
+      - "la ejecución falla rápido (antes de cualquier write a CSV o a SF)"
+      - "el mensaje de error indica exactamente cuál env var falta (`SF_MATCHING_GIFT_RECORD_TYPE_ID`)"
+      - "el pattern de fail-fast es consistente con el de IM-767 (mismo logger / formato)"
+      - "el mismo comportamiento aplica a cada env var requerida si se omite una a la vez"
+
+  - title: "Query-regression spec cubre cada slot + cross-type interaction (guard estático del shape de query y wiring del extractor)"
+    tags:
+      - regression
+      - ac-6
+      - dev-tests
+      - static-guard
+    given:
+      - "el PR #132 incluye `donation-record-type-query.spec.ts` (modificado/extendido) con coverage para cada slot"
+    when:
+      - "correr `npx jest donation-record-type-query` sobre la branch del PR"
+    then:
+      - "todos los tests del spec PASAN sobre el branch del PR"
+      - "existen tests dedicados por cada slot lógico (Matching, Stock, Property, Planned, In-Kind, Donation default)"
+      - "existe al menos 1 test cross-type que valida la precedencia"
+      - "los tests verifican: (a) presencia del token en la query SQL, (b) shape grain-safe del CTE, (c) wiring extractor → env var → token replacement"
+
+tags:
+  - im-784
+  - im-914
+  - im-70
+  - im-767
+  - tucson
+  - altru
+  - migration
+  - sql-server
+  - record-type
+  - opportunity
+  - matching-gift
+  - in-kind-gift
+  - stock-gift
+  - property-gift
+  - planned-gift
+  - pledge
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-12T20:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-12T20:30:00Z"
+  version: 1
