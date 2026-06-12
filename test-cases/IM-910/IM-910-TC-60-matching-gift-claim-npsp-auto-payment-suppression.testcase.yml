@@ -1,0 +1,187 @@
+schemaVersion: "1.0"
+
+id: "e515c83f-a5d9-4cf1-a4cf-554f599f51c9"
+key: "TC-60"
+title: "donation_transaction.sql — suprimir NPSP auto-payment para active matching-gift claim Opportunities (npsp__Do_Not_Automatically_Create_Payments__c = 1)"
+description: |
+  Cobertura QA funcional de IM-910 "Prevent duplicate matching gift
+  claim payments".
+
+  Pre-fix: una matching-gift claim Opportunity podía recibir DOS
+  payments en NPSP — uno importado por `opportunity_payments.sql` y
+  otro auto-creado por NPSP cuando
+  `npsp__Do_Not_Automatically_Create_Payments__c` no estaba en 1. La
+  causa raíz: la lógica de auto-payment suppression en
+  `donation_transaction.sql` solo activaba el flag cuando
+  `REVENUESPLIT_EXT.APPLICATION = 'Matching gift'`, pero los active
+  matching-gift claim roots pueden tener otra application en la línea
+  raíz (heredada del donante / source revenue type). Resultado: claim
+  Opps con application != 'Matching gift' se exportaban sin el flag, y
+  NPSP creaba un payment duplicado además del importado.
+
+  La fix actualiza la regla del flag para que se prenda cuando el
+  Opportunity es un active `REVENUEMATCHINGGIFT` claim, independiente
+  del APPLICATION del root line.
+
+  Ejemplo canónico documentado en el ticket (Tucson Botanical Gardens):
+  - Donor/source transaction: `rev-10566213`
+  - Matching-gift claim transaction: `rev-10566216` (active claim,
+    REVENUEMATCHINGGIFT.ID = rev-10566216,
+    MGSOURCEREVENUEID = rev-10566213)
+  - Source validation: 1 active claim root, 1 claim Opportunity row,
+    1 exported payment, 1 distinct source payment transaction
+    ($200 amount)
+  - Pre-fix: la claim se exportaba SIN
+    `npsp__Do_Not_Automatically_Create_Payments__c = 1` porque la
+    application del root line no es 'Matching gift'
+  - Post-fix: la claim se exporta CON el flag = 1, y NPSP no crea
+    auto-payment
+
+  Out of scope (NO regression):
+  - Donor/source Opportunities (la lógica de suppression NO debe
+    cambiar para no-claim Opps).
+  - Imported payment count: debe seguir siendo exactamente 1 por
+    claim (no debe duplicarse ni perderse).
+  - Modelo two-Opportunity de matching gifts (donor Opp + claim Opp
+    linked by `npsp__Matching_Gift__c`) debe preservarse.
+
+  Tickets relacionados:
+  - IM-910 padre (Error, In QA Review, High Severity: 2-Critical,
+    reporter veevart_josed)
+  - IM-913 — QA Sub-task de IM-910
+  - IM-906 — relates to (Mutual exclusion en FA queries, complementaria
+    para el mismo claim flow)
+  - PR: Veevarts/MigrationToolETL#131
+
+  Cobertura por AC (5 ACs en el ticket → 5 scenarios):
+  - AC1 (active REVENUEMATCHINGGIFT claim → flag = 1) → Scenario 1
+  - AC2 (Tucson pair `rev-10566213`/`rev-10566216` → claim exporta con
+    flag) → Scenario 2
+  - AC3 (mismo Tucson pair → exactamente 1 imported payment) →
+    Scenario 3
+  - AC4 (no-claim donations sin cambio) → Scenario 4
+  - AC5 (regression spec cubre application != 'Matching gift' con
+    payments importados) → Scenario 5
+
+  Limitaciones (NO levantar como bug):
+  - Cross-customer audit (otros profiles Altru) queda fuera de scope.
+    Mismo razonamiento que IM-904 / IM-906: una sola SQL sin lógica
+    per-customer.
+  - Validación en Lightning post-load (NPSP auto-payment NO se crea)
+    queda como pendiente manual sobre el sandbox — la fix se valida en
+    el output SQL pre-load; la confirmación de comportamiento NPSP
+    requiere observar el sandbox después del load.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Branch del PR #131 (Veevarts/MigrationToolETL) checkeada y compilable"
+  - "Acceso safesql al profile `tucson` (tucson_db_3)"
+  - "Active matching-gift claim `rev-10566216` (linked a `rev-10566213`) confirmado en `REVENUEMATCHINGGIFT`"
+  - "Acceso a logs de safesql para comparar baseline (rama base) vs post-fix"
+
+format: gherkin
+scenarios:
+  - title: "Active REVENUEMATCHINGGIFT claim Opportunity exporta con npsp__Do_Not_Automatically_Create_Payments__c = 1 (independiente del APPLICATION del root line)"
+    tags:
+      - happy-path
+      - ac-1
+      - matching-gift-claim
+      - npsp-auto-payment-suppression
+    given:
+      - "una active matching-gift claim identificada por `REVENUEMATCHINGGIFT` cuyo root line tiene `REVENUESPLIT_EXT.APPLICATION` distinto de 'Matching gift'"
+    when:
+      - "ejecutar `donation_transaction.sql` post-fix sobre tucson filtrando ese claim"
+    then:
+      - "el claim Opportunity exporta con `npsp__Do_Not_Automatically_Create_Payments__c = 1`"
+      - "el flag se prende basado en active `REVENUEMATCHINGGIFT` status (no en el APPLICATION del root line)"
+      - "el opportunity ID y el constituent del claim se mantienen iguales (la fix solo cambia el flag)"
+
+  - title: "Tucson canonical — pair `rev-10566213`/`rev-10566216`: claim Opportunity exporta con auto-payment suppression"
+    tags:
+      - happy-path
+      - ac-2
+      - tucson
+      - canonical-example
+    given:
+      - "donor/source transaction Tucson `rev-10566213`"
+      - "matching-gift claim Tucson `rev-10566216` linked al source por `MGSOURCEREVENUEID`"
+      - "pre-fix: la claim `rev-10566216` se exportaba SIN `npsp__Do_Not_Automatically_Create_Payments__c = 1` porque la application del root line no es 'Matching gift'"
+    when:
+      - "ejecutar `donation_transaction.sql` post-fix sobre tucson filtrando `rev-10566216`"
+    then:
+      - "`rev-10566216` exporta con `npsp__Do_Not_Automatically_Create_Payments__c = 1`"
+      - "el donor/source `rev-10566213` exporta SIN cambio en su flag (solo afecta a la claim Opp)"
+      - "el linkage `npsp__Matching_Gift__c` entre donor Opp y claim Opp se preserva"
+
+  - title: "Tucson canonical — `rev-10566216` recibe exactamente 1 imported payment ($200)"
+    tags:
+      - happy-path
+      - ac-3
+      - tucson
+      - imported-payment-count
+    given:
+      - "el active matching-gift claim Tucson `rev-10566216` con 1 source payment transaction por $200"
+    when:
+      - "ejecutar `opportunity_payments.sql` post-fix sobre tucson filtrando `rev-10566216`"
+    then:
+      - "se exporta exactamente 1 `npe01__OppPayment__c` row para el claim opportunity"
+      - "el amount del payment es $200 (= source payment transaction amount)"
+      - "el payment importado referencia la claim Opportunity correctamente"
+      - "post-load en Salesforce: NPSP NO crea un auto-payment adicional para `rev-10566216` (validación pendiente sobre sandbox)"
+
+  - title: "Donations normales (NO matching-gift claims) mantienen auto-payment behavior sin cambio"
+    tags:
+      - regression
+      - ac-4
+      - non-claim-donation
+      - no-regression
+    given:
+      - "transactions de donation normales en Tucson que NO son active matching-gift claims"
+      - "pre-fix: estas transactions exportan con su flag de auto-payment según la lógica existente"
+    when:
+      - "ejecutar `donation_transaction.sql` post-fix sobre tucson"
+    then:
+      - "las transactions no matching-gift mantienen exactamente el mismo valor de `npsp__Do_Not_Automatically_Create_Payments__c` que en baseline (delta = 0)"
+      - "la lógica de suppression para no-claim Opps NO cambió (la fix solo amplía la regla para active matching-gift claims)"
+      - "ningún FA o Opportunity no matching-gift cambia de Implementation_External_ID o amount"
+
+  - title: "Query-regression suite cubre claim con APPLICATION != 'Matching gift' y payments importados"
+    tags:
+      - regression
+      - ac-5
+      - dev-tests
+      - static-guard
+    given:
+      - "la suite de query-regression del PR incluye al menos 1 spec para `donation_transaction.sql`"
+    when:
+      - "correr `npx jest donation-transaction` sobre la branch del PR"
+    then:
+      - "todos los specs PASAN (verde) sobre la branch del PR"
+      - "existe al menos 1 test nuevo que cubre el caso: active matching-gift claim cuyo root line APPLICATION != 'Matching gift' Y `opportunity_payments.sql` emite imported payment"
+      - "el test verifica que `npsp__Do_Not_Automatically_Create_Payments__c = 1` se setea en ese caso"
+
+tags:
+  - im-910
+  - im-913
+  - im-70
+  - tucson
+  - altru
+  - migration
+  - sql-server
+  - matching-gift
+  - npsp
+  - opportunity
+  - payment-suppression
+  - regression
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-12T18:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-12T18:00:00Z"
+  version: 1

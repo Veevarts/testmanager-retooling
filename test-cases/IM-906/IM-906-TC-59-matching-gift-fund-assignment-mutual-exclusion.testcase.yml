@@ -1,0 +1,170 @@
+schemaVersion: "1.0"
+
+id: "bc802813-8967-4671-916e-8f23f2c63913"
+key: "TC-59"
+title: "fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims (no duplicar FA)"
+description: |
+  Cobertura QA funcional de IM-906 "Prevent duplicate matching-gift fund
+  assignments".
+
+  Pre-fix: un active matching-gift claim era emitido por AMBAS queries de
+  fund-assignment (donations + payments), generando 2 FAs para el mismo
+  claim opportunity. La causa raíz: IM-619 / PR #100 amplió la inclusión
+  de matching-gift claims en `fund_assignment_payments.sql`, pero
+  `fund_assignment_donations.sql` solo excluía las líneas de matching-gift
+  PAYMENT (no las CLAIM ROOT transactions). La fix actualiza
+  `fund_assignment_donations.sql` para excluir también los active
+  matching-gift claim root transactions, garantizando que cada claim FA
+  sea emitido por exactamente UNA query.
+
+  Ejemplo canónico documentado en el ticket (Tucson Botanical Gardens):
+  - Source DB transaction `rev-10669731` (active matching-gift claim)
+  - Pre-fix: 1 FA en `fund_assignment_donations.sql` + 1 FA en
+    `fund_assignment_payments.sql` → 2 filas duplicadas para el mismo
+    claim opportunity
+  - Post-fix: 0 filas en donations + 1 fila en payments (ruta correcta)
+
+  Out of scope (NO regression):
+  - Refund FAs (viven en queries hermanas, no en donations/payments
+    matching-gift flow).
+  - Normal donations no matching-gift (deben seguir saliendo por
+    donations FA query — sin cambio).
+  - Pledge / matching-gift PAYMENT flows en payments query (deben seguir
+    saliendo — sin cambio).
+
+  Tickets relacionados:
+  - IM-906 padre (Error, In QA Review, High, reporter veevart_josed)
+  - IM-912 — QA Sub-task de IM-906
+  - IM-904 — relates to (Duplicado Membresía 2150 Club, fix análogo
+    sobre fund_assignment_memberships.sql)
+  - IM-910 — relates to (NPSP auto-payment suppression para claim Opps)
+  - PR: Veevarts/MigrationToolETL#130
+
+  Cobertura por AC (5 ACs en el ticket → 5 scenarios):
+  - AC1 (active matching-gift claim NO emitido por ambas queries) →
+    Scenario 1
+  - AC2 (Tucson `rev-10669731` solo en la ruta correcta) → Scenario 2
+  - AC3 (normal donations sin cambio) → Scenario 3
+  - AC4 (pledge + matching-gift payment flows sin cambio) → Scenario 4
+  - AC5 (query-regression suite cubre mutual exclusion) → Scenario 5
+
+  Limitaciones (NO levantar como bug):
+  - Cross-customer audit (otros profiles Altru: High Desert, MOAD,
+    Aspen, Illinois) queda fuera de scope. La fix es un único cambio
+    SQL sin lógica per-customer; validar sobre Tucson valida el
+    comportamiento sobre Altru-the-system (mismo razonamiento que
+    IM-904 / TC-58 / TR-067).
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Branch del PR #130 (Veevarts/MigrationToolETL) checkeada y compilable"
+  - "Acceso safesql al profile `tucson` (tucson_db_3)"
+  - "Dataset Altru fuente con el active matching-gift claim `rev-10669731` confirmado en `REVENUEMATCHINGGIFT`"
+  - "Acceso a logs de safesql para baseline (rama base) vs post-fix"
+
+format: gherkin
+scenarios:
+  - title: "Active matching-gift claim NO es emitido por ambas FA queries (mutual exclusion)"
+    tags:
+      - happy-path
+      - ac-1
+      - mutual-exclusion
+      - matching-gift-claim
+    given:
+      - "un active matching-gift claim cuyo root transaction tiene una donation/gift line"
+      - "pre-fix: la claim aparece en el output tanto de `fund_assignment_donations.sql` como de `fund_assignment_payments.sql`"
+    when:
+      - "ejecutar ambas queries post-fix sobre el profile `tucson` filtrando ese claim"
+    then:
+      - "el claim aparece en EXACTAMENTE UNA de las dos queries (no en las dos)"
+      - "el conteo total de FAs para el claim opportunity es 1 (no 2)"
+      - "el FA emitido referencia el matching-gift opportunity correcto"
+
+  - title: "Tucson canonical — `rev-10669731`: solo la ruta correcta emite el FA del claim"
+    tags:
+      - happy-path
+      - ac-2
+      - tucson
+      - canonical-example
+    given:
+      - "el active matching-gift claim Tucson `rev-10669731`"
+      - "pre-fix: `fund_assignment_donations.sql` emite 1 fila + `fund_assignment_payments.sql` emite 1 fila para el mismo claim opportunity"
+    when:
+      - "ejecutar ambas queries post-fix sobre tucson filtrando `rev-10669731`"
+    then:
+      - "`fund_assignment_donations.sql` ya NO emite fila para `rev-10669731` (excluido por la nueva regla)"
+      - "`fund_assignment_payments.sql` sigue emitiendo exactamente 1 fila para `rev-10669731` (ruta correcta)"
+      - "el conteo total para el claim opportunity baja de 2 a 1 (delta exacto vs pre-fix)"
+      - "el amount, el opportunity ID y el constituent del claim se mantienen iguales (la fix solo elimina el duplicado)"
+
+  - title: "Donations normales (no matching-gift claims) siguen siendo emitidas por donations FA query (no regresión)"
+    tags:
+      - regression
+      - ac-3
+      - non-claim-donation
+      - no-regression
+    given:
+      - "una donation transaction normal en Tucson que NO es un matching-gift claim (active REVENUEMATCHINGGIFT no existe para esta transaction)"
+      - "pre-fix: la donation aparece en `fund_assignment_donations.sql`"
+    when:
+      - "ejecutar `fund_assignment_donations.sql` post-fix sobre tucson"
+    then:
+      - "la donation NO matching-gift sigue siendo emitida por donations FA query (sin cambio respecto a baseline)"
+      - "el delta de FAs no matching-gift entre baseline y post-fix es 0"
+      - "ningún FA no matching-gift cambia de Implementation_External_ID o Posted_Date"
+
+  - title: "Pledge y matching-gift PAYMENT flows en payments FA query siguen funcionando (no regresión en payments)"
+    tags:
+      - regression
+      - ac-4
+      - payments-preserved
+      - no-regression
+    given:
+      - "transactions de tipo pledge payment y de tipo matching-gift payment (no claim root) en Tucson"
+      - "pre-fix: ambas son emitidas por `fund_assignment_payments.sql`"
+    when:
+      - "ejecutar `fund_assignment_payments.sql` post-fix sobre tucson"
+    then:
+      - "las pledges payments siguen siendo emitidas por payments FA query (delta = 0)"
+      - "los matching-gift payments (no claim root) siguen siendo emitidos por payments FA query (delta = 0)"
+      - "el cambio en la donations FA query NO se propagó al output de payments FA query"
+
+  - title: "Query-regression suite cubre matching-gift claim mutual exclusion (guard estático en dev tests)"
+    tags:
+      - regression
+      - ac-5
+      - dev-tests
+      - static-guard
+    given:
+      - "la suite de query-regression del PR incluye specs para `fund_assignment_donations.sql` y `fund_assignment_payments.sql`"
+    when:
+      - "correr `npx jest fund-assignment-` sobre la branch del PR"
+    then:
+      - "todos los specs PASAN (verde) sobre la branch del PR"
+      - "existe al menos 1 test nuevo agregado por el dev que asegura el exclude de active matching-gift claim roots en donations FA query"
+      - "el test verifica el string SQL del exclude (guard estático del shape de query)"
+
+tags:
+  - im-906
+  - im-912
+  - im-70
+  - tucson
+  - altru
+  - migration
+  - sql-server
+  - fund-assignment
+  - matching-gift
+  - mutual-exclusion
+  - regression
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-12T18:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-12T18:00:00Z"
+  version: 1

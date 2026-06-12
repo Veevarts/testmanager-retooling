@@ -1,0 +1,377 @@
+schemaVersion: "1.0"
+id: tr-775c17c1-2bf0-4a95-83b3-226a0b2df851
+key: TR-068
+title: >-
+  Run TC-59 — IM-906 PR #130 (mutual exclusion para active matching-gift claims entre donations/payments FA queries) — 5/5
+  PASS · Tucson (Altru) 231 claim FAs removidos de donations · canonical rev-10669731 2 FAs → 1 FA · sin defectos
+status: completed
+environment:
+  name: >-
+    Local clone of Veevarts/MigrationToolETL on branch
+    story/prevent-duplicate-matching-gift-fund-assignments-IM-906 (PR #130) at /tmp/MigrationToolETL. Node v25.4.0.
+    safesql tucson OK (tucson_db_3 @ ec2-100-56-250-103).
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/130"
+  buildVersion: >-
+    Classification: SQL-only (1 SQL file modified: fund_assignment_donations.sql + 2 jest specs + openspec docs).
+    Solution: agrega un NOT EXISTS clause sobre REVENUEMATCHINGGIFT.ISACTIVE = 1 al EligibleLines CTE de la donations FA
+    query, excluyendo active matching-gift claim root transactions y delegando su emisión a payments FA query.
+startedAt: "2026-06-12T18:00:00.000Z"
+completedAt: "2026-06-12T19:30:00.000Z"
+notes: |
+  ## Solution understood
+  fund_assignment_donations.sql agrega 1 nuevo bloque NOT EXISTS al CTE EligibleLines (líneas 51-56):
+    AND NOT EXISTS (
+      SELECT 1 FROM REVENUEMATCHINGGIFT rmg_claim
+      WHERE rmg_claim.ID = ft.ID AND rmg_claim.ISACTIVE = 1
+    )
+  Esto excluye los active matching-gift claim ROOT transactions de la donations FA query, garantizando que cada claim
+  Opportunity sea emitido por exactamente UNA query (payments). Pre-fix había duplicación: la misma claim Opp
+  recibía 1 FA de donations + 1 FA de payments. Post-fix: 0 de donations + 1 de payments = 1 total.
+
+  ## Validation summary
+  - Unit tests: 8/8 PASS en matching-gift-query.spec.ts (incluye guard nuevo IM-906 del exclude)
+  - Tucson donations FA: baseline 57,070 rows vs post-fix 56,839 rows (231 active claim FAs removidos)
+  - Tucson set integrity: 0 keys nuevas en post-fix; 0 cambios de campo en las 56,839 non-claim donations que quedan
+  - Canonical rev-10669731 (FT.ID 8C335D60-BB46-45E1-AEEE-9DE1BEC9A0C7): pre-fix 2 FAs (1 donations + 1 payments) →
+    post-fix 1 FA (0 donations + 1 payments). Mutual exclusion confirmada.
+  - Sibling queries (payments, memberships): byte-idénticas entre branches → 0 regresión posible
+  - OWASP: 1/10 Applicable (A03 Injection) → PASS; 9/10 N/A con justificación
+results:
+  - testCaseId: "bc802813-8967-4671-916e-8f23f2c63913"
+    testCaseKey: TC-59
+    testCaseTitle: >-
+      fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims
+    testCaseFilePath: test-cases/IM-906/IM-906-TC-59-matching-gift-fund-assignment-mutual-exclusion.testcase.yml
+    scenarioTitle: "Active matching-gift claim NO es emitido por ambas FA queries (mutual exclusion)"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-06-12T19:11:11.696Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: >-
+          231 active matching-gift claim root transactions identificados en Tucson via REVENUEMATCHINGGIFT.ISACTIVE = 1.
+          Pre-fix: cada uno emitía un FA en donations Y un FA en payments → 462 FAs totales para 231 claims.
+        phase: given
+        text: un active matching-gift claim cuyo root transaction tiene una donation/gift line
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado vía probe + comparación baseline (main) vs post-fix (PR-130)."
+        phase: given
+        text: "pre-fix: la claim aparece en el output tanto de fund_assignment_donations.sql como de fund_assignment_payments.sql"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          Ejecutado: `node safesql.mjs run tucson fund_assignment_donations.sql --allow-rows 0 --allow-wildcard` en
+          main (baseline) y luego en pr-130 (post-fix). Diff por vnfp__Implementation_External_ID__c.
+        phase: when
+        text: ejecutar ambas queries post-fix sobre el profile tucson filtrando ese claim
+        attachments:
+          - name: comparison-matrix.txt
+            path: attachments/tr-068-tc-59/scenario-1/comparison-matrix.txt
+            mimeType: text/plain
+            size: 1357
+      - order: 4
+        status: passed
+        actual: >-
+          231 keys removidas de donations FA query post-fix (= 100% de active matching-gift claim FAs). 0 keys nuevas
+          en post-fix. Mutual exclusion holds: cada claim aparece en EXACTAMENTE 1 query.
+        phase: then
+        text: el claim aparece en EXACTAMENTE UNA de las dos queries (no en las dos)
+        attachments: []
+      - order: 5
+        status: passed
+        actual: >-
+          Pre-fix: 2 FAs por claim Opp (1 donations + 1 payments). Post-fix: 1 FA por claim Opp (0 donations + 1
+          payments). Cardinalidad de FAs por claim baja exactamente de 2 a 1.
+        phase: then
+        text: el conteo total de FAs para el claim opportunity es 1 (no 2)
+        attachments: []
+      - order: 6
+        status: passed
+        actual: >-
+          El FA en payments query referencia la claim Opportunity correctamente via vnfp__Opportunity__c = claim FT.ID.
+        phase: then
+        text: el FA emitido referencia el matching-gift opportunity correcto
+        attachments: []
+    notes: >-
+      Scenario 1 PASS. Mutual exclusion confirmada sobre el universo completo de active matching-gift claims en Tucson (231 claims).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-068-tc-59/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1357
+    defects: []
+  - testCaseId: "bc802813-8967-4671-916e-8f23f2c63913"
+    testCaseKey: TC-59
+    testCaseTitle: >-
+      fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims
+    testCaseFilePath: test-cases/IM-906/IM-906-TC-59-matching-gift-fund-assignment-mutual-exclusion.testcase.yml
+    scenarioTitle: "Tucson canonical — `rev-10669731`: solo la ruta correcta emite el FA del claim"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-06-12T19:11:11.696Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Confirmado vía probe: rev-10669731 mapea a FT.ID 8C335D60-BB46-45E1-AEEE-9DE1BEC9A0C7 con RMG.ISACTIVE = 1."
+        phase: given
+        text: el active matching-gift claim Tucson rev-10669731
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Baseline donations FA query: 1 FA para Opp 8C335D60-... + baseline payments: 1 FA → 2 FAs total para el claim."
+        phase: given
+        text: "pre-fix: fund_assignment_donations.sql emite 1 fila + fund_assignment_payments.sql emite 1 fila para el mismo claim opportunity"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado sobre tucson en ambas branches; diff por Opportunity claim ID."
+        phase: when
+        text: ejecutar ambas queries post-fix sobre tucson filtrando rev-10669731
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Post-fix donations FA query: 0 FAs para Opp 8C335D60-... (claim excluido por el nuevo NOT EXISTS REVENUEMATCHINGGIFT)."
+        phase: then
+        text: fund_assignment_donations.sql ya NO emite fila para rev-10669731 (excluido por la nueva regla)
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Post-fix payments FA query: 1 FA para Opp 8C335D60-... (payments query no cambió, sigue emitiendo el claim)."
+        phase: then
+        text: fund_assignment_payments.sql sigue emitiendo exactamente 1 fila para rev-10669731 (ruta correcta)
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "Pre-fix: 2 FAs (1+1). Post-fix: 1 FA (0+1). Delta = -1 exacto."
+        phase: then
+        text: el conteo total para el claim opportunity baja de 2 a 1 (delta exacto vs pre-fix)
+        attachments: []
+      - order: 7
+        status: passed
+        actual: "El FA restante (payments) mantiene amount, vnfp__Opportunity__c, y constituent iguales al baseline."
+        phase: then
+        text: el amount, opportunity ID y constituent del claim se mantienen iguales
+        attachments: []
+    notes: "Scenario 2 PASS. Canonical example reconciliado exactamente con lo descrito en el ticket."
+    attachments: []
+    defects: []
+  - testCaseId: "bc802813-8967-4671-916e-8f23f2c63913"
+    testCaseKey: TC-59
+    testCaseTitle: >-
+      fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims
+    testCaseFilePath: test-cases/IM-906/IM-906-TC-59-matching-gift-fund-assignment-mutual-exclusion.testcase.yml
+    scenarioTitle: "Donations normales (no matching-gift claims) siguen siendo emitidas por donations FA query (no regresión)"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-06-12T19:11:11.696Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: "Tucson tiene 56,839 donations no-claim en el output de donations FA query post-fix."
+        phase: given
+        text: una donation transaction normal en Tucson que NO es un matching-gift claim
+        attachments: []
+      - order: 2
+        status: passed
+        actual: "Confirmado: las 56,839 keys están presentes en baseline donations también."
+        phase: given
+        text: "pre-fix: la donation aparece en fund_assignment_donations.sql"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado sobre tucson en ambas branches."
+        phase: when
+        text: ejecutar fund_assignment_donations.sql post-fix sobre tucson
+        attachments:
+          - name: non-claim-donations-preserved.txt
+            path: attachments/tr-068-tc-59/scenario-3/non-claim-donations-preserved.txt
+            mimeType: text/plain
+            size: 602
+      - order: 4
+        status: passed
+        actual: "Las 56,839 non-claim donations siguen en donations FA query post-fix sin cambios."
+        phase: then
+        text: la donation no matching-gift sigue siendo emitida por donations FA query (sin cambio respecto a baseline)
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Set integrity check: 0 keys en baseline-only excluyendo las 231 active claims; 0 keys en post-fix-only."
+        phase: then
+        text: el delta de FAs no matching-gift entre baseline y post-fix es 0
+        attachments: []
+      - order: 6
+        status: passed
+        actual: >-
+          Byte-equality check sobre las 56,839 keys present en ambos: 0 diffs en cualquier campo
+          (vnfp__Implementation_External_ID__c, Auctifera__Posted_Date__c, amount, opportunity, etc.).
+        phase: then
+        text: ningún FA no matching-gift cambia de Implementation_External_ID o Posted_Date
+        attachments: []
+    notes: "Scenario 3 PASS. Cero regresión sobre donations no matching-gift."
+    attachments:
+      - name: non-claim-donations-preserved.txt
+        path: attachments/tr-068-tc-59/scenario-3/non-claim-donations-preserved.txt
+        mimeType: text/plain
+        size: 602
+    defects: []
+  - testCaseId: "bc802813-8967-4671-916e-8f23f2c63913"
+    testCaseKey: TC-59
+    testCaseTitle: >-
+      fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims
+    testCaseFilePath: test-cases/IM-906/IM-906-TC-59-matching-gift-fund-assignment-mutual-exclusion.testcase.yml
+    scenarioTitle: "Pledge y matching-gift PAYMENT flows en payments FA query siguen funcionando (no regresión en payments)"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-06-12T19:13:13.520Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: >-
+          Confirmed vía `git diff main...pr-130 -- src/.../fund_assignment_payments.sql` = EMPTY DIFF.
+          Sibling query es byte-idéntica entre branches.
+        phase: given
+        text: transactions de pledge payment y matching-gift payment (no claim root) en Tucson
+        attachments:
+          - name: payments-preserved.txt
+            path: attachments/tr-068-tc-59/scenario-4/payments-preserved.txt
+            mimeType: text/plain
+            size: 627
+      - order: 2
+        status: passed
+        actual: "Asumido por byte-equality de la SQL: si no cambió, el output no puede cambiar."
+        phase: given
+        text: "pre-fix: ambas son emitidas por fund_assignment_payments.sql"
+        attachments: []
+      - order: 3
+        status: passed
+        actual: "Ejecutado: payments FA query devuelve 2,836 rows sobre tucson (mismo número en main y pr-130)."
+        phase: when
+        text: ejecutar fund_assignment_payments.sql post-fix sobre tucson
+        attachments: []
+      - order: 4
+        status: passed
+        actual: "Por byte-identical SQL, delta = 0 garantizado. Pledges payments preservados."
+        phase: then
+        text: las pledges payments siguen siendo emitidas por payments FA query (delta = 0)
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "Por byte-identical SQL, delta = 0 garantizado. Matching-gift payments (no claim) preservados."
+        phase: then
+        text: los matching-gift payments (no claim root) siguen siendo emitidos por payments FA query (delta = 0)
+        attachments: []
+      - order: 6
+        status: passed
+        actual: "El cambio del PR queda contenido en donations FA query; payments output no se ve afectado."
+        phase: then
+        text: el cambio en la donations FA query NO se propagó al output de payments FA query
+        attachments: []
+    notes: "Scenario 4 PASS por aislamiento estático + verificación de output count."
+    attachments:
+      - name: payments-preserved.txt
+        path: attachments/tr-068-tc-59/scenario-4/payments-preserved.txt
+        mimeType: text/plain
+        size: 627
+    defects: []
+  - testCaseId: "bc802813-8967-4671-916e-8f23f2c63913"
+    testCaseKey: TC-59
+    testCaseTitle: >-
+      fund_assignment_donations.sql vs fund_assignment_payments.sql — mutual exclusion para active matching-gift claims
+    testCaseFilePath: test-cases/IM-906/IM-906-TC-59-matching-gift-fund-assignment-mutual-exclusion.testcase.yml
+    scenarioTitle: "Query-regression suite cubre matching-gift claim mutual exclusion (guard estático en dev tests)"
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-06-12T18:50:00.000Z"
+    stepResults:
+      - order: 1
+        status: passed
+        actual: >-
+          PR-130 incluye matching-gift-query.spec.ts (modificado) y matching-gift-query-chain.integration.spec.ts
+          (nuevo, skipped por requerir SQL Server real). 8 tests en el spec unitario, todos verdes.
+        phase: given
+        text: la suite de query-regression del PR incluye specs para fund_assignment_donations.sql y fund_assignment_payments.sql
+        attachments:
+          - name: dev-tests-coverage.txt
+            path: attachments/tr-068-tc-59/scenario-5/dev-tests-coverage.txt
+            mimeType: text/plain
+            size: 974
+      - order: 2
+        status: passed
+        actual: >-
+          Ejecutado: `npx jest matching-gift-query --runInBand` → Tests: 4 skipped, 8 passed, 12 total. Suite 1 passed,
+          1 skipped (integration).
+        phase: when
+        text: correr `npx jest fund-assignment-` sobre la branch del PR
+        attachments:
+          - name: test-run-log.txt
+            path: attachments/tr-068-tc-59/scenario-0-unit-tests/test-run-log.txt
+            mimeType: text/plain
+            size: 949
+      - order: 3
+        status: passed
+        actual: "8/8 tests PASS en matching-gift-query.spec.ts. Integration spec skipped (no SQL Server)."
+        phase: then
+        text: todos los specs PASAN (verde) sobre la branch del PR
+        attachments: []
+      - order: 4
+        status: passed
+        actual: >-
+          Test nuevo: 'fund_assignment_donations.sql excludes active matching-gift claim root transactions'
+          (en describe 'IM-619 matching-gift query invariants'). Verifica el NOT EXISTS REVENUEMATCHINGGIFT clause.
+        phase: then
+        text: existe al menos 1 test nuevo agregado por el dev que asegura el exclude de active matching-gift claim roots en donations FA query
+        attachments: []
+      - order: 5
+        status: passed
+        actual: "El test verifica el string SQL del exclude (toContain match), confirmando que el clause está en la query."
+        phase: then
+        text: el test verifica el string SQL del exclude (guard estático del shape de query)
+        attachments: []
+    notes: "Scenario 5 PASS. Dev tests cubren mutual exclusion estáticamente."
+    attachments:
+      - name: dev-tests-coverage.txt
+        path: attachments/tr-068-tc-59/scenario-5/dev-tests-coverage.txt
+        mimeType: text/plain
+        size: 974
+    defects: []
+history:
+  - action: started
+    timestamp: "2026-06-12T18:00:00.000Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: "Ejecución TC-59 iniciada (PR #130)"
+  - action: completed
+    timestamp: "2026-06-12T19:30:00.000Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: "5/5 scenarios PASS. Mutual exclusion confirmada para 231 active matching-gift claims en Tucson. Sin defectos."
+defects: []
+attachments:
+  - name: regression-plan.txt
+    path: attachments/tr-068-tc-59/regression-plan.txt
+    mimeType: text/plain
+    size: 2550
+  - name: regression-results.txt
+    path: attachments/tr-068-tc-59/regression-results.txt
+    mimeType: text/plain
+    size: 277
+  - name: owasp-top10-scan.txt
+    path: attachments/tr-068-tc-59/owasp-top10-scan.txt
+    mimeType: text/plain
+    size: 2314
+  - name: test-run-log.txt
+    path: attachments/tr-068-tc-59/scenario-0-unit-tests/test-run-log.txt
+    mimeType: text/plain
+    size: 949
+metadata:
+  createdBy: codex
+  createdAt: "2026-06-12T19:30:00.000Z"
+  updatedBy: codex
+  updatedAt: "2026-06-12T19:30:00.000Z"
+  version: 1
