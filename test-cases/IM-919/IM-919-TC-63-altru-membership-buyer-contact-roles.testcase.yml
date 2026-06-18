@@ -1,0 +1,216 @@
+schemaVersion: "1.0"
+
+id: "cd3b9d39-2635-4d70-b60c-a6fa687ebf75"
+key: "TC-63"
+title: "contact_roles.sql — emitir Buyer Contact Role (IsPrimary) para el resolved primary contact de membership Opportunities cuando difiere del member"
+description: |
+  Cobertura QA funcional de IM-919 "Altru - Gift Memberships migradas no
+  muestran al Primary Contact en Contact Roles".
+
+  Pre-fix: `contact_roles.sql` emite filas de membership Contact Role solo
+  desde records `[MEMBER]` (`Role = 'Member'`). Para gift memberships, la
+  persona que compra/otorga la membresía (resolved primary contact /
+  buyer) NO aparece en los Contact Roles de la Opportunity migrada — solo
+  aparece el member que la recibe. La Opportunity sí se crea bien; el
+  defecto es de cardinalidad de Contact Roles.
+
+  La fix actualiza `contact_roles.sql` para que replique la cadena de
+  fallback del primary contact que ya usa `membership_transactions.sql`
+  (valid `SALESORDERITEMMEMBERSHIP.GIVENBYID` → `MEMBERSHIPTRANSACTION.DONORID`
+  → resolved financial transaction constituent → primary member), emita
+  candidatos member y buyer, deduplique por `(OpportunityId, ContactId)` y
+  marque la fila buyer como primary cuando difiere del member.
+
+  Ejemplo canónico documentado en el ticket (Tucson Botanical Gardens):
+  - Revenue ID: `rev-10626550`
+  - Primary Contact / buyer (quien da la membresía): Adriana Lopez
+  - Primary Member (quien recibe la gift membership): Slawomir Bucki
+  - Salesforce Contact (member): 003Vz00000oPMIoIAO
+  - Nuance crítico: en este sample el primary contact se resuelve a través
+    del fallback de financial transaction constituent, NO por `GIVENBYID`
+    ni `DONORID`. Una fix que solo agregue filas gift/giver NO arreglaría
+    este caso — la cadena de fallback completa es obligatoria.
+
+  Scope agregado Tucson (evidencia del ticket, safesql aggregate-only):
+  - 98,905 membership primary-member opportunity rows elegibles.
+  - 5,932 rows/opportunities con resolved primary contact distinto del
+    primary member (incluye 3,670 gift rows).
+
+  Out of scope (NO regression):
+  - Opportunities cuyo resolved primary contact ES el mismo member: deben
+    seguir emitiendo exactamente 1 fila `(OpportunityId, ContactId)` (sin
+    duplicar por agregar el buyer).
+  - Membership Opportunities que no son elegibles bajo IM-583: no deben
+    aparecer (la fix no debe relajar la elegibilidad).
+  - Non-membership Contact Roles (donation, etc.): fuera de alcance.
+
+  Tickets relacionados:
+  - IM-919 padre (Historia, Is Ready For QA, Medium, epic IM-70 Altru
+    Queries, account Tucson, reporter Sara Montenegro)
+  - IM-945 — QA Sub-task de IM-919
+  - IM-583 — eligibility protections que deben preservarse (regression)
+  - PR: 1 PR OPEN en Veevarts/MigrationToolETL (story/altru-gift-memberships-migradas-no-muestran-al-IM-919)
+
+  Cobertura por AC (5 ACs en el ticket → scenarios 1-5) + ejemplo canónico
+  (scenario 6) + query-regression suite (scenario 7):
+  - AC1 (resolved primary contact != member → Buyer row con IsPrimary=true) → Scenario 1
+  - AC2 (la misma Opp con member → member sigue con Member role) → Scenario 2
+  - AC3 (buyer != member → member row NO marcado primary) → Scenario 3
+  - AC4 (buyer == member → una sola fila `(OpportunityId, ContactId)`) → Scenario 4
+  - AC5 (IM-583 eligibility preservada) → Scenario 5
+  - Ejemplo canónico Tucson `rev-10626550` vía financial-transaction fallback → Scenario 6
+  - Query-regression suite (buyer/member output, primary flags, eligibility) → Scenario 7
+
+  Limitaciones / riesgos (NO levantar como bug sin confirmar):
+  - Target org role-picklist support para `Buyer`: debe confirmarse en el
+    org destino antes de la validación de load final. Si el picklist no
+    soporta `Buyer`, el load fallaría — es un pre-requisito, no un defecto
+    de la query.
+  - Validación funcional en Lightning (el buyer aparece en Contact Roles
+    bajo la Opportunity) queda como pendiente manual sobre sandbox/post-load:
+    la fix se valida en el output SQL pre-load; la confirmación en UI
+    requiere observar el registro migrado.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Branch del PR (Veevarts/MigrationToolETL, story/altru-gift-memberships-migradas-no-muestran-al-IM-919) checkeada y compilable"
+  - "Acceso safesql al profile `tucson`"
+  - "Membership Opportunity de ejemplo `rev-10626550` (buyer Adriana Lopez resuelto vía financial transaction constituent, member Slawomir Bucki) confirmada en source"
+  - "Acceso a logs de safesql para comparar baseline (rama base) vs post-fix sobre `contact_roles.sql`"
+  - "Confirmar soporte de `Buyer` en el role-picklist del org destino antes de la validación de load"
+
+format: gherkin
+scenarios:
+  - title: "Membership Opportunity con resolved primary contact distinto del member emite un Buyer Contact Role con IsPrimary = true"
+    tags:
+      - happy-path
+      - ac-1
+      - contact-roles
+      - buyer-role
+    given:
+      - "una membership Opportunity migrada elegible cuyo resolved primary contact (cadena de fallback: GIVENBYID → DONORID → financial transaction constituent → primary member) difiere del primary member"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson filtrando esa Opportunity"
+    then:
+      - "el export incluye una fila de Contact Role con `Role = 'Buyer'` para el resolved primary contact"
+      - "esa fila buyer tiene `IsPrimary = true`"
+      - "el contacto del buyer corresponde al resolved primary contact de la cadena de fallback (no a un giver hardcodeado solo por GIVENBYID/DONORID)"
+
+  - title: "La misma membership Opportunity sigue emitiendo el Member Contact Role para el member que recibe"
+    tags:
+      - happy-path
+      - ac-2
+      - contact-roles
+      - member-role
+    given:
+      - "la misma membership Opportunity del Scenario 1 que también tiene un receiving member"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson filtrando esa Opportunity"
+    then:
+      - "el export sigue incluyendo una fila de Contact Role con `Role = 'Member'` para el member que recibe la membresía"
+      - "la fila member no se pierde ni se reemplaza al agregar el buyer (ambos roles coexisten)"
+
+  - title: "Cuando el buyer difiere del member, el Member Contact Role NO queda marcado como primary"
+    tags:
+      - edge-case
+      - ac-3
+      - contact-roles
+      - primary-flag
+    given:
+      - "una membership Opportunity cuyo resolved primary contact difiere del primary member"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson filtrando esa Opportunity"
+    then:
+      - "la fila `Role = 'Member'` tiene `IsPrimary = false` (o no marcado primary)"
+      - "solo la fila buyer queda con `IsPrimary = true` para esa Opportunity"
+      - "no hay dos filas marcadas primary para la misma Opportunity"
+
+  - title: "Cuando el buyer y el member son la misma persona, se emite una sola fila (OpportunityId, ContactId)"
+    tags:
+      - edge-case
+      - ac-4
+      - contact-roles
+      - dedupe
+    given:
+      - "una membership Opportunity cuyo resolved primary contact es la MISMA persona que el primary member"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson filtrando esa Opportunity"
+    then:
+      - "se emite exactamente una fila `(OpportunityId, ContactId)` para ese contacto/opportunity"
+      - "no se duplica la fila por haber agregado la lógica del buyer (dedupe por `(OpportunityId, ContactId)`)"
+      - "la fila resultante mantiene un único `IsPrimary` coherente para esa Opportunity"
+
+  - title: "Las protecciones de elegibilidad de IM-583 se preservan (solo contactos individuales exportables y membership Opportunities elegibles)"
+    tags:
+      - regression
+      - ac-5
+      - im-583
+      - eligibility
+    given:
+      - "el universo de membership Opportunities de tucson con las protecciones de elegibilidad de IM-583 vigentes"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson"
+    then:
+      - "todas las filas de Contact Role (member y buyer) referencian contactos individuales exportables"
+      - "todas las filas referencian solo membership Opportunities elegibles bajo IM-583"
+      - "la fix NO introduce filas para contactos no exportables ni para Opportunities no elegibles (sin relajar la elegibilidad)"
+
+  - title: "Tucson canonical — rev-10626550: el buyer (Adriana Lopez) resuelto vía financial-transaction-constituent fallback aparece como Buyer primary y el member (Slawomir Bucki) como Member"
+    tags:
+      - regression-evidence
+      - tucson
+      - canonical-example
+      - financial-transaction-fallback
+    given:
+      - "la membership Opportunity Tucson `rev-10626550` con buyer Adriana Lopez (resuelto por financial transaction constituent, NO por GIVENBYID/DONORID) y member Slawomir Bucki"
+      - "pre-fix: la membresía solo aparece bajo Slawomir Bucki en los Contact Roles"
+    when:
+      - "ejecutar `contact_roles.sql` post-fix sobre tucson filtrando `rev-10626550`"
+    then:
+      - "el export emite una fila `Role = 'Buyer'` `IsPrimary = true` para Adriana Lopez"
+      - "el export emite una fila `Role = 'Member'` para Slawomir Bucki (sin primary)"
+      - "se confirma que el buyer se resolvió por el fallback de financial transaction constituent (caso que una fix gift/giver-only NO cubriría)"
+      - "post-load en Salesforce: bajo la Opportunity migrada, Adriana Lopez aparece en Contact Roles como buyer/primary (validación pendiente sobre sandbox)"
+
+  - title: "Query-regression suite cubre buyer/member output, primary flags y elegibilidad IM-583"
+    tags:
+      - regression
+      - dev-tests
+      - static-guard
+    given:
+      - "la suite de query-regression del PR incluye specs para `contact_roles.sql`"
+    when:
+      - "correr la suite de query-regression de `contact_roles.sql` sobre la branch del PR"
+    then:
+      - "todos los specs PASAN (verde) sobre la branch del PR"
+      - "existe al menos 1 test nuevo que cubre: resolved primary contact != member → fila Buyer con IsPrimary=true Y member con Member role sin primary"
+      - "existe cobertura para el caso buyer == member → una sola fila `(OpportunityId, ContactId)`"
+      - "los specs verifican que la elegibilidad IM-583 sigue restringiendo a contactos exportables y Opportunities elegibles"
+
+tags:
+  - im-919
+  - im-945
+  - im-70
+  - tucson
+  - altru
+  - migration
+  - sql-server
+  - contact-roles
+  - membership
+  - gift-membership
+  - buyer-role
+  - primary-contact
+  - im-583
+  - regression
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-18T16:47:29Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-18T16:47:29Z"
+  version: 1
