@@ -1,0 +1,26 @@
+Baseline (merge-base cc4069f) vs Post-fix (PR #134) — safesql tucson (tucson_db_3), 2026-06-18
+Date params unbound (@hasDateFilterFrom/To = 0 -> full universe). String column 'Role' redacted by safesql (PII policy); counts are numeric.
+
+| Metric                         | Baseline   | Post-fix          | Delta   | AC ref | Verdict |
+|--------------------------------|------------|-------------------|---------|--------|---------|
+| Role rows — Member             | 128,409    | 128,409           | 0       | AC2    | PASS (member rows preserved, none lost) |
+| Role rows — Donor (new)        | 0          | 4,298             | +4,298  | AC1    | PASS (buyer/resolved-primary row emitted; all IsPrimary=1) |
+| Primary rows — Member          | 98,761     | 94,463            | -4,298  | AC3    | PASS (member flips to non-primary where a separate primary exists) |
+| Primary rows — Donor           | 0          | 4,298             | +4,298  | AC3    | PASS (donor becomes the primary; flips conserved 1:1) |
+| Primary rows — TOTAL           | 98,761     | 98,761            | 0       | AC3    | PASS (exactly one primary per opportunity conserved) |
+| Duplicate (OpportunityId,ContactId) pairs | n/a | 0          | 0       | AC4    | PASS (dedupe holds at scale) |
+| Opportunities with >1 primary  | n/a        | 0                 | 0       | AC3    | PASS (no double-primary) |
+
+INTEGRITY HIGHLIGHT: member-primary losses (4,298) == donor-primary gains (4,298) == new donor rows (4,298).
+The fix neither creates nor destroys "primary" cardinality; it reassigns the primary flag from member to buyer
+on exactly the 4,298 opportunities where a separate resolved primary contact exists.
+
+RECONCILIATION vs ticket aggregate (5,932 differ, incl 3,670 gift):
+4,298 Donor rows <= 5,932 "resolved primary != member" rows. Expected gap (~1,634): the Donor candidate is only
+emitted when the resolved primary contact is an INDIVIDUAL constituent (ISORGANIZATION=0, ISGROUP=0, ISCONSTITUENT=1)
+AND is not already a member role on the same opportunity (NOT EXISTS guard). Org/group resolved primaries are
+correctly EXCLUDED (Accounts are not valid OpportunityContactRole contacts) -> this is the IM-583 eligibility
+protection working (AC5). Not a defect.
+
+CAVEAT: the role label itself ('Donor') is the subject of defect IM-946 — the data shape is correct, the picklist
+value is not. The counts above validate cardinality/primary/dedupe regardless of the label.
