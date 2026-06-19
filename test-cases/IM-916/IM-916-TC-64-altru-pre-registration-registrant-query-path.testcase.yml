@@ -1,0 +1,278 @@
+schemaVersion: "1.0"
+
+id: "c5b7f04f-cc31-42bd-8a47-bf06173ed86e"
+key: "TC-64"
+title: "Altru — Pre-Registration Registrant query path con anti-joins (formal link, attendance overlap, same-event ticket candidate, CONSTITUENTID NULL, WILLNOTATTEND) en `MigrationToolETL`"
+description: |
+  Cobertura QA integración para IM-916 "Altru - Add Pre-Registration
+  Registrant Query Path to Ticketing Migration".
+
+  El dev agrega una query path dedicada al grain REGISTRANT.ID para
+  capturar standalone pre-registration registrants que actualmente se
+  pierden en el migration de Ticketing/Attendance (porque las queries
+  existentes dependen de SALESORDERITEMEVENTREGISTRANTREGISTRATION /
+  EVENTPRICE / REGISTRANTREGISTRATION).
+
+  Caso de Aspen Historical Society:
+  - 5,882 REGISTRANT rows / 762 events.
+  - 526 registrants en 101 events sin link a current ticket export paths.
+  - 760 events con registrants sin EVENTPRICE.
+  - Aspen History 101 (2026-01-11): 5 direct REGISTRANT rows, todos
+    "Preregistration / Registered", 0 sale-order / ticket links,
+    0 overlap con current attendance.
+
+  Cross-profile (safesql SHA `c436ff7261cc`):
+  - 7 perfiles alcanzables (Aspen, Everson, High Desert, Illinois,
+    Kidstream, MOAD, Tucson). `muhammed2` falló 2 veces con timeout.
+  - 185,427 direct REGISTRANT rows totales.
+  - Safe agreed rule: 142,360 rows (139,017 registered-like).
+  - Safe conservative rule: 139,569 rows (139,005 registered-like) en
+    943 events. **El dev recomendó y eligió la regla conservadora.**
+
+  Tickets relacionados:
+  - IM-916 padre (Historia, In QA Review, High, reporter Sara
+    Montenegro, assignee veevart_josed).
+  - IM-949 — QA Sub-task de IM-916.
+  - Repo: Veevarts/MigrationToolETL.
+
+  Cobertura por AC (7 ACs en la historia):
+  - AC1 (Eligible: no formal link + no attendance overlap) → Scenario 1
+  - AC2 (Exclude: formal sale-order/ticket REGISTRANTID link) → Scenario 2
+  - AC3 (Exclude: EVENTID+CONSTITUENTID already in attendance) → Scenario 3
+  - AC4 (Exclude: same-event/same-constituent ticket candidate
+    conservative guard) → Scenario 4
+  - AC5 (Exclude: CONSTITUENTID IS NULL) → Scenario 5
+  - AC6 (Exclude: WILLNOTATTEND = 1) → Scenario 6
+  - AC7 (Aspen History 101 fixture: 5 rows eligible, 0 duplicate) →
+    Scenario 7
+
+  Cobertura adicional:
+  - Scenario 8: cross-profile aggregate smoke vía safesql sobre los 7
+    perfiles alcanzables (counts safe/agreed/conservative coinciden con
+    los publicados por el dev).
+  - Scenario 9: regression — row grain estable, no multiplicación por
+    sale-order candidates ni registration-info rows.
+  - Scenario 10: spot-check `evreg-10005535` permanece eligible
+    (registered-like, con constituyente, sin links formales ni
+    registration-info).
+
+  Riesgos abiertos:
+  - R1 (Media) — perfil `muhammed2` no fue alcanzable durante el dev
+    cross-profile analysis. Su volumen y safe-count quedan desconocidos
+    hasta que el perfil vuelva. QA reproducirá la query cuando se
+    restablezca.
+  - R2 (Media) — política de anonymous attendee aún NO definida; 869
+    rows en Aspen con `CONSTITUENTID IS NULL` (275 events) quedan fuera
+    de scope por decisión explícita. Crear ticket follow-up.
+  - R3 (Baja) — target Salesforce object shape "during implementation".
+    QA validará el output de la query a nivel staged CSV; el load a SF
+    queda como manual handoff.
+  - R4 (Baja) — el delta entre regla agreed y conservative (Aspen: 85
+    rows, todos `WILLNOTATTEND = 1` con same-event ticket candidate)
+    debe quedar documentado en el dev test suite.
+
+  Limitaciones (NO levantar como bug):
+  - El cambio es solo en la query SQL Server de extracción y, según el
+    PR, en mapper/pipeline si hace falta + query-regression spec.
+    No produce mutaciones en Salesforce por sí mismo.
+  - Validación funcional en Lightning (Salesforce target con
+    registrants migrados) queda como manual post-load sobre sandbox
+    Aspen.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Branch del PR de `Veevarts/MigrationToolETL` checkeada y compilable"
+  - "Acceso safesql al menos a 1 perfil Altru (preferido `aspen` para reproducir History 101)"
+  - "Para AC8 cross-profile smoke: safesql a los 7 perfiles alcanzables (aspen, everson, high_desert, illinois, kidstream, moad, tucson)"
+  - "Conocimiento del schema Altru: tablas REGISTRANT, SALESORDERITEMEVENTREGISTRATION, SALESORDERITEMTICKETREGISTRANT, REGISTRANTREGISTRATION, REGISTRATIONINFO, EVENTPRICE, EVENT"
+  - "Dataset Altru fuente con events conteniendo registrants Pre-Registration sin ticket backing (Aspen History 101 es el canonical fixture)"
+
+format: gherkin
+scenarios:
+  - title: "Eligible: direct REGISTRANT sin formal sale-order/ticket link y sin overlap con current attendance se incluye con grain REGISTRANT.ID"
+    tags:
+      - happy-path
+      - ac-1
+      - aspen
+      - registrant-grain
+      - pre-registration
+    given:
+      - "el dataset Altru Aspen contiene al menos 1 direct REGISTRANT row con `WILLNOTATTEND = 0`, `CONSTITUENTID NOT NULL`, sin row en `SALESORDERITEMEVENTREGISTRATION` ni `SALESORDERITEMTICKETREGISTRANT` con `REGISTRANTID = REGISTRANT.ID`, y sin `(EVENTID, CONSTITUENTID)` en current attendance output"
+      - "el branch del PR está checked-out y la query path REGISTRANT-grain se ejecuta vía safesql"
+    when:
+      - "se ejecuta la query post-fix sobre el perfil `aspen`"
+    then:
+      - "la query emite la row a grain `REGISTRANT.ID` (1 row por REGISTRANT, no multiplicada)"
+      - "el output incluye EVENTID, CONSTITUENTID, REGISTRANT.ID y los campos requeridos por el target attendance/ticket object"
+      - "no se requiere `EVENTPRICE` para que la row sea eligible (este es el shape de Pre-Registration)"
+
+  - title: "Excluded: direct REGISTRANT con SALESORDERITEMEVENTREGISTRATION o SALESORDERITEMTICKETREGISTRANT REGISTRANTID link"
+    tags:
+      - negative
+      - ac-2
+      - anti-join-formal-link
+    given:
+      - "una direct REGISTRANT row con al menos un row en `SALESORDERITEMEVENTREGISTRATION` donde `REGISTRANTID = REGISTRANT.ID`"
+      - "OR una direct REGISTRANT row con al menos un row en `SALESORDERITEMTICKETREGISTRANT` donde `REGISTRANTID = REGISTRANT.ID`"
+    when:
+      - "se ejecuta la query post-fix"
+    then:
+      - "la row queda excluida del output (no aparece en el set REGISTRANT-grain)"
+      - "el comportamiento previene duplicate ticket/attendance output (la row ya está siendo emitida por la query existente sale-order-backed)"
+      - "el anti-join se implementa como `NOT EXISTS` o `LEFT JOIN ... WHERE NULL`, no como `IN (subquery)` para evitar problemas de NULL"
+
+  - title: "Excluded: direct REGISTRANT cuyo (EVENTID + CONSTITUENTID) ya existe en current attendance output"
+    tags:
+      - negative
+      - ac-3
+      - anti-join-attendance-overlap
+      - dedup
+    given:
+      - "una direct REGISTRANT row con `EVENTID = E` y `CONSTITUENTID = C`"
+      - "current attendance output contiene un row con `EVENTID = E` y `CONSTITUENTID = C` (independiente del REGISTRANT.ID source)"
+    when:
+      - "se ejecuta la query post-fix"
+    then:
+      - "la row direct REGISTRANT queda excluida del output"
+      - "se previene attendance duplicada para el mismo asistente al mismo event"
+      - "el anti-join usa la composite key `EVENTID + CONSTITUENTID`, no solo una de las dos columnas"
+
+  - title: "Excluded: direct REGISTRANT con same-event/same-constituent sale-order ticket o event-registration candidate (conservative guard)"
+    tags:
+      - negative
+      - ac-4
+      - anti-join-conservative
+      - same-event-same-constituent
+    given:
+      - "una direct REGISTRANT row con `EVENTID = E` y `CONSTITUENTID = C`, SIN formal sale-order/ticket link a su `REGISTRANT.ID`"
+      - "existe un sale-order ticket o event-registration candidate (en `SALESORDERITEMEVENTREGISTRATION` o `SALESORDERITEMTICKETREGISTRANT`) para el mismo `(EVENTID, CONSTITUENTID)`, posiblemente con otro REGISTRANTID"
+    when:
+      - "se ejecuta la query post-fix con la conservative rule activa"
+    then:
+      - "la row direct REGISTRANT queda excluida del output"
+      - "este es el caso del Aspen delta de 85 rows (todos `WILLNOTATTEND = 1` con same-event ticket candidate): el dev confirmó que TODOS quedan excluidos por la conservative rule"
+      - "la query post-fix usa la conservative rule, NO la agreed rule (139,569 conservative vs 142,360 agreed cross-profile)"
+
+  - title: "Excluded: direct REGISTRANT con CONSTITUENTID IS NULL"
+    tags:
+      - negative
+      - ac-5
+      - constituentid-null
+      - anonymous-attendee
+    given:
+      - "una direct REGISTRANT row con `REGISTRANT.CONSTITUENTID IS NULL`"
+      - "no existe una política aprobada de anonymous/unknown attendee mapping"
+    when:
+      - "se ejecuta la query post-fix"
+    then:
+      - "la row queda excluida del output del ticket/attendance migration"
+      - "Aspen tiene 869 rows con `CONSTITUENTID IS NULL` en 275 events; el count excluido en aspen coincide con esa cifra"
+      - "el follow-up ticket de anonymous attendee strategy queda flagged en el ticket (riesgo R2)"
+
+  - title: "Excluded: direct REGISTRANT con WILLNOTATTEND = 1"
+    tags:
+      - negative
+      - ac-6
+      - will-not-attend
+    given:
+      - "una direct REGISTRANT row con `WILLNOTATTEND = 1`"
+    when:
+      - "se ejecuta la query post-fix"
+    then:
+      - "la row no se migra como ticket/attendance"
+      - "el comportamiento es independiente de los demás anti-joins (aún si la row tuviera link formal, no se migraría por este predicado)"
+      - "los 85 rows del Aspen delta agreed-vs-conservative todos cumplen `WILLNOTATTEND = 1`"
+
+  - title: "Aspen History 101 fixture: 5 standalone preregistration rows quedan eligible y NO duplican attendance"
+    tags:
+      - regression-evidence
+      - ac-7
+      - aspen
+      - aspen-history-101
+      - canonical-fixture
+    given:
+      - "el event Aspen History 101 (2026-01-11) tiene 5 direct REGISTRANT rows"
+      - "los 5 rows tienen `ISWALKIN = 0`, no cancelados, no `WILLNOTATTEND = 1`, con CONSTITUENTID"
+      - "0 EVENTPRICE rows, 0 REGISTRANTREGISTRATION rows, 0 SALESORDERITEMEVENTREGISTRANTREGISTRATION rows"
+      - "0 same-event/same-constituent sale-order candidates y 0 current-attendance overlap"
+    when:
+      - "se ejecuta la query post-fix sobre `aspen`"
+    then:
+      - "los 5 rows aparecen en el output a grain REGISTRANT.ID (5 rows, no multiplicadas, no missing)"
+      - "ningún row del fixture es excluido por anti-joins (porque no tiene links formales, no tiene overlap, no tiene CONSTITUENTID NULL, no tiene WILLNOTATTEND=1)"
+      - "el dev test suite incluye este fixture como regression spec"
+
+  - title: "Cross-profile aggregate smoke: counts conservative coinciden con los 139,569 rows / 943 events publicados por el dev"
+    tags:
+      - regression
+      - cross-profile
+      - ac-cross
+      - smoke
+      - aggregate
+    given:
+      - "safesql alcanzable a los 7 perfiles: aspen, everson, high_desert, illinois, kidstream, moad, tucson"
+      - "el branch del PR está checked-out con la conservative rule activa"
+    when:
+      - "se ejecuta la query post-fix sobre cada perfil y se agregan los counts"
+    then:
+      - "el total `safe_conservative` ≈ 139,569 rows (±1% por nondet en datos vivos desde el SHA `c436ff7261cc`)"
+      - "los `registered_like_conservative` ≈ 139,005 rows"
+      - "el number of events distintos ≈ 943"
+      - "`muhammed2` queda explícitamente fuera de scope con nota R1 (timeout durante dev analysis)"
+
+  - title: "Row grain estable: NO multiplicar REGISTRANT.ID por sale-order candidates, registration-info rows o relaciones opcionales"
+    tags:
+      - regression
+      - row-grain
+      - no-multiplication
+    given:
+      - "un REGISTRANT.ID que tiene 0 sale-order candidates pero múltiples rows en relaciones opcionales (ej. multiple REGISTRATIONINFO rows o multiple designation rows si existieran)"
+    when:
+      - "se ejecuta la query post-fix"
+    then:
+      - "el output emite exactamente 1 row por `REGISTRANT.ID` eligible"
+      - "los joins a tablas opcionales se hacen con aggregation (MAX/MIN) o subqueries scalar, no joins que multipliquen"
+      - "`SELECT REGISTRANT.ID, COUNT(*) FROM output GROUP BY REGISTRANT.ID HAVING COUNT(*) > 1` retorna 0 rows"
+
+  - title: "Spot-check `evreg-10005535`: registered-like Aspen registrant con constituyente, sin links formales, sin registration-info ni designation, permanece eligible"
+    tags:
+      - regression-evidence
+      - aspen
+      - spot-check
+      - evreg-10005535
+    given:
+      - "Aspen tiene un row REGISTRANT con external/registration id `evreg-10005535`"
+      - "este row tiene constituyente, no formal sale-order/ticket links, no direct registrant-registration row, no registration-info row, no designation row, y no overlap de attendance"
+    when:
+      - "se ejecuta la query post-fix sobre `aspen`"
+    then:
+      - "el row `evreg-10005535` aparece en el output (eligible)"
+      - "el row se emite a grain REGISTRANT.ID con EVENTID + CONSTITUENTID correctos"
+      - "este es el canonical case-by-id que el dev mencionó en la historia"
+
+tags:
+  - im-916
+  - im-949
+  - aspen
+  - altru
+  - migration
+  - sql-server
+  - ticketing
+  - attendance
+  - pre-registration
+  - registrant-grain
+  - anti-join
+  - migrationtooletl
+  - conservative-rule
+
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-19T20:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-19T20:20:00Z"
+  version: 1
