@@ -1,0 +1,348 @@
+schemaVersion: "1.0"
+
+id: "2a172725-eccd-4ce9-b555-db962e1f7bae"
+key: "TC-65"
+title: "Deliverable 2 — Operator input, discovered-choice select & MANUAL handoff (curated master · 3 ICs)"
+description: |
+  Cobertura QA del Deliverable 2 del Notion `QA Deliverables`:
+  Operator input · discovered-choice selects · human handoff sobre el
+  curated master template (Company Info & Mock Contact flagship v7,
+  General Donation Fund, Specific Funds 4.01) + manual-tier catalog.
+
+  Bundle único agrupando 6 historias hermanas del epic IM-735
+  (Implementation Cases Automation):
+
+  - IM-744 — W4-1 Company Info + Mock Contact · page-layout T2 · discovered-choice + handoff lifecycle (host de la QA Sub-task)
+  - IM-745 — W4-2 Company Info · operator input capture (free-text)
+  - IM-753 — Company Info flexi-page rework + IE handoff
+  - IM-917 — General Donation Fund IC · prod delivery + handoff
+  - IM-918 — Account Funds Setup IC (4.01 Specific Funds) · prod delivery + handoff
+  - IM-953 — Manual ICs · release Manual-confidence cases a prod (31 cases)
+
+  Fuera de scope D2 (en QA Review pero ajenos a este bundle):
+  IM-747, IM-751, IM-752, IM-755.
+
+  QA Sub-task asociada: IM-954
+  Fuente Gherkin: Notion · QA Deliverables · Deliverable 2
+  https://app.notion.com/p/QA-Deliverables-37302267648e81808620e072114f9a67
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Run path: in-process executor bajo `LOCAL_DEV_MODE` (org `im696-tucson` Tucson Botanical `--veevartd`)"
+  - "Production SFN outbox path comparte el mismo resolver/reporter semantics; ambos `run-sm.asl.json` y `metadata-deploy-sm.asl.json` hacen stop-not-finalize al parquear"
+  - "Master template `master-core-implementation` seeded vía `scripts/seed-master-template.ts`; flagship case a v7 (incluye step de handoff); demo cases 5.16 y 4.01 presentes"
+  - "AuthBroker reachable y org target autorizada (para metadata discovery live + T2 read-back verification)"
+  - "IE con org \"active\" conectada (Deliverable 1) y acceso Cognito; dashboard polling activo en `GET /runs/:id`"
+  - "Catálogo manual-tier (31 cases) seeded en dev Y prod, bundled en master template `Veevart Core Setup`"
+
+format: gherkin
+scenarios:
+  - title: "Operator input free-text — case parquea AWAITING_INPUT sin finalizar la run"
+    tags:
+      - happy-path
+      - im-745
+      - operator-input
+      - lifecycle
+    given:
+      - "un plan cuya case carga steps con `{{token}}` sin resolver (e.g. el company name del flagship)"
+    when:
+      - "el IE inicia el run"
+    then:
+      - "esa case transiciona a AWAITING_INPUT y no finaliza"
+      - "el Run Dashboard renderiza una inline input card para esa case"
+
+  - title: "Operator input free-text — submit resume sólo la case afectada"
+    tags:
+      - happy-path
+      - im-745
+      - operator-input
+      - api
+    given:
+      - "una case parqueada AWAITING_INPUT"
+    when:
+      - "el IE llena los text field(s) y submitea"
+    then:
+      - "se envía `POST /implementations/plan-runs/:id/inputs` con sólo las answers de esa case"
+      - "los tokens se sustituyen en resolve time y la case continúa corriendo"
+      - "la input card se resuelve en el siguiente refetch"
+
+  - title: "Operator input free-text — submit gating cuando el required está vacío"
+    tags:
+      - negative
+      - im-745
+      - operator-input
+      - ui
+    given:
+      - "una input card con un campo required vacío"
+    when:
+      - "el IE intenta submitear"
+    then:
+      - "la acción submit queda deshabilitada hasta que el campo tenga valor"
+
+  - title: "Discovered-choice select — opciones descubiertas del org en spawn"
+    tags:
+      - happy-path
+      - im-744
+      - discovered-choice
+      - org-discovery
+    given:
+      - "un step declara un input tipo `select` (e.g. record page / profile / layout)"
+    when:
+      - "el run hace spawn"
+    then:
+      - "la lista de opciones se popula desde el org (profiles / layouts / flexipages / apps)"
+      - "el dashboard renderiza un dropdown para esa case"
+
+  - title: "Discovered-choice select — pick + submit resume la case"
+    tags:
+      - happy-path
+      - im-744
+      - discovered-choice
+      - api
+    given:
+      - "una case parqueada AWAITING_INPUT con dropdown discovered"
+    when:
+      - "el IE selecciona una opción y submitea"
+    then:
+      - "el valor elegido se sustituye en resolve time y la case continúa"
+      - "sólo la selección de esa case se envía"
+
+  - title: "MANUAL handoff — step sin Salesforce API parquea AWAITING_HANDOFF"
+    tags:
+      - happy-path
+      - im-744
+      - im-753
+      - handoff
+      - lifecycle
+    given:
+      - "un plan cuyo step no tiene Salesforce API (e.g. set the org-default record page)"
+    when:
+      - "el run alcanza ese step"
+    then:
+      - "el StepRun parquea AWAITING_HANDOFF y el run status pasa a AWAITING_HANDOFF"
+      - "el dashboard renderiza un handoff card con el note/instructions del step y un botón \"Mark as done\""
+
+  - title: "MANUAL handoff — \"Mark as done\" resume con step-first / kickoff-last + idempotente"
+    tags:
+      - happy-path
+      - im-744
+      - handoff
+      - idempotency
+      - api
+    given:
+      - "un step parqueado AWAITING_HANDOFF"
+    when:
+      - "el IE hace click en \"Mark as done\""
+    then:
+      - "se envía `POST /implementations/plan-runs/:id/steps/:caseRunId/:stepRunId/handoff`"
+      - "el step se marca COMPLETED primero, luego el run flips y re-kicka (step-first / kickoff-last)"
+      - "re-correr un handoff step ya COMPLETED es idempotente (sin doble efecto)"
+      - "la card se resuelve en el siguiente refetch"
+
+  - title: "Handoff card inline elegida sólo para steps P3 con note (legacy no se mezcla)"
+    tags:
+      - edge-case
+      - im-744
+      - im-753
+      - handoff
+      - ui
+    given:
+      - "un step `type: \"handoff\"` que carga un note"
+    when:
+      - "el dashboard renderiza el step parqueado"
+    then:
+      - "se renderiza la nueva inline \"Mark as done\" card"
+      - "NO se renderiza la legacy HandoffSession card en ese slot"
+
+  - title: "Failure-cause — el step fallido persiste `lastError` y el dashboard lo surfacea"
+    tags:
+      - negative
+      - failure-cause
+      - dashboard
+      - im-758
+    given:
+      - "un step que falla (Apex compile/runtime error, T2 read-back mismatch, etc.)"
+    when:
+      - "el reporter procesa el fallo"
+    then:
+      - "el StepRun persiste `lastError`"
+      - "el Run Dashboard surfacea esa cause en el failed step / run detail"
+
+  - title: "Plan Preview FE — \"start from scratch\" limpia selección y persiste (no rebote)"
+    tags:
+      - happy-path
+      - frontend
+      - plan-preview
+      - im-744
+    given:
+      - "el Plan Preview template dropdown"
+    when:
+      - "el IE elige \"start from scratch\""
+    then:
+      - "toda case selection se limpia y Continue queda disabled"
+      - "la selección NO rebota al primer template"
+
+  - title: "Plan Preview FE — default one-time prefiere un master template"
+    tags:
+      - happy-path
+      - frontend
+      - plan-preview
+      - im-744
+    given:
+      - "el IE abre Plan Preview sin selección previa"
+    when:
+      - "carga la página"
+    then:
+      - "un master template queda seleccionado por default"
+
+  - title: "Case 4.01 — payment-method picklist values se activan primero"
+    tags:
+      - happy-path
+      - im-918
+      - case-4-01
+      - picklist
+      - t3
+    given:
+      - "un org sin algunos payment-method values en `Auctifera__Specific_Fund__c.Allocated_Payment_Method__c`"
+    when:
+      - "case 4.01 corre"
+    then:
+      - "el step T3 agrega/activa los values (Cash, Check, Credit Card, Debit Card, Exchange, Member Access, Store Credit, Wire Transfer, In-Kind, Gift Card)"
+      - "el step se verifica leyendo el value set del field de vuelta"
+
+  - title: "Case 4.01 — los 12 credit Specific Funds se crean"
+    tags:
+      - happy-path
+      - im-918
+      - case-4-01
+      - specific-funds
+      - credit
+    given:
+      - "case 4.01 corriendo con la picklist ya activada"
+    when:
+      - "se ejecuta el step de credit funds"
+    then:
+      - "existen los 12 credit funds (incl. el Discrepancy Fund)"
+      - "cada uno es Open + Active + Available Online + Available in POS Mobile con GL Code = name"
+      - "el step se reporta FAILED si falta cualquier fund esperado"
+
+  - title: "Case 4.01 — los 7 debit default-allocation funds con payment method correcto"
+    tags:
+      - happy-path
+      - im-918
+      - case-4-01
+      - specific-funds
+      - debit
+    given:
+      - "case 4.01 corriendo con la picklist ya activada"
+    when:
+      - "se ejecuta el step de debit default-allocation funds"
+    then:
+      - "existen los 7 debit funds (CASH / CREDIT CARDS / CHECKS / WIRE / OTHER / IN KIND / GIFT CARDS PAYMENTS), cada uno Open-only y flagged Default Allocation Fund"
+      - "cada uno tiene su Allocated Payment Method seteado al value activo del picklist (e.g. WIRE PAYMENTS → Wire Transfer)"
+      - "el verify falla el step si un value está missing/inactive"
+
+  - title: "Case 4.01 — re-run idempotente"
+    tags:
+      - regression
+      - im-918
+      - case-4-01
+      - idempotency
+    given:
+      - "case 4.01 ya completada en el org"
+    when:
+      - "corre de nuevo"
+    then:
+      - "no se crean Specific Funds duplicados y el run completa"
+
+  - title: "General Donation Fund IC end-to-end + handoff (no-input case del isolation pattern)"
+    tags:
+      - happy-path
+      - im-917
+      - master-template
+      - handoff
+    given:
+      - "el curated master template incluye el General Donation Fund IC"
+    when:
+      - "el IE inicia el run"
+    then:
+      - "los steps automated del IC completan COMPLETED"
+      - "cualquier handoff step dentro parquea AWAITING_HANDOFF y es atestable"
+      - "al atestar, el IC finaliza COMPLETED idempotentemente"
+
+  - title: "Manual-tier — cases agrupados por product line (no bucket único \"MANUAL\")"
+    tags:
+      - happy-path
+      - im-953
+      - manual-catalog
+      - ui
+    given:
+      - "el catálogo seeded en Plan Preview"
+    when:
+      - "el IE navega el catálogo"
+    then:
+      - "los manual cases aparecen bajo su product-line category (CORE_SETUP / GENERAL_SETTINGS / ACCOUNTING / FUNDRAISING / TICKETING)"
+      - "el master template \"Veevart Core Setup\" los lista"
+
+  - title: "Manual-tier — guide card legible al parquear (sample por categoría)"
+    tags:
+      - happy-path
+      - im-953
+      - manual-catalog
+      - handoff
+      - ui
+    given:
+      - "un run conteniendo un manual case (sample en varias categorías)"
+    when:
+      - "el run alcanza ese case"
+    then:
+      - "parquea AWAITING_HANDOFF y el dashboard muestra el guide card — \"Manual action\" eyebrow, \"What to do\" intro, numbered locator+action steps, ~time estimate"
+      - "al click \"Mark as done\" el step completa y la run resume (per Scenario 7)"
+
+  - title: "Manual-tier — broad sweep no exhaustivo (≥3 categorías muestreadas)"
+    tags:
+      - regression
+      - im-953
+      - manual-catalog
+      - sampling
+    given:
+      - "los 31 manual cases seeded"
+    when:
+      - "QA hace spot-check"
+    then:
+      - "se muestrean al menos uno de GENERAL_SETTINGS, uno de ACCOUNTING y uno de TICKETING — no los 31"
+      - "cada muestra valida lifecycle de §6/§7 sin requerir cobertura exhaustiva"
+
+tags:
+  - im-735
+  - im-744
+  - im-745
+  - im-753
+  - im-917
+  - im-918
+  - im-953
+  - im-954
+  - implementation-cases-automation
+  - datamigration-appfrontend
+  - notion-qa-deliverables
+  - deliverable-2
+  - master-template
+  - operator-input
+  - discovered-choice
+  - handoff
+  - lifecycle
+  - case-4-01
+  - manual-catalog
+  - aws-dev
+
+estimatedDuration: 180
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-22T18:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-22T18:00:00Z"
+  version: 1
