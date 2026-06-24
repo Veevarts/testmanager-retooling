@@ -1,0 +1,155 @@
+schemaVersion: "1.0"
+
+id: "c493d765-d6c5-4339-892c-33176e3a2610"
+key: "TC-66"
+title: "VeevartMCPGuidanceTool — guidance-first router para playbooks v1 (JSON estricto, fallbacks safe, write gates, prompt-template compat)"
+description: |
+  Cobertura QA de IM-943 (Add guided MCP scenario prompts), historia
+  standalone del área AI/MCP del producto Veevart Insights.
+
+  El nuevo `VeevartMCPGuidanceTool` actúa como router de playbooks curados
+  para clientes MCP (Claude / ChatGPT / etc.), retornando guidance JSON
+  estricto con fallbacks seguros para tools no visibles, gates explícitos
+  en paths write-capable, y compatibilidad backward con
+  `VeevartMCPPromptTemplatesTool.listPromptTemplates`.
+
+  Repo: VeevartMCPContext (Salesforce 2GP package).
+  Subscriber Package Version Id de referencia: 04tVs000000ITmjIAG.
+
+  QA Sub-task asociada: IM-956
+  Issue link: IM-641 (Configure Salesforce Hosted MCP — Finalizada)
+  Follow-up: IM-955 (Query templates separados)
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "VeevartMCPContext v0.31.0.1 o superior instalado (Subscriber Package Version Id `04tVs000000ITmjIAG`)"
+  - "Org de validación con `VeevartMCPGuidanceTool` accesible vía MCP"
+  - "MCP client (Claude o ChatGPT) configurado para llamar el server"
+  - "Acceso Apex (Developer Console / `sf apex run`) para ejecutar `VeevartMCPGuidanceToolTest.cls`"
+  - "Prompt Builder DESHABILITADO en la org de validación (matchea el contexto donde el package no empaqueta metadata)"
+
+format: gherkin
+scenarios:
+  - title: "Return guidance for each core playbook"
+    tags:
+      - critical
+      - im-943
+      - ac-1
+      - happy-path
+      - guidance-tool
+    given:
+      - "a supported user request maps to a v1 MCP scenario"
+    when:
+      - "Veevart MCP Guidance is called"
+    then:
+      - "the response includes a matched scenario key, confidence, clarifying questions, ordered steps, safety gates, fallbacks, and warnings"
+      - "the response is valid JSON"
+
+  - title: "Handle missing or hidden tools safely"
+    tags:
+      - critical
+      - im-943
+      - ac-2
+      - happy-path
+      - fallback
+    given:
+      - "a request maps to a playbook that normally uses tools not visible to the client"
+    when:
+      - "Veevart MCP Guidance evaluates the visible tool list"
+    then:
+      - "it marks unavailable tools as missing or visibility unknown"
+      - "it provides fallback guidance instead of telling the LLM to call a hidden tool"
+
+  - title: "Require confirmation before write-capable paths"
+    tags:
+      - critical
+      - im-943
+      - ac-3
+      - safety-gate
+      - write-path
+    given:
+      - "a playbook can lead to report creation, report type creation, large export, or another write-capable action"
+    when:
+      - "guidance is returned"
+    then:
+      - "it requires explicit confirmation before the write step"
+      - "it recommends planning or dry-run behavior first where supported"
+
+  - title: "Preserve prompt-template compatibility"
+    tags:
+      - important
+      - im-943
+      - ac-4
+      - regression
+      - backward-compat
+    given:
+      - "an existing consumer calls `VeevartMCPPromptTemplatesTool.listPromptTemplates`"
+    when:
+      - "templates are returned"
+    then:
+      - "legacy response fields such as `promptTemplatesJson` and `templateCount` remain available"
+      - "templates include playbook references for clients that can use them"
+
+  - title: "Support minimal MCP personas"
+    tags:
+      - important
+      - im-943
+      - ac-5
+      - minimal-persona
+    given:
+      - "the MCP server exposes only Guidance, Context, and standard Salesforce read/schema/SOQL tools"
+    when:
+      - "a known analytics request is made"
+    then:
+      - "guidance remains useful"
+      - "it does not require prompt templates, custom Veevart SOQL, analytics, or report-creation tools to be exposed"
+
+  - title: "Document setup and deferred Prompt Builder metadata"
+    tags:
+      - important
+      - im-943
+      - ac-6
+      - docs
+    given:
+      - "the implementation is complete"
+    when:
+      - "README and MCP setup docs are reviewed"
+    then:
+      - "they explain guidance-first usage, minimal persona configuration, Prompt Builder/Flex wrapper options, and why Prompt Builder metadata is not packaged yet"
+
+  - title: "Response includes Salesforce record links when record Ids are available"
+    tags:
+      - regression-evidence
+      - im-943
+      - response-rendering
+    given:
+      - "a guidance step returns a Salesforce record Id in its result envelope"
+    when:
+      - "the guidance JSON is rendered"
+    then:
+      - "the response-rendering guidance instructs the LLM to surface the matching Salesforce record link"
+      - "the Id remains visible alongside the link"
+
+tags:
+  - im-943
+  - im-956
+  - mcp
+  - ai-connector
+  - veevart-insights
+  - veevart-mcp-context
+  - apex
+  - guidance-router
+  - prompt-templates
+  - salesforce-2gp
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1

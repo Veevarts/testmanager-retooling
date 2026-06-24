@@ -1,0 +1,191 @@
+schemaVersion: "1.0"
+
+id: "1ace087d-9605-4790-830e-3656003384e4"
+key: "TC-68"
+title: "Altru — Pledge stage derivado del rollup de installments (Pledged / Closed Won / Closed Lost) en donation_pledges.sql"
+description: |
+  Cobertura QA de IM-951 (Pledges con Pagos Completos Tienen Stage
+  Incorrecto en Salesforce), bajo el epic IM-70 (Altru Queries).
+  Customer reportante: Everson Museum of Art.
+
+  Validación de que `donation_pledges.sql` deja de hard-codear
+  `StageName = 'Pledged'` y deriva el stage del rollup de installments a
+  grain pledge:
+  - positive remaining → `Pledged`
+  - no remaining + write-off → `Closed Lost`
+  - no remaining + no write-off → `Closed Won`
+  - no installment evidence → `Pledged` (conservative default)
+
+  Repo: MigrationToolETL.
+  QA Sub-task asociada: IM-958
+  Engineering smoke SHA: query_sha=7d4766be75d8
+  Ejemplo canónico: rev-10055919 (Everson) debe quedar `Closed Won`.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL con worktree `/Users/joseangarita/Developer/MigrationToolETL-IM-951` y branch `story/pledges-con-pagos-completos-tienen-stage-IM-951`"
+  - "safesql configurado para los profiles: `aspen`, `everson`, `high-desert`, `illinois`, `kidstream`, `moad`, `tucson` (+ opcional `muhammed2`)"
+  - "Node + npm instalado para `npm test`, `npm run build`, `npm run lint:check`"
+  - "Acceso opcional a Everson sandbox para validar `rev-10055919` post-load"
+
+format: gherkin
+scenarios:
+  - title: "Closed Won mapping (pledge fully paid)"
+    tags:
+      - happy-path
+      - im-951
+      - ac-1
+      - stage-mapping
+      - closed-won
+    given:
+      - "an Altru pledge has installment payments that reduce remaining amount to zero"
+      - "no write-off amount exists"
+    when:
+      - "the pledge Opportunity CSV is generated"
+    then:
+      - "`StageName` is `Closed Won`"
+
+  - title: "Pledged mapping (positive remaining)"
+    tags:
+      - happy-path
+      - im-951
+      - ac-2
+      - stage-mapping
+      - pledged
+    given:
+      - "an Altru pledge has positive remaining amount after payments and write-offs"
+    when:
+      - "the pledge Opportunity CSV is generated"
+    then:
+      - "`StageName` remains `Pledged`"
+
+  - title: "Closed Lost mapping (no remaining + write-off)"
+    tags:
+      - happy-path
+      - im-951
+      - ac-3
+      - stage-mapping
+      - closed-lost
+    given:
+      - "an Altru pledge has no remaining amount"
+      - "one or more write-off amounts exist"
+    when:
+      - "the pledge Opportunity CSV is generated"
+    then:
+      - "`StageName` is `Closed Lost`"
+
+  - title: "Conservative default when no installment evidence"
+    tags:
+      - edge-case
+      - im-951
+      - ac-4
+      - conservative-default
+    given:
+      - "a pledge has no installment split evidence"
+    when:
+      - "the pledge Opportunity CSV is generated"
+    then:
+      - "`StageName` remains conservatively `Pledged`"
+
+  - title: "Grain stability across profiles (no multiplied rows)"
+    tags:
+      - regression
+      - im-951
+      - ac-5
+      - grain
+      - smoke
+    given:
+      - "the pledge Opportunity export runs on a reachable safesql profile"
+    when:
+      - "aggregate smoke compares export row count to distinct `PLEDGEID` count"
+    then:
+      - "row count equals distinct pledge count"
+      - "no pledge rows are multiplied by the new `INSTALLMENT` joins"
+
+  - title: "Everson canonical rev-10055919 maps to Closed Won"
+    tags:
+      - regression-evidence
+      - im-951
+      - everson
+      - example
+    given:
+      - "the Everson source profile contains pledge with `Revenue_ID_legacy__c = \"rev-10055919\"`"
+      - "aggregate source data shows scheduled 5000, paid 5000, written off 0, remaining 0"
+    when:
+      - "the pledge Opportunity export runs"
+    then:
+      - "the row for `rev-10055919` has `StageName = \"Closed Won\"`"
+      - "the row is present in the export (not filtered out)"
+
+  - title: "Cross-profile stage distribution matches engineering smoke"
+    tags:
+      - regression
+      - im-951
+      - cross-profile
+      - smoke
+    given:
+      - "the safesql aggregate smoke `query_sha=7d4766be75d8` runs on each reachable profile"
+    when:
+      - "the pledge Opportunity export is generated"
+    then:
+      - "aspen: 0 rows / 0 distinct pledges"
+      - "everson: 628 rows / 628 distinct — 12 Pledged, 550 Closed Won, 66 Closed Lost"
+      - "high-desert: 2889 rows / 2889 distinct — 54 Pledged, 2409 Closed Won, 426 Closed Lost"
+      - "illinois: 6543 rows / 6543 distinct — 177 Pledged, 6065 Closed Won, 301 Closed Lost"
+      - "kidstream: 72 rows / 72 distinct — 20 Pledged, 52 Closed Won, 0 Closed Lost"
+      - "moad: 1202 rows / 1202 distinct — 630 Pledged, 556 Closed Won, 16 Closed Lost"
+      - "tucson: 684 rows / 684 distinct — 41 Pledged, 422 Closed Won, 221 Closed Lost"
+
+  - title: "muhammed2 profile validated after tunnel is restored"
+    tags:
+      - edge-case
+      - im-951
+      - missing-doc
+      - muhammed2
+    given:
+      - "the `muhammed2` safesql profile was blocked at engineering time by tunnel connection failure"
+    when:
+      - "QA re-runs the smoke on `muhammed2`"
+    then:
+      - "the row count, distinct pledge count, and stage breakdown are captured"
+      - "any deviation from the cross-profile pattern is flagged"
+
+  - title: "Non-pledge Opportunities remain unchanged"
+    tags:
+      - regression
+      - im-951
+      - no-regression
+    given:
+      - "the export pipeline includes non-pledge Opportunity flows (donation, membership, etc.)"
+    when:
+      - "the IM-951 stage change is applied"
+    then:
+      - "non-pledge Opportunity `StageName` values are not affected by the new pledge stage mapper"
+      - "only `donation_pledges.sql` rows reflect the new stage derivation"
+
+tags:
+  - im-951
+  - im-958
+  - im-70
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - pledge
+  - pledge-stage
+  - donation-pledges
+  - installment-split
+  - everson
+  - safesql
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1

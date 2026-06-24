@@ -1,0 +1,173 @@
+schemaVersion: "1.0"
+
+id: "4cf0d939-872a-4504-9f9a-c462aacfe4a0"
+key: "TC-69"
+title: "Altru — Membership add-on fallback vía MEMBERSHIPADDON.REVENUESPLITID en membership_transactions.sql (sales-order precedence preservada)"
+description: |
+  Cobertura QA de IM-952 (Membresía con Add-On — Validar Migración de
+  Ambos Componentes del Pago $50 + $30), bajo el epic IM-70 (Altru Queries).
+  Customer reportante: Everson Museum of Art.
+
+  Validación del nuevo fallback de membership add-on en
+  `membership_transactions.sql`: incluye el `Membership add-on` cuando NO
+  hay `SALESORDERITEM`, vía `MEMBERSHIPADDON.REVENUESPLITID`, sin doble
+  contar cuando ambos sources existen (sales-order toma precedence).
+
+  Repo: MigrationToolETL.
+  QA Sub-task asociada: IM-959
+  Engineering smoke SHAs: bug `ac382ab21a11`, fix `e81a3a417e92`, cross-profile `1be4cae26811`.
+  Ejemplo canónico: rev-10142916 (Everson) — pre-fix Amount=$50, post-fix Amount=$80.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL con worktree `/Users/joseangarita/Developer/MigrationToolETL-IM-952` y branch `story/membresia-con-add-on-validar-migracion-de-IM-952`"
+  - "safesql configurado para los profiles: `aspen`, `everson`, `high-desert`, `illinois`, `kidstream`, `moad`, `tucson` (+ opcional `muhammed2`)"
+  - "Node + npm instalado para `npm test`, `npm run build`, `npm run lint:check`"
+  - "Acceso opcional a Everson sandbox para validar `rev-10142916` post-load en Lightning"
+
+format: gherkin
+scenarios:
+  - title: "Membership add-on without SALESORDERITEM is captured via the revenue-line fallback"
+    tags:
+      - happy-path
+      - im-952
+      - ac-1
+      - fallback
+      - revenue-split
+    given:
+      - "a membership transaction has a Membership revenue split and a Membership add-on revenue split"
+      - "the Membership add-on has no linked `SALESORDERITEM`"
+    when:
+      - "the export calculates add-on totals"
+    then:
+      - "it uses the `MEMBERSHIPADDON.REVENUESPLITID` revenue line fallback"
+      - "the parent Opportunity amount includes the add-on amount"
+
+  - title: "Everson rev-10142916 exports with full $80 amount and $30 add-on total"
+    tags:
+      - regression-evidence
+      - im-952
+      - ac-1
+      - everson
+      - example
+    given:
+      - "Everson Revenue ID `rev-10142916` has a $50 Membership line and a $30 Membership add-on line"
+    when:
+      - "the membership Opportunity export is generated"
+    then:
+      - "the parent Opportunity `Amount` is $80"
+      - "`Add_On_Total__c` is $30"
+      - "`Add_On_Quantity__c` is 1"
+
+  - title: "Sales-order add-on total wins when both sources exist"
+    tags:
+      - happy-path
+      - im-952
+      - ac-3
+      - precedence
+      - coalesce
+    given:
+      - "a membership has both sales-order add-on totals and revenue-line fallback totals"
+    when:
+      - "the export calculates the Opportunity amount"
+    then:
+      - "it uses the sales-order add-on total"
+      - "it does NOT add both sources together"
+      - "no double counting occurs in `Add_On_Total__c`"
+
+  - title: "Membership Opportunity amount aligns with membership fund assignment total"
+    tags:
+      - regression
+      - im-952
+      - ac-4
+      - parity
+      - fund-assignment
+    given:
+      - "membership fund assignments are exported for the same payment as the Opportunity"
+    when:
+      - "totals are compared"
+    then:
+      - "the membership Opportunity `Amount` equals the sum of membership fund assignment amounts"
+      - "no orphan add-on amounts are unallocated"
+
+  - title: "Memberships without any add-on data remain unchanged"
+    tags:
+      - negative
+      - im-952
+      - no-regression
+    given:
+      - "a membership has neither a sales-order add-on item nor a `MEMBERSHIPADDON` revenue line"
+    when:
+      - "the export runs with the IM-952 fallback applied"
+    then:
+      - "the Opportunity `Amount` equals only the Membership line amount"
+      - "`Add_On_Total__c` is 0 (or NULL per existing convention)"
+      - "`Add_On_Quantity__c` is 0"
+
+  - title: "Cross-profile aggregate smoke confirms expected counts"
+    tags:
+      - regression
+      - im-952
+      - cross-profile
+      - smoke
+    given:
+      - "the safesql aggregate smoke `SHA 1be4cae26811` runs on each reachable profile"
+    when:
+      - "the export is generated"
+    then:
+      - "`aspen`, `everson`, `high-desert`, `illinois`, `kidstream`, `moad`, `tucson` all pass smoke"
+      - "no profile shows duplicated Opportunities for the same membership transaction"
+      - "no profile shows a regression in fund-assignment-to-Opportunity parity"
+
+  - title: "muhammed2 profile validated after tunnel restoration"
+    tags:
+      - edge-case
+      - im-952
+      - missing-doc
+      - muhammed2
+    given:
+      - "the `muhammed2` safesql profile was blocked at engineering time by tunnel connection failure"
+    when:
+      - "QA re-runs the smoke on `muhammed2`"
+    then:
+      - "the add-on totals and Opportunity amounts are captured"
+      - "any unexpected divergence from the other profiles is flagged"
+
+  - title: "Add-on join does not multiply rows (grain stability)"
+    tags:
+      - regression
+      - im-952
+      - grain
+    given:
+      - "the membership Opportunity export runs with the new fallback"
+    when:
+      - "the row count is compared to distinct `MEMBERSHIPTRANSACTIONID` count"
+    then:
+      - "row count equals distinct membership transaction count"
+      - "the JOIN on `MEMBERSHIPADDON.MEMBERSHIPTRANSACTIONID` does not multiply parents"
+
+tags:
+  - im-952
+  - im-959
+  - im-70
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - membership-addon
+  - membership-transactions
+  - revenue-split
+  - everson
+  - safesql
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1

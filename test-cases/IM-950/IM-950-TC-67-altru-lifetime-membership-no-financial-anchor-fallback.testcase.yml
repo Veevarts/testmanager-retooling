@@ -1,0 +1,174 @@
+schemaVersion: "1.0"
+
+id: "a6d7d7cd-9c90-44f4-9093-e272fd5ed362"
+key: "TC-67"
+title: "Altru — Lifetime Membership fallback para no-financial-anchor (membership_transactions.sql + contact_roles.sql)"
+description: |
+  Cobertura QA de IM-950 (Lifetime Memberships Faltantes en Salesforce —
+  Existen en Altru pero No Fueron Migradas), bajo el epic IM-70 (Altru
+  Queries). Customer reportante: Tucson Botanical Gardens.
+
+  Validación del nuevo CTE `LatestNoFinancialAnchorLifetimeMembershipTransactions`
+  en `membership_transactions.sql` (con su espejo en `contact_roles.sql`):
+  incluye memberships Altru con `STATUSCODE = 0` + `EXPIRATIONDATE IS NULL`
+  + sin anchor financiero/order/add-on, emitiendo una sola Opportunity por
+  la transacción más reciente y manteniendo paridad de contact roles.
+
+  Repo: MigrationToolETL.
+  QA Sub-task asociada: IM-957
+  Engineering smoke SHA: query_sha=995cd0b44216
+  Ejemplos canónicos Tucson: Contact 308 (activo), 9046 (inactivo), 9161 (fallecido e inactivo).
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL con branch del PR de IM-950 checked-out"
+  - "safesql configurado para los profiles: `aspen`, `everson`, `high-desert`, `illinois`, `kidstream`, `moad`, `tucson` (+ opcional `muhammed2`)"
+  - "Node + npm instalado para `npm test`, `npm run build`"
+  - "Acceso opcional a Tucson Botanical Gardens sandbox para validar post-load en Lightning"
+
+format: gherkin
+scenarios:
+  - title: "Active no-expiration membership without financial anchor emits exactly one Opportunity"
+    tags:
+      - happy-path
+      - im-950
+      - ac-1
+      - fallback
+    given:
+      - "an Altru membership with `STATUSCODE = 0` and `EXPIRATIONDATE IS NULL`"
+      - "it has at least one active `MEMBERSHIPTRANSACTION` without `REVENUESPLITID`, sales-order item, add-on or resolvable financial transaction"
+    when:
+      - "the membership Opportunity export runs"
+    then:
+      - "exactly one Opportunity is emitted for the latest `MEMBERSHIPTRANSACTION` of that membership"
+      - "the export references the membership in `contact_roles.sql` via the same Opportunity ID"
+
+  - title: "No-anchor active no-expiration with multiple active transactions ranks to the latest"
+    tags:
+      - happy-path
+      - im-950
+      - ac-2
+      - ranking
+    given:
+      - "a no-anchor active no-expiration membership has multiple active `MEMBERSHIPTRANSACTION` rows"
+    when:
+      - "the export runs"
+    then:
+      - "only the latest transaction by transaction date and ID is emitted"
+      - "no duplicate Opportunities are produced for the same `MEMBERSHIPID`"
+
+  - title: "Contact roles reference the fallback Opportunity"
+    tags:
+      - happy-path
+      - im-950
+      - ac-3
+      - contact-roles
+      - mirror
+    given:
+      - "the IM-950 fallback emits a membership Opportunity"
+    when:
+      - "contact roles are exported via `contact_roles.sql`"
+    then:
+      - "member contact roles reference the same Opportunity ID emitted by the fallback"
+      - "no contact roles are orphaned with NULL Opportunity references"
+
+  - title: "Inactive no-expiration is excluded from the fallback"
+    tags:
+      - negative
+      - im-950
+      - ac-4
+      - scope-gate
+    given:
+      - "a no-expiration membership has `STATUSCODE != 0`"
+    when:
+      - "the export runs"
+    then:
+      - "the IM-950 fallback does NOT include that row"
+      - "no fallback Opportunity is emitted for inactive memberships"
+
+  - title: "Tucson canonical examples appear in the export"
+    tags:
+      - regression-evidence
+      - im-950
+      - tucson
+      - example
+    given:
+      - "Tucson Contact IDs 308 (active), 9046 (inactive), 9161 (deceased inactive) per IM-950 examples"
+    when:
+      - "the membership Opportunity export runs on `tucson` profile"
+    then:
+      - "Contact 308 appears with a fallback Opportunity emitted"
+      - "Contact 9046 is evaluated by status: if active → emitted; if `STATUSCODE != 0` → excluded per Scenario 4"
+      - "Contact 9161 is evaluated by status: if marked deceased AND inactive → excluded; if only deceased but still active → emitted"
+
+  - title: "Cross-profile smoke produces expected additional counts"
+    tags:
+      - regression
+      - im-950
+      - cross-profile
+      - smoke
+    given:
+      - "the safesql aggregate smoke runs on each reachable profile"
+    when:
+      - "the fallback CTE is applied"
+    then:
+      - "aspen returns 0 additions"
+      - "everson returns 6 additions"
+      - "high-desert returns 212 additions"
+      - "illinois returns 0 additions"
+      - "kidstream returns 0 additions"
+      - "moad returns 0 additions"
+      - "tucson returns 39 additions"
+
+  - title: "`muhammed2` profile is validated after the SSH tunnel is restored"
+    tags:
+      - edge-case
+      - im-950
+      - missing-doc
+      - muhammed2
+    given:
+      - "the `muhammed2` safesql profile was blocked at engineering time by local port/bind/connection reset error"
+    when:
+      - "QA re-runs the smoke on `muhammed2`"
+    then:
+      - "the additions count is captured and compared with the rest of the cross-profile baseline"
+      - "any unexpected delta is flagged as a defect or documented if explainable"
+
+  - title: "Existing anchor-backed memberships remain unchanged"
+    tags:
+      - regression
+      - im-950
+      - no-regression
+    given:
+      - "Altru memberships with `REVENUESPLITID`, sales-order item, add-on or resolvable financial anchor"
+    when:
+      - "the export runs with the IM-950 fallback applied"
+    then:
+      - "the row count and Opportunity grain match the pre-fallback baseline for these memberships"
+      - "no Opportunities are duplicated by the new CTE join"
+
+tags:
+  - im-950
+  - im-957
+  - im-70
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - lifetime-membership
+  - membership-transactions
+  - contact-roles
+  - tucson
+  - safesql
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1
