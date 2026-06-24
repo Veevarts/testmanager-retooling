@@ -1,0 +1,34 @@
+TR-078 · TC-69 · IM-952 add-on fallback validation (safesql 2026-06-24)
+
+SQL files validated (via gh api fetch):
+  - membership_transactions.sql: pre=747 LOC, post=774 LOC, diff=+33/-6
+
+Changes confirmed by diff:
+  1. Renamed AddOnLineItems → SalesOrderAddOnLineItems (no semantic change)
+  2. NEW CTE: MembershipTransactionAddOnLineItems (fallback via MEMBERSHIPADDON.REVENUESPLITID)
+  3. SELECT: `+ COALESCE(so_addon.AddOnTotal, mt_addon.AddOnTotal, 0)` — sales-order precedence
+  4. SELECT: `COALESCE(so_addon.AddOnQuantity, mt_addon.AddOnQuantity) AS Add_On_Quantity__c`
+  5. LEFT JOIN MembershipTransactionAddOnLineItems mt_addon ON mt.ID
+
+Fallback CTE count per profile:
+  aspen:      fallback_eligible_mts = 0     (no add-on data)
+  illinois_2: fallback_eligible_mts = 0     (no add-on data)
+  tucson:     fallback_eligible_mts = 3499  (these get the fallback OR sales-order based on COALESCE)
+
+Canonical example (rev-10142916, Everson):
+  Eng smoke (PR body): pre-fix Amount=$50 (only Membership line picked up)
+                       post-fix Amount=$80, Add_On_Total__c=$30, Add_On_Quantity__c=1
+                       fund_assignments=$80 (parity confirmed)
+  Verified end-to-end by eng smoke SHAs: ac382ab21a11 (bug confirmation), e81a3a417e92 (fix verification)
+  everson profile not reachable locally — verdict INHERITED.
+
+Precedence (sales-order > fallback) proof:
+  SQL diff line: `+ COALESCE(so_addon.AddOnTotal, mt_addon.AddOnTotal, 0)`
+  COALESCE evaluates left-to-right. When both sources exist, sales-order wins.
+  No double-counting possible: each MEMBERSHIPTRANSACTIONID contributes exactly one Add_On_Total.
+
+Cross-profile aggregate smoke (eng SHA 1be4cae26811):
+  All 7 profiles passed (aspen, everson, high-desert, illinois, kidstream, moad, tucson)
+  No duplicated Opportunities per MEMBERSHIPTRANSACTIONID (grain stable)
+  Fund-assignment-to-Opportunity parity preserved
+  muhammed2 BLOCKED (same tunnel block as IM-950/IM-951).
