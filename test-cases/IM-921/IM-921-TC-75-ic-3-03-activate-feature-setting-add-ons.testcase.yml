@@ -1,0 +1,206 @@
+schemaVersion: "1.0"
+
+id: "9baf289e-a2c1-4f6a-8805-61f8522bd37d"
+key: "TC-75"
+title: "IC 3.03 — Activate Feature Setting (Add Ons) (delivery hybrid, operator-selected add-ons)"
+description: |
+  Cobertura QA de IM-921 (3.03 Activate Feature Setting (Add Ons) — deliver
+  to Implementations, high-confidence). Junio delivery del Implementation
+  Case `ic-3-03-activate-feature-setting-add-ons` (hybrid). Confianza alta
+  por reporte IM-735 (2026-06-12): construido + verificado en CamiloDev,
+  cross-test COMPLETED en Tucson.
+
+  Validar que el IC:
+  1) Le presenta al IE la lista completa de los 12 add-ons Veevart
+     (Collection Online, Courses, Digital Membership Card, QuickBooks/Sage,
+     Google Integration, Microsoft Integration, Multiple Captcha Providers,
+     Shopify Integration, Shop App, Multiple Locations, Pay By Link,
+     Fundraising Events/Galas),
+  2) Activa SÓLO los add-ons seleccionados en el Feature Setting del cliente,
+  3) Deja intactos los NO seleccionados,
+  4) Maneja el caso vacío (cliente sin add-ons → no-op exitoso),
+  5) Es safe to re-run (additivo: nuevos add-ons se prenden, los ya activos
+     no se apagan),
+  6) Es 100% automatizado tras la selección.
+
+  QA Sub-task asociada: IM-976
+  Riesgos abiertos: AC5 (re-run aditivo) requiere correr el IC dos veces con
+  selecciones distintas para validar que la 2da NO apaga lo activado en la 1ra.
+
+type: functional
+priority: high
+status: active
+
+preconditions:
+  - "Implementation Case `ic-3-03-activate-feature-setting-add-ons` deployado en prod"
+  - "Org target con Veevart `Auctifera__Feature_Settings__c` (o equivalente) disponible y un record org-default accesible"
+  - "Permisos para modificar el custom setting de Feature Settings"
+  - "Acceso al catálogo de prod para seedear el IC"
+
+format: gherkin
+scenarios:
+  - title: "Operator picks add-ons from the complete Veevart add-on list"
+    tags:
+      - happy-path
+      - im-921
+      - ac-1
+      - operator-input
+    given:
+      - "el IE corre IC 3.03 contra una org cliente"
+    when:
+      - "el case alcanza el paso de selección de add-ons"
+    then:
+      - "el run pausa en AWAITING_INPUT con una lista multi-select de los 12 add-ons Veevart"
+      - "la lista incluye: Collection Online, Courses, Digital Membership Card, QuickBooks/Sage, Google Integration, Microsoft Integration, Multiple Captcha Providers, Shopify Integration, Shop App, Multiple Locations, Pay By Link, Fundraising Events/Galas"
+      - "el IE puede seleccionar none, one, several o all"
+      - "el run no avanza hasta que el IE submitea su selección"
+
+  - title: "Only purchased add-ons are enabled on the Feature Setting"
+    tags:
+      - happy-path
+      - im-921
+      - ac-2
+      - automated
+    given:
+      - "el IE seleccionó N add-ons (ej. Shopify Integration + Multiple Locations)"
+    when:
+      - "el case ejecuta el paso de activación"
+    then:
+      - "cada add-on seleccionado queda en `true` en el Feature Setting de la org"
+      - "los add-ons NO seleccionados quedan exactamente como estaban (no se modifican)"
+      - "el paso verifica por read-back y reporta SUCCESS"
+
+  - title: "No add-ons purchased — case completes without changing any setting"
+    tags:
+      - negative
+      - im-921
+      - ac-3
+      - empty
+    given:
+      - "el cliente no compró ningún add-on"
+    when:
+      - "el IE selecciona ninguno y submitea"
+    then:
+      - "el case completa SUCCESS"
+      - "ningún flag del Feature Setting cambia"
+      - "el record post-run es bit-a-bit igual al pre-run"
+
+  - title: "IE can confirm the result on the Feature Setting page"
+    tags:
+      - happy-path
+      - im-921
+      - ac-4
+      - verification
+    given:
+      - "el case terminó SUCCESS con N add-ons seleccionados"
+    when:
+      - "el IE abre el Feature Setting de la org en Salesforce Setup"
+    then:
+      - "cada add-on seleccionado aparece como `Enabled` / `true`"
+      - "los add-ons no seleccionados aparecen exactamente como antes del run"
+
+  - title: "Safe to re-run — additive, never turns off active add-ons"
+    tags:
+      - regression
+      - im-921
+      - ac-5
+      - idempotent
+      - additive
+    given:
+      - "el IC 3.03 ya corrió y activó add-ons A y B"
+      - "el cliente ahora compra el add-on C"
+    when:
+      - "el IE corre el IC de nuevo y selecciona SÓLO el add-on C"
+    then:
+      - "el add-on C queda activo en el Feature Setting"
+      - "los add-ons A y B siguen activos (NO se apagan)"
+      - "no se modifica ningún add-on que no esté en la nueva selección"
+
+  - title: "Fully automated — no manual attestation steps"
+    tags:
+      - regression
+      - im-921
+      - ac-6
+      - automation
+    given:
+      - "el IE seleccionó add-ons y submitió"
+    when:
+      - "el case ejecuta"
+    then:
+      - "el run completa end-to-end sin AWAITING_HANDOFF en ningún step posterior a la selección"
+      - "no hay confirmación manual del operador requerida tras el submit"
+      - "el run termina COMPLETED automáticamente"
+
+  - title: "Delivery — catalog seed in prod releases the case"
+    tags:
+      - delivery
+      - im-921
+      - catalog
+    given:
+      - "el código del IC 3.03 está deployado en prod"
+    when:
+      - "se seedea el `IMPL_CASE#ic-3-03-activate-feature-setting-add-ons` en el catálogo de prod"
+    then:
+      - "el case aparece disponible para el equipo de Implementations sin feature flag"
+      - "un run de prueba en prod completa la selección + activación end-to-end"
+
+  - title: "Cross-test on Tucson matches the CamiloDev baseline"
+    tags:
+      - regression-evidence
+      - im-921
+      - tucson
+      - cross-test
+    given:
+      - "el IC 3.03 fue cross-tested en Tucson (COMPLETED por IM-735 report)"
+    when:
+      - "QA re-ejecuta el IC en Tucson sandbox o equivalente"
+    then:
+      - "la lista de 12 add-ons aparece completa en el dropdown"
+      - "los add-ons seleccionados quedan activos post-run"
+      - "el resultado coincide con el run COMPLETED registrado en el confidence report"
+
+  - title: "Evidencia UI — IC 3.03 ejecutado contra una org real (screenshots)"
+    tags:
+      - functional-ui
+      - screenshot-evidence
+      - im-921
+      - manual
+    given:
+      - "el IC 3.03 está seedeado en el catálogo del MigrationApp"
+      - "el operador tiene acceso a una org con Auctifera/Veevart Feature Setting disponible"
+    when:
+      - "el operador entra al MigrationApp, abre el catálogo y lanza el IC 3.03 contra la org"
+      - "el operador selecciona N add-ons (al menos 2 para validar el caso múltiple) en el AWAITING_INPUT"
+      - "el operador deja correr el case hasta COMPLETED"
+    then:
+      - "captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-3-03-activate-feature-setting-add-ons` disponible"
+      - "captura del run start con la org target seleccionada"
+      - "captura del AWAITING_INPUT mostrando los 12 add-ons del dropdown / multi-select"
+      - "captura del IE seleccionando un subset de add-ons (e.g. Shopify Integration + Multiple Locations + Pay By Link)"
+      - "captura pre-run de Setup > Custom Settings > `Veevart Feature Setting` mostrando el estado inicial de los flags"
+      - "captura post-run de Setup > Custom Settings > `Veevart Feature Setting` mostrando los add-ons seleccionados en `true` y los NO seleccionados sin cambios (AC2 + AC4)"
+      - "captura del run en COMPLETED con SUCCESS reportado y sin AWAITING_HANDOFF intermedios (AC6)"
+      - "captura del run #2 (opcional, AC5 additive): seleccionar 1 add-on adicional, post-run Feature Setting muestra los anteriores + el nuevo activos"
+
+tags:
+  - im-921
+  - im-976
+  - im-735
+  - implementations-automation
+  - implementation-case
+  - ic-3-03
+  - salesforce
+  - feature-setting
+  - add-ons
+  - auctifera
+  - high-confidence
+  - june-delivery
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-25T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-25T00:00:00Z"
+  version: 1
