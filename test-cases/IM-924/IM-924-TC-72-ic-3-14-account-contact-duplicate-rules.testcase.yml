@@ -1,0 +1,228 @@
+schemaVersion: "1.0"
+
+id: "7d26489d-7d60-473d-a856-d91b6b7e2a1a"
+key: "TC-72"
+title: "IC 3.14 — Account/Contact Duplicate Rules (delivery hybrid, NPSP + workflow + dup rules)"
+description: |
+  Cobertura QA de IM-924 (3.14 Account/Contact Duplicate Rules — deliver
+  to Implementations, high-confidence). Junio delivery del Implementation
+  Case `ic-3-14-account-contact-duplicate-rules` (hybrid). Confianza alta
+  por reporte IM-735 (2026-06-12): construido + verificado en CamiloDev,
+  cross-test COMPLETED en Tucson.
+
+  Validar que el IC:
+  1) seta NPSP `Respect Duplicate Rule Settings = true`,
+  2) reconfigura los workflows (Cashier Drawer Journal inactivos,
+     Preferred_Email activo),
+  3) crea/activa el Standard Account Duplicate Rule y Standard Contact
+     Duplicate Rule en Report-only,
+  4) parquea con AWAITING_HANDOFF para activar matching rules y para
+     asignar NPSP Contact Personal Email Match (Setup-UI-only),
+  5) acepta la prueba final QA: crear un duplicate genera el banner
+     "View Duplicates" y permite merge.
+
+  Scope técnico: matching-rule activation + NPSP Contact rule matching-rule
+  assignment son Setup-UI-only (Metadata API los bloquea); el resto es
+  automatizado.
+
+  QA Sub-task asociada: IM-973
+  Riesgos abiertos: AC5 + AC6 dependen del operador para Setup; AC7 (QA
+  acceptance) requiere crear un duplicado real para forzar el banner.
+
+type: functional
+priority: high
+status: active
+
+preconditions:
+  - "Implementation Case `ic-3-14-account-contact-duplicate-rules` deployado en prod"
+  - "Org target con NPSP + Auctifera instalados"
+  - "Permisos para tocar custom settings `npsp__Error_Settings__c`, workflow rules, y Duplicate Rules"
+  - "Acceso a Setup UI para los pasos manuales (activate matching rules + assign NPSP matching rule a Contact dup rule)"
+
+format: gherkin
+scenarios:
+  - title: "Manual handoff to activate Standard Account Matching Rule and NPSP Contact Personal Email Match"
+    tags:
+      - manual
+      - im-924
+      - ac-5
+      - awaiting-handoff
+    given:
+      - "el run del IC 3.14 alcanza el primer paso"
+    when:
+      - "el paso de matching rules se presenta"
+    then:
+      - "el run parquea con guía para activar `Standard Account Matching Rule` y `NPSP Contact Personal Email Match`"
+      - "el run incluye guía para desactivar el matching rule `Cashier Drawer Journal`"
+      - "el run no avanza hasta que el operador marca el paso como done"
+
+  - title: "NPSP honors native duplicate rules"
+    tags:
+      - happy-path
+      - im-924
+      - ac-1
+      - automated
+      - npsp
+    given:
+      - "el IC 3.14 se ejecuta"
+    when:
+      - "el paso `Set NPSP Respect Duplicate Rule Settings` termina"
+    then:
+      - "`npsp__Error_Settings__c.npsp__Respect_Duplicate_Rule_Settings__c = true` en el record org-default"
+      - "el paso verifica por query-back"
+      - "una re-ejecución no falla ni duplica el record (idempotente)"
+
+  - title: "Workflow rules are adjusted to the target state"
+    tags:
+      - happy-path
+      - im-924
+      - ac-2
+      - automated
+    given:
+      - "el IC 3.14 corre el paso de workflow rules"
+    when:
+      - "el paso completa"
+    then:
+      - "las workflow rules `Cashier Is Open` y `Cashier is close` del objeto Cashier Drawer Journal quedan INACTIVAS"
+      - "la workflow rule sobre `Contact.Preferred_Email__c` queda ACTIVA"
+      - "el paso verifica por read-back"
+
+  - title: "Standard Account Duplicate Rule exists and is active in Report-only"
+    tags:
+      - happy-path
+      - im-924
+      - ac-3
+      - automated
+      - duplicate-rules
+    given:
+      - "los matching rules fueron activados (AC5 done) y el IC corre el paso de duplicate-rule de Account"
+    when:
+      - "el paso termina"
+    then:
+      - "el `Standard Account Duplicate Rule` existe (creado si no estaba) y está activo"
+      - "las operaciones de Alert están OFF — Report-only"
+      - "la regla referencia el `Standard Account Matching Rule`"
+
+  - title: "Standard Contact Duplicate Rule is active in Report-only"
+    tags:
+      - happy-path
+      - im-924
+      - ac-4
+      - automated
+      - duplicate-rules
+    given:
+      - "los matching rules fueron activados (AC5 done) y el IC corre el paso de duplicate-rule de Contact"
+    when:
+      - "el paso termina"
+    then:
+      - "el `Standard Contact Duplicate Rule` está activo con operaciones Report-only"
+      - "el paso verifica por read-back"
+
+  - title: "Manual handoff to assign NPSP Contact Personal Email Match to the Contact duplicate rule"
+    tags:
+      - manual
+      - im-924
+      - ac-6
+      - awaiting-handoff
+    given:
+      - "los duplicate rules están configurados"
+    when:
+      - "el run alcanza el paso final"
+    then:
+      - "el run parquea con guía para asignar el matching rule `NPSP Contact Personal Email Match` al Contact duplicate rule desde Setup"
+      - "el paso se cierra solo después de que el operador marca como done"
+      - "el case documenta que managed matching rules son invisibles a Metadata API (justificación del manual)"
+
+  - title: "Duplicate detection works end-to-end (QA acceptance)"
+    tags:
+      - happy-path
+      - im-924
+      - ac-7
+      - functional
+      - acceptance
+    given:
+      - "los duplicate rules de Account y Contact están activos en Report-only"
+      - "el matching rule de Contact está asignado al NPSP Contact Personal Email Match"
+    when:
+      - "QA crea un Contact duplicado a uno existente (mismo nombre + email)"
+    then:
+      - "Salesforce muestra el banner `It looks as if duplicates exist for this contact. View Duplicates`"
+      - "el operador puede abrir View Duplicates y mergear los records"
+
+  - title: "Delivery — catalog seed in prod releases the case"
+    tags:
+      - delivery
+      - im-924
+      - catalog
+    given:
+      - "el código del IC 3.14 está deployado en prod"
+    when:
+      - "se seedea el `IMPL_CASE#ic-3-14-...` en el catálogo de prod"
+    then:
+      - "el case aparece disponible para el equipo de Implementations sin feature flag"
+      - "un run de prueba completa los pasos automáticos y parquea correctamente en los 2 handoffs manuales"
+
+  - title: "Cross-test on Tucson matches the CamiloDev baseline"
+    tags:
+      - regression-evidence
+      - im-924
+      - tucson
+      - cross-test
+    given:
+      - "el IC 3.14 fue cross-tested en Tucson (COMPLETED por IM-735 report)"
+    when:
+      - "QA re-ejecuta el IC en Tucson sandbox o equivalente"
+    then:
+      - "los pasos automáticos completan con verificación"
+      - "el resultado de NPSP, workflows y duplicate rules coincide con el reporte de confianza"
+
+  - title: "Evidencia UI — IC 3.14 ejecutado contra una org real (screenshots)"
+    tags:
+      - functional-ui
+      - screenshot-evidence
+      - im-924
+      - manual
+    given:
+      - "el IC 3.14 está seedeado en el catálogo del MigrationApp"
+      - "el operador tiene acceso a una org con NPSP + Auctifera, permisos para custom settings, workflow rules y duplicate rules"
+    when:
+      - "el operador entra al MigrationApp, abre el catálogo y lanza el IC 3.14"
+      - "el operador completa el AC5 (activar matching rules) en Setup y marca done en el MigrationApp"
+      - "el operador deja correr los pasos automáticos (AC1-AC4)"
+      - "el operador completa el AC6 (asignar NPSP Contact Personal Email Match) en Setup y marca done"
+      - "QA crea un Contact duplicado para validar AC7"
+    then:
+      - "captura del catálogo MigrationApp mostrando el IC 3.14 disponible"
+      - "captura del paso AC5 en AWAITING_HANDOFF con la guía completa para activar matching rules + captura de Setup > Duplicate Management > Matching Rules con `Standard Account Matching Rule` y `NPSP Contact Personal Email Match` activos"
+      - "captura post-AC1: SOQL workbench o Setup > Custom Settings > NPSP Error Settings mostrando `Respect_Duplicate_Rule_Settings__c = true`"
+      - "captura post-AC2: Setup > Process Automation > Workflow Rules con `Cashier Is Open` + `Cashier is close` INACTIVAS y la workflow rule sobre `Contact.Preferred_Email__c` ACTIVA"
+      - "captura post-AC3: Setup > Duplicate Management > Duplicate Rules > Standard Account Duplicate Rule activo con operations Report-only y matching rule reference"
+      - "captura post-AC4: Standard Contact Duplicate Rule activo con Report-only"
+      - "captura del paso AC6 en AWAITING_HANDOFF + captura post-AC6: Contact Duplicate Rule edit page mostrando NPSP Contact Personal Email Match asignado"
+      - "captura del AC7: crear nuevo Contact duplicado mostrando el banner `It looks as if duplicates exist for this contact. View Duplicates` + captura del View Duplicates con opción de merge"
+      - "captura final del run en COMPLETED con los 6 pasos cerrados"
+
+tags:
+  - im-924
+  - im-973
+  - im-735
+  - implementations-automation
+  - implementation-case
+  - ic-3-14
+  - salesforce
+  - duplicate-rules
+  - npsp
+  - workflow-rules
+  - account
+  - contact
+  - high-confidence
+  - june-delivery
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1
