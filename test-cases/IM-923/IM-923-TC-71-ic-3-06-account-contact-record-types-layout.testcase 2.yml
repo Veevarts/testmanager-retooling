@@ -1,0 +1,226 @@
+schemaVersion: "1.0"
+
+id: "a2b0140e-2c87-4e61-9828-0795edfca4ee"
+key: "TC-71"
+title: "IC 3.06 — Account/Contact Record Types & Page Layout (delivery hybrid, operator-selected layout)"
+description: |
+  Cobertura QA de IM-923 (3.06 Account/Contact Record Types & Page Layout —
+  deliver to Implementations, high-confidence). Junio delivery del
+  Implementation Case `ic-3-06-account-contact-record-types-layout` (hybrid).
+  Confianza alta por reporte IM-735 (2026-06-12): construido + verificado
+  en CamiloDev, cross-test COMPLETED en Tucson incluyendo el multi-step
+  layout assign sin throttle.
+
+  Validar que el IC:
+  1) pausa con un dropdown de Contact layouts descubiertos en la org
+     (incluyendo packaged con namespace prefijado),
+  2) asigna el layout seleccionado a todos los profiles batched ≤10 por
+     call (sin Lambda timeout en orgs grandes),
+  3) agrega el field `Auctifera__Current_Membership_Program1__c` al final
+     de la primera sección DEL MISMO layout seleccionado,
+  4) asigna Veevart Household y Veevart Organization layouts a sus record
+     types, deactiva los record types `(DEPRECATED)`,
+  5) parquea en AWAITING_HANDOFF para los 3 pasos Setup-only.
+
+  QA Sub-task asociada: IM-972
+  Riesgos abiertos: AC5 (scale) requiere org con 40+ profiles para validar
+  batching; AC7 manual depende del operador para Lightning Record Page
+  default + Name Suffixes + delete deprecated record types.
+
+type: functional
+priority: high
+status: active
+
+preconditions:
+  - "Implementation Case `ic-3-06-account-contact-record-types-layout` deployado en prod"
+  - "Org target con Auctifera + NPSP instalados, con al menos un Contact page layout managed (e.g. `Contact-vnfp__VNFP Contact Layout - V5 - April 2023`)"
+  - "Org target tiene los record types Account `Household_Account`, `Organization` y al menos uno con sufijo `(DEPRECATED)`"
+  - "Permisos para Profile.LayoutAssignment y para deactivate de RecordType"
+
+format: gherkin
+scenarios:
+  - title: "Operator picks a Contact layout from the live org dropdown"
+    tags:
+      - happy-path
+      - im-923
+      - ac-1
+      - operator-input
+    given:
+      - "el run del IC 3.06 ejecuta el paso de Contact layout"
+    when:
+      - "el run alcanza el dropdown"
+    then:
+      - "el run pausa en AWAITING_INPUT"
+      - "el dropdown lista los Contact page layouts reales de la org (descubiertos en runtime, no hardcoded)"
+      - "los layouts managed aparecen con su nombre namespaced (e.g. `Contact-vnfp__VNFP Contact Layout - V5 - April 2023`, NO `Contact-VNFP Contact Layout...`)"
+      - "el run no avanza hasta que el operador selecciona un layout"
+
+  - title: "Selected Contact layout is assigned to every applicable profile"
+    tags:
+      - happy-path
+      - im-923
+      - ac-2
+      - automated
+    given:
+      - "el operador seleccionó un Contact layout y lo submiteó"
+    when:
+      - "el paso de assign corre"
+    then:
+      - "el layout seleccionado queda como Contact page layout activo en todos los profiles que tienen acceso a Contact"
+      - "los profiles sin acceso a Contact se skipean (no fallan)"
+      - "el paso re-lee los profiles y reporta SUCCESS"
+
+  - title: "Current Membership Program field is appended to the SAME selected layout"
+    tags:
+      - happy-path
+      - im-923
+      - ac-3
+      - automated
+      - field-add
+    given:
+      - "el paso de assign de Contact layout terminó OK"
+    when:
+      - "el paso de field add corre"
+    then:
+      - "`Auctifera__Current_Membership_Program1__c` aparece al final de la primera sección del MISMO layout seleccionado en AC1"
+      - "el paso re-lee el layout y confirma el field presente"
+      - "el field queda visible para los profiles que ven ese layout (AC2 + AC3 coherentes)"
+
+  - title: "No wrong-layout assignment and no hardcoded layout name regression"
+    tags:
+      - regression
+      - im-923
+      - ac-4
+      - org-agnostic
+    given:
+      - "el IC corre en una org distinta a la org de referencia original (IM-696)"
+    when:
+      - "los pasos de assign + field add ejecutan"
+    then:
+      - "el run NO falla con `no usable layout named ...`"
+      - "el field NO se agrega a un layout que después el assign reemplaza"
+      - "ningún layout name específico de im-696 está hardcoded en el código del IC"
+
+  - title: "Profile assign scales on a 40+ profile org without Lambda timeout"
+    tags:
+      - regression
+      - im-923
+      - ac-5
+      - performance
+      - batching
+    given:
+      - "una org con 40+ profiles habilitados para Contact"
+    when:
+      - "el paso de assign corre"
+    then:
+      - "el paso completa dentro del timeout de la tool"
+      - "los profile writes se batchean en chunks ≤10 por call"
+      - "no aparece error `Task timed out` ni Lambda timeout en el log"
+
+  - title: "Account record types receive their layouts and DEPRECATED are deactivated"
+    tags:
+      - happy-path
+      - im-923
+      - ac-6
+      - automated
+      - account
+    given:
+      - "los pasos de Contact (AC1-AC3) completaron"
+    when:
+      - "los pasos de Account corren"
+    then:
+      - "el layout `Veevart Household` queda asignado al record type `Household_Account`"
+      - "el layout `Veevart Organization` queda asignado al record type `Organization`"
+      - "los record types Account con sufijo `(DEPRECATED)` quedan con `active = false`"
+      - "cada paso verifica su resultado por read-back antes de marcar SUCCESS"
+
+  - title: "Manual handoff covers Name Suffixes, Lightning Record Pages and DEPRECATED deletes"
+    tags:
+      - manual
+      - im-923
+      - ac-7
+      - awaiting-handoff
+    given:
+      - "los pasos automáticos completaron"
+    when:
+      - "el run alcanza el paso manual"
+    then:
+      - "el paso parquea en AWAITING_HANDOFF con instrucciones para: enable `Name Suffixes for Person Names`, asignar `Veevart Contact` y `Veevart Account` Lightning Record Pages como Org Default (Desktop + Phone), eliminar los record types Account `(DEPRECATED)` ahora desactivados"
+      - "el paso se cierra solo cuando el operador confirma cada acción"
+
+  - title: "Idempotent re-run with the same selected layout"
+    tags:
+      - regression
+      - im-923
+      - ac-8
+      - idempotent
+    given:
+      - "el IC 3.06 ya fue aplicado y el operador selecciona el mismo layout"
+    when:
+      - "el IC re-ejecuta"
+    then:
+      - "el assign re-verifica y reporta SUCCESS sin duplicar (no-op si ya apuntaba ahí)"
+      - "el field add es no-op (ya presente)"
+      - "los record type assigns y deactivates son no-op"
+      - "el manual step se vuelve a presentar para confirmación explícita"
+
+  - title: "Delivery — catalog seed in prod releases the case"
+    tags:
+      - delivery
+      - im-923
+      - catalog
+    given:
+      - "el código del IC 3.06 está deployado en prod"
+    when:
+      - "se seedea el IMPL_CASE entry en el catálogo de prod"
+    then:
+      - "el case aparece disponible para Implementations sin feature flag"
+      - "un run de prueba en prod completa los pasos automáticos y deja el manual esperando handoff"
+
+  - title: "Evidencia UI — IC 3.06 ejecutado contra una org real (screenshots)"
+    tags:
+      - functional-ui
+      - screenshot-evidence
+      - im-923
+      - manual
+    given:
+      - "el IC 3.06 está seedeado en el catálogo del MigrationApp"
+      - "el operador tiene acceso a una org con Auctifera + NPSP, al menos un Contact layout managed y los record types Account `Household_Account`, `Organization` y al menos uno `(DEPRECATED)`"
+    when:
+      - "el operador entra al MigrationApp, abre el catálogo y lanza el IC 3.06 contra la org"
+      - "el operador selecciona un Contact layout del dropdown y deja correr el assign + field add + Account record types steps"
+      - "el operador completa el paso manual de Lightning Record Pages, Name Suffixes, y delete de los DEPRECATED record types"
+    then:
+      - "captura del catálogo MigrationApp mostrando el IC 3.06 disponible"
+      - "captura del dropdown de Contact layouts mostrando los layouts namespaced (e.g. `Contact-vnfp__VNFP Contact Layout - V5 - April 2023`)"
+      - "captura del run mostrando el progreso del assign de profiles batched (visible el batching ≤10)"
+      - "captura post-run del Page Layout editor mostrando `Auctifera__Current_Membership_Program1__c` al final de la primera sección del layout seleccionado (AC3)"
+      - "captura de Setup > Object Manager > Account > Record Types mostrando: Household_Account con Veevart Household layout, Organization con Veevart Organization layout, y los DEPRECATED con `Active = false` (AC6)"
+      - "captura del paso manual en AWAITING_HANDOFF con la lista de acciones operator-side"
+      - "captura post-handoff: Setup > Object Manager > Contact > Lightning Record Pages asignado como Org Default + Setup mostrando Name Suffixes enabled (AC7)"
+      - "captura final del run en COMPLETED"
+
+tags:
+  - im-923
+  - im-972
+  - im-735
+  - implementations-automation
+  - implementation-case
+  - ic-3-06
+  - salesforce
+  - record-types
+  - page-layout
+  - profiles
+  - account
+  - contact
+  - high-confidence
+  - june-delivery
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-06-24T00:00:00Z"
+  version: 1

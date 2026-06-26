@@ -1,216 +1,186 @@
-schemaVersion: "1.0"
-
-id: "6e93f711-d7c5-42d6-a48f-c3c7c368ca75"
-key: "TC-74"
-title: "IC 4.02 — Default GL Codes Setup (delivery auto, anonymous Apex)"
-description: |
-  Cobertura QA de IM-926 (4.02 Default GL Codes Setup — deliver to
-  Implementations, high-confidence). Junio delivery del Implementation
-  Case `ic-4-02-default-gl-codes` v1 (auto). Confianza alta por reporte
-  IM-735 (2026-06-12): verificado en ambas orgs (auto). Live-verified en
-  CamiloDevOrg (existing-org run + cleared-org run + restore). Seedeado a
-  `MigrationApp-dev` con `IMPL_CASE#ic-4-02-default-gl-codes` v1 +
-  `PLAN_TEMPLATE#ic-4-02-default-gl-codes-tmpl` v1 (PR #189 squash-merged
-  a main).
-
-  Validar que el case (anonymous Apex, sin operator input):
-  1) upserta el record org-default del custom setting hierarchy
-     `Auctifera__Accounting__c` con `SetupOwnerId = UserInfo.getOrganizationId()`,
-  2) escribe los 10 GL code placeholders Veevart en su valor canónico,
-  3) es idempotente,
-  4) sobrescribe blanks o valores distintos a los defaults,
-  5) si la verificación detecta un write parcial / bad, tira y reporta FAILED,
-  6) es org-agnostic (sin org-IDs hardcoded, usa managed-package field
-     API names),
-  7) no toca `Membership Split Donation GL Code` (out of scope).
-
-  QA Sub-task asociada: IM-975
-  Riesgos abiertos: AC4 (false-green) requiere forzar un write parcial
-  para validar el throw; sin operator input → el flujo entero es scriptable.
-
+schemaVersion: '1.0'
+id: 6e93f711-d7c5-42d6-a48f-c3c7c368ca75
+key: TC-74
+title: IC 4.02 — Default GL Codes Setup (delivery auto, anonymous Apex)
+description: "Cobertura QA de IM-926 (4.02 Default GL Codes Setup — deliver to\nImplementations, high-confidence). Junio delivery del Implementation\nCase `ic-4-02-default-gl-codes` v1 (auto). Confianza\
+  \ alta por reporte\nIM-735 (2026-06-12): verificado en ambas orgs (auto). Live-verified en\nCamiloDevOrg (existing-org run + cleared-org run + restore). Seedeado a\n`MigrationApp-dev` con `IMPL_CASE#ic-4-02-default-gl-codes`\
+  \ v1 +\n`PLAN_TEMPLATE#ic-4-02-default-gl-codes-tmpl` v1 (PR #189 squash-merged\na main).\n\nValidar que el case (anonymous Apex, sin operator input):\n1) upserta el record org-default del custom setting\
+  \ hierarchy\n   `Auctifera__Accounting__c` con `SetupOwnerId = UserInfo.getOrganizationId()`,\n2) escribe los 10 GL code placeholders Veevart en su valor canónico,\n3) es idempotente,\n4) sobrescribe\
+  \ blanks o valores distintos a los defaults,\n5) si la verificación detecta un write parcial / bad, tira y reporta FAILED,\n6) es org-agnostic (sin org-IDs hardcoded, usa managed-package field\n   API\
+  \ names),\n7) no toca `Membership Split Donation GL Code` (out of scope).\n\nQA Sub-task asociada: IM-975\nRiesgos abiertos: AC4 (false-green) requiere forzar un write parcial\npara validar el throw;\
+  \ sin operator input → el flujo entero es scriptable.\n"
 type: functional
 priority: high
 status: active
-
 preconditions:
-  - "Implementation Case `ic-4-02-default-gl-codes` v1 deployado en prod"
-  - "Org target con Auctifera managed package instalado (custom setting `Auctifera__Accounting__c` disponible)"
-  - "Permisos para upsert custom settings hierarchy y para ejecutar anonymous Apex"
-  - "Acceso a SOQL para verificar `Auctifera__Accounting__c` org-default record"
-
+- Implementation Case `ic-4-02-default-gl-codes` v1 deployado en prod
+- Org target con Auctifera managed package instalado (custom setting `Auctifera__Accounting__c` disponible)
+- Permisos para upsert custom settings hierarchy y para ejecutar anonymous Apex
+- Acceso a SOQL para verificar `Auctifera__Accounting__c` org-default record
 format: gherkin
 scenarios:
-  - title: "Seed default GL codes on a fresh org with no org-default record"
-    tags:
-      - happy-path
-      - im-926
-      - ac-1
-      - automated
-      - seed
-    given:
-      - "una implementation org con Auctifera instalado y SIN org-default record en `Auctifera__Accounting__c`"
-    when:
-      - "el IC 4.02 corre"
-    then:
-      - "se crea un record org-default con `SetupOwnerId = UserInfo.getOrganizationId()`"
-      - "`Auctifera__Ticket_Offer_GL_Code__c = TICKETS`"
-      - "`Auctifera__Ticket_Offer_Tax_GL_Code__c = TICKET TAXES`"
-      - "`Auctifera__Membership_GL_Code__c = MEMBERSHIPS`"
-      - "`Auctifera__Membership_Tax_GL_Code__c = MEMBERSHIP TAXES`"
-      - "`Auctifera__Shop_Item_GL_Code__c = SHOP`"
-      - "`Auctifera__Shop_Item_Tax_GL_Code__c = SHOP TAXES`"
-      - "`Auctifera__Resources_Services_GL_Code__c = RENTALS`"
-      - "`Auctifera__Resources_Services_Tax_GL_Code__c = RENTAL TAXES`"
-      - "`Auctifera__Location_GL_Code__c = RENTALS`"
-      - "`Auctifera__Location_Tax_GL_Code__c = RENTAL TAXES`"
-      - "el step reporta SUCCESS"
-
-  - title: "Idempotent re-run on already-seeded org"
-    tags:
-      - regression
-      - im-926
-      - ac-2
-      - idempotent
-    given:
-      - "el org-default record ya tiene los 10 GL code defaults Veevart"
-    when:
-      - "el case se ejecuta de nuevo"
-    then:
-      - "no se crea un record duplicado (sigue habiendo exactamente uno con `SetupOwnerId = OrgId`)"
-      - "los 10 valores quedan inalterados"
-      - "el step reporta SUCCESS"
-
-  - title: "Overwrite blank or differing GL code values to the Veevart defaults"
-    tags:
-      - happy-path
-      - im-926
-      - ac-3
-      - automated
-      - overwrite
-    given:
-      - "un org-default record cuyo set de los 10 GL code fields está en blanco o tiene valores distintos a los placeholders"
-    when:
-      - "el case corre"
-    then:
-      - "los 10 fields quedan seteados exactamente a los placeholders Veevart definidos en AC1"
-      - "el step reporta SUCCESS"
-
-  - title: "Verification catches a bad or partial write"
-    tags:
-      - negative
-      - im-926
-      - ac-4
-      - verification
-    given:
-      - "el case ejecutó el upsert pero la org quedó con uno de los 10 fields con un valor distinto al expected"
-    when:
-      - "el step de verificación se ejecuta"
-    then:
-      - "el case lanza excepción y el step reporta FAILED (un write incorrecto NUNCA se reporta como SUCCESS)"
-      - "el log del run identifica cuál field quedó con el valor incorrecto"
-
-  - title: "Org-agnostic — no hardcoded org identifiers"
-    tags:
-      - regression
-      - im-926
-      - ac-5
-      - org-agnostic
-    given:
-      - "una implementation org nueva con Auctifera instalado"
-    when:
-      - "el case corre"
-    then:
-      - "funciona sin cambios per-org en el código del IC"
-      - "los field API names son los managed-package `Auctifera__*_GL_Code__c`"
-      - "el `SetupOwnerId` se resuelve dinámicamente con `UserInfo.getOrganizationId()` (no hardcoded org ID)"
-
-  - title: "Scope guard — placeholder defaults only, no client overrides or Membership Split Donation"
-    tags:
-      - regression
-      - im-926
-      - ac-6
-      - scope
-    given:
-      - "el case termina su run en una org"
-    when:
-      - "QA inspecciona el org-default record post-run"
-    then:
-      - "sólo los 10 placeholders Veevart están seteados a los defaults"
-      - "el field `Auctifera__Membership_Split_Donation_GL_Code__c` queda intacto (no parte del playbook)"
-      - "ningún client-specific chart-of-accounts override aparece (eso es manual / fuera de scope)"
-
-  - title: "Release — case seeded into prod catalog without feature flag"
-    tags:
-      - delivery
-      - im-926
-      - ac-7
-      - catalog
-    given:
-      - "el case fue reviewed at high confidence"
-    when:
-      - "se seedea en el catálogo de prod (no feature flag, per IM-759)"
-    then:
-      - "el case 4.02 corre y verifica en prod"
-      - "el equipo de Implementations puede seleccionar y ejecutar el case"
-
-  - title: "Reference run on CamiloDevOrg — clear → seed → verify → restore"
-    tags:
-      - regression-evidence
-      - im-926
-      - camilodev
-      - reference
-    given:
-      - "el reference run live-verified en CamiloDevOrg (existing-org no-op + cleared-org fresh insert + restore)"
-    when:
-      - "QA reproduce el flujo limpiando el org-default y corriendo el case"
-    then:
-      - "la corrida con record presente termina con verify OK (idempotent no-op)"
-      - "tras eliminar el org-default, la corrida vuelve a insertarlo con `SetupOwnerId = OrgId` y los 10 valores correctos"
-      - "el resultado coincide con la evidencia citada en la story (PR #189 / seed en MigrationApp-dev)"
-
-  - title: "Evidencia UI — IC 4.02 ejecutado contra una org real (screenshots)"
-    tags:
-      - functional-ui
-      - screenshot-evidence
-      - im-926
-      - manual
-    given:
-      - "el IC 4.02 v1 está seedeado en el catálogo del MigrationApp"
-      - "el operador tiene acceso a una org con Auctifera instalado y permisos para upsert custom settings hierarchy + ejecutar anonymous Apex"
-    when:
-      - "el operador entra al MigrationApp, abre el catálogo y lanza el IC 4.02 contra la org"
-      - "el operador deja correr el case sin intervención (anonymous Apex, sin operator input)"
-      - "QA inspecciona el org-default record vía SOQL post-run"
-    then:
-      - "captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-4-02-default-gl-codes` v1 + `PLAN_TEMPLATE#ic-4-02-default-gl-codes-tmpl` v1 disponibles"
-      - "captura pre-run de Setup > Custom Settings > `Auctifera - Accounting` mostrando el estado inicial (sin record org-default o con valores distintos a los placeholders)"
-      - "captura del run en progress mostrando el step ejecutándose"
-      - "captura post-run de Setup > Custom Settings > `Auctifera - Accounting` > Manage mostrando el record org-default con `SetupOwnerId` = Org Id"
-      - "captura del record org-default mostrando los 10 GL code fields seteados a los placeholders Veevart (TICKETS, TICKET TAXES, MEMBERSHIPS, MEMBERSHIP TAXES, SHOP, SHOP TAXES, RENTALS x2, RENTAL TAXES x2) (AC1)"
-      - "captura del SOQL workbench mostrando el query `SELECT Id, SetupOwnerId, Auctifera__Ticket_Offer_GL_Code__c, ... FROM Auctifera__Accounting__c WHERE SetupOwnerId = :OrganizationId` con los 10 valores correctos"
-      - "captura del record mostrando `Auctifera__Membership_Split_Donation_GL_Code__c` intacto (AC6 scope guard)"
-      - "captura del run en COMPLETED con SUCCESS reportado"
-
-tags:
+- title: 4.02 Default GL Codes Setup — Seed default GL codes on a fresh org with no org-default record
+  tags:
+  - happy-path
   - im-926
-  - im-975
-  - im-735
-  - implementations-automation
-  - implementation-case
-  - ic-4-02
-  - salesforce
-  - gl-codes
-  - custom-settings
-  - auctifera
-  - anonymous-apex
-  - high-confidence
-  - june-delivery
-
+  - ac-1
+  - automated
+  - seed
+  given:
+  - una implementation org con Auctifera instalado y SIN org-default record en `Auctifera__Accounting__c`
+  when:
+  - el IC 4.02 corre
+  then:
+  - se crea un record org-default con `SetupOwnerId = UserInfo.getOrganizationId()`
+  - '`Auctifera__Ticket_Offer_GL_Code__c = TICKETS`'
+  - '`Auctifera__Ticket_Offer_Tax_GL_Code__c = TICKET TAXES`'
+  - '`Auctifera__Membership_GL_Code__c = MEMBERSHIPS`'
+  - '`Auctifera__Membership_Tax_GL_Code__c = MEMBERSHIP TAXES`'
+  - '`Auctifera__Shop_Item_GL_Code__c = SHOP`'
+  - '`Auctifera__Shop_Item_Tax_GL_Code__c = SHOP TAXES`'
+  - '`Auctifera__Resources_Services_GL_Code__c = RENTALS`'
+  - '`Auctifera__Resources_Services_Tax_GL_Code__c = RENTAL TAXES`'
+  - '`Auctifera__Location_GL_Code__c = RENTALS`'
+  - '`Auctifera__Location_Tax_GL_Code__c = RENTAL TAXES`'
+  - el step reporta SUCCESS
+- title: 4.02 Default GL Codes Setup — Idempotent re-run on already-seeded org
+  tags:
+  - regression
+  - im-926
+  - ac-2
+  - idempotent
+  given:
+  - el org-default record ya tiene los 10 GL code defaults Veevart
+  when:
+  - el case se ejecuta de nuevo
+  then:
+  - no se crea un record duplicado (sigue habiendo exactamente uno con `SetupOwnerId = OrgId`)
+  - los 10 valores quedan inalterados
+  - el step reporta SUCCESS
+- title: 4.02 Default GL Codes Setup — Overwrite blank or differing GL code values to the Veevart defaults
+  tags:
+  - happy-path
+  - im-926
+  - ac-3
+  - automated
+  - overwrite
+  given:
+  - un org-default record cuyo set de los 10 GL code fields está en blanco o tiene valores distintos a los placeholders
+  when:
+  - el case corre
+  then:
+  - los 10 fields quedan seteados exactamente a los placeholders Veevart definidos en AC1
+  - el step reporta SUCCESS
+- title: 4.02 Default GL Codes Setup — Verification catches a bad or partial write
+  tags:
+  - negative
+  - im-926
+  - ac-4
+  - verification
+  given:
+  - el case ejecutó el upsert pero la org quedó con uno de los 10 fields con un valor distinto al expected
+  when:
+  - el step de verificación se ejecuta
+  then:
+  - el case lanza excepción y el step reporta FAILED (un write incorrecto NUNCA se reporta como SUCCESS)
+  - el log del run identifica cuál field quedó con el valor incorrecto
+- title: 4.02 Default GL Codes Setup — Org-agnostic — no hardcoded org identifiers
+  tags:
+  - regression
+  - im-926
+  - ac-5
+  - org-agnostic
+  given:
+  - una implementation org nueva con Auctifera instalado
+  when:
+  - el case corre
+  then:
+  - funciona sin cambios per-org en el código del IC
+  - los field API names son los managed-package `Auctifera__*_GL_Code__c`
+  - el `SetupOwnerId` se resuelve dinámicamente con `UserInfo.getOrganizationId()` (no hardcoded org ID)
+- title: 4.02 Default GL Codes Setup — Scope guard — placeholder defaults only, no client overrides or Membership Split Donation
+  tags:
+  - regression
+  - im-926
+  - ac-6
+  - scope
+  given:
+  - el case termina su run en una org
+  when:
+  - QA inspecciona el org-default record post-run
+  then:
+  - sólo los 10 placeholders Veevart están seteados a los defaults
+  - el field `Auctifera__Membership_Split_Donation_GL_Code__c` queda intacto (no parte del playbook)
+  - ningún client-specific chart-of-accounts override aparece (eso es manual / fuera de scope)
+- title: 4.02 Default GL Codes Setup — Release — case seeded into prod catalog without feature flag
+  tags:
+  - delivery
+  - im-926
+  - ac-7
+  - catalog
+  given:
+  - el case fue reviewed at high confidence
+  when:
+  - se seedea en el catálogo de prod (no feature flag, per IM-759)
+  then:
+  - el case 4.02 corre y verifica en prod
+  - el equipo de Implementations puede seleccionar y ejecutar el case
+- title: 4.02 Default GL Codes Setup — Reference run on CamiloDevOrg — clear → seed → verify → restore
+  tags:
+  - regression-evidence
+  - im-926
+  - camilodev
+  - reference
+  given:
+  - el reference run live-verified en CamiloDevOrg (existing-org no-op + cleared-org fresh insert + restore)
+  when:
+  - QA reproduce el flujo limpiando el org-default y corriendo el case
+  then:
+  - la corrida con record presente termina con verify OK (idempotent no-op)
+  - tras eliminar el org-default, la corrida vuelve a insertarlo con `SetupOwnerId = OrgId` y los 10 valores correctos
+  - 'el resultado coincide con la evidencia citada en la story (PR #189 / seed en MigrationApp-dev)'
+- title: 4.02 Default GL Codes Setup — Evidencia UI — IC 4.02 ejecutado contra una org real (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-926
+  - manual
+  given:
+  - el IC 4.02 v1 está seedeado en el catálogo del MigrationApp
+  - el operador tiene acceso a una org con Auctifera instalado y permisos para upsert custom settings hierarchy + ejecutar anonymous Apex
+  when:
+  - el operador entra al MigrationApp, abre el catálogo y lanza el IC 4.02 contra la org
+  - el operador deja correr el case sin intervención (anonymous Apex, sin operator input)
+  - QA inspecciona el org-default record vía SOQL post-run
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-4-02-default-gl-codes` v1 + `PLAN_TEMPLATE#ic-4-02-default-gl-codes-tmpl` v1 disponibles
+  - captura pre-run de Setup > Custom Settings > `Auctifera - Accounting` mostrando el estado inicial (sin record org-default o con valores distintos a los placeholders)
+  - captura del run en progress mostrando el step ejecutándose
+  - captura post-run de Setup > Custom Settings > `Auctifera - Accounting` > Manage mostrando el record org-default con `SetupOwnerId` = Org Id
+  - captura del record org-default mostrando los 10 GL code fields seteados a los placeholders Veevart (TICKETS, TICKET TAXES, MEMBERSHIPS, MEMBERSHIP TAXES, SHOP, SHOP TAXES, RENTALS x2, RENTAL TAXES x2)
+    (AC1)
+  - captura del SOQL workbench mostrando el query `SELECT Id, SetupOwnerId, Auctifera__Ticket_Offer_GL_Code__c, ... FROM Auctifera__Accounting__c WHERE SetupOwnerId = :OrganizationId` con los 10 valores
+    correctos
+  - captura del record mostrando `Auctifera__Membership_Split_Donation_GL_Code__c` intacto (AC6 scope guard)
+  - captura del run en COMPLETED con SUCCESS reportado
+tags:
+- im-926
+- im-975
+- im-735
+- implementations-automation
+- implementation-case
+- ic-4-02
+- salesforce
+- gl-codes
+- custom-settings
+- auctifera
+- anonymous-apex
+- high-confidence
+- june-delivery
 estimatedDuration: 60
-
 metadata:
-  createdBy: "codex"
-  createdAt: "2026-06-24T00:00:00Z"
-  updatedBy: "codex"
-  updatedAt: "2026-06-24T00:00:00Z"
+  createdBy: codex
+  createdAt: '2026-06-24T00:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-24T00:00:00Z'
   version: 1
