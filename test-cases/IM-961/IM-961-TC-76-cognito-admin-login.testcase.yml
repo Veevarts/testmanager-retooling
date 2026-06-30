@@ -1,0 +1,137 @@
+schemaVersion: '1.0'
+id: 97a324c0-789b-4da9-9586-c63f96b2915b
+key: TC-76
+title: IM-961 — Cognito login for Survey Tool admin UI
+description: |
+  Cobertura QA de IM-961 (Add Cognito login for admin UI). Sub-task QA: IM-982.
+  Repositorio en scope: `survey-tool`. La historia agrega Cognito Hosted UI / OIDC
+  en Express con rutas `/api/auth/{login,callback,logout,me}`, session cookie
+  httpOnly secure y middleware de admin auth. El widget público no se ve afectado
+  (eso se valida en IM-963).
+
+  Validar:
+  1) usuario no autenticado en una admin page → redirect a Cognito login,
+  2) callback OIDC válido → crea session cookie httpOnly secure y deja entrar a
+     páginas protegidas,
+  3) logout → limpia la sesión y vuelve a forzar login en rutas admin,
+  4) endpoints del widget público (Salesforce) siguen funcionando sin login,
+  5) sanity check de la cookie (`HttpOnly`, `Secure`, `SameSite`) y del session
+     state expuesto en `/api/auth/me`.
+
+  Riesgos abiertos:
+  - El detalle del entorno Cognito (User Pool, App Client, callback/logout URLs,
+    cookie secret) lo provee IM-964 (documentación); si esos valores no están
+    publicados, los escenarios 1-3 dependen de QA pidiéndoselos a dev.
+  - Cualquier regresión en el flujo del widget cae en IM-963 (no se duplica acá).
+type: functional
+priority: high
+status: active
+preconditions:
+- Build del `survey-tool` que incluye la rama / merge de IM-961 desplegado en el ambiente bajo prueba (local / dev)
+- Cognito User Pool + App Client provisionados con callback `/api/auth/callback` y logout URL configurados (per IM-964)
+- Variables de entorno cargadas (Cognito domain, User Pool Id, App Client Id, App Client secret, cookie secret, callback/logout URLs)
+- Un usuario admin de prueba dado de alta en el User Pool con credenciales conocidas
+- Browser con DevTools para inspeccionar Set-Cookie y network 302
+format: gherkin
+scenarios:
+- title: IM-961 — Unauthenticated admin page redirects to Cognito login
+  tags:
+  - happy-path
+  - im-961
+  - im-982
+  - ac-1
+  - auth
+  - redirect
+  given:
+  - el browser no tiene session cookie del admin
+  when:
+  - el usuario navega a una admin page (e.g. `/admin/surveys`)
+  then:
+  - el server responde 302 con `Location` apuntando al endpoint Cognito Hosted UI (`/login` o `/oauth2/authorize`)
+  - la URL final contiene `client_id`, `response_type=code`, `redirect_uri` igual a `/api/auth/callback` y `scope=openid`
+  - la admin page NO se renderiza ni filtra datos previos al login
+- title: IM-961 — Successful Cognito callback creates secure httpOnly session and grants admin access
+  tags:
+  - happy-path
+  - im-961
+  - im-982
+  - ac-2
+  - cookie
+  - session
+  given:
+  - el usuario completó el flujo de Cognito Hosted UI con credenciales válidas
+  when:
+  - Cognito redirige al callback con `code=...` y `state` válido
+  then:
+  - el server intercambia el code por tokens (id/access) y responde 302 a la admin page solicitada (o al admin home)
+  - la respuesta incluye `Set-Cookie` con flags `HttpOnly`, `Secure`, `SameSite=Lax|Strict` y `Path=/`
+  - una request subsecuente a `/api/auth/me` devuelve 200 con el perfil del admin (email/username) y NO devuelve tokens crudos
+  - una request a una admin API protegida (e.g. `/api/admin/surveys`) responde 200 con la session cookie
+- title: IM-961 — Logout clears session and re-protects admin routes
+  tags:
+  - happy-path
+  - im-961
+  - im-982
+  - ac-3
+  - logout
+  given:
+  - el admin tiene una session cookie válida (vino de Scenario 2)
+  when:
+  - el admin hace POST/GET a `/api/auth/logout`
+  then:
+  - el server responde con `Set-Cookie` que invalida la session (cookie con `Max-Age=0` o `Expires` en pasado)
+  - el server redirige al endpoint de logout de Cognito (limpiando la sesión del Hosted UI)
+  - una request posterior a `/api/auth/me` devuelve 401 / sin user
+  - una request posterior a `/admin/surveys` vuelve a 302 a Cognito login
+- title: IM-961 — Public survey widget endpoints stay open without admin auth (cross-check with IM-963)
+  tags:
+  - happy-path
+  - im-961
+  - im-982
+  - ac-4
+  - public-widget
+  - non-regression
+  given:
+  - el admin auth middleware está activo
+  - el browser/cliente NO tiene session cookie de admin
+  when:
+  - el cliente llama a un public endpoint del widget (e.g. `/api/public/surveys/<slug>` o `/api/widget/eligibility`)
+  then:
+  - la response es 200 con el payload esperado del widget
+  - NO se devuelve 302 ni 401
+  - NO se intenta setear cookie de admin
+- title: IM-961 — Tampered or expired session cookie is rejected
+  tags:
+  - negative
+  - im-961
+  - im-982
+  - ac-2
+  - cookie-integrity
+  - missing-doc
+  given:
+  - una session cookie firmada por el server fue manipulada (ej. último byte alterado) o expiró
+  when:
+  - el cliente la envía a una admin API protegida
+  then:
+  - el server responde 401 (o redirect 302 a Cognito login para rutas HTML)
+  - NO se trata como sesión válida
+  - el log del server registra el intento (sin loggear el valor crudo de la cookie ni los tokens)
+tags:
+- im-961
+- im-982
+- im-727
+- survey-tool
+- nps
+- auth
+- cognito
+- oidc
+- express
+- session-cookie
+- admin-ui
+estimatedDuration: 60
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T16:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T16:00:00Z'
+  version: 1

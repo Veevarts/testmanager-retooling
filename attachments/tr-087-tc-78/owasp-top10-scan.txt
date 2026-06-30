@@ -1,0 +1,25 @@
+OWASP Top 10 (2021) — Applicability scan for IM-963 / PR #21 / TC-78
+
+Surfaces touched: server/src/db/{index,migrate,path,runMigrations}.ts (DB bootstrap refactor for
+testability), server/src/routes/apiBoundary.test.ts (+test case for active-only public lookup).
+Test suite: 39/39 PASS — the new test "keeps public feature survey delivery active-only even
+with preview or active=false flags" + "allows public widget response submission without an
+admin session" cover the widget protection.
+
+| ID  | Risk                       | Applicable | Check method                                         | Verdict | Evidence / Justification |
+|-----|----------------------------|------------|------------------------------------------------------|---------|--------------------------|
+| A01 | Broken Access Control      | Yes        | Boundary test reinforces public access stays anonymous | PASS  | apiBoundary.test.ts confirms public widget hits 200 without cookie ("allows public widget survey lookup without an admin session", "allows public response submission validation without an admin session", "allows public widget response submission without an admin session"). The PR explicitly adds these tests to lock the contract in CI. |
+| A02 | Cryptographic Failures     | No         | -                                                    | N/A     | No crypto/PII handling in this PR. |
+| A03 | Injection                  | Yes        | grep against changed files; review of db/path resolver | PASS  | db/path.ts resolves SURVEY_DB_PATH from env-var only (no user input). DB file path not concatenated with user-controlled data. New tests use mkdtempSync to isolate (no command injection). |
+| A04 | Insecure Design            | Yes        | Threat model: does the DB-path refactor enable arbitrary file write? | PASS | path.ts checks SURVEY_DB_PATH env; no path traversal helper exposed to HTTP requests. Migration scripts run only at server boot and at test bootstrap. |
+| A05 | Security Misconfiguration  | Yes        | Review test isolation: do test fixtures leak into prod DB? | PASS | Tests set `process.env.SURVEY_DB_PATH = join(testDataDir, "survey.db")` and `rmSync(testDataDir, { recursive: true, force: true })` on after-hook — full isolation. Default prod path remains unchanged. |
+| A06 | Vulnerable Components      | Yes        | npm audit --json                                     | INFO    | Same pre-existing high advisories as TC-76/77 (drizzle-orm, path-to-regexp). PR #21 did not touch server/package.json. |
+| A07 | Identification and Authentication Failures | No | -                                          | N/A     | No auth surface touched. |
+| A08 | Software and Data Integrity Failures | No | -                                          | N/A     | DB migration runner reads checked-in SQL only; no external load path. |
+| A09 | Security Logging and Monitoring Failures | No | -                                          | N/A     | No log change. |
+| A10 | SSRF                       | No         | -                                                    | N/A     | No outbound HTTP. |
+
+Decisions:
+- 0 Applicable+FAIL.
+- A06 INFO (pre-existing).
+- Functional widget scenarios (AC1 widget loads in Lightning, AC5 CORS preflight from Salesforce origin, AC7 NFPFundraising cross-test) require a deployed survey-tool + AuctiferaDX/NFPFundraising sandbox to validate end-to-end. NOT auto-executable in this code-review pass; they stay `blocked` in the TR with notes.

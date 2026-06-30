@@ -1,0 +1,163 @@
+schemaVersion: '1.0'
+id: adafad18-d03a-45c1-afb3-4aef95e3f8fb
+key: TC-77
+title: IM-962 — Separate public and admin API routes in survey-tool
+description: |
+  Cobertura QA de IM-962 (Separate public and admin API routes). Sub-task QA: IM-983.
+  Repositorio en scope: `survey-tool`. La historia reclasifica TODAS las rutas del
+  API entre public (widget) y admin (management), y aplica el middleware de admin
+  auth SOLO a las rutas admin.
+
+  Riesgo High flaggeado en la historia: si se sobreprotege, el widget se rompe;
+  si se subprotege, queda expuesto el management. QA debe cubrir ambas direcciones.
+
+  Validar:
+  1) existe un route map explícito clasificando cada endpoint como public/admin,
+  2) un request no autenticado a un admin endpoint → 401,
+  3) un request no autenticado a un public endpoint → 200,
+  4) survey submission (post público) sigue funcionando sin admin session,
+  5) cobertura por categoría: features CRUD, surveys CRUD, organizations/settings,
+     analytics/export, Salesforce integration/sync, response admin (admin) +
+     survey load by slug/placement, eligibility, impression/dismissal tracking,
+     response submission (public).
+
+  Riesgos abiertos:
+  - Si el "route map" no se entrega como artefacto (md, JSON, o test snapshot),
+    AC1 se valida por código + run-time inspection.
+  - La división public/admin debe quedar congruente con IM-961 (middleware) y
+    no romper widget (IM-963).
+type: integration
+priority: high
+status: active
+preconditions:
+- Build del `survey-tool` que incluye la rama / merge de IM-962 desplegado
+- Cognito + admin auth middleware del IM-961 disponibles en el ambiente
+- Un usuario admin de prueba con session cookie válida
+- Listado del route map (md / código / OpenAPI) — si no existe, se infiere del express router
+- Browser + cliente HTTP (curl / Postman) para impactar endpoints sin redirect
+format: gherkin
+scenarios:
+- title: IM-962 — Route map explicitly classifies every API route as public or admin
+  tags:
+  - happy-path
+  - im-962
+  - im-983
+  - ac-1
+  - documentation
+  - route-map
+  given:
+  - el repo `survey-tool` está en el commit del merge
+  when:
+  - QA revisa el route map (md doc / OpenAPI / archivo `routes/*.ts` con metadata, según donde quede el contrato)
+  then:
+  - cada endpoint aparece etiquetado como public o admin (no hay rutas sin clasificación)
+  - las categorías admin incluyen al menos `features`, `surveys`, `organizations/settings`, `analytics/export`, `salesforce/integration`, `responses (admin)`
+  - las categorías public incluyen al menos `survey load by slug/placement`, `eligibility`, `impressions`, `dismissals`, `responses (submit)`
+- title: IM-962 — Unauthenticated requests to admin APIs are rejected
+  tags:
+  - happy-path
+  - im-962
+  - im-983
+  - ac-2
+  - admin-auth
+  given:
+  - el cliente NO tiene session cookie de admin
+  when:
+  - el cliente hace requests a admin endpoints (ej. `GET /api/admin/surveys`, `POST /api/admin/features`, `GET /api/admin/analytics/export`)
+  then:
+  - cada response es 401 (o redirect a login si la ruta es HTML)
+  - NO se devuelven datos parciales (ningún payload con data admin)
+  - el log del server registra el intento sin filtrar PII
+- title: IM-962 — Unauthenticated requests to public widget APIs succeed
+  tags:
+  - happy-path
+  - im-962
+  - im-983
+  - ac-3
+  - public-widget
+  given:
+  - el cliente NO tiene session cookie
+  when:
+  - el cliente hace requests a public endpoints (`GET /api/public/surveys/<slug>`, `POST /api/public/eligibility`, `POST /api/public/impressions`, `POST /api/public/dismissals`)
+  then:
+  - cada response es 200 (o 4xx por validación de payload, no por auth)
+  - el header `Set-Cookie` NO contiene la cookie de admin
+  - NO se devuelve 302 a Cognito
+- title: IM-962 — Public survey submission still works end-to-end after auth split
+  tags:
+  - happy-path
+  - im-962
+  - im-983
+  - ac-4
+  - non-regression
+  - response-submission
+  given:
+  - un survey activo con `slug` conocido y eligibilidad open
+  when:
+  - un cliente sin session cookie hace `POST /api/public/responses` con un payload válido
+  then:
+  - la response es 2xx y devuelve un id / confirmación
+  - el record queda persistido (verificable vía admin endpoint o DB)
+  - NO requiere admin auth en ningún paso intermedio
+- title: IM-962 — Authenticated admin request to admin API returns expected payload
+  tags:
+  - happy-path
+  - im-962
+  - im-983
+  - ac-2
+  - admin-auth
+  given:
+  - un admin con session cookie válida (post-Cognito callback, ver IM-961)
+  when:
+  - el admin llama a `GET /api/admin/surveys` y `GET /api/admin/features`
+  then:
+  - cada response es 200 con el payload esperado
+  - el contenido NO se mezcla con datos del widget público (no leaks)
+- title: IM-962 — Cookie-protected admin endpoint blocked when accessed with stale/missing CSRF or SameSite violation
+  tags:
+  - negative
+  - im-962
+  - im-983
+  - ac-2
+  - cookie-security
+  - missing-doc
+  given:
+  - el server tiene `SameSite=Lax|Strict` en la cookie de admin (per IM-961)
+  when:
+  - un request cross-origin sin la cookie (o con SameSite que la suprime) llega a un admin endpoint
+  then:
+  - el server responde 401 / 403
+  - NO ejecuta la mutación admin
+- title: IM-962 — No public endpoint accidentally leaks admin-only fields
+  tags:
+  - regression
+  - im-962
+  - im-983
+  - ac-3
+  - data-leak
+  - missing-doc
+  given:
+  - los DTOs de public endpoints
+  when:
+  - QA inspecciona la response de `GET /api/public/surveys/<slug>`
+  then:
+  - el payload NO incluye fields admin-only (ej. createdBy, internal flags, secrets, salesforce sync metadata)
+  - el payload incluye SOLO lo necesario para renderizar el widget
+tags:
+- im-962
+- im-983
+- im-727
+- survey-tool
+- nps
+- auth
+- api-routes
+- express
+- middleware
+- high-risk
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T16:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T16:00:00Z'
+  version: 1

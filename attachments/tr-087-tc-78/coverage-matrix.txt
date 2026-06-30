@@ -1,0 +1,45 @@
+Coverage matrix — TC-78 (IM-963 Preserve public widget access)
+
+PR commit: 42260ee1 (PR #21)
+Test suites run: 39/39 PASS
+
+AC → unit tests:
+
+AC1 — Salesforce-embedded widget loads without redirecting to Cognito
+  - Backend proof: apiBoundary.test "allows public widget survey lookup without an admin session" ✓ (server returns 200 not 302)
+  - Runtime caveat: Lightning iframe + JS console "no 302" verification needs a deployed env.
+  → Server-side covered ✅ / Browser-side BLOCKED pending deployed env
+
+AC2 — Eligibility check returns the expected survey payload for a target respondent
+  - apiBoundary.test "keeps public feature survey delivery active-only even with preview or active=false flags" ✓
+  - Eligibility helper unit tests (counter_equals, unknown_trigger_type) — all 8 PASS
+  → Covered ✅
+
+AC3 — Anonymous survey submission is accepted and persisted
+  - apiBoundary.test "allows public widget response submission without an admin session" ✓ (full POST → 201 → record persisted with id/surveyId/featureId/score)
+  → Covered ✅
+
+AC4 — Frequency rules respected by the public flow
+  - evaluateSurveyEligibility tests (counter_equals: 6 tests covering usageCount equals/below/above/missing + null triggerCounter) ✓
+  - apiBoundary.test active-only filter prevents inactive surveys leaking
+  → Covered ✅ at the eligibility-logic level
+
+AC5 — CORS preflight from Salesforce origin is allowed
+  - server/src/index.ts: no CORS middleware visible in the diff. CORS handling is either via Vite proxy (dev) or via reverse proxy in prod (per README dev URL surveytool.dev.veevart.ai).
+  - No unit test for CORS in this PR.
+  → BLOCKED pending deployed env to verify Access-Control-Allow-Origin actually allows Salesforce origin.
+
+AC6 — Public widget request does NOT send or expect the admin session cookie
+  - Tests do not send the admin cookie when hitting public routes — confirms server doesn't require it.
+  - Cookie scoping is browser-side (Domain attribute). Server emits the cookie with Path=/ and no Domain attribute → restricted to the survey-tool origin, NOT the Salesforce origin. Code-level: PASS.
+  - Runtime: BLOCKED pending DevTools inspection on the deployed survey-tool from a Lightning page.
+
+AC7 — Cross-test on NFPFundraising pending package
+  - Out of scope for code review. BLOCKED pending NFPFundraising package availability.
+
+Gaps:
+- AC5 (CORS) needs runtime evidence with the real Salesforce origin.
+- AC6 needs runtime DevTools inspection.
+- AC7 needs the pending package.
+
+Functional runtime caveat: TC-78 is the most runtime-dependent of the four TCs. 3/7 scenarios need a deployed env + Salesforce sandbox.

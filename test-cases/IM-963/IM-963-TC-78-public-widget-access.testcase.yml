@@ -1,0 +1,162 @@
+schemaVersion: '1.0'
+id: 5ac7e96d-1ec1-409a-843e-eeef6afdf4e6
+key: TC-78
+title: IM-963 — Preserve public Survey Tool widget access after admin auth rollout
+sourceTickets:
+- IM-963
+- IM-982
+description: |
+  Cobertura QA de IM-963 (Preserve public survey widget access). Sub-task QA: IM-984.
+  Repositorios en scope: `survey-tool`, `AuctiferaDX` (widget en Salesforce static
+  resource), `NFPFundraising` (integración pending package, si aplica).
+
+  Validar end-to-end que el widget embebido en Salesforce sigue funcionando
+  después del rollout de Cognito (IM-961) + route split (IM-962):
+  1) widget carga sin redirect a Cognito,
+  2) la API pública devuelve el survey payload esperado,
+  3) submission anónimo se acepta y persiste,
+  4) frequency rules (impressions / dismissals) respetan los límites,
+  5) CORS + session cookie + static resource embedding no interfieren.
+
+  Riesgos abiertos:
+  - El widget consume el survey-tool API desde el origin de Salesforce; CORS y
+    cookie-domain mismatches son las causas más probables de regresión.
+  - El pending package integration (NFPFundraising) puede no estar listo; si así
+    es, ese cross-test queda blocked y se documenta.
+type: integration
+priority: high
+status: active
+preconditions:
+- Build del `survey-tool` con IM-961 + IM-962 + IM-963 desplegado
+- Sandbox de Salesforce con el widget instalado como static resource (AuctiferaDX) y configurado contra el survey-tool desplegado
+- Un survey de prueba activo con `slug` conocido + reglas de eligibilidad y frequency rules definidas
+- Browser con DevTools (Network + Console) para inspeccionar CORS, Set-Cookie y status codes
+- Cliente HTTP (curl) para hits directos a public APIs sin cookies
+format: gherkin
+scenarios:
+- title: IM-963 — Salesforce-embedded widget loads without redirecting to Cognito
+  tags:
+  - happy-path
+  - im-963
+  - im-984
+  - ac-1
+  - widget
+  - salesforce
+  given:
+  - el widget está embebido en una Lightning page del sandbox AuctiferaDX
+  - el browser NO tiene session cookie de admin
+  when:
+  - el usuario abre la Lightning page
+  then:
+  - el widget hace requests al survey-tool API público y recibe 200
+  - NO hay redirect 302 a Cognito en el iframe / fetch
+  - el widget renderiza el survey
+- title: IM-963 — Eligibility check returns the expected survey payload for a target respondent
+  tags:
+  - happy-path
+  - im-963
+  - im-984
+  - ac-2
+  - eligibility
+  given:
+  - un respondent que cumple las reglas de eligibilidad del survey de prueba
+  when:
+  - el widget llama al public endpoint de eligibility / survey load by slug
+  then:
+  - el response trae el payload del survey (questions, options, targeting metadata mínima)
+  - NO incluye fields admin-only
+  - el response code es 200 sin requerir auth
+- title: IM-963 — Anonymous survey submission is accepted and persisted
+  tags:
+  - happy-path
+  - im-963
+  - im-984
+  - ac-3
+  - response-submission
+  given:
+  - un usuario interactúa con el widget y responde el survey
+  when:
+  - el widget hace `POST /api/public/responses` sin admin session cookie
+  then:
+  - la response es 2xx
+  - la respuesta es visible en el admin response viewer (vía admin endpoint, post-login)
+  - NO se requiere admin auth para el submit
+- title: IM-963 — Frequency rules (impressions + dismissals) are respected by the public flow
+  tags:
+  - happy-path
+  - im-963
+  - im-984
+  - ac-4
+  - frequency-rules
+  given:
+  - un survey con regla "no mostrar más de 1 vez por respondent en 24h" (o equivalente)
+  - el respondent ya tiene una impression / dismissal registrada hoy
+  when:
+  - el widget pide eligibility nuevamente dentro de la ventana
+  then:
+  - el public endpoint responde con un payload que indica NO mostrar el survey (eligibility=false o equivalente)
+  - NO se vuelve a mostrar el widget al respondent
+- title: IM-963 — CORS preflight from Salesforce origin is allowed
+  tags:
+  - regression
+  - im-963
+  - im-984
+  - ac-1
+  - cors
+  - missing-doc
+  given:
+  - el widget hace una request cross-origin (Salesforce → survey-tool)
+  when:
+  - el browser envía el preflight `OPTIONS` al public endpoint
+  then:
+  - el server responde 200/204 con `Access-Control-Allow-Origin` permitiendo el origin de Salesforce
+  - los headers permitidos cubren los del widget (`Content-Type`, etc.)
+  - el preflight NO falla con CORS error en la consola
+- title: IM-963 — Public widget request does NOT send or expect the admin session cookie
+  tags:
+  - regression
+  - im-963
+  - im-984
+  - ac-1
+  - cookie-domain
+  given:
+  - el widget está corriendo en el origin de Salesforce
+  when:
+  - QA inspecciona en DevTools la request al public endpoint
+  then:
+  - el header `Cookie` NO contiene la cookie de admin del survey-tool
+  - la response NO trae `Set-Cookie` con la cookie admin
+- title: IM-963 — Cross-test on NFPFundraising pending package (blocked if package not ready)
+  tags:
+  - regression-evidence
+  - im-963
+  - im-984
+  - nfpfundraising
+  - cross-test
+  - blocked-if-missing
+  given:
+  - el pending package integration de NFPFundraising está disponible y desplegado en un sandbox
+  when:
+  - QA repite los scenarios 1-4 desde el sandbox NFPFundraising
+  then:
+  - el widget se comporta igual que en AuctiferaDX
+  - si el package no está disponible, este scenario queda `blocked` con nota explícita en el TR
+tags:
+- im-963
+- im-984
+- im-727
+- survey-tool
+- nps
+- public-widget
+- salesforce
+- auctifera-dx
+- nfpfundraising
+- cors
+- non-regression
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T16:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T16:00:00Z'
+  version: 1

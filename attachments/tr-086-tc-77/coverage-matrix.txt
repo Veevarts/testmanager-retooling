@@ -1,0 +1,54 @@
+Coverage matrix — TC-77 (IM-962 Public/admin API split)
+
+PR commit: a192d2bb (PR #19)
+Test suites run: 39/39 PASS
+
+AC → unit tests:
+
+AC1 — Route map explicitly classifies every route as public or admin
+  - server/src/index.ts: route mount table reviewed:
+      app.use("/api/features", featuresPublicRouter)        ← public
+      app.use("/api/surveys", surveysPublicRouter)          ← public
+      app.use("/api/responses", responsesPublicRouter)      ← public
+      app.use("/api/admin", requireAdminAuth)               ← gate
+      app.use("/api/admin/features", featuresAdminRouter)   ← admin
+      app.use("/api/admin/surveys", surveysAdminRouter)     ← admin
+      app.use("/api/admin/responses", responsesAdminRouter) ← admin
+      app.use("/api/admin/settings", settingsRouter)        ← admin
+  - Each router file (features.ts, surveys.ts, responses.ts) exports two named routers (Public + Admin), making intent explicit at code level.
+  → Covered ✅ via code review (no AC1 unit test required; the split IS the structure).
+
+AC2 — Unauthenticated requests to admin APIs are rejected
+  - server/src/routes/apiBoundary.test.ts "requires an admin session for admin routes" ✓ (asserts 401 on /api/admin/responses/export.csv)
+  → Covered ✅
+
+AC3 — Unauthenticated requests to public widget APIs succeed
+  - apiBoundary.test "allows public widget survey lookup without an admin session" ✓
+  - apiBoundary.test "allows public response submission validation without an admin session" ✓
+  - apiBoundary.test "allows public widget response submission without an admin session" ✓
+  → Covered ✅
+
+AC4 — Public survey submission still works end-to-end after auth split
+  - apiBoundary.test "allows public widget response submission without an admin session" ✓ (full DB persistence path: 201 + record back from /api/responses with surveyId, featureId, score)
+  → Covered ✅
+
+AC5 — Authenticated admin request to admin API returns expected payload
+  - apiBoundary.test "allows admin routes with a valid admin session" ✓
+  - apiBoundary.test "allows authenticated admin feature survey lookup to include inactive surveys" ✓
+  - apiBoundary.test "keeps public survey lookup active-only and inactive lookup admin-only" ✓
+  → Covered ✅
+
+AC6 — SameSite/CSRF violation blocks admin request
+  - Cookie SameSite default Lax (lib/auth.ts:133). SameSite enforcement is browser-side, not server-asserted.
+  - apiBoundary.test does not assert SameSite browser semantics.
+  → Partial: server CONFIG correct; browser enforcement assumed.
+
+AC7 — No public endpoint accidentally leaks admin-only fields
+  - apiBoundary.test "keeps public feature survey delivery active-only even with preview or active=false flags" ✓ (proves public endpoint hides inactive surveys)
+  - apiBoundary.test "keeps public survey lookup active-only and inactive lookup admin-only" ✓ (404 vs 200 distinction)
+  - Public router response shapes reviewed — no createdBy/updatedBy/internal flags leaked.
+  → Covered ✅ (via tests + code review)
+
+Gaps: AC6 cookie SameSite browser enforcement is not asserted by unit tests (it can't easily be — that's a browser behavior). The server emits SameSite=Lax which is the correct default; cross-origin cookie suppression is the browser's responsibility. Flag as "covered by code config, not by automated runtime test."
+
+Functional runtime caveat: same as TC-76 — these unit tests verify HTTP-level behavior. Real cross-origin browser tests would require a deployed survey-tool.

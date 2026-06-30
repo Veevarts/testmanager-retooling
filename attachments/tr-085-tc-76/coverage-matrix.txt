@@ -1,0 +1,48 @@
+Coverage matrix — TC-76 (IM-961 Cognito admin login)
+
+PR commits: 9aee59b3 (PR #18 backend) + 10d1295c (PR #20 frontend)
+Test suites run: tsx --test src/**/*.test.ts → 39/39 PASS
+
+AC → unit tests:
+
+AC1 — Unauthenticated admin page redirects to Cognito login
+  - server/src/routes/auth.test.ts "redirects login to Cognito Hosted UI and sets the OAuth state cookie" ✓
+  - server/src/lib/auth.test.ts "prevents protocol-relative returnTo redirects" ✓
+  - server/src/lib/auth.test.ts "prevents backslash-based returnTo redirects" ✓
+  - server/src/lib/auth.test.ts "keeps login returnTo values scoped to admin routes" ✓
+  - server/src/lib/auth.test.ts "allows admin returnTo values only on the admin route boundary" ✓
+  - client/src/pages/LoginPage.tsx implements getReturnTo() with same regex
+  → Covered ✅
+
+AC2 — Successful Cognito callback creates secure httpOnly session and grants admin access
+  - server/src/routes/auth.test.ts "creates a session cookie and redirects after a valid Cognito callback" ✓ (asserts HttpOnly + Secure flags + Max-Age=0 on state cookie + redirect to /admin/features)
+  - server/src/routes/auth.test.ts "returns the signed session identity from me" ✓
+  - server/src/lib/auth.test.ts "accepts a valid RS256 Cognito id token for an allowed admin email" ✓
+  - server/src/lib/auth.test.ts "rejects Cognito id tokens with the wrong audience" ✓
+  - server/src/lib/auth.test.ts "rejects allowed admin emails when Cognito has not verified the email" ✓
+  - server/src/lib/auth.test.ts "keeps Cognito group authorization independent from email verification" ✓
+  → Covered ✅
+
+AC3 — Logout clears session and re-protects admin routes
+  - server/src/routes/auth.test.ts "clears the session cookie on logout" ✓ (asserts Max-Age=0)
+  - server/src/routes/auth.test.ts "returns 401 from me without a valid session" ✓
+  - server/src/lib/auth.test.ts "returns 401 when middleware receives no valid session" ✓
+  → Covered ✅
+
+AC4 — Public survey widget endpoints stay open without admin auth
+  - server/src/routes/apiBoundary.test.ts "allows public widget survey lookup without an admin session" ✓
+  - server/src/routes/apiBoundary.test.ts "allows public response submission validation without an admin session" ✓
+  - server/src/routes/apiBoundary.test.ts "allows public widget response submission without an admin session" ✓
+  → Covered ✅
+
+AC5 — Tampered or expired session cookie is rejected
+  - server/src/lib/auth.test.ts "rejects tampered signed values" ✓
+  - server/src/lib/auth.test.ts "rejects signed values with extra segments" ✓
+  - server/src/lib/auth.test.ts "rejects malformed cookies instead of throwing" ✓
+  - server/src/lib/auth.test.ts "does not extend a Cognito session past the token expiration" ✓
+  - server/src/routes/auth.test.ts "returns 400 and clears OAuth state when callback cookies are malformed" ✓
+  → Covered ✅
+
+Gaps: None. All 5 ACs covered by dev's unit/integration tests. No QA backfill required for code-level verification.
+
+Functional runtime (deployed env) caveat: scenarios 1-5 of TC-76 describe browser/network behavior. The unit tests prove the server emits the right Set-Cookie/Location headers; the browser-side end-to-end happy path with a real Cognito User Pool requires a deployed survey-tool + Cognito Hosted UI configured per IM-964. That validation is OUT OF SCOPE for this code-review pass.

@@ -1,0 +1,25 @@
+OWASP Top 10 (2021) — Applicability scan for IM-962 / PR #19 / TC-77
+
+Surfaces touched: server/src/index.ts (route wiring), server/src/lib/auth.ts (requireAdminAuth
+re-used), server/src/routes/{features,responses,surveys}.ts (split into Public+Admin routers),
+server/src/routes/apiBoundary.test.ts (new dedicated test).
+Test suite: 39/39 PASS — 8 dedicated to public/admin boundary.
+
+| ID  | Risk                       | Applicable | Check method                                         | Verdict | Evidence / Justification |
+|-----|----------------------------|------------|------------------------------------------------------|---------|--------------------------|
+| A01 | Broken Access Control      | Yes        | Code review of router mounting; admin middleware applied at boundary, never bypassed | PASS    | server/src/index.ts mounts public routers (e.g. `/api/features`) BEFORE the `app.use("/api/admin", requireAdminAuth)` gate. Admin routers (`featuresAdminRouter`, `surveysAdminRouter`, `responsesAdminRouter`, `settingsRouter`) live entirely under `/api/admin/*` and inherit the middleware. Boundary tests prove: "requires an admin session for admin routes" (401), "allows admin routes with a valid admin session" (200), "keeps public feature survey delivery active-only even with preview or active=false flags" (no inactive leak via public). |
+| A02 | Cryptographic Failures     | No         | -                                                    | N/A     | This PR does not change crypto primitives. The session cookie reused from IM-961 keeps HmacSHA256 + AUTH_COOKIE_SECRET enforcement. |
+| A03 | Injection                  | Yes        | grep "(SELECT\|INSERT\|UPDATE\|DELETE).*\+.*\$" against split route files | PASS    | No string-concatenated SQL in features.ts / surveys.ts / responses.ts. All DB calls go through drizzle-orm with parameterized values (`eq(...)`, `.values({...})`). Body parsing validated server-side; 400 returned on missing payload. |
+| A04 | Insecure Design            | Yes        | Threat model on the split: does any admin operation accidentally appear on a public router? | PASS    | apiBoundary.test.ts asserts inactive-only-admin invariants ("keeps public survey lookup active-only and inactive lookup admin-only") — public path returns 404 for inactive id; admin path returns 200. Admin endpoints required for: features CRUD, surveys CRUD, responses export.csv, settings. Public endpoints scoped to: feature surveys (active filter), survey submission, survey lookup by slug. No mutation path is publicly reachable that shouldn't be (the response POST is intentional public submission). |
+| A05 | Security Misconfiguration  | Yes        | Review CORS / headers / mount order                  | PASS    | Mount order in index.ts is: public routers -> admin middleware -> admin routers. Reversing would lock the widget; the chosen order is correct. No new CORS/header changes in PR #19. No verbose error leak observed. |
+| A06 | Vulnerable Components      | Yes        | npm audit --json (post-merge)                        | INFO    | 0 critical / 2 high / 7 moderate / 0 low — same advisories as TC-76 (pre-existing). PR #19 did not touch server/package.json. See attachments/tr-086-tc-77/npm-audit.json. |
+| A07 | Identification and Authentication Failures | Yes | Verify the boundary doesn't allow auth bypass via header injection or path traversal | PASS | requireAdminAuth depends only on the signed cookie; no header-based bypass. Route paths are static (`/api/admin/...`), no wildcard glob that could be tricked. Boundary test "requires an admin session for admin routes" enforces 401 on /api/admin/responses/export.csv. |
+| A08 | Software and Data Integrity Failures | No | -                                          | N/A     | No CI/CD or deserialization changes. JSON body parsing uses Express built-in (uses `JSON.parse`, safe). |
+| A09 | Security Logging and Monitoring Failures | No | -                                          | N/A     | No log changes. Public submission persists to DB; admin export visibility unchanged. Public payloads do not include admin-only fields (verified by reading featuresPublicRouter return shape: id/slug/name/active, no createdBy/internal flags). |
+| A10 | SSRF                       | No         | -                                                    | N/A     | No new outbound HTTP calls in PR #19. |
+
+Decisions:
+- 0 Applicable+FAIL on any category.
+- A06 is INFO (pre-existing).
+- AC1 (route map) verified by reading server/src/index.ts: every public router declared before the admin gate.
+- AC7 (no leak admin-only fields) verified by reading featuresPublicRouter response shape + the apiBoundary test asserting active-only filter.
