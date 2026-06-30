@@ -1,240 +1,291 @@
-schemaVersion: '1.0'
+schemaVersion: "1.0"
 id: tr-01c01e53-b4f1-4757-9dab-33c7ed600a35
 key: TR-085
-title: TR-085 · TC-76 · IM-961 — Cognito admin login (code-review pass on PR #18 + #20)
-status: completed
+title: TR-085 · TC-76 · IM-961 — Cognito admin login (code-review pass on PR
+status: in-progress
 environment:
-  name: 'survey-tool repo (Veevarts/survey-tool). PR #18 + #20 merged to main via epic #23. Code-review pass: server tests 39/39 PASS, OWASP scan, security regression.'
+  name: >-
+    survey-tool repo (Veevarts/survey-tool). PR #18 + #20 merged to main via epic #23. Code-review pass: server tests
+    39/39 PASS, OWASP scan, security regression.
   url: https://veevart.atlassian.net/browse/IM-961
-  buildVersion: 'Clasificación: Backend-pipeline (Express + Node) — mostly auto-executable (unit tests + static security scans). Runtime functional (real Cognito flow in browser) requires deployed env: BLOCKED por scope.'
-startedAt: '2026-06-30T16:00:00.000Z'
+  buildVersion: >-
+    Clasificación: Backend-pipeline (Express + Node) — mostly auto-executable (unit tests + static security scans).
+    Runtime functional (real Cognito flow in browser) requires deployed env: BLOCKED por scope.
+startedAt: "2026-06-30T16:00:00.000Z"
 results:
-- testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
-  testCaseKey: TC-76
-  testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
-  testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
-  scenarioTitle: IM-961 — Unauthenticated admin page redirects to Cognito login
-  scenarioIndex: 0
-  status: passed
-  stepResults:
-  - order: 1
+  - testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
+    testCaseKey: TC-76
+    testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
+    testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
+    scenarioTitle: IM-961 — Unauthenticated admin page redirects to Cognito login
+    scenarioIndex: 0
     status: passed
-    actual: 'PASS — auth.test.ts "redirects login to Cognito Hosted UI..." asserts /api/auth/login returns 302 to https://auth.example.com/oauth2/authorize?... and emits the state cookie. safeReturnTo en lib/auth.ts:183-188 blocks //, \\, y paths no-/admin (probado por 4 tests adicionales).'
-    phase: given
-    text: el browser no tiene session cookie del admin
+    stepResults:
+      - order: 1
+        status: passed
+        actual: >-
+          PASS — auth.test.ts "redirects login to Cognito Hosted UI..." asserts /api/auth/login returns 302 to
+          https://auth.example.com/oauth2/authorize?... and emits the state cookie. safeReturnTo en lib/auth.ts:183-188
+          blocks //, \\, y paths no-/admin (probado por 4 tests adicionales).
+        phase: given
+        text: el browser no tiene session cookie del admin
+        attachments: []
+      - order: 2
+        status: passed
+        actual: PASS — confirmed por código + unit test.
+        phase: when
+        text: el usuario navega a una admin page (e.g. `/admin/surveys`)
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          PASS — Server emite 302 con Location apuntando a Cognito Hosted UI. URL contiene client_id,
+          response_type=code, scope=openid email profile, redirect_uri y state nonce signed. Frontend LoginPage.tsx
+          replica el guard returnTo.
+        phase: then
+        text: el server responde 302 con `Location` apuntando al endpoint Cognito Hosted UI (`/login` o `/oauth2/authorize`)
+        attachments:
+          - name: coverage-matrix.txt
+            path: attachments/tr-085-tc-76/coverage-matrix.txt
+            mimeType: text/plain
+      - order: 4
+        status: passed
+        actual: PASS — confirmed por unit test.
+        phase: then
+        text: >-
+          la URL final contiene `client_id`, `response_type=code`, `redirect_uri` igual a `/api/auth/callback` y
+          `scope=openid`
+        attachments: []
+      - order: 5
+        status: passed
+        actual: >-
+          PASS — buildLoginRedirect retorna URL Cognito; el server hace redirect antes de renderizar la admin page
+          (Express middleware-level guard).
+        phase: then
+        text: la admin page NO se renderiza ni filtra datos previos al login
+        attachments: []
+    notes: >-
+      AC1 cubierto por 5 unit tests (auth.test.ts redirects login + 4 returnTo guard tests). LoginPage.tsx duplica el
+      guard client-side. Runtime e2e en deployed env: BLOCKED.
     attachments: []
-  - order: 2
+    defects: []
+  - testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
+    testCaseKey: TC-76
+    testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
+    testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
+    scenarioTitle: IM-961 — Successful Cognito callback creates secure httpOnly session and grants admin access
+    scenarioIndex: 1
     status: passed
-    actual: PASS — confirmed por código + unit test.
-    phase: when
-    text: el usuario navega a una admin page (e.g. `/admin/surveys`)
+    stepResults:
+      - order: 1
+        status: passed
+        actual: PASS — flow end-to-end probado por "creates a session cookie and redirects after a valid Cognito callback".
+        phase: given
+        text: el usuario completó el flujo de Cognito Hosted UI con credenciales válidas
+        attachments: []
+      - order: 2
+        status: passed
+        actual: >-
+          PASS — exchangeCodeForSession (lib/auth.ts:380-398) POSTea a /oauth2/token; verifyCognitoIdToken valida RS256
+          con JWKS + audience + issuer + email_verified + admin allowlist.
+        phase: when
+        text: Cognito redirige al callback con `code=...` y `state` válido
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          PASS — Test "creates a session cookie..." asserts: callback responde 302 a /admin/features y emite session
+          cookie. Implementación en auth.ts:26-43.
+        phase: then
+        text: >-
+          el server intercambia el code por tokens (id/access) y responde 302 a la admin page solicitada (o al admin
+          home)
+        attachments: []
+      - order: 4
+        status: passed
+        actual: >-
+          PASS — Test verifica match /HttpOnly/ y /Secure/ y la state cookie con /Max-Age=0/. serializeCookie en
+          lib/auth.ts:171-181 incluye Path=/, SameSite (Lax default), HttpOnly por default.
+        phase: then
+        text: la respuesta incluye `Set-Cookie` con flags `HttpOnly`, `Secure`, `SameSite=Lax|Strict` y `Path=/`
+        attachments: []
+      - order: 5
+        status: passed
+        actual: >-
+          PASS — Test "returns the signed session identity from me" devuelve 200 con {sub, email, name}. No retorna
+          id_token, access_token ni refresh_token (auth.ts:54-69).
+        phase: then
+        text: >-
+          una request subsecuente a `/api/auth/me` devuelve 200 con el perfil del admin (email/username) y NO devuelve
+          tokens crudos
+        attachments: []
+      - order: 6
+        status: passed
+        actual: PASS — boundary tests confirman que /api/admin/* responde 200 con la session cookie y 401 sin ella.
+        phase: then
+        text: una request a una admin API protegida (e.g. `/api/admin/surveys`) responde 200 con la session cookie
+        attachments: []
+    notes: >-
+      6 unit tests cubren este flujo (callback + 5 token verification tests en auth.test.ts). HmacSHA256 sign +
+      constant-time compare + AUTH_COOKIE_SECRET >=32 chars enforcement.
     attachments: []
-  - order: 3
+    defects: []
+  - testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
+    testCaseKey: TC-76
+    testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
+    testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
+    scenarioTitle: IM-961 — Logout clears session and re-protects admin routes
+    scenarioIndex: 2
     status: passed
-    actual: 'PASS — Server emite 302 con Location apuntando a Cognito Hosted UI. URL contiene client_id, response_type=code, scope=openid email profile, redirect_uri y state nonce signed. Frontend LoginPage.tsx replica el guard returnTo.'
-    phase: then
-    text: el server responde 302 con `Location` apuntando al endpoint Cognito Hosted UI (`/login` o `/oauth2/authorize`)
-    attachments:
-    - name: coverage-matrix.txt
-      path: attachments/tr-085-tc-76/coverage-matrix.txt
-      mimeType: text/plain
-  - order: 4
-    status: passed
-    actual: PASS — confirmed por unit test.
-    phase: then
-    text: la URL final contiene `client_id`, `response_type=code`, `redirect_uri` igual a `/api/auth/callback` y `scope=openid`
+    stepResults:
+      - order: 1
+        status: passed
+        actual: PASS — pre-state asumido por test "clears the session cookie on logout".
+        phase: given
+        text: el admin tiene una session cookie válida (vino de Scenario 2)
+        attachments: []
+      - order: 2
+        status: passed
+        actual: PASS — auth.ts:45-52 POST /api/auth/logout llama clearSessionCookie + buildLogoutUrl.
+        phase: when
+        text: el admin hace POST/GET a `/api/auth/logout`
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          PASS — Test asserts /Max-Age=0/ en Set-Cookie. clearSessionCookie en lib/auth.ts:248-256 emite cookie vacía
+          con maxAge=0.
+        phase: then
+        text: el server responde con `Set-Cookie` que invalida la session (cookie con `Max-Age=0` o `Expires` en pasado)
+        attachments: []
+      - order: 4
+        status: passed
+        actual: >-
+          PASS — Response payload incluye {ok: true, logoutUrl: buildLogoutUrl()} donde logoutUrl apunta a Cognito
+          /logout con client_id + logout_uri. Cliente decide si seguir el redirect (LoginPage handles).
+        phase: then
+        text: el server redirige al endpoint de logout de Cognito (limpiando la sesión del Hosted UI)
+        attachments: []
+      - order: 5
+        status: passed
+        actual: PASS — Test "returns 401 from me without a valid session" cubre /api/auth/me sin cookie.
+        phase: then
+        text: una request posterior a `/api/auth/me` devuelve 401 / sin user
+        attachments: []
+      - order: 6
+        status: passed
+        actual: >-
+          PASS — requireAdminAuth (lib/auth.ts:267-276) emite 401 sin sesión. Frontend AdminLayout llama api.auth.me() y
+          redirige a /login si 401.
+        phase: then
+        text: una request posterior a `/admin/surveys` vuelve a 302 a Cognito login
+        attachments: []
+    notes: 3 unit tests cubren logout (logout + 2 401-without-session tests).
     attachments: []
-  - order: 5
+    defects: []
+  - testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
+    testCaseKey: TC-76
+    testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
+    testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
+    scenarioTitle: IM-961 — Public survey widget endpoints stay open without admin auth (cross-check with IM-963)
+    scenarioIndex: 3
     status: passed
-    actual: PASS — buildLoginRedirect retorna URL Cognito; el server hace redirect antes de renderizar la admin page (Express middleware-level guard).
-    phase: then
-    text: la admin page NO se renderiza ni filtra datos previos al login
+    stepResults:
+      - order: 1
+        status: passed
+        actual: PASS — boundary tests no usan cookie.
+        phase: given
+        text: el admin auth middleware está activo
+        attachments: []
+      - order: 2
+        status: passed
+        actual: PASS — confirmed.
+        phase: given
+        text: el browser/cliente NO tiene session cookie de admin
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          PASS — apiBoundary.test.ts: "allows public widget survey lookup without an admin session", "allows public
+          widget response submission without an admin session" cubren GET y POST públicos.
+        phase: when
+        text: >-
+          el cliente llama a un public endpoint del widget (e.g. `/api/public/surveys/<slug>` o
+          `/api/widget/eligibility`)
+        attachments: []
+      - order: 4
+        status: passed
+        actual: PASS — 201 retornado en POST de respuesta con record persistido.
+        phase: then
+        text: la response es 200 con el payload esperado del widget
+        attachments: []
+      - order: 5
+        status: passed
+        actual: PASS — sin 302 ni 401 en boundary tests.
+        phase: then
+        text: NO se devuelve 302 ni 401
+        attachments: []
+      - order: 6
+        status: passed
+        actual: PASS — boundary tests no emiten Set-Cookie en public routes (no requireAdminAuth aguas arriba).
+        phase: then
+        text: NO se intenta setear cookie de admin
+        attachments: []
+    notes: >-
+      AC4 cubierto por apiBoundary.test.ts (cross-test con TC-77 / IM-962). Confirma que la introducción del middleware
+      admin no rompe el widget público.
     attachments: []
-  notes: 'AC1 cubierto por 5 unit tests (auth.test.ts redirects login + 4 returnTo guard tests). LoginPage.tsx duplica el guard client-side. Runtime e2e en deployed env: BLOCKED.'
-  attachments: []
-  defects: []
-- testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
-  testCaseKey: TC-76
-  testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
-  testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
-  scenarioTitle: IM-961 — Successful Cognito callback creates secure httpOnly session and grants admin access
-  scenarioIndex: 1
-  status: passed
-  stepResults:
-  - order: 1
+    defects: []
+  - testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
+    testCaseKey: TC-76
+    testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
+    testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
+    scenarioTitle: IM-961 — Tampered or expired session cookie is rejected
+    scenarioIndex: 4
     status: passed
-    actual: PASS — flow end-to-end probado por "creates a session cookie and redirects after a valid Cognito callback".
-    phase: given
-    text: el usuario completó el flujo de Cognito Hosted UI con credenciales válidas
+    stepResults:
+      - order: 1
+        status: passed
+        actual: >-
+          PASS — auth.test.ts cubre 4 variantes: tampered signature, extra segments, expired exp, malformed cookie
+          syntax.
+        phase: given
+        text: una session cookie firmada por el server fue manipulada (ej. último byte alterado) o expiró
+        attachments: []
+      - order: 2
+        status: passed
+        actual: PASS — getAdminSession en lib/auth.ts:258-265 retorna null si verifySignedValue falla.
+        phase: when
+        text: el cliente la envía a una admin API protegida
+        attachments: []
+      - order: 3
+        status: passed
+        actual: >-
+          PASS — requireAdminAuth emite 401 si getAdminSession devuelve null. callback handler en auth.ts emite 400
+          cuando malformed callback cookie ("returns 400 and clears OAuth state when callback cookies are malformed").
+        phase: then
+        text: el server responde 401 (o redirect 302 a Cognito login para rutas HTML)
+        attachments: []
+      - order: 4
+        status: passed
+        actual: PASS — sesión rechazada. constantTimeEquals previene timing attack en verifySignedValue.
+        phase: then
+        text: NO se trata como sesión válida
+        attachments: []
+      - order: 5
+        status: passed
+        actual: >-
+          PASS — En auth.ts, los errores se loggean implicitamente vía String(e) en la response — no se loggea ni la
+          cookie cruda ni los tokens en el servidor (no console.log de session value). Sugerencia menor: usar logger
+          estructurado.
+        phase: then
+        text: el log del server registra el intento (sin loggear el valor crudo de la cookie ni los tokens)
+        attachments: []
+    notes: >-
+      5 unit tests cubren rechazo de cookies inválidas. Importante: AUTH_COOKIE_SECRET <32 chars hace explicit fail at
+      boot (lib/auth.ts:97-101).
     attachments: []
-  - order: 2
-    status: passed
-    actual: PASS — exchangeCodeForSession (lib/auth.ts:380-398) POSTea a /oauth2/token; verifyCognitoIdToken valida RS256 con JWKS + audience + issuer + email_verified + admin allowlist.
-    phase: when
-    text: Cognito redirige al callback con `code=...` y `state` válido
-    attachments: []
-  - order: 3
-    status: passed
-    actual: 'PASS — Test "creates a session cookie..." asserts: callback responde 302 a /admin/features y emite session cookie. Implementación en auth.ts:26-43.'
-    phase: then
-    text: el server intercambia el code por tokens (id/access) y responde 302 a la admin page solicitada (o al admin home)
-    attachments: []
-  - order: 4
-    status: passed
-    actual: 'PASS — Test verifica match /HttpOnly/ y /Secure/ y la state cookie con /Max-Age=0/. serializeCookie en lib/auth.ts:171-181 incluye Path=/, SameSite (Lax default), HttpOnly por default.'
-    phase: then
-    text: la respuesta incluye `Set-Cookie` con flags `HttpOnly`, `Secure`, `SameSite=Lax|Strict` y `Path=/`
-    attachments: []
-  - order: 5
-    status: passed
-    actual: PASS — Test "returns the signed session identity from me" devuelve 200 con {sub, email, name}. No retorna id_token, access_token ni refresh_token (auth.ts:54-69).
-    phase: then
-    text: una request subsecuente a `/api/auth/me` devuelve 200 con el perfil del admin (email/username) y NO devuelve tokens crudos
-    attachments: []
-  - order: 6
-    status: passed
-    actual: PASS — boundary tests confirman que /api/admin/* responde 200 con la session cookie y 401 sin ella.
-    phase: then
-    text: una request a una admin API protegida (e.g. `/api/admin/surveys`) responde 200 con la session cookie
-    attachments: []
-  notes: '6 unit tests cubren este flujo (callback + 5 token verification tests en auth.test.ts). HmacSHA256 sign + constant-time compare + AUTH_COOKIE_SECRET >=32 chars enforcement.'
-  attachments: []
-  defects: []
-- testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
-  testCaseKey: TC-76
-  testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
-  testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
-  scenarioTitle: IM-961 — Logout clears session and re-protects admin routes
-  scenarioIndex: 2
-  status: passed
-  stepResults:
-  - order: 1
-    status: passed
-    actual: PASS — pre-state asumido por test "clears the session cookie on logout".
-    phase: given
-    text: el admin tiene una session cookie válida (vino de Scenario 2)
-    attachments: []
-  - order: 2
-    status: passed
-    actual: PASS — auth.ts:45-52 POST /api/auth/logout llama clearSessionCookie + buildLogoutUrl.
-    phase: when
-    text: el admin hace POST/GET a `/api/auth/logout`
-    attachments: []
-  - order: 3
-    status: passed
-    actual: PASS — Test asserts /Max-Age=0/ en Set-Cookie. clearSessionCookie en lib/auth.ts:248-256 emite cookie vacía con maxAge=0.
-    phase: then
-    text: el server responde con `Set-Cookie` que invalida la session (cookie con `Max-Age=0` o `Expires` en pasado)
-    attachments: []
-  - order: 4
-    status: passed
-    actual: 'PASS — Response payload incluye {ok: true, logoutUrl: buildLogoutUrl()} donde logoutUrl apunta a Cognito /logout con client_id + logout_uri. Cliente decide si seguir el redirect (LoginPage handles).'
-    phase: then
-    text: el server redirige al endpoint de logout de Cognito (limpiando la sesión del Hosted UI)
-    attachments: []
-  - order: 5
-    status: passed
-    actual: PASS — Test "returns 401 from me without a valid session" cubre /api/auth/me sin cookie.
-    phase: then
-    text: una request posterior a `/api/auth/me` devuelve 401 / sin user
-    attachments: []
-  - order: 6
-    status: passed
-    actual: PASS — requireAdminAuth (lib/auth.ts:267-276) emite 401 sin sesión. Frontend AdminLayout llama api.auth.me() y redirige a /login si 401.
-    phase: then
-    text: una request posterior a `/admin/surveys` vuelve a 302 a Cognito login
-    attachments: []
-  notes: 3 unit tests cubren logout (logout + 2 401-without-session tests).
-  attachments: []
-  defects: []
-- testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
-  testCaseKey: TC-76
-  testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
-  testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
-  scenarioTitle: IM-961 — Public survey widget endpoints stay open without admin auth (cross-check with IM-963)
-  scenarioIndex: 3
-  status: passed
-  stepResults:
-  - order: 1
-    status: passed
-    actual: PASS — boundary tests no usan cookie.
-    phase: given
-    text: el admin auth middleware está activo
-    attachments: []
-  - order: 2
-    status: passed
-    actual: PASS — confirmed.
-    phase: given
-    text: el browser/cliente NO tiene session cookie de admin
-    attachments: []
-  - order: 3
-    status: passed
-    actual: 'PASS — apiBoundary.test.ts: "allows public widget survey lookup without an admin session", "allows public widget response submission without an admin session" cubren GET y POST públicos.'
-    phase: when
-    text: el cliente llama a un public endpoint del widget (e.g. `/api/public/surveys/<slug>` o `/api/widget/eligibility`)
-    attachments: []
-  - order: 4
-    status: passed
-    actual: PASS — 201 retornado en POST de respuesta con record persistido.
-    phase: then
-    text: la response es 200 con el payload esperado del widget
-    attachments: []
-  - order: 5
-    status: passed
-    actual: PASS — sin 302 ni 401 en boundary tests.
-    phase: then
-    text: NO se devuelve 302 ni 401
-    attachments: []
-  - order: 6
-    status: passed
-    actual: PASS — boundary tests no emiten Set-Cookie en public routes (no requireAdminAuth aguas arriba).
-    phase: then
-    text: NO se intenta setear cookie de admin
-    attachments: []
-  notes: 'AC4 cubierto por apiBoundary.test.ts (cross-test con TC-77 / IM-962). Confirma que la introducción del middleware admin no rompe el widget público.'
-  attachments: []
-  defects: []
-- testCaseId: 97a324c0-789b-4da9-9586-c63f96b2915b
-  testCaseKey: TC-76
-  testCaseTitle: IM-961 — Cognito login for Survey Tool admin UI
-  testCaseFilePath: test-cases/IM-961/IM-961-TC-76-cognito-admin-login.testcase.yml
-  scenarioTitle: IM-961 — Tampered or expired session cookie is rejected
-  scenarioIndex: 4
-  status: passed
-  stepResults:
-  - order: 1
-    status: passed
-    actual: 'PASS — auth.test.ts cubre 4 variantes: tampered signature, extra segments, expired exp, malformed cookie syntax.'
-    phase: given
-    text: una session cookie firmada por el server fue manipulada (ej. último byte alterado) o expiró
-    attachments: []
-  - order: 2
-    status: passed
-    actual: PASS — getAdminSession en lib/auth.ts:258-265 retorna null si verifySignedValue falla.
-    phase: when
-    text: el cliente la envía a una admin API protegida
-    attachments: []
-  - order: 3
-    status: passed
-    actual: PASS — requireAdminAuth emite 401 si getAdminSession devuelve null. callback handler en auth.ts emite 400 cuando malformed callback cookie ("returns 400 and clears OAuth state when callback cookies are malformed").
-    phase: then
-    text: el server responde 401 (o redirect 302 a Cognito login para rutas HTML)
-    attachments: []
-  - order: 4
-    status: passed
-    actual: PASS — sesión rechazada. constantTimeEquals previene timing attack en verifySignedValue.
-    phase: then
-    text: NO se trata como sesión válida
-    attachments: []
-  - order: 5
-    status: passed
-    actual: 'PASS — En auth.ts, los errores se loggean implicitamente vía String(e) en la response — no se loggea ni la cookie cruda ni los tokens en el servidor (no console.log de session value). Sugerencia menor: usar logger estructurado.'
-    phase: then
-    text: el log del server registra el intento (sin loggear el valor crudo de la cookie ni los tokens)
-    attachments: []
-  notes: '5 unit tests cubren rechazo de cookies inválidas. Importante: AUTH_COOKIE_SECRET <32 chars hace explicit fail at boot (lib/auth.ts:97-101).'
-  attachments: []
-  defects: []
+    defects: []
 summary:
   total: 5
   passed: 5
@@ -244,57 +295,29 @@ summary:
   notRun: 0
   passRate: 100
 history:
-- action: started
-  timestamp: '2026-06-30T16:00:00.000Z'
-  user: codex
-  from: planned
-  to: in-progress
-  reason: Code-review execution pass on PR #18 + #20 merged to main via epic delivery PR #23.
-- action: completed
-  timestamp: '2026-06-30T17:00:00.000Z'
-  user: codex
-  from: in-progress
-  to: completed
-  reason: 'AC1-AC5 PASS por unit tests + code review. 39/39 server tests PASS. OWASP scan sin findings aplicables-FAIL. npm audit reporta 2 high pre-existentes (drizzle-orm, path-to-regexp) NO introducidos por este PR — flag como mantenimiento separado.'
-notes: |
-  ## Classification
-  Backend pipeline (Express + Node 22, TS, ESM). Mostly auto-executable: unit tests + static security scans.
-
-  ## Solution understood
-  PR #18 implementa OIDC contra Cognito Hosted UI:
-  - lib/auth.ts (407 líneas): HmacSHA256-signed httpOnly cookie, state nonce CSRF protection,
-    JWKS verification con kid + RS256, admin allowlist por email_verified OR group membership,
-    safeReturnTo regex anti-open-redirect, constant-time signature compare, AUTH_COOKIE_SECRET
-    enforced >=32 chars, sesión TTL 8h sin extender más allá del exp del Cognito id_token.
-  - routes/auth.ts (69 líneas): 4 endpoints — /login, /callback, /logout, /me.
-  - server/index.ts: monta /api/auth router.
-  PR #20 agrega frontend:
-  - client/src/pages/LoginPage.tsx: chequea /api/auth/me, redirige a /api/auth/login con
-    returnTo encoded; mismo guard returnTo regex que el backend.
-  - client/src/components/AdminLayout.tsx: añade botón Log out + redirige a /login en 401.
-
-  ## Coverage
-  - 39/39 unit tests PASS en server (post-merge state). AC1-AC5 cubiertos por 18 tests dedicados.
-  - LoginPage.tsx + AdminLayout.tsx: code review (no UI test, low risk: lógica delgada).
-
-  ## Security regression
-  - SQL injection grep: 0 hits en diff.
-  - Secrets grep: solo placeholders (`replace-with-at-least-32-random-characters`, ejemplos en docs).
-  - PII logging: 0 hits.
-  - npm audit: 2 high pre-existentes (drizzle-orm SQL identifier escape; path-to-regexp ReDoS).
-    Ninguno introducido por este PR — flag como upgrade futuro, NO blocker para IM-961.
-
-  ## OWASP Top 10
-  Ver attachments/tr-085-tc-76/owasp-top10-scan.txt. 0 Applicable+FAIL.
-  A06 INFO (deps pre-existentes).
-
-  ## Runtime caveat
-  Los 5 escenarios prueban behavior HTTP/cookie via unit tests. La validación e2e en browser
-  contra un Cognito User Pool real requiere deployed env (per IM-964 deployment checklist).
-  No es blocker para code-review; queda explícito en este TR.
+  - action: started
+    timestamp: "2026-06-30T16:00:00.000Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: Code-review execution pass on PR
+  - action: completed
+    timestamp: "2026-06-30T17:00:00.000Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      AC1-AC5 PASS por unit tests + code review. 39/39 server tests PASS. OWASP scan sin findings aplicables-FAIL. npm
+      audit reporta 2 high pre-existentes (drizzle-orm, path-to-regexp) NO introducidos por este PR — flag como
+      mantenimiento separado.
+  - action: reopened
+    timestamp: "2026-06-30T19:38:41.205Z"
+    user: testmanager
+    from: completed
+    to: in-progress
 metadata:
   createdBy: codex
-  createdAt: '2026-06-30T16:00:00Z'
-  updatedBy: codex
-  updatedAt: '2026-06-30T17:00:00Z'
-  version: 1
+  createdAt: "2026-06-30T16:00:00Z"
+  updatedBy: testmanager
+  updatedAt: "2026-06-30T19:38:41.205Z"
+completedAt: null
