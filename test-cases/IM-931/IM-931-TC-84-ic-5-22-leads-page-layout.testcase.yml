@@ -1,0 +1,205 @@
+schemaVersion: '1.0'
+id: 48d18041-c393-4e64-810e-3b457eb6daee
+key: TC-84
+title: IC 5.22 — Update Leads Page Layout (delivery hybrid v2, 2 automated + 2 manual handoffs)
+description: |
+  Cobertura QA de IM-931 (5.22 Update Leads Page Layout — deliver to
+  Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-5-22-leads-page-layout` v2 (HYBRID). Confianza alta por reporte IM-735
+  (2026-06-12): verificado en ambas orgs. Delivered en PR #197 (squash a main).
+
+  Los steps de Lightning Record Page quedan manuales porque Salesforce no expone
+  Metadata API reliable para FlexiPage org-default assignment ni component-tree
+  edits.
+
+  Validar que el IC:
+  1) asigna el Veevart Lead page layout seleccionado como active en TODOS los
+     profiles (verificado por read-back per profile),
+  2) selección org-agnóstica: no hardcoded name, layouts discovered from live org,
+  3) reconfigura Lead Status values: exactamente Contacted, Open, Qualified,
+     Unqualified (en ese orden) con Open como default; los stock values (Open -
+     Not Contacted, Working - Contacted, Closed - Converted, Closed - Not
+     Converted) quedan deactivated,
+  4) idempotente,
+  5) verified-or-fail (no silent success),
+  6) parquea con 2 manual handoffs (Veevart Lead Record Page as Org Default;
+     Path component + rename Campaigns → Campaign History + Files → News + Twitter),
+  7) release DoD.
+
+  QA Sub-task asociada: IM-991
+  Riesgos abiertos: AC6 handoffs manuales (Lightning Record Page + component-tree
+  edits) requieren attestation del operator.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-5-22-leads-page-layout` v2 deployado en prod
+- Org target con el Veevart Lead page layout instalado (Auctifera package)
+- Permisos para modificar Lead page layout assignments across all profiles
+- Permisos para modificar Lead Status value set
+- Acceso a Setup para los 2 manual handoffs (Lightning Record Page Assignment + Lightning App Builder)
+- Acceso al catálogo prod para seedear v2
+format: gherkin
+scenarios:
+- title: 5.22 Update Leads Page Layout — Lead page layout activated across all profiles
+  tags:
+  - happy-path
+  - im-931
+  - im-991
+  - ac-1
+  - automated
+  - page-layout
+  given:
+  - una org con el Veevart Lead page layout instalado
+  when:
+  - el operator corre el case y selecciona el Lead layout del dropdown discovered
+  then:
+  - el selected layout queda como active Lead page-layout para cada profile discovered
+  - la asignación se confirma per profile (step succeeds only on verified)
+- title: 5.22 Update Leads Page Layout — Layout selection is org/version-agnostic (no hardcoded)
+  tags:
+  - regression
+  - im-931
+  - im-991
+  - ac-2
+  - org-agnostic
+  given:
+  - dos orgs cuyo Veevart Lead layout difiere en name, managed namespace o versión
+  when:
+  - el case corre en cada una
+  then:
+  - el operator ve las opciones reales de cada org (live-discovered)
+  - el chosen layout se asigna usando su namespaced API name real
+  - no aparece ningún Lead layout name hardcoded en el step handler
+- title: 5.22 Update Leads Page Layout — Lead Status values reconfigured
+  tags:
+  - happy-path
+  - im-931
+  - im-991
+  - ac-3
+  - automated
+  - picklist
+  given:
+  - una org con el standard Lead Status (LeadStatus) value set
+  when:
+  - el automated Lead Status step corre
+  then:
+  - los active Lead Status values son exactamente y en orden Contacted, Open, Qualified, Unqualified
+  - Open es el default único
+  - los stock values (Open - Not Contacted, Working - Contacted, Closed - Converted, Closed - Not Converted) quedan deactivated
+  - el end state se confirma por read-back
+- title: 5.22 Update Leads Page Layout — Idempotent re-run
+  tags:
+  - regression
+  - im-931
+  - im-991
+  - ac-4
+  - idempotent
+  given:
+  - el case ya completó successfully
+  when:
+  - se re-ejecuta con la misma selección
+  then:
+  - Lead layout y Lead Status end state quedan sin cambios
+  - el run completa sin error (no duplicate ni conflicting writes)
+- title: 5.22 Update Leads Page Layout — Verified-or-fail (no silent success)
+  tags:
+  - regression
+  - im-931
+  - im-991
+  - ac-5
+  - verification
+  given:
+  - un automated step cuya write no tomó efecto en la org
+  when:
+  - el step verifica reading back
+  then:
+  - el step se reporta failed (no silently passed)
+  - el run no avanza al siguiente step
+- title: 5.22 Update Leads Page Layout — Manual handoff — Veevart Lead Record Page as Org Default
+  tags:
+  - manual
+  - im-931
+  - im-991
+  - ac-6
+  - awaiting-handoff
+  given:
+  - los steps automated completaron
+  when:
+  - el run llega al primer handoff
+  then:
+  - el run parquea con guía step-by-step para asignar la Veevart Lead Record Page como Org Default para Desktop y Phone
+  - el operator marca done tras completar en Setup
+- title: 5.22 Update Leads Page Layout — Manual handoff — Path + rename tabs + Twitter
+  tags:
+  - manual
+  - im-931
+  - im-991
+  - ac-6
+  - awaiting-handoff
+  given:
+  - primer handoff done
+  when:
+  - el run llega al segundo handoff
+  then:
+  - el run parquea con guía para agregar el Path component
+  - renombrar Campaigns tab a `Campaign History` y Files tab a `News`
+  - asegurar que el Twitter component está presente
+  - el operator marca done
+- title: 5.22 Update Leads Page Layout — Release (catalog seed in prod)
+  tags:
+  - delivery
+  - im-931
+  - im-991
+  - ac-7
+  - catalog
+  given:
+  - IC 5.22 v2 seedeado al prod IC catalog
+  when:
+  - un implementer abre el catálogo
+  then:
+  - el label "5.22 Update Leads Page Layout" aparece como active version
+  - corre end-to-end y se verifica en prod
+- title: 5.22 Update Leads Page Layout — Evidencia UI — IC 5.22 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-931
+  - im-991
+  - manual
+  given:
+  - el IC 5.22 v2 está seedeado en el catálogo del MigrationApp
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator lanza el IC 5.22 desde MigrationApp
+  - el operator selecciona el Lead layout del dropdown
+  - el operator completa los 2 handoffs manuales
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-5-22-leads-page-layout` v2 disponible
+  - captura del dropdown de Lead layouts discovered
+  - 'captura post-AC1: Setup > Object Manager > Lead > Page Layout Assignment cross-table mostrando el Veevart layout asignado a todos los profiles'
+  - 'captura post-AC3: Setup > Object Manager > Lead > Fields & Relationships > Lead Status con exactamente Contacted, Open (default), Qualified, Unqualified activos y los stock values deactivated'
+  - captura de los 2 handoffs AWAITING_HANDOFF con guías
+  - captura final del run en COMPLETED
+tags:
+- im-931
+- im-991
+- im-735
+- implementations-automation
+- implementation-case
+- ic-5-22
+- salesforce
+- auctifera
+- lead
+- page-layout
+- lightning-record-page
+- picklist
+- high-confidence
+- june-delivery
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1

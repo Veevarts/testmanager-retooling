@@ -1,0 +1,228 @@
+schemaVersion: '1.0'
+id: b8c5652d-56cc-4bbd-8f4b-1f7b31c2f0a2
+key: TC-80
+title: IC 4.05 — Update Transaction Journal & Journal Page Layouts (delivery auto, depends on IC 4.01)
+description: |
+  Cobertura QA de IM-927 (4.05 Update Transaction Journal & Journal Page Layouts —
+  deliver to Implementations, high-confidence). Junio delivery del Implementation
+  Case `ic-4-05-update-transaction-journal-layouts` (auto, 3 steps). Confianza alta
+  por reporte IM-735 (2026-06-12): verificado en CamiloDevOrg, merged en PR #190
+  (squash 41cf5033).
+
+  Validar que el IC (3 automated steps):
+  1) Part A — configura Auctifera accounting org-default settings (Fee Fund,
+     Roundup Donations Specific Fund, Automatic Journal Creation Enabled) +
+     Fundraising Settings de vnfp (Roundup Donations Specific Fund),
+  2) selección de funds: default IC 4.01 canonicals (PROCESSING FEES, ROUND-UP) u
+     override por operator; falla claro si el fund no existe,
+  3) Part B — asigna el Transaction Journal page layout seleccionado por el
+     operator (descubierto de la org, no hardcoded) a través de TODOS los profiles
+     y verifica por read-back,
+  4) Part C — legacy-field guard: pasa si los 8 legacy fields no existen; falla
+     con instrucciones manuales si están presentes (managed, no borrables por API),
+  5) depende de IC 4.01: no arranca hasta que 4.01 haya COMPLETED,
+  6) release DoD: seedeado a catálogo prod y verificado.
+
+  QA Sub-task asociada: IM-987
+  Riesgos abiertos: AC4 legacy-field-present branch requiere una org legacy para
+  reproducir (típicamente no aplica en orgs actuales de Auctifera).
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-4-05-update-transaction-journal-layouts` deployado en prod
+- Org target con Auctifera + vnfp packages instalados
+- IC 4.01 (Specific Funds Debit & Credit) ejecutado exitosamente (crea `PROCESSING FEES` y `ROUND-UP` Specific Funds)
+- Permisos para modificar custom settings de Auctifera Accounting + vnfp Fundraising Settings
+- Permisos para asignar Transaction Journal page layout across profiles
+- Acceso al catálogo de prod para seedear el IC
+format: gherkin
+scenarios:
+- title: 4.05 Update Transaction Journal — Auctifera Accounting settings configured (Part A)
+  tags:
+  - happy-path
+  - im-927
+  - im-987
+  - ac-1
+  - automated
+  - accounting-settings
+  given:
+  - una org con los Specific Funds `PROCESSING FEES` y `ROUND-UP` creados por IC 4.01
+  when:
+  - el IC 4.05 corre el step de accounting settings
+  then:
+  - '`Auctifera__Accounting__c.Auctifera__Fee_Fund__c` apunta al Specific Fund `PROCESSING FEES`'
+  - '`Auctifera__Accounting__c.Auctifera__Roundup_Donations_Specific_Fund__c` apunta al Specific Fund `ROUND-UP`'
+  - '`Auctifera__Accounting__c.Auctifera__Automatic_Journal_Creation_Enabled__c = true`'
+  - la Fundraising Settings de vnfp queda con `Roundup Donations Specific Fund` apuntando al mismo `ROUND-UP` fund
+  - cada valor se verifica por read-back; un write fallido reporta el step FAILED
+- title: 4.05 Update Transaction Journal — Fund selection defaults with optional override
+  tags:
+  - happy-path
+  - im-927
+  - im-987
+  - ac-2
+  - operator-input
+  given:
+  - el operator no ingresa ningún nombre de fund
+  when:
+  - el IC 4.05 corre
+  then:
+  - usa `PROCESSING FEES` (fee) y `ROUND-UP` (roundup) como defaults IC 4.01 canonicals
+- title: 4.05 Update Transaction Journal — Operator override for fund names
+  tags:
+  - happy-path
+  - im-927
+  - im-987
+  - ac-2
+  - operator-input
+  given:
+  - el operator ingresa nombres personalizados de fee y/o roundup fund
+  when:
+  - el IC 4.05 corre
+  then:
+  - usa los nombres ingresados en lugar de los defaults
+  - los funds existen y se resuelven correctamente en el accounting settings
+- title: 4.05 Update Transaction Journal — Missing fund fails with actionable message
+  tags:
+  - negative
+  - im-927
+  - im-987
+  - ac-2
+  - missing-doc
+  given:
+  - el fee o roundup fund seleccionado NO existe en la org
+  when:
+  - el IC 4.05 corre
+  then:
+  - el step falla con un mensaje claro pidiendo correr IC 4.01 (Specific Funds) primero
+  - el run no avanza a Part B
+- title: 4.05 Update Transaction Journal — Operator picks layout from org-discovered dropdown (Part B)
+  tags:
+  - happy-path
+  - im-927
+  - im-987
+  - ac-3
+  - operator-input
+  - page-layout
+  given:
+  - el IC 4.05 alcanza el paso de page-layout
+  when:
+  - el run descubre los Transaction Journal layouts de la org (ej. `VNFP Transaction Journal Layout - V3 - August 2024`)
+  then:
+  - el operator ve un dropdown con los layouts disponibles (no hardcoded)
+  - tras seleccionar uno, el layout queda asignado como active para el Transaction Journal object en TODOS los profiles
+  - la asignación se verifica por read-back per profile
+- title: 4.05 Update Transaction Journal — Legacy-field guard (Part C) — normal org
+  tags:
+  - happy-path
+  - im-927
+  - im-987
+  - ac-4
+  - guard
+  given:
+  - la org NO tiene los 8 legacy Transaction Journal fields
+  when:
+  - el IC 4.05 corre el guard step
+  then:
+  - el step completa automáticamente sin acción
+  - el run avanza a COMPLETED
+- title: 4.05 Update Transaction Journal — Legacy-field guard on legacy org fails with manual instructions
+  tags:
+  - negative
+  - im-927
+  - im-987
+  - ac-4
+  - missing-doc
+  - legacy
+  given:
+  - una org legacy que aún tiene alguno de los 8 legacy fields (Total Source formula, Card/Cash amount & refund, Checks Amount, Source, Date)
+  when:
+  - el IC 4.05 corre el guard step
+  then:
+  - el step falla con instrucciones para borrarlos manualmente en Salesforce Classic (Total Source formula primero)
+  - el mensaje aclara que son managed fields y no borrables por API
+- title: 4.05 Update Transaction Journal — Depends on IC 4.01 completion
+  tags:
+  - regression
+  - im-927
+  - im-987
+  - ac-5
+  - dependency
+  given:
+  - IC 4.05 y IC 4.01 corren en el mismo plan
+  when:
+  - el plan ejecuta
+  then:
+  - IC 4.05 no arranca hasta que IC 4.01 haya reportado COMPLETED
+  - un run que arranca IC 4.05 sin 4.01 completado se detiene con dependency error
+- title: 4.05 Update Transaction Journal — Idempotent re-run
+  tags:
+  - regression
+  - im-927
+  - im-987
+  - idempotent
+  given:
+  - el IC 4.05 ya fue aplicado a la org
+  when:
+  - se re-ejecuta el IC
+  then:
+  - los 3 steps convergen sin errores
+  - accounting settings, page layout assignment y guard status quedan sin cambios
+- title: 4.05 Update Transaction Journal — Release (catalog seed in prod)
+  tags:
+  - delivery
+  - im-927
+  - im-987
+  - ac-6
+  - catalog
+  given:
+  - el case fue reviewed at high confidence
+  when:
+  - se seedea `IMPL_CASE#ic-4-05-update-transaction-journal-layouts` en el catálogo de prod
+  then:
+  - el case aparece disponible para el equipo de Implementations sin feature flag
+  - un run de prueba completa los 3 automated steps con verificación
+- title: 4.05 Update Transaction Journal — Evidencia UI — IC 4.05 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-927
+  - im-987
+  - manual
+  given:
+  - el IC 4.05 está seedeado en el catálogo del MigrationApp
+  - IC 4.01 ya se corrió (funds existen)
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator entra al MigrationApp, abre el catálogo y lanza el IC 4.05
+  - el operator confirma o overridea los fund names en el paso de selección
+  - el operator selecciona un Transaction Journal layout en el dropdown
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-4-05-update-transaction-journal-layouts` disponible
+  - 'captura post-AC1: Setup > Custom Settings > Auctifera Accounting mostrando Fee Fund + Roundup + Automatic Journal Creation Enabled + Fundraising Settings de vnfp con Roundup fund'
+  - 'captura del dropdown AC3 mostrando los Transaction Journal layouts descubiertos + captura post-run de Setup > Object Manager > Transaction Journal > Page Layouts con el layout seleccionado asignado en Page Layout Assignment (todos los profiles)'
+  - 'captura del guard step Part C completado (o el mensaje de fallo en org legacy si aplica)'
+  - captura final del run en COMPLETED
+tags:
+- im-927
+- im-987
+- im-735
+- implementations-automation
+- implementation-case
+- ic-4-05
+- salesforce
+- auctifera
+- vnfp
+- accounting-settings
+- page-layout
+- transaction-journal
+- high-confidence
+- june-delivery
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1

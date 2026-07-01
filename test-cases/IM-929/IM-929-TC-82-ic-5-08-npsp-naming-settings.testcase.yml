@@ -1,0 +1,205 @@
+schemaVersion: '1.0'
+id: e4f47ae9-40f8-49d4-819b-63804d8c2c0d
+key: TC-82
+title: IC 5.08 — NPSP Opportunity & Household Naming Settings + Pledge field (delivery auto v2)
+description: |
+  Cobertura QA de IM-929 (5.08 NPSP Opportunity & Household Naming Settings —
+  deliver to Implementations, high-confidence). Junio delivery del Implementation
+  Case `ic-5-08-npsp-naming-settings` v2 (fully auto). Confianza alta por reporte
+  IM-735 (2026-06-12): Built+verified en CamiloDev, cross-test COMPLETED en Tucson.
+  PR #195 squash-merged a main (commit d02c4cde).
+
+  Validar que el IC (v2 fully auto — el manual "create Pledge checkbox" se automatizó
+  con T3 customField op + FLS dinámico):
+  1) NPSP Opportunity Naming Settings con name format `{!Account.Name} {!Amount}
+     {!RecordType.Name} {!CloseDate}` + date format `MM/dd/yyyy` aplicado a los
+     record types donde exista (Donation/Grant/InKindGift/MajorGift/MatchingGift/Membership),
+  2) NPSP Household Naming Settings con `Household_Name_Format__c = {!{!FirstName}}
+     {!LastName} Household`,
+  3) crea `Opportunity.Pledge__c` (Checkbox, default Unchecked) si no existe,
+  4) grantea FLS Read+Edit para `Pledge__c` al running/integration user's profile
+     (y SysAdmin best-effort) — necesario porque Metadata API no otorga FLS,
+  5) dynamic / new-org safe (no hardcoded IDs / profile names),
+  6) idempotente,
+  7) type-change safety: si `Pledge__c` existe con otro type, falla (no convierte),
+  8) release DoD.
+
+  QA Sub-task asociada: IM-989
+  Riesgos abiertos: AC7 requiere reproducir con Pledge__c de otro tipo para probar
+  el type-change guard.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-5-08-npsp-naming-settings` v2 deployado en prod (PR #195)
+- Org target con NPSP + Auctifera + vnfp instalados
+- Backend redeployed de `main` en prod (carrying T3 customField op)
+- Existen Opportunity record types entre Donation, Grant, In-Kind Gift, Major Gift, Matching Gift, Membership (al menos uno)
+- Permisos para modificar NPSP Opportunity Naming Settings + Household Naming Settings custom settings
+- Permisos para crear custom field vía Metadata API + granting FLS
+- Acceso al catálogo prod para seedear el IC v2
+format: gherkin
+scenarios:
+- title: 5.08 NPSP Naming — Opportunity naming format applied to requested record types
+  tags:
+  - happy-path
+  - im-929
+  - im-989
+  - ac-1
+  - automated
+  - npsp
+  given:
+  - una org con NPSP + Opportunity record types entre Donation, Grant, In-Kind Gift, Major Gift, Matching Gift, Membership
+  when:
+  - el IC 5.08 corre
+  then:
+  - NPSP Opportunity Naming Settings queda con name format `{!Account.Name} {!Amount} {!RecordType.Name} {!CloseDate}` y date format `MM/dd/yyyy`
+  - el record-type list se resuelve at runtime a los Ids de los record types activos que matchean la lista requerida (nombres ausentes se skipean, no se fabrican)
+  - el step verifica por query-back; falla si el row no tiene esos valores
+- title: 5.08 NPSP Naming — Household name format configured
+  tags:
+  - happy-path
+  - im-929
+  - im-989
+  - ac-2
+  - automated
+  - npsp
+  given:
+  - la org NPSP Household Naming Settings org-level
+  when:
+  - el IC 5.08 corre
+  then:
+  - '`npsp__Household_Name_Format__c = {!{!FirstName}} {!LastName} Household`'
+  - se verifica por query-back
+  - re-run es no-op
+- title: 5.08 NPSP Naming — Pledge checkbox field created on Opportunity
+  tags:
+  - happy-path
+  - im-929
+  - im-989
+  - ac-3
+  - automated
+  - metadata-api
+  given:
+  - el Opportunity object NO tiene el field `Pledge__c`
+  when:
+  - el IC 5.08 corre
+  then:
+  - se crea un custom Checkbox field `Opportunity.Pledge__c` con default value Unchecked
+  - el step verifica que el field existe con el label, type y default value correctos
+- title: 5.08 NPSP Naming — Pledge field FLS granted to running user profile
+  tags:
+  - happy-path
+  - im-929
+  - im-989
+  - ac-4
+  - automated
+  - fls
+  given:
+  - '`Pledge__c` fue creado via Metadata API (que no otorga FLS)'
+  when:
+  - el IC 5.08 corre el FLS step
+  then:
+  - Read + Edit FLS para `Opportunity.Pledge__c` se otorgan al profile del running/integration user
+  - best-effort también al System Administrator profile
+  - el data-migration user puede setear Pledge = true en pledge opportunities
+- title: 5.08 NPSP Naming — Dynamic / new-org safe (no hardcoding)
+  tags:
+  - regression
+  - im-929
+  - im-989
+  - ac-5
+  - org-agnostic
+  given:
+  - una brand-new customer org con record-type Ids diferentes y running profile diferente
+  when:
+  - el IC 5.08 corre
+  then:
+  - los record types se resuelven por nombre (no por Id)
+  - el FLS apunta al running profile at runtime
+  - no aparecen org-specific Ids ni profile names hardcoded en el step handler
+- title: 5.08 NPSP Naming — Idempotent re-run
+  tags:
+  - regression
+  - im-929
+  - im-989
+  - ac-6
+  - idempotent
+  given:
+  - el IC ya completó successfully en la org
+  when:
+  - se re-ejecuta
+  then:
+  - todos los steps convergen sin error (settings no-op, field actualizado in place, FLS already granted)
+  - el case reporta success
+- title: 5.08 NPSP Naming — Type-change safety on existing Pledge__c
+  tags:
+  - negative
+  - im-929
+  - im-989
+  - ac-7
+  - guard
+  given:
+  - existe `Opportunity.Pledge__c` de otro tipo (ej. Text) creado manualmente
+  when:
+  - el IC 5.08 corre
+  then:
+  - el field type NO se convierte
+  - el step falla con mensaje claro (no intenta destructive change)
+- title: 5.08 NPSP Naming — Release (catalog seed dev then prod)
+  tags:
+  - delivery
+  - im-929
+  - im-989
+  - ac-8
+  - catalog
+  given:
+  - el backend carrying T3 customField op está deployed
+  when:
+  - IC 5.08 v2 se seedea en dev catalog, se valida, luego en prod catalog
+  then:
+  - el case es la active version en ambos ambientes y corre a verified success
+- title: 5.08 NPSP Naming — Evidencia UI — IC 5.08 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-929
+  - im-989
+  - manual
+  given:
+  - el IC 5.08 v2 está seedeado en el catálogo del MigrationApp
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator lanza el IC 5.08 desde MigrationApp
+  - el operator deja correr los steps automated
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-5-08-npsp-naming-settings` v2 disponible
+  - 'captura post-AC1: NPSP Settings > People > Contact Naming Settings (o equivalente) con name format + date format aplicados a los record types requeridos'
+  - 'captura post-AC2: NPSP Settings > Households > Household Naming Settings con Household Name Format `{!{!FirstName}} {!LastName} Household`'
+  - 'captura post-AC3: Setup > Object Manager > Opportunity > Fields & Relationships mostrando el field `Pledge__c` con type Checkbox, default Unchecked'
+  - 'captura post-AC4: Setup > Profiles > <running profile> > Field-Level Security > Opportunity mostrando `Pledge__c` con Read + Edit granted'
+  - captura final del run en COMPLETED
+tags:
+- im-929
+- im-989
+- im-735
+- implementations-automation
+- implementation-case
+- ic-5-08
+- salesforce
+- npsp
+- opportunity
+- household
+- naming-settings
+- pledge-field
+- fls
+- metadata-api
+- high-confidence
+- june-delivery
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1

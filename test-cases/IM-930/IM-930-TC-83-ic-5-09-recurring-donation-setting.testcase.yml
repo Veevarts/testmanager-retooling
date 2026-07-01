@@ -1,0 +1,273 @@
+schemaVersion: '1.0'
+id: 26061295-9318-4b52-ab54-a067ac6f6f44
+key: TC-83
+title: IC 5.09 — Recurring Donation Setting (delivery hybrid v4, 5 automated + 3 manual handoffs)
+description: |
+  Cobertura QA de IM-930 (5.09 Recurring Donation Setting — deliver to
+  Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-5-09-recurring-donation-setting` v4 (hybrid). Confianza alta por reporte
+  IM-735 (2026-06-12): verificado en ambas orgs. Live-verified en `im696-tucson`
+  y CamiloDevOrg.
+
+  Validar que el IC (v4 catalog: 5 automated + 3 manual handoffs):
+  1) NPSP Recurring Donations default Opportunity Record Type = Donation (vnfp-namespaced
+     preferido cuando hay múltiples activos),
+  2) desactiva `Quarterly` en Installment Period picklist (NPSP RD2 no lo soporta),
+  3) agrega tab `Recurring Donation` al Fundraising app (`vnfp__Fundraising`) en el
+     subscriber-tabs slot,
+  4) enable Enhanced Recurring Donations (RD2) gated por operator "Yes/No"
+     (verifica CRLP on + user NPSP admin; falla actionable si no),
+  5) turn on `Veevart NFP - Automatic Batch Schedule` scheduled job (CRON
+     `0 0 18 * * ?`) gated por el mismo operator input,
+  6) parquea con 3 manual handoffs (activate & tailor Recurring Donation emails +
+     Fundraising Settings Default record; Save Customer Card action + Notification
+     Manager; specific funds & recurring memberships),
+  7) dependency documented on IC 3.16 (Org-Wide Email Address),
+  8) release DoD prod catalog.
+
+  QA Sub-task asociada: IM-990
+  Riesgos abiertos: AC4 branch "operator=No" es intencional no-op; AC5 mismo input
+  gate. Verificar que los toggles se respetan y que "Yes" con CRLP off falla claro.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-5-09-recurring-donation-setting` v4 deployado en prod
+- Org target con NPSP + vnfp installed
+- Existe al menos un Opportunity record type `Donation` activo (vnfp-namespaced preferido)
+- Fundraising app (`vnfp__Fundraising`) instalado
+- Customizable Rollups (CRLP) enabled (para el "Yes" branch de AC4)
+- Running user es NPSP admin (para el "Yes" branch de AC4)
+- IC 3.16 (Org-Wide Email Address) ya corrido antes de 5.09 (dependencia documentada)
+- Permisos para modificar NPSP Recurring Donations Settings + Installment Period picklist + app tabs + scheduled jobs
+- Acceso al catálogo prod para seedear v4
+format: gherkin
+scenarios:
+- title: 5.09 Recurring Donation — Default Opportunity Record Type set to Donation
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-1
+  - automated
+  - npsp
+  given:
+  - una org con al menos un Opportunity record type activo cuyo developer name es `Donation`
+  when:
+  - el IC 5.09 corre
+  then:
+  - NPSP Recurring Donations org-default `Opportunity Record Type` queda seteado al Donation record type resuelto at runtime
+  - el vnfp-namespaced Donation record type se prefiere cuando hay múltiples activos con nombre `Donation`
+  - no aparece un hardcoded Id en el step handler
+  - re-running el case lo deja sin cambios
+- title: 5.09 Recurring Donation — Quarterly installment period deactivated
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-2
+  - automated
+  - picklist
+  given:
+  - el Recurring Donation `Installment Period` picklist tiene `Quarterly` active
+  when:
+  - el IC 5.09 corre
+  then:
+  - '`Quarterly` ya no es selectable en el field (NPSP RD2 no lo soporta)'
+  - si `Quarterly` ya estaba inactive o ausente, el step también pasa como no-op
+- title: 5.09 Recurring Donation — Recurring Donation tab added to Fundraising app
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-3
+  - automated
+  - app-tab
+  given:
+  - el managed Fundraising app (`vnfp__Fundraising`)
+  when:
+  - el IC 5.09 corre
+  then:
+  - el tab `Recurring Donation` object aparece en la nav del Fundraising app (subscriber-tabs slot)
+  - los packaged nav items quedan intactos
+  - re-running no duplica el tab
+- title: 5.09 Recurring Donation — Enable Enhanced Recurring Donations (operator gated "Yes")
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-4
+  - automated
+  - rd2
+  - operator-input
+  given:
+  - operator responde "Activate recurring donations now?" = Yes
+  - CRLP está enabled y el running user es NPSP admin
+  when:
+  - el IC 5.09 corre
+  then:
+  - NPSP Enhanced Recurring Donations (RD2) queda enabled (verificado en `IsRecurringDonations2Enabled__c`)
+  - si RD2 ya estaba enabled → no-op
+  - si existen legacy recurring donations, el step logea reminder de correr NPSP RD2 data migration
+- title: 5.09 Recurring Donation — Operator "No" → RD2 unchanged (deliberate no-op)
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-4
+  - operator-input
+  given:
+  - operator responde "No" a "Activate recurring donations now?"
+  when:
+  - el IC 5.09 corre
+  then:
+  - RD2 queda unchanged (no se enable ni disable)
+  - el step reporta success como deliberate no-op
+- title: 5.09 Recurring Donation — CRLP off or non-admin user fails actionable
+  tags:
+  - negative
+  - im-930
+  - im-990
+  - ac-4
+  - guard
+  given:
+  - operator responde Yes pero CRLP está off O el running user no es NPSP admin
+  when:
+  - el IC 5.09 corre
+  then:
+  - el step FALLA con mensaje actionable (no habilita RD2 parcialmente)
+  - el mensaje indica exactamente qué precondition falta
+- title: 5.09 Recurring Donation — Automatic Batch Schedule turned on (operator gated "Yes")
+  tags:
+  - happy-path
+  - im-930
+  - im-990
+  - ac-5
+  - automated
+  - scheduled-job
+  given:
+  - operator responde Yes al mismo input que gates AC4
+  when:
+  - el IC 5.09 corre
+  then:
+  - el scheduled job `Veevart NFP - Automatic Batch Schedule` existe con CRON `0 0 18 * * ?`
+  - lanza el batch `Veevart NFP - Recurring donation`
+  - un job ya-scheduled queda as-is
+  - si operator = No, no se schedula (deliberate no-op)
+- title: 5.09 Recurring Donation — Manual handoff — activate & tailor Recurring Donation emails
+  tags:
+  - manual
+  - im-930
+  - im-990
+  - ac-6
+  - awaiting-handoff
+  given:
+  - los steps automated completaron
+  when:
+  - el run llega al primer handoff
+  then:
+  - el run parquea con guía para setear Fundraising Settings `Default` record `Active = true` + los 4 Recurring Donation email toggles
+  - guía para tailor `Recurring Donation` email templates al cliente (Setup-only — Custom Metadata record no writable via API)
+  - operator confirma done
+- title: 5.09 Recurring Donation — Manual handoff — Save Customer Card action + Notification Manager
+  tags:
+  - manual
+  - im-930
+  - im-990
+  - ac-6
+  - awaiting-handoff
+  given:
+  - primer handoff done
+  when:
+  - el run llega al segundo handoff
+  then:
+  - guía para agregar `Save Customer Card` action al Recurring Donation page layout + configurar Notification Manager
+  - operator confirma done
+- title: 5.09 Recurring Donation — Manual handoff — Specific funds & recurring memberships
+  tags:
+  - manual
+  - im-930
+  - im-990
+  - ac-6
+  - awaiting-handoff
+  given:
+  - segundo handoff done
+  when:
+  - el run llega al tercer handoff
+  then:
+  - guía para integrar Recurring Installment Periods para specific funds + setup de recurring memberships (only if client uses them)
+  - operator confirma done (o skipea con nota)
+- title: 5.09 Recurring Donation — Dependency on IC 3.16 (Org-Wide Email Address) documented
+  tags:
+  - regression
+  - im-930
+  - im-990
+  - ac-7
+  - dependency
+  given:
+  - IC 3.16 crea/verifica la Org-Wide Email Address y setea Fundraising Settings `Emails Sender Address`
+  when:
+  - se planea 5.09
+  then:
+  - 5.09 se documenta que debe correr DESPUÉS de 3.16
+  - los emails de Recurring Donation envían desde el sender correcto
+- title: 5.09 Recurring Donation — Release (catalog seed in prod)
+  tags:
+  - delivery
+  - im-930
+  - im-990
+  - ac-8
+  - catalog
+  given:
+  - el case verificado at high confidence
+  when:
+  - IC 5.09 v4 se seedea en prod IC catalog
+  then:
+  - el case corre y se verifica en prod
+  - handed off to Implementations
+- title: 5.09 Recurring Donation — Evidencia UI — IC 5.09 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-930
+  - im-990
+  - manual
+  given:
+  - el IC 5.09 v4 está seedeado en el catálogo del MigrationApp
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator lanza el IC 5.09 desde MigrationApp
+  - el operator responde "Yes" al input de activación
+  - el operator completa los 3 handoffs manuales
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-5-09-recurring-donation-setting` v4 disponible
+  - captura del input step con la pregunta "Activate recurring donations now?"
+  - 'captura post-AC1: NPSP Settings > Recurring Donations > default Opportunity Record Type = Donation'
+  - 'captura post-AC2: Recurring Donation Installment Period picklist con Quarterly deactivated'
+  - 'captura post-AC3: Fundraising app nav mostrando el tab Recurring Donation'
+  - 'captura post-AC4: NPSP Settings mostrando Enhanced Recurring Donations enabled (o no-op si operator = No)'
+  - 'captura post-AC5: Setup > Scheduled Jobs mostrando `Veevart NFP - Automatic Batch Schedule` con CRON'
+  - captura de los 3 handoffs AWAITING_HANDOFF
+  - captura final del run en COMPLETED
+tags:
+- im-930
+- im-990
+- im-735
+- implementations-automation
+- implementation-case
+- ic-5-09
+- salesforce
+- npsp
+- vnfp
+- recurring-donation
+- rd2
+- scheduled-job
+- high-confidence
+- june-delivery
+estimatedDuration: 120
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1

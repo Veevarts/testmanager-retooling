@@ -1,0 +1,180 @@
+schemaVersion: '1.0'
+id: 766c526c-391e-401d-aa55-d3200136bbbf
+key: TC-86
+title: IC 6.06 — Online Apps Setting CMDT / Ticketing (delivery auto, T3 customMetadata allRecords)
+description: |
+  Cobertura QA de IM-933 (6.06 Online Apps Setting CMDT (Ticketing) — deliver to
+  Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-6-06-online-apps-setting-metadata` (auto). Confianza alta por reporte IM-735
+  (2026-06-12): built+verified CamiloDev, cross-tested COMPLETED Tucson.
+  Delivered en PR #201 (managed-record fix) + PR #203 (all-records mode). v3
+  seedeado a MigrationApp-dev.
+
+  El case activa 2 flags en TODOS los records del CMDT `Auctifera__Online_Apps_Setting__mdt`
+  usando el T3 `customMetadata` op en modo `allRecords` (no per-IC code):
+  - `Auctifera__Save_Tickets_Contact__c` (Save Tickets Contact)
+  - `Auctifera__Update_Tickets_Contact__c` (Update Tickets Contact)
+
+  Verified en CamiloDevOrg: 3 records (`Auctifera.Default`, `Auctifera.MiOnlineApp`,
+  `vnfp.Sandbox`) flipped false → true, incluyendo el cross-namespace `vnfp` record.
+
+  Validar (functional):
+  1) Activate — todos los records del CMDT quedan con ambos flags true,
+  2) idempotent — records ya-configurados no se modifican,
+  3) mixed state — off records se actualizan, on records unchanged, todos end con true,
+  4) managed records updated in place (no unmanaged duplicate),
+  5) works across owning namespaces (Auctifera + vnfp records),
+  6) self-verifying — un record que no commit reporta failure (no falsely COMPLETED),
+  7) release DoD.
+
+  QA Sub-task asociada: IM-993
+  Riesgos abiertos: reproducir el cross-namespace scenario requiere una org con
+  al menos un vnfp-owned Online Apps Setting record.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-6-06-online-apps-setting-metadata` deployado en prod
+- Org target con Auctifera package instalado
+- Al menos 1 record de `Auctifera__Online_Apps_Setting__mdt` en la org (el `Default` managed record típicamente)
+- Backend redeployed carrying el T3 `customMetadata` op en modo allRecords
+- Permisos para escribir Custom Metadata Types
+- Acceso al catálogo prod para seedear v3
+format: gherkin
+scenarios:
+- title: 6.06 Online Apps Setting — Activate ticketing-contact flags on every record
+  tags:
+  - happy-path
+  - im-933
+  - im-993
+  - functional
+  - custom-metadata
+  given:
+  - una org con el Auctifera package instalado
+  - existen 1+ records de `Auctifera__Online_Apps_Setting__mdt`
+  when:
+  - el IC 6.06 corre
+  then:
+  - '`Auctifera__Save_Tickets_Contact__c = true` en TODOS los records (Default y otros)'
+  - '`Auctifera__Update_Tickets_Contact__c = true` en TODOS los records'
+  - el case finaliza COMPLETED
+- title: 6.06 Online Apps Setting — Already configured (idempotent)
+  tags:
+  - regression
+  - im-933
+  - im-993
+  - idempotent
+  given:
+  - todos los records ya tienen ambos flags on
+  when:
+  - el case corre nuevamente
+  then:
+  - ningún record se modifica (writes skipped)
+  - el case finaliza COMPLETED
+- title: 6.06 Online Apps Setting — Mixed starting state
+  tags:
+  - happy-path
+  - im-933
+  - im-993
+  - functional
+  given:
+  - algunos records tienen los flags off y otros on
+  when:
+  - el case corre
+  then:
+  - los off records se actualizan
+  - todos los records terminan con ambos flags on
+  - el case finaliza COMPLETED
+- title: 6.06 Online Apps Setting — Managed records updated in place — no duplicate
+  tags:
+  - regression
+  - im-933
+  - im-993
+  - managed
+  given:
+  - package-shipped (managed) records como el managed `Default` record
+  when:
+  - el case corre
+  then:
+  - cada managed record se actualiza in place en su namespaced identifier real
+  - NO se crea un new/unmanaged duplicate record
+  - sólo los 2 flags son escritos — todos los demás fields quedan unchanged
+- title: 6.06 Online Apps Setting — Works across owning namespaces
+  tags:
+  - regression
+  - im-933
+  - im-993
+  - cross-namespace
+  given:
+  - records owned por distintos packages (ej. Auctifera-owned + vnfp-owned)
+  when:
+  - el case corre
+  then:
+  - ambos flags = true en cada record, independiente del owning namespace
+  - verified en CamiloDev con Auctifera.Default, Auctifera.MiOnlineApp y vnfp.Sandbox
+- title: 6.06 Online Apps Setting — Self-verifying (no silent success)
+  tags:
+  - negative
+  - im-933
+  - im-993
+  - verification
+  given:
+  - un record cuyo flag no pudo commit
+  when:
+  - el case corre
+  then:
+  - el step reporta failure para ese record
+  - el case succeeds ONLY si todos los records verifican
+- title: 6.06 Online Apps Setting — Release (catalog seed in prod)
+  tags:
+  - delivery
+  - im-933
+  - im-993
+  - catalog
+  given:
+  - backend redeployed en dev + case seedeado v3 dev catalog + verificado
+  when:
+  - backend redeployed en prod + case seedeado en prod catalog
+  then:
+  - el case corre y se verifica en prod
+  - handed off to Implementations
+- title: 6.06 Online Apps Setting — Evidencia UI — IC 6.06 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-933
+  - im-993
+  - manual
+  given:
+  - el IC 6.06 está seedeado en el catálogo del MigrationApp
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator lanza el IC 6.06 desde MigrationApp
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-6-06-online-apps-setting-metadata` disponible
+  - 'captura pre-run: Setup > Custom Metadata Types > Auctifera Online Apps Setting > Manage records mostrando el estado inicial (alguno con flags off)'
+  - 'captura post-run: mismo view mostrando todos los records con Save Tickets Contact = true y Update Tickets Contact = true'
+  - 'captura de un managed record post-run confirming que el resto de fields quedó unchanged'
+  - captura final del run en COMPLETED
+tags:
+- im-933
+- im-993
+- im-735
+- implementations-automation
+- implementation-case
+- ic-6-06
+- salesforce
+- auctifera
+- vnfp
+- custom-metadata
+- ticketing
+- online-apps-setting
+- high-confidence
+- june-delivery
+estimatedDuration: 45
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1

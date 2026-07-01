@@ -1,0 +1,182 @@
+schemaVersion: '1.0'
+id: c0e0e63f-9d61-4b78-ae15-b95301173a46
+key: TC-85
+title: IC 5.26 — NPSP Contact Roles by default (delivery auto, 3 steps)
+description: |
+  Cobertura QA de IM-932 (5.26 NPSP Contact Roles by default — deliver to
+  Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-5-26-npsp-contact-roles` (auto). Confianza alta por reporte IM-735
+  (2026-06-12): verificado en ambas orgs. Delivered en PR #196, seedeado v2 a
+  MigrationApp-dev.
+
+  Live e2e en CamiloDevOrg (`00Dfj00000QJMx7EAH`) desde fresh-org state
+  deliberadamente reseteado (picklist stripped, individual role = "Soft Credit",
+  member role blank + toggle off): los 3 steps COMPLETED; SOQL/describe independent
+  confirmó AC1-AC3; idempotent re-run clean.
+
+  Validar que el IC (3 automated steps, self-verifying):
+  1) Individual Opps default contact role = "Donor" (`npe01__Opportunity_Contact_Role_Default_role__c`),
+  2) Household Member contact role = "Household Member" +
+     `npo02__Household_Contact_Roles_On__c = true`,
+  3) Contact Role picklist (`ContactRole` StandardValueSet) contiene "Donor" y
+     "Household Member" activos + stock values (Business User, Decision Maker,
+     etc.) unchanged,
+  4) verified-or-fail (cada step re-reads y falla en mismatch),
+  5) idempotente,
+  6) org-agnóstico.
+
+  QA Sub-task asociada: IM-992
+  Riesgos abiertos: la validación fresh-org requiere resetear picklist + settings
+  antes de correr para reproducir el escenario canónico.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-5-26-npsp-contact-roles` deployado en prod
+- Org target con NPSP instalado
+- Permisos para modificar `npe01__Contacts_And_Orgs_Settings__c` + `npo02__Households_Settings__c` (custom settings hierarchy, org-default)
+- Permisos para modificar el `ContactRole` StandardValueSet (metadata)
+- Acceso al catálogo prod para seedear v2
+format: gherkin
+scenarios:
+- title: 5.26 NPSP Contact Roles — Individual Opps default = Donor
+  tags:
+  - happy-path
+  - im-932
+  - im-992
+  - ac-1
+  - automated
+  - npsp
+  given:
+  - una org con NPSP instalado
+  when:
+  - el IC 5.26 corre
+  then:
+  - '`npe01__Contacts_And_Orgs_Settings__c.npe01__Opportunity_Contact_Role_Default_role__c = "Donor"` (org-default record)'
+  - se refleja como "Contact Role for Individual Opps" = Donor en NPSP Settings > Donations > Contact Roles
+- title: 5.26 NPSP Contact Roles — Household Member role = Household Member + toggle on
+  tags:
+  - happy-path
+  - im-932
+  - im-992
+  - ac-2
+  - automated
+  - npsp
+  given:
+  - una org con NPSP instalado
+  when:
+  - el IC 5.26 corre
+  then:
+  - '`npo02__Households_Settings__c.npo02__Household_Member_Contact_Role__c = "Household Member"` (org-default)'
+  - '`npo02__Household_Contact_Roles_On__c = true` (NPSP blanks el member role cuando el toggle está off; true es NPSP install default)'
+  - se refleja como "Household Member Contact Role" = Household Member en NPSP Settings > Donations > Contact Roles
+- title: 5.26 NPSP Contact Roles — Both role values selectable in Contact Role picklist
+  tags:
+  - happy-path
+  - im-932
+  - im-992
+  - ac-3
+  - automated
+  - picklist
+  given:
+  - una fresh org cuyo `OpportunityContactRole.Role` picklist NO contiene "Donor" ni "Household Member"
+  when:
+  - el IC 5.26 corre
+  then:
+  - el `ContactRole` StandardValueSet (que drives `OpportunityContactRole.Role`) contiene "Donor" y "Household Member" activos
+  - los standard Contact Role values (Business User, Decision Maker, etc.) siguen activos y unchanged
+  - ambos verified roles renderean correctamente (no blank) en los NPSP Settings dropdowns
+- title: 5.26 NPSP Contact Roles — Each step verifies own outcome (no silent pass)
+  tags:
+  - regression
+  - im-932
+  - im-992
+  - ac-4
+  - verification
+  given:
+  - el case corre
+  when:
+  - un step escribe un valor que no persiste como expected
+  then:
+  - el step reporta FAILED (re-reads y falla en mismatch)
+  - el run no reporta silently passed
+- title: 5.26 NPSP Contact Roles — Idempotent re-run
+  tags:
+  - regression
+  - im-932
+  - im-992
+  - ac-5
+  - idempotent
+  given:
+  - el case ya corrió successfully
+  when:
+  - se re-ejecuta
+  then:
+  - completa sin cambio funcional (no duplicate picklist values, settings unchanged)
+- title: 5.26 NPSP Contact Roles — Org-agnostic (any incoming org)
+  tags:
+  - regression
+  - im-932
+  - im-992
+  - ac-6
+  - org-agnostic
+  given:
+  - cualquier NPSP org target
+  when:
+  - el case corre
+  then:
+  - no aparecen org-specific Ids hardcoded
+  - role names y value-set name son NPSP/Salesforce constants
+  - hierarchy settings se escriben via `getOrgDefaults()`
+  - picklist reconciled via dynamic metadata read-back
+- title: 5.26 NPSP Contact Roles — Release (catalog seed in prod)
+  tags:
+  - delivery
+  - im-932
+  - im-992
+  - catalog
+  given:
+  - el case fue reviewed at high confidence y seedeado a dev catalog v2
+  when:
+  - backend re-release + seed en prod catalog
+  then:
+  - el case está disponible en prod para Implementations
+- title: 5.26 NPSP Contact Roles — Evidencia UI — IC 5.26 (screenshots)
+  tags:
+  - functional-ui
+  - screenshot-evidence
+  - im-932
+  - im-992
+  - manual
+  given:
+  - el IC 5.26 está seedeado en el catálogo del MigrationApp
+  - el operator tiene acceso a Illinois Trainings dev (o equivalente) con permisos
+  when:
+  - el operator lanza el IC 5.26 desde MigrationApp
+  then:
+  - captura del catálogo MigrationApp mostrando `IMPL_CASE#ic-5-26-npsp-contact-roles` disponible
+  - 'captura post-AC1: NPSP Settings > Donations > Contact Roles con "Contact Role for Individual Opps" = Donor'
+  - 'captura post-AC2: misma sección con "Household Member Contact Role" = Household Member'
+  - 'captura post-AC3: Setup > Object Manager > Opportunity Contact Role > Fields > Role > Picklist Values mostrando Donor y Household Member activos + stock values intactos'
+  - captura final del run en COMPLETED
+tags:
+- im-932
+- im-992
+- im-735
+- implementations-automation
+- implementation-case
+- ic-5-26
+- salesforce
+- npsp
+- contact-role
+- picklist
+- opportunity-contact-role
+- high-confidence
+- june-delivery
+estimatedDuration: 60
+metadata:
+  createdBy: codex
+  createdAt: '2026-06-30T22:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-06-30T22:00:00Z'
+  version: 1
