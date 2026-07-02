@@ -1,0 +1,195 @@
+schemaVersion: '1.0'
+id: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+key: TC-96
+title: IM-966 — Add general (non-feature) NPS survey position (survey-tool + widget)
+description: |
+  Cobertura QA de IM-966 (Add general NPS survey position), bajo el epic IM-970
+  NPS Survey Tool delivery. Extiende el modelo de surveys product-feature-scoped
+  a un survey NPS general no atado a ninguna feature, disparable desde un
+  entry point acordado (típicamente login u otro).
+
+  Repos en scope:
+  - `survey-tool` — admin flow para crear/activar la posición general +
+    public endpoint que la devuelve al widget
+  - `AuctiferaDX` — widget integration del trigger general
+  - `NFPFundraising` — si el trigger debe existir también en flujos nonprofit
+    (pending package cross-test, igual que TC-78 AC7)
+
+  El technical scope indica "should build on the dynamic placement model when
+  available, rather than adding another hardcoded slug path" → el widget-side
+  ideal depende de que la dynamic placement esté disponible. Si no está,
+  hay riesgo de que el dev caiga en un slug hardcoded como fallback y ese
+  camino se convierta en deuda.
+
+  Validar:
+  1) admin puede crear + activar un general NPS survey independiente de los
+     product-specific surveys,
+  2) con placement general activo, el trigger acordado de Salesforce puede
+     pedir + mostrar el survey general via el public endpoint,
+  3) con placement general inactivo, no se muestra survey,
+  4) product-specific surveys siguen funcionando sin regresión cuando
+     coexisten con el general,
+  5) el trigger point exacto queda documentado (login vs otro entry) — TBD
+     hasta que el PM/dev definan.
+
+  QA Sub-task asociada: IM-1006
+  Riesgos abiertos:
+  - Trigger point exacto (login? App Launcher? record-page open?) NO está
+    pinneado en la story. Bloqueará AC2 hasta definirse.
+  - Dynamic placement model dependency: si no está lista, revisar si el dev
+    metió un slug hardcoded como fallback — eso sería deuda técnica.
+  - NFPFundraising cross-test dependerá del pending package (mismo issue que
+    TC-78 AC7).
+type: integration
+priority: medium
+status: active
+preconditions:
+- Build del `survey-tool` con IM-966 desplegado en env dev (`surveytool.dev.veevart.ai`)
+- Widget integration en AuctiferaDX / scratch org con el trigger general enganchado (o pendiente de definirse — flag como blocker si no está)
+- Admin user del survey-tool con permisos para crear surveys
+- Un product-specific survey activo en paralelo (para regression AC4) — reutilizar el fixture de TC-78
+- Browser con DevTools (Network + Console) para inspeccionar la request al general endpoint
+- Cliente HTTP (curl) para hits directos al public endpoint sin cookies
+format: gherkin
+scenarios:
+- title: IM-966 — Admin creates a general NPS survey configured independently from product-specific surveys
+  tags:
+  - happy-path
+  - im-966
+  - im-1006
+  - im-970
+  - ac-1
+  - admin
+  - survey-tool
+  given:
+  - un admin user autenticado en el survey-tool
+  - existe (o puede coexistir) al menos un product-specific NPS survey ya configurado
+  when:
+  - el admin crea una nueva survey con placement = general (no feature-scoped)
+  - configura preguntas, escala, eligibility rules y activa la survey
+  then:
+  - la survey general queda persistida con el placement general
+  - su configuración es independiente de cualquier product-specific survey (no comparte slug, ni feature id, ni targeting)
+  - queda activable/desactivable desde el admin UI
+  - el response schema del admin endpoint distingue placement=general de placement=feature
+- title: IM-966 — Active general NPS placement responds via the public endpoint when the agreed Salesforce trigger fires
+  tags:
+  - happy-path
+  - im-966
+  - im-1006
+  - im-970
+  - ac-2
+  - widget
+  - salesforce
+  given:
+  - una general NPS survey activa creada en scenario 1
+  - el widget está enganchado al trigger acordado (login u otro entry point definido por PM/dev)
+  when:
+  - el trigger se dispara en el entorno target (Lightning login handler, App home load, o el trigger acordado)
+  - el widget hace request al public endpoint del general placement
+  then:
+  - el public endpoint retorna 200 con el payload del general survey
+  - NO hay redirect a Cognito (mismo gate que TC-78 AC1)
+  - el widget renderiza el survey general
+  - la request es anónima (sin admin cookie, mismo gate que TC-78 AC6)
+- title: IM-966 — General NPS survey inactive returns no survey to the widget
+  tags:
+  - negative
+  - im-966
+  - im-1006
+  - im-970
+  - ac-3
+  - widget
+  given:
+  - la general NPS survey está en estado inactive (nunca activada, desactivada, o placement general deshabilitado)
+  when:
+  - el trigger acordado se dispara
+  - el widget hace request al public endpoint del general placement
+  then:
+  - el response indica NO mostrar survey (payload vacío, eligibility=false, o 204)
+  - el widget NO renderiza ningún survey
+  - NO hay error en console — es un no-op silencioso esperado
+- title: IM-966 — Product-specific surveys keep working when a general survey coexists (no eligibility regression)
+  tags:
+  - regression
+  - im-966
+  - im-1006
+  - im-970
+  - ac-4
+  - eligibility
+  - regression-evidence
+  given:
+  - una general NPS survey activa
+  - al menos un product-specific survey activo (feature-scoped, ej. rentals — mismo fixture que TC-78)
+  when:
+  - el trigger product-specific se dispara en su feature normal
+  - el widget hace request al public endpoint del feature
+  then:
+  - el response del feature endpoint retorna el product-specific survey (no el general)
+  - la eligibility del product survey NO se ve afectada por la existencia del general
+  - los boundary tests que lockearon el contrato en IM-963 (apiBoundary.test) siguen pasando 39/39
+  - no hay cross-contamination entre general y feature en el response payload
+- title: IM-966 — Trigger point definition (TBD in story) — validate agreed entry point once documented
+  tags:
+  - missing-doc
+  - im-966
+  - im-1006
+  - im-970
+  - ac-2
+  - trigger-tbd
+  given:
+  - la story dice "such as login or another agreed application entry point" — el trigger exacto NO está pinneado
+  when:
+  - el PM/dev definen el trigger final
+  then:
+  - actualizar este scenario con el trigger específico (login vs App home vs otro)
+  - re-ejecutar AC2 contra el trigger definido y capturar screenshot de la Lightning page donde dispara
+  - documentar el trigger point en el runbook del widget para futuros dev-ops
+- title: IM-966 — Dynamic placement model dependency (fallback to hardcoded slug = tech debt)
+  tags:
+  - missing-doc
+  - im-966
+  - im-1006
+  - im-970
+  - dependency
+  - edge-case
+  given:
+  - technical scope pide "build on the dynamic placement model when available, rather than adding another hardcoded slug path"
+  when:
+  - QA revisa el PR
+  then:
+  - si el dev usó el dynamic placement model → PASS y queda alineado con la arquitectura target
+  - si el dev metió un slug hardcoded como fallback → raiseo defect linkeando a la story del dynamic placement, marco este scenario como fail y pido refactor cuando el dynamic placement esté listo
+- title: IM-966 — NFPFundraising cross-test (blocked if package not ready)
+  tags:
+  - regression-evidence
+  - im-966
+  - im-1006
+  - im-970
+  - nfpfundraising
+  - cross-test
+  - blocked-if-missing
+  given:
+  - el pending package integration de NFPFundraising está disponible y desplegado en un sandbox
+  when:
+  - QA repite scenarios 2-4 desde el sandbox NFPFundraising
+  then:
+  - el widget general se comporta igual que en AuctiferaDX
+  - si el package no está disponible, este scenario queda `blocked` con nota explícita en el TR (mismo patrón que TC-78 AC7)
+tags:
+- im-966
+- im-1006
+- im-970
+- survey-tool
+- nps
+- general-placement
+- public-widget
+- salesforce
+- auctifera-dx
+- nfpfundraising
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T20:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T20:00:00Z'
