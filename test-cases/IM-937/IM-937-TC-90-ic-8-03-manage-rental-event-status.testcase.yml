@@ -1,0 +1,162 @@
+schemaVersion: '1.0'
+id: b66752cf-d11c-41c2-aa65-24a7a098fae4
+key: TC-90
+title: IC 8.03 — Manage Rental Event Status (delivery auto, declarative customSetting op)
+description: |
+  Cobertura QA de IM-937 (8.03 Manage Rental Event Status — deliver to
+  Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-8-03-manage-rental-event-status` (auto). Confianza alta por reporte
+  IM-735 (2026-06-12): built+verified CamiloDev, cross-tested COMPLETED Tucson.
+  BE PR #208 merged a main; MigrationApp-dev seeded.
+
+  El case reproduce el playbook manual (App Launcher → Veevart Settings →
+  Rentals → Rental Settings → check "Manage the rental event status by the
+  paid amount" → Save) como un solo step automated que corre el reusable
+  declarative `customSetting` op — sin código per-case. Toca solo
+  `Auctifera__Manage_Rental_Event_Status_By_Paid_Amount__c` (o field
+  equivalente en Auctifera__Rental_Settings__c) sin tocar otros fields del
+  Rental Settings.
+
+  Validar:
+  1) Enable cuando la settings row nunca ha sido configurada (create),
+  2) Enable cuando existe pero está unchecked (update-in-place),
+  3) Idempotent re-run cuando ya está checked (no change, still COMPLETED),
+  4) Org-agnostic — solo se toca el field target, nothing else,
+  5) Failed save reported como FAILED con mensaje explicativo,
+  6) Delivery — seedeado en prod catalog bajo Rentals category, IE handoff.
+
+  QA Sub-task asociada: IM-999
+  Riesgos abiertos:
+  - AC5 (insufficient permissions) requiere reproducir con un running user
+    sin edit access sobre la managed custom setting.
+type: functional
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-8-03-manage-rental-event-status` deployado en prod (BE PR #208)
+- Org target con Auctifera package instalado
+- IE con permisos para editar Auctifera__Rental_Settings__c (o suficiente para run el case sin permisos, para reproducir AC5)
+- Acceso al catálogo prod para seedear el case
+format: gherkin
+scenarios:
+- title: 8.03 Manage Rental Event Status — Enable when never configured (create org-default)
+  tags:
+  - happy-path
+  - im-937
+  - im-999
+  - ac-1
+  - automated
+  - custom-setting
+  given:
+  - una target org donde Rental Settings nunca se han saved (box unchecked / no org-default record)
+  when:
+  - el operator corre IC 8.03
+  then:
+  - el org-wide Rental Settings record es created o updated con "Manage the rental event status by the paid amount" checked
+  - el case completa con status COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.03 Manage Rental Event Status — Enable when currently off (update-in-place, no duplicate)
+  tags:
+  - happy-path
+  - im-937
+  - im-999
+  - ac-2
+  - automated
+  - custom-setting
+  given:
+  - el org-wide Rental Settings existe con "Manage the rental event status by the paid amount" unchecked
+  when:
+  - el operator corre IC 8.03
+  then:
+  - el existing record es updated in place
+  - NO se crea un duplicate record
+  - el box termina checked
+  - el case completa COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.03 Manage Rental Event Status — Idempotent re-run (already checked, no change)
+  tags:
+  - happy-path
+  - im-937
+  - im-999
+  - ac-3
+  - automated
+  - idempotent
+  given:
+  - el box ya está checked
+  when:
+  - el operator corre IC 8.03 otra vez
+  then:
+  - no se escribe ningún cambio
+  - el case sigue completando COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.03 Manage Rental Event Status — Org-agnostic, only touches the target field
+  tags:
+  - im-937
+  - im-999
+  - ac-4
+  - org-agnostic
+  given:
+  - cualquier Veevart customer org con Auctifera package instalado
+  when:
+  - el operator corre IC 8.03
+  then:
+  - la org es identificada at run time (nada org-específico hardcoded)
+  - cualquier newly-onboarded org es soportada
+  - SOLO el field "Manage the rental event status by the paid amount" cambia — cada otro Rental Setting field queda untouched
+  estimatedDuration: 10
+  automated: false
+- title: 8.03 Manage Rental Event Status — Failed save is reported FAILED (not hidden)
+  tags:
+  - negative
+  - im-937
+  - im-999
+  - ac-5
+  - failure-semantics
+  given:
+  - el Rental Settings record no puede ser saved (ej. insufficient permissions del running user)
+  when:
+  - el operator corre IC 8.03
+  then:
+  - el step es reportado como FAILED con un mensaje explicativo
+  - el run NO reporta success
+  estimatedDuration: 15
+  automated: false
+- title: 8.03 Manage Rental Event Status — Released through prod catalog under Rentals category
+  tags:
+  - im-937
+  - im-999
+  - ac-6
+  - delivery
+  - production
+  given:
+  - backend deployed y IC 8.03 seedeado en prod IC catalog
+  when:
+  - un operator browses el catálogo
+  then:
+  - IC 8.03 "Manage the rental event status by the paid amount" aparece bajo Rentals category como automated case
+  - puede correrse end-to-end contra una customer org
+  - el case queda handed off a Implementations
+  estimatedDuration: 15
+  automated: false
+tags:
+- im-937
+- im-999
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- rentals
+- custom-setting
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

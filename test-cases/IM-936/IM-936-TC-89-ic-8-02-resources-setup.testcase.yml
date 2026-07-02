@@ -1,0 +1,210 @@
+schemaVersion: '1.0'
+id: 916b8067-48b5-4192-bf2a-9f7cba71cc35
+key: TC-89
+title: IC 8.02 — Resources Setup (delivery auto, 3 T6 steps, org-agnostic GL codes)
+description: |
+  Cobertura QA de IM-936 (8.02 Resources Setup — deliver to Implementations,
+  high-confidence). Junio delivery del Implementation Case
+  `ic-8-02-resources-setup` v6 (auto). Confianza alta por reporte IM-735
+  (2026-06-12): built+verified CamiloDev, cross-tested COMPLETED Tucson. v6
+  dev-seeded en MigrationApp-dev.
+
+  El case automatiza el playbook manual de Resources Setup: (1) normaliza el
+  default Auctifera Display/Storage Location renombrándolo a "Technical Record
+  Do Not Modify" y limpiando Capacity/GL/Tax GL; (2) crea la Display/Storage
+  Location "Location Test" con Capacity=100, Available for Rent, y GL/Tax GL
+  copiados desde Auctifera Accounting; (3) crea el Resource/Service "Resource
+  test" con Quantity=1 y GL/Tax GL desde Auctifera Accounting Resources.
+
+  Validar:
+  1) el default location es hallado dinámicamente por Store Default Location=true
+     (no por museum name) y renombrado con Capacity/GL/Tax GL clareados,
+  2) "Location Test" existe con Capacity=100, Available for Rent, GL codes
+     copiados desde Accounting,
+  3) "Resource test" existe con Quantity=1 y GL/Tax GL desde Accounting Resources,
+  4) org-agnostic — no hay GL-code strings hardcoded en la case definition,
+  5) idempotent y self-heal — GL Code drifted se re-syncea al valor de Accounting,
+  6) verify failures loud — steps fallan con "[8.02-x] verify failed: ..."
+     en vez de raw platform error,
+  7) depends-on-3.03 — si el default location no existe, step 1 falla con error
+     controlado nombrando 3.03 como prerequisito,
+  8) delivery — v6 seedeado en prod catalog e IE handoff.
+
+  QA Sub-task asociada: IM-998
+  Riesgos abiertos:
+  - AC7 (depends-on-3.03) requiere una org donde 3.03 no ha corrido todavía —
+    típicamente una scratch org fresca.
+  - AC5 self-heal (GL drift) requiere reproducir drift manualmente antes de
+    re-correr el case.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-8-02-resources-setup` v6 deployado en prod (feasibility auto, 3 T6 steps)
+- Org target con Auctifera package instalado
+- Auctifera Accounting setting configurado con Location GL/Tax GL y Resources/Services GL/Tax GL (típicamente via case 4.02)
+- Default Auctifera Display/Storage Location existe (Store Default Location=true) — típicamente creado por case 3.03
+- Acceso al catálogo prod para seedear v6
+format: gherkin
+scenarios:
+- title: 8.02 Resources Setup — Default Display/Storage Location normalized (renamed + cleared)
+  tags:
+  - happy-path
+  - im-936
+  - im-998
+  - ac-1
+  - automated
+  - display-storage-location
+  given:
+  - una org con el default Auctifera Display/Storage Location (Store Default Location=true) nombrado por el museo
+  when:
+  - el case corre el step 1
+  then:
+  - el default location es hallado dinámicamente por su Store-Default flag (NOT by museum name)
+  - su name cambia a "Technical Record Do Not Modify"
+  - Capacity, GL Code y Tax GL Code quedan blank
+  - Store Default Location sigue en true
+  - no se crea un default location adicional
+  - el step reporta COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.02 Resources Setup — "Location Test" Display/Storage Location created with Accounting GL codes
+  tags:
+  - happy-path
+  - im-936
+  - im-998
+  - ac-2
+  - automated
+  - display-storage-location
+  given:
+  - la org tiene Auctifera Accounting con Location GL Code y Location Tax GL Code configurados
+  when:
+  - el case corre el step 2
+  then:
+  - existe un Display/Storage Location llamado "Location Test"
+  - su Capacity = 100
+  - su "Available for Rent" está checked
+  - su GL Code y Tax GL Code igualan los valores de Accounting Location GL/Tax GL de la org (no hardcoded literals)
+  - el step reporta COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.02 Resources Setup — "Resource test" Resource/Service created with Accounting Resources GL codes
+  tags:
+  - happy-path
+  - im-936
+  - im-998
+  - ac-3
+  - automated
+  - resource-service
+  given:
+  - la org tiene Auctifera Accounting con Resources/Services GL Code y Tax GL Code configurados
+  when:
+  - el case corre el step 3
+  then:
+  - existe un Resource/Service llamado "Resource test"
+  - su Quantity = 1
+  - su GL Code y Tax GL Code igualan los valores de Accounting Resources/Services GL/Tax GL de la org
+  - el step reporta COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 8.02 Resources Setup — Org-agnostic (no hardcoded GL codes)
+  tags:
+  - im-936
+  - im-998
+  - ac-4
+  - org-agnostic
+  given:
+  - una org distinta cuyos Accounting GL codes difieren de cualquier otra org
+  when:
+  - el case corre
+  then:
+  - los records creados inheritan los GL codes DE ESA org
+  - la case definition NO contiene strings hardcoded de GL-code
+  estimatedDuration: 15
+  automated: false
+- title: 8.02 Resources Setup — Idempotent re-run and self-heal on GL drift
+  tags:
+  - im-936
+  - im-998
+  - ac-5
+  - idempotent
+  - self-heal
+  given:
+  - el case ya corrió exitosamente (los records existen)
+  when:
+  - el case se corre otra vez
+  then:
+  - completa exitosamente sin duplicar records
+  - el default location sigue renombrado con Capacity/GL/Tax GL blank
+  - si un record existente tiene GL Code drifteado del Accounting, se re-syncea al valor de Accounting
+  estimatedDuration: 15
+  automated: false
+- title: 8.02 Resources Setup — Verification surfaces failures with "[8.02-x] verify failed" prefix
+  tags:
+  - negative
+  - im-936
+  - im-998
+  - ac-6
+  - failure-semantics
+  given:
+  - una post-condition no se cumple (ej. default location missing, duplicate-named records, GL value no matchea Accounting)
+  when:
+  - el case corre
+  then:
+  - el step falla con mensaje "[8.02-x] verify failed: ..." en vez de raw platform error
+  - el failing step detiene el case (los steps posteriores no corren)
+  estimatedDuration: 15
+  automated: false
+- title: 8.02 Resources Setup — Depends on 3.03 (missing default location fails with controlled error)
+  tags:
+  - negative
+  - im-936
+  - im-998
+  - ac-7
+  - dependency
+  given:
+  - el case 3.03 (Rename Tabs and Labels) crea el default Display/Storage Location
+  - la org está en estado pre-3.03 y no hay default location
+  when:
+  - el case 8.02 corre antes de que 3.03 haya completado
+  then:
+  - el step 1 falla con un controlled error nombrando 3.03 como prerequisito
+  - el case NO crea un default location falso ni continúa a los steps 2/3
+  estimatedDuration: 15
+  automated: false
+- title: 8.02 Resources Setup — Released to production (v6 catalog seed)
+  tags:
+  - im-936
+  - im-998
+  - ac-8
+  - delivery
+  - production
+  given:
+  - v6 dev-seeded en MigrationApp-dev
+  when:
+  - se seedea `ic-8-02-resources-setup` v6 en el catálogo prod (per IM-759, no feature flags)
+  then:
+  - un IE puede ver el case en el catálogo prod
+  - un run end-to-end contra una customer org completa los 3 steps green
+  - el case queda handed off a Implementations
+  estimatedDuration: 20
+  automated: false
+tags:
+- im-936
+- im-998
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- resources
+- display-storage-location
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

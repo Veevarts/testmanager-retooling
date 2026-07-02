@@ -1,0 +1,200 @@
+schemaVersion: '1.0'
+id: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+key: TC-92
+title: IC 9.1 — Run Merchant Batches (delivery hybrid, Square/Stripe branching)
+description: |
+  Cobertura QA de IM-939 (9.1 Run Merchant Batches — deliver to Implementations,
+  high-confidence). Junio delivery del Implementation Case
+  `ic-9-1-merchant-batches` (hybrid). Confianza alta por reporte IM-735
+  (2026-06-12): hybrid — built+verified CamiloDev, cross-tested COMPLETED
+  Tucson. BE PR #207 squash-merged a main; MigrationApp-dev seeded. AC1–AC7
+  live-verified (incl. double-run for idempotency); AC8 (prod-seed) pendiente
+  redeploy backend.
+
+  El case automatiza el playbook: Veevart Settings → Merchant Account → Square
+  Batches → Run + Schedule → check Square → Save (Square only; Stripe no tiene
+  IE-run batches). Es un solo automated step con branching sobre el input
+  Payment merchant (Square | Stripe).
+
+  Validar:
+  1) Square path: Auctifera__Schedule_Square__c=true, recurring jobs "Veevart -
+     Square charge fix" + "Veevart - Square refund status update" existen,
+     daily meta-scheduler "Veevart - Automatic Batch Schedule" scheduled,
+     enqueued immediate AsyncApexJobs de ambos batches,
+  2) Square idempotent re-run: no duplicate jobs, no "already scheduled" failure,
+  3) Stripe: verified no-op success, sin enqueue de Square batches,
+  4) Unrecognized merchant fails con validation error (no silent skip),
+  5) Verification gate verifica enqueue/schedule, NO completion,
+  6) Payment synchronization job es informational-only,
+  7) Org-agnostic — solo managed-package class/field/job names,
+  8) Delivery — prod catalog seed.
+
+  QA Sub-task asociada: IM-1001
+  Riesgos abiertos:
+  - AC4 (unrecognized merchant) requiere feed input inválido — verificar si el
+    catalog UI permite input libre o solo dropdown validado (probablemente lo
+    valida a nivel de input, hacer defense-in-depth check).
+  - AC5 gate depende de detectar jobs que pueden ir a Holding/Queued/Preparing/
+    Processing/Completed — accepted states amplio, low false-positive rate.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-9-1-merchant-batches` deployado en prod (BE PR #207)
+- Org target con Auctifera package y managed Merchant Account configurado (Square para AC1/AC2, Stripe para AC3)
+- IE con permisos para ejecutar el case y ver AsyncApexJob / CronTrigger
+- Acceso al catálogo prod para seedear el case
+format: gherkin
+scenarios:
+- title: 9.1 Merchant Batches — Square path arms recurring auto-schedule + immediate enqueue
+  tags:
+  - happy-path
+  - im-939
+  - im-1001
+  - ac-1
+  - automated
+  - square
+  given:
+  - el operator selecciona "Square" como Payment merchant
+  when:
+  - el case corre
+  then:
+  - Auctifera__Schedule_Square__c es set a true en el Batch_Settings__c org default
+  - los recurring scheduled jobs "Veevart - Square charge fix" y "Veevart - Square refund status update" existen
+  - el daily meta-scheduler "Veevart - Automatic Batch Schedule" está scheduled
+  - un immediate run de ambos Square batches está enqueued (AsyncApexJob en accepted state Holding/Queued/Preparing/Processing/Completed)
+  - el step completa como SUCCESS
+  estimatedDuration: 20
+  automated: false
+- title: 9.1 Merchant Batches — Square idempotent / self-healing re-run
+  tags:
+  - im-939
+  - im-1001
+  - ac-2
+  - idempotent
+  - square
+  given:
+  - el Square auto-schedule ya está armed desde un run previo
+  when:
+  - el case corre otra vez con "Square"
+  then:
+  - el step completa como SUCCESS sin error
+  - no hay "already scheduled" failure y no hay duplicate jobs
+  estimatedDuration: 15
+  automated: false
+- title: 9.1 Merchant Batches — Stripe verified no-op success
+  tags:
+  - happy-path
+  - im-939
+  - im-1001
+  - ac-3
+  - stripe
+  given:
+  - el operator selecciona "Stripe" como Payment merchant
+  when:
+  - el case corre
+  then:
+  - no se enqueue ningún Square reconciliation batch
+  - el step completa como SUCCESS con nota "skipped as success"
+  estimatedDuration: 10
+  automated: false
+- title: 9.1 Merchant Batches — Unrecognized merchant fails safely (no silent skip)
+  tags:
+  - negative
+  - im-939
+  - im-1001
+  - ac-4
+  - failure-semantics
+  given:
+  - el Payment merchant value NO es ni Square ni Stripe
+  when:
+  - el case corre
+  then:
+  - el step FAILS con un clear validation error
+  - no hay silent skip
+  - no hay partial changes
+  estimatedDuration: 10
+  automated: false
+- title: 9.1 Merchant Batches — Verification gate is enqueue/schedule, not completion
+  tags:
+  - im-939
+  - im-1001
+  - ac-5
+  - verification
+  given:
+  - el Square path corre
+  when:
+  - el case verifica el outcome
+  then:
+  - el case verifica enqueue/schedule success — durable flag, required scheduled jobs, immediate AsyncApexJob rows
+  - reporta FAILED si el durable flag o cualquier REQUIRED scheduled job está missing
+  - NO espera ni asserta batch COMPLETION asíncrono
+  estimatedDuration: 15
+  automated: false
+- title: 9.1 Merchant Batches — Payment synchronization job is informational only
+  tags:
+  - im-939
+  - im-1001
+  - ac-6
+  - informational
+  given:
+  - execute() puede también schedule "Veevart - Square payment synchronization" (managed-package, version/config dependent)
+  when:
+  - el case verifica el schedule
+  then:
+  - ese job es reportado informationally only
+  - su absence NO hace fail el case
+  estimatedDuration: 10
+  automated: false
+- title: 9.1 Merchant Batches — Org-agnostic (no hardcoded ids / urls / merchant names)
+  tags:
+  - im-939
+  - im-1001
+  - ac-7
+  - org-agnostic
+  given:
+  - una new implementation org con el managed package
+  when:
+  - el case corre
+  then:
+  - se apoya solo en managed-package class/field/job names
+  - no hay org-specific Ids, URLs, ni merchant-account names hardcoded
+  - completa sin per-org code changes
+  estimatedDuration: 15
+  automated: false
+- title: 9.1 Merchant Batches — Released via catalog seed (prod)
+  tags:
+  - im-939
+  - im-1001
+  - ac-8
+  - delivery
+  - production
+  given:
+  - modelo no-feature-flag (per IM-759)
+  when:
+  - el case es published al prod IC catalog
+  then:
+  - corre y es verified en prod
+  - queda handed off a Implementations
+  estimatedDuration: 20
+  automated: false
+tags:
+- im-939
+- im-1001
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- merchant
+- square
+- stripe
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

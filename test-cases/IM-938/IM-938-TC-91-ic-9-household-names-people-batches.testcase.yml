@@ -1,0 +1,185 @@
+schemaVersion: '1.0'
+id: 7abbfa6b-f622-4daf-98ce-c97f729c1f94
+key: TC-91
+title: IC 9 — Household Names Settings & People Batches (delivery auto v3, PeopleManagerBatch Callable)
+description: |
+  Cobertura QA de IM-938 (9 Household Names Settings & People Batches — deliver
+  to Implementations, high-confidence). Junio delivery del Implementation Case
+  `ic-9-household-names-people-batches` v3 (auto, upgrade desde hybrid).
+  Confianza alta por reporte IM-735 (2026-06-12): hybrid → auto upgrade
+  documented; BE PR #206 squash-merged a main (commit `d5e2865c`); seeded a
+  MigrationApp-dev.
+
+  El case fue upgrade de hybrid a fully automated. El step 2 ("Run People
+  batches + enable the People automatic schedule") era MANUAL sobre el mistake
+  de que las People batches no pueden correr from anonymous Apex; el probe
+  originalmente testeó las wrong classes (NPSP/npo02). Las real Veevart Settings
+  "People" batches son el managed `Auctifera.PeopleManagerBatch` (global
+  Callable) y el checkmark es `Auctifera__Schedule_People__c`, ambos invocables
+  desde anonymous Apex.
+
+  Validar:
+  1) NPSP Household Name Format = "FirstName LastName Household" token
+     (`{!{!FirstName}} {!LastName} Household`) via query-back,
+  2) `Auctifera__Batch_Settings__c.Auctifera__Schedule_People__c = true` +
+     daily "Veevart - Automatic Batch Schedule" CronTrigger WAITING,
+  3) las 6 People methods (CONTACT_SET_LAST_VISIT_DATE,
+     UPDATE_CONTACTS_PURCHASE_AMOUNT, SET_CONTACT_FAVORITE_ARTISTS,
+     DELETE_RELATIVE_CONNECTIONS, UPDATE_ACCOUNTS_PURCHASE_AMOUNT,
+     ACCOUNT_SET_LAST_VISIT_DATE) enqueuedas + rescheduled,
+  4) verify fails loud cuando el daily cron no está registered (asserts BOTH
+     checkmark AND cron),
+  5) idempotent y org-agnostic.
+
+  QA Sub-task asociada: IM-1000
+  Riesgos abiertos:
+  - AC4 (cron missing → FAILED) requiere una org al scheduled-apex limit
+    para reproducir naturalmente; alternativa: force-abort el cron manualmente.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-9-household-names-people-batches` v3 deployado en prod (BE PR #206)
+- Org target con Auctifera package + NPSP package instalados
+- IE con permisos para ejecutar anonymous Apex
+- Acceso al catálogo prod para seedear v3
+format: gherkin
+scenarios:
+- title: 9 Household Names + People — NPSP Household Name Format is set
+  tags:
+  - happy-path
+  - im-938
+  - im-1000
+  - ac-1
+  - automated
+  - npsp
+  given:
+  - una org con el NPSP package instalado
+  when:
+  - el case corre el step 1
+  then:
+  - "el org-level `npsp__Household_Naming_Settings__c.npsp__Household_Name_Format__c` iguala el token \"FirstName LastName Household\" (`{!{!FirstName}} {!LastName} Household`)"
+  - el step reporta SUCCESS (verify por query-back)
+  - si el format ya matchea, el step es un no-op que still reporta SUCCESS
+  estimatedDuration: 10
+  automated: false
+- title: 9 Household Names + People — "People" automatic batch schedule enabled
+  tags:
+  - happy-path
+  - im-938
+  - im-1000
+  - ac-2
+  - automated
+  - auctifera
+  - custom-setting
+  given:
+  - una org con el Auctifera package instalado
+  when:
+  - el case corre el step 2
+  then:
+  - el org-default `Auctifera__Batch_Settings__c.Auctifera__Schedule_People__c` es `true`
+  - el daily `Veevart - Automatic Batch Schedule` CronTrigger está registered (created si no existía)
+  estimatedDuration: 15
+  automated: false
+- title: 9 Household Names + People — Six People (Contact & Account) batches enqueued and scheduled
+  tags:
+  - happy-path
+  - im-938
+  - im-1000
+  - ac-3
+  - automated
+  - batch
+  given:
+  - el step 2 ha corrido
+  when:
+  - el step 3 corre
+  then:
+  - las 6 People methods (CONTACT_SET_LAST_VISIT_DATE, UPDATE_CONTACTS_PURCHASE_AMOUNT, SET_CONTACT_FAVORITE_ARTISTS, DELETE_RELATIVE_CONNECTIONS, UPDATE_ACCOUNTS_PURCHASE_AMOUNT, ACCOUNT_SET_LAST_VISIT_DATE) son submitted como PeopleManagerBatch AsyncApexJobs
+  - cada method self-reschedules como `Veevart - PeopleManagerBatch <METHOD>` scheduled job
+  - los batches solo necesitan ser ENQUEUED, no completed, para que el step pase
+  estimatedDuration: 20
+  automated: false
+- title: 9 Household Names + People — Verify fails loudly when the automatic driver cron is missing
+  tags:
+  - negative
+  - im-938
+  - im-1000
+  - ac-4
+  - failure-semantics
+  given:
+  - la best-effort cron registration del step 2 no instaló el daily cron (ej. org fresca al scheduled-Apex limit)
+  when:
+  - el case corre el step 2
+  then:
+  - el step reporta FAILED (el verify asserts BOTH el checkmark AND el daily cron)
+  - NO se reporta SUCCESS con un inert checkmark
+  estimatedDuration: 15
+  automated: false
+- title: 9 Household Names + People — Idempotent re-run (no duplicate cron)
+  tags:
+  - im-938
+  - im-1000
+  - ac-5
+  - idempotent
+  given:
+  - el case ha corrido exitosamente en la org
+  when:
+  - el case corre otra vez
+  then:
+  - completa exitosamente sin duplicate daily cron y sin errores
+  - settings upsert es idempotent
+  - cron registration se skipea si ya está present
+  estimatedDuration: 15
+  automated: false
+- title: 9 Household Names + People — Org-agnostic (no hardcoded ids)
+  tags:
+  - im-938
+  - im-1000
+  - ac-6
+  - org-agnostic
+  given:
+  - cualquier new implementation org con Auctifera + NPSP packages
+  when:
+  - el case corre
+  then:
+  - completa sin cualquier org-specific identifier
+  - resuelve org id y org-default settings at runtime
+  - todos los managed types están namespace-qualified como `Auctifera.*` / `npsp__*`
+  estimatedDuration: 15
+  automated: false
+- title: 9 Household Names + People — Delivery (v3 prod catalog seed)
+  tags:
+  - im-938
+  - im-1000
+  - delivery
+  - production
+  given:
+  - v3 dev-seeded en MigrationApp-dev
+  when:
+  - se seedea el case v3 en el catálogo prod (per IM-759, no feature flags)
+  then:
+  - un IE puede ver el case en el catálogo prod
+  - run end-to-end contra una customer org completa green
+  - el case queda handed off a Implementations
+  estimatedDuration: 20
+  automated: false
+tags:
+- im-938
+- im-1000
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- npsp
+- household
+- people-batches
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

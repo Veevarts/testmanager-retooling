@@ -1,0 +1,215 @@
+schemaVersion: '1.0'
+id: 57b54ad9-fb76-4b32-a3ed-430dcdc1d544
+key: TC-93
+title: IC 9.2 — Run Accounting Batches (delivery hybrid, ACs inferred from sister ICs)
+description: |
+  Cobertura QA de IM-940 (9.2 Run Accounting Batches — deliver to Implementations,
+  high-confidence). Junio delivery del Implementation Case
+  `ic-9-2-accounting-batches` (hybrid). Confianza alta por reporte IM-735
+  (2026-06-12): hybrid — verified on both orgs.
+
+  ATENCIÓN — RIESGO ABIERTO CRÍTICO: la parent story IM-940 no documenta ACs
+  específicos ni Scenarios en su descripción; solo la boilerplate de delivery
+  (review, prod deploy, seed, handoff). La cobertura de este test case está
+  INFERIDA a partir de las sister ICs 9.1 (IM-939), 9.3 (IM-941) y 9.4
+  (IM-942) que siguen un patrón idéntico:
+  - enable managed-package Automatic Schedule checkmark on `Auctifera__Batch_Settings__c` / equivalent
+  - immediate run de los accounting batches del category via global driver
+  - daily "Veevart - Automatic Batch Schedule" cron registered
+  - verify checkmark + cron por query-back; FAILED loud si falta
+  - idempotent + org-agnostic + prod catalog seed
+
+  Referencia explícita: IM-941 (9.3 Fundraising Batches) declara que "el
+  Veevart Settings Technical Cashier Drawer + POS Purchase/Notification
+  Manager/Ticketing (playbook 1-4) son owned por IC 9.2 Run Accounting Batches",
+  y menciona `vnfp__Schedule_NFP_Accounting__c` como accounting-category
+  setting. Se asume que 9.2 owns el enable de ese checkmark + immediate run
+  del Cashier Drawer, POS Purchase, Notification Manager y Ticketing accounting
+  batches.
+
+  Ante la falta de ACs escritos, se ejecuta este test case con `qa-test-executor`
+  levantando el PR / seed dev del case para leer el spec real y ajustar
+  scenarios. Cualquier gap material se raiseará como defect contra IM-940
+  pidiendo ACs formales.
+
+  Validar (INFERIDO):
+  1) enable Accounting auto-schedule checkmark(s),
+  2) immediate run de los accounting batches del scope 9.2,
+  3) daily driver cron registered + WAITING,
+  4) verify loud si checkmark o cron falta,
+  5) idempotent y org-agnostic,
+  6) delivery — prod catalog seed.
+
+  QA Sub-task asociada: IM-1002
+  Riesgos abiertos:
+  - **CRÍTICO**: IM-940 NO tiene ACs documentadas. Scenarios son inferidos
+    de sister ICs. Se levantará defect contra IM-940 si al leer el spec del
+    case real (PR / dev seed) aparecen ACs no cubiertos.
+  - El nombre exacto del checkmark field (`Auctifera__Schedule_Accounting__c`
+    vs `vnfp__Schedule_NFP_Accounting__c` vs otro) es TBD hasta leer el spec.
+  - El scope exacto de "Accounting Batches" (Cashier Drawer / POS Purchase /
+    Notification Manager / Ticketing? All? Subset?) es TBD hasta leer el spec.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-9-2-accounting-batches` deployado en prod (delivery hybrid)
+- Org target con Auctifera package y `Auctifera__Batch_Settings__c` (+ potencialmente vnfp package si el checkmark es vnfp namespace)
+- IE con permisos para ejecutar el case y ver AsyncApexJob / CronTrigger
+- Acceso al catálogo prod para seedear el case
+- Acceso al spec real del case (`ic-9-2-accounting-batches` seedeado en dev) para reconciliar scenarios contra el playbook real
+format: gherkin
+scenarios:
+- title: 9.2 Accounting Batches — Missing ACs on parent story (documentation gap)
+  tags:
+  - missing-doc
+  - im-940
+  - im-1002
+  - documentation
+  given:
+  - la parent story IM-940 no lista ACs específicos ni Scenarios en su descripción
+  when:
+  - el QA reader intenta mapear cobertura desde la story
+  then:
+  - los scenarios de este TC están INFERIDOS de sister ICs 9.1 / 9.3 / 9.4
+  - se debe leer el spec real de `ic-9-2-accounting-batches` (en el PR o dev seed) para reconciliar
+  - cualquier gap material entre este TC y el spec real se raiseará como defect contra IM-940 pidiendo ACs formales
+  estimatedDuration: 15
+  automated: false
+- title: 9.2 Accounting Batches — Accounting automatic schedule checkmark enabled (INFERRED)
+  tags:
+  - happy-path
+  - im-940
+  - im-1002
+  - ac-inferred
+  - automated
+  - custom-setting
+  - tbd
+  given:
+  - una org con el Auctifera package instalado (y vnfp si aplica)
+  when:
+  - el case corre el step que enable el Accounting category
+  then:
+  - el checkmark del Accounting category en Batch_Settings queda true (nombre exacto de field TBD hasta leer el spec — típicamente `Auctifera__Schedule_Accounting__c` o `vnfp__Schedule_NFP_Accounting__c`)
+  - el step verifica por query-back
+  - el step reporta COMPLETED
+  estimatedDuration: 15
+  automated: false
+- title: 9.2 Accounting Batches — Immediate run of accounting-category batches enqueued (INFERRED)
+  tags:
+  - happy-path
+  - im-940
+  - im-1002
+  - ac-inferred
+  - automated
+  - batch
+  - tbd
+  given:
+  - el checkmark de Accounting category ya está habilitado
+  when:
+  - el case dispara el immediate run via global driver (Auctifera.AutomaticBatchSchedule.execute(null) o equivalente)
+  then:
+  - los accounting-category batches quedan enqueued como AsyncApexJobs en accepted state (Holding/Queued/Preparing/Processing/Completed)
+  - scope exacto de batches (Cashier Drawer / POS Purchase / Notification Manager / Ticketing accounting) TBD hasta leer el spec
+  - el step reporta COMPLETED
+  estimatedDuration: 20
+  automated: false
+- title: 9.2 Accounting Batches — Daily "Veevart - Automatic Batch Schedule" cron registered (INFERRED)
+  tags:
+  - happy-path
+  - im-940
+  - im-1002
+  - ac-inferred
+  - cron
+  given:
+  - el step de enable Accounting category corre
+  when:
+  - el case verifica el cron
+  then:
+  - el daily `Veevart - Automatic Batch Schedule` CronTrigger está registered en WAITING
+  - si no existía, es creado
+  estimatedDuration: 10
+  automated: false
+- title: 9.2 Accounting Batches — Verify fails loudly if checkmark or cron missing (INFERRED)
+  tags:
+  - negative
+  - im-940
+  - im-1002
+  - ac-inferred
+  - failure-semantics
+  given:
+  - el checkmark o el daily cron no se instaló correctamente
+  when:
+  - el case corre el verify
+  then:
+  - el step reporta FAILED (asserts BOTH checkmark AND cron, alineado con AC4 de 9 / AC2 de 9.4)
+  - NO reporta SUCCESS con un inert checkmark
+  estimatedDuration: 15
+  automated: false
+- title: 9.2 Accounting Batches — Idempotent re-run (INFERRED)
+  tags:
+  - im-940
+  - im-1002
+  - ac-inferred
+  - idempotent
+  given:
+  - el case ya corrió exitosamente
+  when:
+  - el case corre otra vez
+  then:
+  - completa exitosamente sin duplicate cron y sin errores
+  - settings upsert es no-op si ya está enabled
+  - cron registration se skipea si ya está present
+  estimatedDuration: 15
+  automated: false
+- title: 9.2 Accounting Batches — Org-agnostic (INFERRED)
+  tags:
+  - im-940
+  - im-1002
+  - ac-inferred
+  - org-agnostic
+  given:
+  - una new implementation org con los required packages
+  when:
+  - el case corre
+  then:
+  - completa sin org-specific ids
+  - resuelve el org via UserInfo.getOrganizationId()
+  - todos los managed types están namespace-qualified
+  estimatedDuration: 15
+  automated: false
+- title: 9.2 Accounting Batches — Delivery to Implementations (prod catalog seed)
+  tags:
+  - im-940
+  - im-1002
+  - delivery
+  - production
+  given:
+  - backend redeployed y el case seedeado en prod IC catalog (per IM-759)
+  when:
+  - un operator browses el catálogo prod
+  then:
+  - IC 9.2 aparece en el catálogo como hybrid case
+  - un run end-to-end contra una customer org completa green
+  - el case queda handed off a Implementations
+  estimatedDuration: 25
+  automated: false
+tags:
+- im-940
+- im-1002
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- accounting-batches
+- delivery
+- high-confidence
+- production
+- june-delivery
+- missing-doc
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

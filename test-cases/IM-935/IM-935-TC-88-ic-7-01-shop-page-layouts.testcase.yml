@@ -1,0 +1,205 @@
+schemaVersion: '1.0'
+id: 7633bb14-e72c-4353-be46-84efce3aace5
+key: TC-88
+title: IC 7.01 — Shop Page Layouts & Lightning Record Page (delivery hybrid v3, operator-selected layouts + T3 fieldSet op)
+description: |
+  Cobertura QA de IM-935 (7.01 Update Shop Page Layouts & Lightning Record Page —
+  deliver to Implementations, high-confidence). Junio delivery del Implementation
+  Case `ic-7-01-shop-page-layouts` v3 (hybrid). Confianza alta por reporte IM-735
+  (2026-06-12): hybrid — verified on both orgs. Delivered en BE PR #205 (rebuild
+  v2 org-agnostic + T3 fieldSet op) + PR #214 (v3 Shopify id fields), ambos
+  merged a main, v3 dev-seeded.
+
+  El case fue rebuilt de v1 (stub hardcoded a un solo org layout) a v2/v3
+  org-agnostic. Ahora hace: (a) pausa upfront para pedir al operator los layouts
+  de Shop Item, Stock Replenishment Order, Client Purchase, Item Variant; (b)
+  asigna esos layouts a todos los profiles; (c) mueve Catalog Item al field set
+  Purchase Order Document; (d) coloca SKU, Available Collection Online, Shopify
+  Inventory Item Id, Shopify Variant Id, Barcode, Barcode Image, QR en el
+  layout de Item Variant; (e) presenta 6 handoffs guiados para el remainder
+  UI-only (List View Button Layout, search layout, field label, 3 Lightning
+  Record Pages).
+
+  Validar:
+  1) Layout selection es org-agnostic y las 4 asignaciones se aplican a todos
+     los profiles (read-back),
+  2) el field set Purchase Order Document muestra Auctifera__Catalog_Item__c,
+  3) los 7 fields aparecen en las secciones Information / System Information del
+     Item Variant layout con la editability correcta,
+  4) los 6 UI-only handoffs quedan documentados en el run con Setup steps + ETA,
+  5) failure semantics — step FAILED con reason explícito cuando la sección no
+     existe o el field set es protected, sin metadata corrupta,
+  6) delivery — v3 seedeado en prod catalog e IE handoff.
+
+  QA Sub-task asociada: IM-997
+  Riesgos abiertos:
+  - AC5 branch protected-field-set solo se reproduce si el package aún restringe
+    edición del field set — verificar en la org target.
+  - AC4 (manual handoffs) requiere UI walkthrough en Lightning Record Page
+    editor y no aplica Metadata API.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-7-01-shop-page-layouts` v3 deployado en prod (BE PR #205 + #214)
+- Backend redeployed carrying el T3 `fieldSet` op
+- Org target con Auctifera package instalado y multiple layout versions activas para Shop Item / Stock Replenishment Order / Client Purchase / Item Variant
+- IE con permisos para modificar Profile Layout Assignments y Item Variant page layout
+- Acceso al catálogo prod para seedear v3
+format: gherkin
+scenarios:
+- title: 7.01 Shop Page Layouts — Operator selects layouts and assignments propagate to every profile
+  tags:
+  - happy-path
+  - im-935
+  - im-997
+  - ac-1
+  - automated
+  - layout-assignment
+  given:
+  - una org con varias versiones de layout activas para Auctifera__CatalogItem__c, Auctifera__StockReplenishmentOrder__c, Auctifera__ClientPurchase__c y Auctifera__Item_Variant__c
+  when:
+  - el IE corre `ic-7-01-shop-page-layouts` v3 desde el catálogo
+  - el case pausa upfront y ofrece dropdowns con los layouts existentes en la org
+  - el IE selecciona un layout por cada uno de los 4 objects
+  then:
+  - el case NO tiene ningún layout version name hardcoded en su spec (org-agnostic)
+  - cada layout seleccionado queda asignado como active page layout para su object en todos los profiles
+  - el case verifica la asignación por read-back de Profile.layoutAssignments
+  - el step reporta COMPLETED
+  estimatedDuration: 20
+  automated: false
+- title: 7.01 Shop Page Layouts — Catalog Item añadido al field set Purchase Order Document
+  tags:
+  - happy-path
+  - im-935
+  - im-997
+  - ac-2
+  - automated
+  - field-set
+  given:
+  - el managed field set `Auctifera__Purchase_Order_Document` en `Auctifera__StockReplenishmentOrder__c` NO muestra el campo `Auctifera__Catalog_Item__c`
+  when:
+  - el case corre el step T3 `fieldSet`
+  then:
+  - el field `Auctifera__Catalog_Item__c` queda en los displayedFields del field set
+  - el cambio se verifica por read-back del field set metadata
+  - re-correr el case es no-op (idempotente)
+  - el step reporta COMPLETED
+  estimatedDuration: 10
+  automated: false
+- title: 7.01 Shop Page Layouts — Item Variant layout gets SKU / Shopify / Barcode / QR fields
+  tags:
+  - happy-path
+  - im-935
+  - im-997
+  - ac-3
+  - automated
+  - page-layout
+  given:
+  - el layout de Item Variant seleccionado por el operator tiene secciones "Information" y "System Information"
+  when:
+  - el case corre el step que edita el Item Variant layout
+  then:
+  - los campos `SKU`, `Available Collection Online`, `Shopify Inventory Item Id` y `Shopify Variant Id` quedan en la sección Information como editable
+  - el campo `Barcode` queda en la sección System Information como editable
+  - los campos `Barcode Image` y `QR` quedan en la sección System Information como read-only
+  - cada colocación se verifica por read-back del layout
+  - el step reporta COMPLETED
+  estimatedDuration: 15
+  automated: false
+- title: 7.01 Shop Page Layouts — UI-only work presented as guided manual handoffs
+  tags:
+  - manual-handoff
+  - im-935
+  - im-997
+  - ac-4
+  - guided
+  given:
+  - el runbook incluye 6 items sin safe Metadata API
+  when:
+  - el case corre y llega a los handoffs manuales
+  then:
+  - cada handoff documenta why-manual + Setup steps + ETA para los 6 items siguientes en el run
+  - "1. Client Purchase List View Button Layout (add \"Add to Multi Item Invoice\")"
+  - "2. Client Purchase Default search layout (replace \"(Deprecated) Total\" with \"Total\")"
+  - "3. Client Purchase \"Account\" field label override → \"Household/Organization\""
+  - "4. Shop Item Lightning Record Page (tabs, components, set as Org Default)"
+  - "5. Client Purchase Lightning Record Page (tabs, components, set as Org Default)"
+  - "6. Item Variant Lightning Record Page (Files tab: Related Files + Manage Files)"
+  estimatedDuration: 45
+  automated: false
+- title: 7.01 Shop Page Layouts — Failure is safe and visible (section missing / protected field set)
+  tags:
+  - negative
+  - im-935
+  - im-997
+  - ac-5
+  - failure-semantics
+  given:
+  - un layout seleccionado NO contiene una sección esperada (ej. Information)
+  - o el field set Purchase Order Document está protected y no acepta edits del subscriber
+  when:
+  - el case corre el step correspondiente
+  then:
+  - el step ends FAILED con reason explícito
+  - no se escribe metadata parcial ni corrupta
+  - los otros steps del case no se ven afectados
+  estimatedDuration: 15
+  automated: false
+- title: 7.01 Shop Page Layouts — Released to Implementations (v3 prod catalog seed)
+  tags:
+  - im-935
+  - im-997
+  - ac-6
+  - delivery
+  - production
+  given:
+  - PR #205 y PR #214 mergeados a main y backend redeployed
+  - v3 dev-seeded en MigrationApp-dev
+  when:
+  - se seedea `ic-7-01-shop-page-layouts` v3 en el catálogo prod (per IM-759, no feature flags)
+  then:
+  - un IE puede ver el case en el catálogo prod bajo la categoría GIFT_SHOP como hybrid
+  - un run end-to-end contra una customer org completa los 3 steps automatizados + presenta los 6 handoffs manuales
+  - el case queda handed off a Implementations
+  estimatedDuration: 30
+  automated: false
+- title: 7.01 Shop Page Layouts — Evidencia UI de post-run (screenshots)
+  tags:
+  - manual-handoff
+  - im-935
+  - im-997
+  - evidence-ui
+  - screenshots
+  given:
+  - el case corrió COMPLETED contra la org target y los 6 handoffs fueron documentados
+  when:
+  - el operator captura evidencia visual
+  then:
+  - "Setup → Object Manager → Auctifera__CatalogItem__c → Page Layouts → layout activo asignado en profiles: screenshot"
+  - "Setup → Object Manager → Auctifera__StockReplenishmentOrder__c → Field Sets → Purchase Order Document: screenshot mostrando Catalog Item en displayedFields"
+  - "Setup → Object Manager → Auctifera__Item_Variant__c → Page Layouts → layout seleccionado: screenshot de secciones Information + System Information con los 7 fields"
+  - los 6 handoffs manuales quedan listados en el run como pending o completed por el operator
+  - evidencia queda en `attachments/tr-<NN>-tc-88/scenario-<K>/`
+  estimatedDuration: 30
+  automated: false
+tags:
+- im-935
+- im-997
+- im-735
+- implementations-automation
+- salesforce
+- shop
+- page-layouts
+- lightning-record-page
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

@@ -1,0 +1,203 @@
+schemaVersion: '1.0'
+id: 16f5256d-9dec-4371-878e-ff574e25a877
+key: TC-95
+title: IC 9.4 — Run Ticketing Batches (delivery hybrid v3, 2 automated + 1 manual)
+description: |
+  Cobertura QA de IM-942 (9.4 Run Ticketing Batches — deliver to Implementations,
+  high-confidence). Junio delivery del Implementation Case
+  `ic-9-4-ticketing-batches` v3 (hybrid, 2 automated + 1 manual). Confianza
+  alta por reporte IM-735 (2026-06-12): hybrid — built+verified Tucson,
+  cross-tested COMPLETED CamiloDev. BE PR #210 squash-merged a main
+  (`e00dce53`); MigrationApp-dev seeded.
+
+  Steps:
+  - Step 1 (AUTOMATED T6): run Contact/Account Ticketing Data batches via
+    global `Auctifera.PeopleManagerBatch` Callable (CONTACT_SET_LAST_VISIT_
+    DATE / ACCOUNT_SET_LAST_VISIT_DATE) + enable Ticketing automatic
+    schedule (`Auctifera__Schedule_Ticketing__c` + global
+    `Auctifera.AutomaticBatchSchedule.execute`) que schedulea los non-global
+    Visitor-Mgmt-Rollup + Ticketing-Reporting batches.
+  - Step 2 (AUTOMATED T6): set `Auctifera__Confirm_Tickets_Automatically__c`
+    en Ticketing_Settings__c desde un boolean operator input.
+  - Step 3 (MANUAL): guide para el Early Bird Control batch (inert stub sin
+    global entry point / no settings card en current packages).
+
+  Validar:
+  1) Contact & Account Ticketing Data batches launched + broken managed
+     contract FAILS the step (no silent swallow),
+  2) Ticketing automatic schedule enabled: checkmark + Visitor Management
+     Rollup + Ticketing Reporting Fields batches scheduled + daily driver cron,
+  3) Confirm Tickets Automatically follows client decision (true/false
+     read-back verified + idempotent re-run),
+  4) No hardcoded org-specific values,
+  5) Early Bird Control MANUAL handoff.
+
+  QA Sub-task asociada: IM-1004
+  Riesgos abiertos:
+  - Step 3 (Early Bird Control manual) es un "run if org still exposes the
+    card, else no-op" — el operator debe documentar el outcome.
+  - AC1 broken-contract branch requiere reproducir con method name inválido
+    (probablemente via test-only spec, not real prod behavior).
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-9-4-ticketing-batches` v3 deployado en prod (BE PR #210)
+- Org target con Auctifera package instalado
+- IE con permisos para ejecutar anonymous Apex + navegar Auctifera Ticketing Settings
+- Acceso al catálogo prod para seedear v3
+format: gherkin
+scenarios:
+- title: 9.4 Ticketing Batches — Contact & Account Ticketing Data batches launched (broken contract FAILS)
+  tags:
+  - happy-path
+  - im-942
+  - im-1004
+  - ac-1
+  - automated
+  - batch
+  given:
+  - una org con el Auctifera package
+  when:
+  - el operator corre el 9.4 case
+  then:
+  - los Contact Ticketing Data y Account Ticketing Data batches son launched via el global `Auctifera.PeopleManagerBatch` Callable (CONTACT_SET_LAST_VISIT_DATE / ACCOUNT_SET_LAST_VISIT_DATE)
+  - si cualquier launch falla (renamed/removed managed method), el step reporta FAILED
+  - el launch NO es silently swallowed
+  estimatedDuration: 20
+  automated: false
+- title: 9.4 Ticketing Batches — Ticketing automatic schedule enabled (checkmark + jobs + daily cron)
+  tags:
+  - happy-path
+  - im-942
+  - im-1004
+  - ac-2
+  - automated
+  - custom-setting
+  - cron
+  given:
+  - el 9.4 case corre
+  when:
+  - el step 1 completa
+  then:
+  - el campo `Auctifera__Schedule_Ticketing__c` = true en el Batch_Settings org default
+  - el global `Auctifera.AutomaticBatchSchedule.execute(null)` ha scheduled los Visitor Management Rollup y Ticketing Reporting Fields batches
+  - el daily `Veevart - Automatic Batch Schedule` driver cron existe
+  - el step FAILS si el durable flag o el daily driver cron está missing
+  estimatedDuration: 15
+  automated: false
+- title: 9.4 Ticketing Batches — Confirm Tickets Automatically follows client decision (true)
+  tags:
+  - happy-path
+  - im-942
+  - im-1004
+  - ac-3
+  - automated
+  - boolean-input
+  given:
+  - el operator answers "Confirm Tickets Automatically" boolean input = true
+  when:
+  - step 2 corre
+  then:
+  - el campo `Auctifera__Confirm_Tickets_Automatically__c` en Ticketing_Settings org default = true, read-back verified
+  - re-run con misma answer es no-op (idempotente)
+  estimatedDuration: 10
+  automated: false
+- title: 9.4 Ticketing Batches — Confirm Tickets Automatically follows client decision (false)
+  tags:
+  - happy-path
+  - im-942
+  - im-1004
+  - ac-3
+  - automated
+  - boolean-input
+  given:
+  - el operator answers "Confirm Tickets Automatically" boolean input = false
+  when:
+  - step 2 corre
+  then:
+  - el campo `Auctifera__Confirm_Tickets_Automatically__c` en Ticketing_Settings org default = false, read-back verified
+  - re-run con misma answer es no-op (idempotente)
+  estimatedDuration: 10
+  automated: false
+- title: 9.4 Ticketing Batches — No hardcoded org-specific values
+  tags:
+  - im-942
+  - im-1004
+  - ac-4
+  - org-agnostic
+  given:
+  - una brand-new client org con el Auctifera package
+  when:
+  - el case corre
+  then:
+  - completa usando SOLO Auctifera managed-package constants y un runtime Org Id (`UserInfo.getOrganizationId()`)
+  - no hay org-specific ids baked in
+  estimatedDuration: 15
+  automated: false
+- title: 9.4 Ticketing Batches — Early Bird Control batch (MANUAL handoff)
+  tags:
+  - manual-handoff
+  - im-942
+  - im-1004
+  - ac-5
+  - guided
+  given:
+  - el Early Bird Control batch no tiene global entry point y es un inert stub sin settings card en current packages
+  when:
+  - el operator alcanza step 3
+  then:
+  - el step es un MANUAL guide instruyendo al IE a correr el batch SOLO si la org aún expone la card
+  - si no está expuesta, mark done as no-op
+  - operator documenta outcome + screenshots del state final
+  estimatedDuration: 15
+  automated: false
+- title: 9.4 Ticketing Batches — Idempotent re-run (no duplicate cron)
+  tags:
+  - im-942
+  - im-1004
+  - idempotent
+  given:
+  - el case ha corrido exitosamente
+  when:
+  - el case corre otra vez
+  then:
+  - completa exitosamente sin duplicate cron
+  - settings upsert es no-op si ya está enabled
+  - cron registration se skipea si ya está present
+  estimatedDuration: 15
+  automated: false
+- title: 9.4 Ticketing Batches — Delivery (v3 prod catalog seed)
+  tags:
+  - im-942
+  - im-1004
+  - delivery
+  - production
+  given:
+  - v3 dev-seeded en MigrationApp-dev
+  when:
+  - se seedea `ic-9-4-ticketing-batches` v3 en el catálogo prod (per IM-759)
+  then:
+  - un IE puede ver el case en el catálogo prod
+  - run end-to-end contra una customer org completa steps 1+2 automated + presenta el manual handoff
+  - el case queda handed off a Implementations
+  estimatedDuration: 25
+  automated: false
+tags:
+- im-942
+- im-1004
+- im-735
+- implementations-automation
+- salesforce
+- auctifera
+- ticketing-batches
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'

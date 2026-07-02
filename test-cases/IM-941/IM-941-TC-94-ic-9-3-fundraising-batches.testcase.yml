@@ -1,0 +1,217 @@
+schemaVersion: '1.0'
+id: 95889765-1615-4bcf-ae6e-4e9036ea8844
+key: TC-94
+title: IC 9.3 — Run Fundraising Batches (delivery hybrid v4, 2 automated + 2 manual)
+description: |
+  Cobertura QA de IM-941 (9.3 Run Fundraising Batches — deliver to Implementations,
+  high-confidence). Junio delivery del Implementation Case
+  `ic-9-3-fundraising-batches` v4 (hybrid, 2 automated + 2 manual). Confianza
+  alta por reporte IM-735 (2026-06-12): hybrid — verified on both orgs. BE
+  PR #209 (functional v4) + PR #219 (scope-note v5) merged; MigrationApp-dev
+  seeded; live-verified en `im696-tucson`.
+
+  Scope: 9.3 owns los Veevart Nonprofit Settings fundraising steps (playbook
+  5-10). Los Veevart Settings Technical Cashier Drawer + POS
+  Purchase/Notification Manager/Ticketing (playbook 1-4) son owned por IC 9.2
+  Run Accounting Batches.
+
+  Steps:
+  - Step 1 (AUTOMATED): enable Nonprofit Automatic Schedule (Auctifera__
+    Schedule_Membership__c + vnfp__Schedule_Donation__c + vnfp__Schedule_
+    Specific_Fund__c=true), immediate run via `vnfp.AutomaticBatchSchedule.
+    execute(null)`, daily `Veevart NFP - Automatic Batch Schedule` cron
+    registered.
+  - Step 2 (AUTOMATED): enqueue `vnfp.ContactRolesCreationBatch` via global
+    Callable path, snapshot AsyncApexJob Ids pre-call para assertar NEW job,
+    FAILED by design si el flex queue está full.
+  - Step 3 (MANUAL): guide para Opportunity Origin Assignment Batch
+    (`vnfp.FixOpportunityOriginBatch` es public, no anonymous-Apex invocable).
+  - Step 4 (MANUAL): guide para Fix Contact Roles Batch
+    (`vnfp.FixContactRolesBatch` es public, no anonymous-Apex invocable).
+
+  Validar:
+  1) Nonprofit auto-schedule enabled + immediate run + daily cron registered,
+  2) ContactRolesCreationBatch enqueue con snapshot assertion (NEW job Id),
+  3) Manual handoff Opportunity Origin Assignment Batch guide (con UI steps),
+  4) Manual handoff Fix Contact Roles Batch guide (con UI steps),
+  5) Source-agnostic (no hardcoded ids),
+  6) Idempotent re-run (no duplicate cron),
+  7) Scope boundary — steps 1-4 del playbook son OUT of scope (9.2 owns).
+
+  QA Sub-task asociada: IM-1003
+  Riesgos abiertos:
+  - Steps 3/4 (manual handoffs) requieren UI walkthrough en Nonprofit Settings
+    → Batches. Documentar screenshots en Setup → Apex Jobs.
+  - Scenario 7 (side-effect por vnfp__Schedule_NFP_Accounting__c ya enabled)
+    puede reagendar batches del category owned por 9.2 — verificar que se
+    documenta como expected side-effect, no como 9.3 step.
+type: integration
+priority: high
+status: active
+preconditions:
+- Implementation Case `ic-9-3-fundraising-batches` v4 deployado en prod (BE PR #209 + #219)
+- Org target con vnfp + Auctifera managed packages
+- IE con permisos para ejecutar anonymous Apex + navegar Nonprofit Settings → Batches
+- Acceso al catálogo prod para seedear v4
+format: gherkin
+scenarios:
+- title: 9.3 Fundraising Batches — Fundraising Automatic Schedule enabled + immediate run + daily cron
+  tags:
+  - happy-path
+  - im-941
+  - im-1003
+  - ac-1
+  - automated
+  - custom-setting
+  given:
+  - una org con vnfp + Auctifera managed packages
+  when:
+  - el case corre step 1
+  then:
+  - el org-default `Auctifera__Batch_Settings__c` tiene `Auctifera__Schedule_Membership__c` + `vnfp__Schedule_Donation__c` + `vnfp__Schedule_Specific_Fund__c` = true
+  - los enabled-category fundraising batches corren immediately via `vnfp.AutomaticBatchSchedule.execute(null)`
+  - el daily `Veevart NFP - Automatic Batch Schedule` cron está registered (WAITING)
+  - el step verifica los 3 checkmarks AND el driver cron por query-back
+  - falla si algo falta
+  estimatedDuration: 20
+  automated: false
+- title: 9.3 Fundraising Batches — Create Contact Roles Batch enqueued via Callable
+  tags:
+  - happy-path
+  - im-941
+  - im-1003
+  - ac-2
+  - automated
+  - batch
+  given:
+  - la org expone el global `vnfp.ContactRolesCreationBatch`
+  when:
+  - el case corre step 2
+  then:
+  - el batch es enqueued via el org Callable path
+  - el step snapshot pre-existing AsyncApexJob Ids for esa class antes del call
+  - asserts un NEW job (Id no en el snapshot) en accepted state después
+  - verifica THIS run enqueued, no un leftover job
+  - si el enqueue no puede ocurrir (incl. flex queue full), el step FAILS by design
+  - Create Contact Roles es one-time batch sin cron fallback → operator debe re-run
+  estimatedDuration: 15
+  automated: false
+- title: 9.3 Fundraising Batches — Opportunity Origin Assignment Batch (MANUAL handoff)
+  tags:
+  - manual-handoff
+  - im-941
+  - im-1003
+  - ac-3
+  - guided
+  given:
+  - "`vnfp.FixOpportunityOriginBatch` es public (non-global) managed class → `Type.forName` returns null desde anonymous Apex (verified live)"
+  when:
+  - el operator alcanza step 3
+  then:
+  - "guide dirige a: Nonprofit Settings → Batches → Fundraising Batches → Membership Batches → \"Run\" en \"Opportunity Origin Assignment Batch\""
+  - "operator confirma el job en Setup → Apex Jobs"
+  - screenshots del run + Apex Jobs entry esperados como evidencia
+  estimatedDuration: 20
+  automated: false
+- title: 9.3 Fundraising Batches — Fix Contact Roles Batch (MANUAL handoff)
+  tags:
+  - manual-handoff
+  - im-941
+  - im-1003
+  - ac-4
+  - guided
+  given:
+  - "`vnfp.FixContactRolesBatch` es public (non-global) managed class → no anonymous-Apex invocable (verified live)"
+  when:
+  - el operator alcanza step 4
+  then:
+  - guide dirige a run "Fix Contact Roles Batch" desde la misma UI (opcionalmente scoped by report)
+  - operator confirma el job en Setup → Apex Jobs
+  - screenshots del run + Apex Jobs entry esperados como evidencia
+  estimatedDuration: 20
+  automated: false
+- title: 9.3 Fundraising Batches — Source-agnostic (no hardcoded ids)
+  tags:
+  - im-941
+  - im-1003
+  - ac-5
+  - org-agnostic
+  given:
+  - una new implementation org con los required packages
+  when:
+  - el case corre
+  then:
+  - completa sin org-specific ids
+  - todos los type/field references son namespace-qualified package constants
+  - la settings row está keyed en `UserInfo.getOrganizationId()`
+  estimatedDuration: 15
+  automated: false
+- title: 9.3 Fundraising Batches — Idempotent re-run (no duplicate cron)
+  tags:
+  - im-941
+  - im-1003
+  - ac-6
+  - idempotent
+  given:
+  - los checkmarks ya están enabled y el cron ya existe
+  when:
+  - los automated steps corren otra vez
+  then:
+  - el upsert es no-op
+  - cron registration se skipea si ya está present
+  - la verification sigue passing (no duplicate cron)
+  estimatedDuration: 15
+  automated: false
+- title: 9.3 Fundraising Batches — Scope boundary (playbook steps 1-4 owned by IC 9.2)
+  tags:
+  - im-941
+  - im-1003
+  - ac-7
+  - scope-boundary
+  given:
+  - el source playbook opens con Veevart Settings Technical Cashier Drawer + POS Purchase/Notification Manager/Ticketing schedule (steps 1-4)
+  when:
+  - el operator revisa el 9.3 case
+  then:
+  - 9.3 intentionally NO tiene step para esos items — owned por IC 9.2
+  - documented en template description (template v5)
+  - si el org ya tiene una accounting category enabled (ej. `vnfp__Schedule_NFP_Accounting__c` = true), el step 1's `execute(null)` PUEDE re-schedule ese category's batches como package side effect que faithfully mirrors el UI "Save"
+  - side-effect es expected, no un 9.3 step
+  estimatedDuration: 15
+  automated: false
+- title: 9.3 Fundraising Batches — Delivery (v4 prod catalog seed + IE handoff)
+  tags:
+  - im-941
+  - im-1003
+  - delivery
+  - production
+  given:
+  - PR #209 + #219 merged, backend redeployed
+  - MigrationApp-dev seeded
+  when:
+  - el case es seedeado en el catálogo prod (per IM-759)
+  then:
+  - un IE puede ver el case en el catálogo prod
+  - run end-to-end contra una customer org completa el step 1 automated + step 2 automated + presenta los 2 manual handoffs
+  - el case queda handed off a Implementations
+  estimatedDuration: 25
+  automated: false
+tags:
+- im-941
+- im-1003
+- im-735
+- implementations-automation
+- salesforce
+- vnfp
+- auctifera
+- fundraising-batches
+- delivery
+- high-confidence
+- production
+- june-delivery
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-02T14:00:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-02T14:00:00Z'
