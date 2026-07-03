@@ -1,0 +1,1368 @@
+diff --git a/README.md b/README.md
+index 56784546..68dfb61f 100644
+--- a/README.md
++++ b/README.md
+@@ -42,18 +42,23 @@ To show the survey inside your app (e.g. after checkout), use the global trigger
+ window.SurveyWidget.open({ featureId: 'checkout' });
+ // or by numeric feature id:
+ window.SurveyWidget.open({ featureId: 1 });
+-// or a specific survey:
++// or the survey selected by a previous eligibility lookup:
+ window.SurveyWidget.open({ featureId: 1, surveyId: 1 });
+-// include account context when general NPS surveys are enabled:
++// include user context when general NPS surveys are enabled:
+ window.SurveyWidget.open({
+   featureId: 'checkout',
++  surveyId: 1, // optional: render this exact eligible survey
+   clientOrgId: 'museum-demo',
+   respondentId: '003xx000001',
+-  accountCreatedDate: '2026-01-15T12:00:00.000Z'
++  userCreatedDate: '2026-01-15T12:00:00.000Z'
+ });
+ ```
+ 
+-The widget will fetch the eligible survey, show a modal with the NPS or CSAT form, and `POST` the response to the API. `featureId` can be the feature’s **slug** (string) or **id** (number). When an active general NPS survey exists for the provided `clientOrgId`, the API evaluates that survey first using `accountCreatedDate` (Salesforce `Account.CreatedDate`) and returns only the general survey when it is eligible. If the account date is missing or the configured delay has not elapsed, delivery falls back to the feature-specific survey.
++The widget will fetch the eligible survey, show a modal with the NPS or CSAT form, and `POST` the response to the API. `featureId` can be the feature’s **slug** (string) or **id** (number). When an active general NPS survey exists for the provided `clientOrgId`, the API evaluates that survey first using `userCreatedDate` (Salesforce `User.CreatedDate`) and returns only the general survey when it is eligible. If the user date is missing, the configured delay has not elapsed, or the general survey was already answered/dismissed for that respondent, delivery falls back to the feature-specific survey.
++
++`surveyId` is not an override and does not bypass general-survey priority, audience checks, or feature context validation. It filters the eligible survey result for the same trigger feature/context, so embedders should pass the `surveyId` returned by the prior eligibility response. `render=true` only skips delivery caps affected by the opening modal impression; it does not skip audience or general survey eligibility.
++
++Use `userCreatedDate` for Salesforce `User.CreatedDate`. `userCreatedAt`, `accountCreatedDate`, and `accountCreatedAt` remain accepted legacy aliases; user aliases take precedence when both are present.
+ 
+ **Non-React apps** can use the standalone script (no build). Host the survey tool client somewhere, then on your site:
+ 
+@@ -78,12 +83,13 @@ registerSurveyWidgetTrigger("/api"); // or your API base URL
+ 
+ // After the user finishes a feature (e.g. checkout):
+ window.SurveyWidget?.open({ featureId: "checkout" });
+-// For general NPS eligibility, pass Salesforce Account.CreatedDate:
++// For general NPS eligibility, pass Salesforce User.CreatedDate:
+ window.SurveyWidget?.open({
+   featureId: "checkout",
++  surveyId: eligibleSurvey.id,
+   clientOrgId: "museum-demo",
+   respondentId: "003xx000001",
+-  accountCreatedDate: account.CreatedDate,
++  userCreatedDate: user.CreatedDate,
+ });
+ ```
+ 
+diff --git a/client/public/survey-trigger.js b/client/public/survey-trigger.js
+index eda07740..1f62e255 100644
+--- a/client/public/survey-trigger.js
++++ b/client/public/survey-trigger.js
+@@ -1,18 +1,20 @@
+ /**
+  * Standalone survey trigger for non-React apps.
+  * Load this script, set window.SURVEY_APP_URL to your survey tool origin (e.g. https://surveys.example.com),
+- * then call window.SurveyWidget.open({ featureId: 'checkout', version: '2.1.0', clientOrgId: 'org_123', respondentId: 'user_456', accountCreatedDate: '2026-01-15T12:00:00.000Z', usageCount: 7 }) to show the survey in a modal iframe.
+- * Optional version, clientOrgId, respondentId, accountCreatedDate and usageCount are used for targeting/scheduling and stored with the response.
++ * then call window.SurveyWidget.open({ featureId: 'checkout', surveyId: 1, version: '2.1.0', clientOrgId: 'org_123', respondentId: 'user_456', userCreatedDate: '2026-01-15T12:00:00.000Z', usageCount: 7 }) to show the survey in a modal iframe.
++ * Optional surveyId, userCreatedDate/accountCreatedDate and usageCount are used for targeting/scheduling.
++ * version, clientOrgId and respondentId are also included when the response is submitted.
+  */
+ (function () {
+   var CONFIG = { appUrl: window.SURVEY_APP_URL || "" };
+ 
+   function open(options) {
+     var featureId = options && (options.featureId != null ? options.featureId : options.feature);
++    var surveyId = options && options.surveyId;
+     var version = options && options.version;
+     var clientOrgId = options && options.clientOrgId;
+     var respondentId = options && options.respondentId;
+-    var accountCreatedDate = options && (options.accountCreatedDate || options.accountCreatedAt);
++    var userCreatedDate = options && (options.userCreatedDate || options.userCreatedAt || options.accountCreatedDate || options.accountCreatedAt);
+     var usageCount = options && options.usageCount;
+     if (!featureId) {
+       console.warn("SurveyWidget.open: featureId required");
+@@ -24,10 +26,11 @@
+     }
+     var surveyPath = "/survey/" + encodeURIComponent(String(featureId));
+     var sep = "?";
++    if (surveyId != null && surveyId !== "") { surveyPath += sep + "surveyId=" + encodeURIComponent(String(surveyId)); sep = "&"; }
+     if (version) { surveyPath += sep + "version=" + encodeURIComponent(String(version)); sep = "&"; }
+     if (clientOrgId) { surveyPath += sep + "clientOrgId=" + encodeURIComponent(String(clientOrgId)); sep = "&"; }
+     if (respondentId) { surveyPath += sep + "respondentId=" + encodeURIComponent(String(respondentId)); sep = "&"; }
+-    if (accountCreatedDate) { surveyPath += sep + "accountCreatedDate=" + encodeURIComponent(String(accountCreatedDate)); sep = "&"; }
++    if (userCreatedDate) { surveyPath += sep + "userCreatedDate=" + encodeURIComponent(String(userCreatedDate)); sep = "&"; }
+     if (usageCount != null && usageCount !== "") { surveyPath += sep + "usageCount=" + encodeURIComponent(String(usageCount)); }
+     var iframeSrc = CONFIG.appUrl.replace(/\/$/, "") + surveyPath;
+     var isMobile = (typeof window !== "undefined" ? window.innerWidth : 1024) < 640;
+diff --git a/client/src/api/client.ts b/client/src/api/client.ts
+index b9690db1..338054c3 100644
+--- a/client/src/api/client.ts
++++ b/client/src/api/client.ts
+@@ -217,6 +217,7 @@ export const api = {
+   features: {
+     list: () => request<Feature[]>("/admin/features"),
+     get: (id: number) => request<Feature>(`/admin/features/${id}`),
++    getPublic: (id: number) => request<Feature>(`/features/${id}`),
+     getBySlug: (slug: string) => request<Feature>(`/features/by-slug/${encodeURIComponent(slug)}`),
+     create: (body: { name: string; slug: string; description?: string; productOwner?: string; version?: string; implementationPerson?: string; customerSuccessExecutive?: string; isFeature?: boolean }) =>
+       request<Feature>("/admin/features", { method: "POST", body: JSON.stringify(body) }),
+@@ -226,7 +227,21 @@ export const api = {
+       request<void>(`/admin/features/${id}`, { method: "DELETE" }),
+     surveys: (
+       featureIdOrSlug: number | string,
+-      params?: { clientOrgId?: string; respondentId?: string; accountCreatedDate?: string; usageCount?: number; today?: string; date?: string; active?: boolean; preview?: boolean; render?: boolean }
++      params?: {
++        clientOrgId?: string;
++        respondentId?: string;
++        userCreatedDate?: string;
++        userCreatedAt?: string;
++        accountCreatedDate?: string;
++        accountCreatedAt?: string;
++        usageCount?: number;
++        today?: string;
++        date?: string;
++        surveyId?: number;
++        active?: boolean;
++        preview?: boolean;
++        render?: boolean;
++      }
+     ) => {
+       const requiresAdminLookup = params?.preview === true || params?.active === false;
+       return request<Survey[]>(`${requiresAdminLookup ? "/admin" : ""}/features/${encodeURIComponent(String(featureIdOrSlug))}/surveys`, {
+@@ -243,6 +258,7 @@ export const api = {
+   surveys: {
+     list: () => request<Survey[]>("/admin/surveys"),
+     get: (id: number) => request<Survey>(`/admin/surveys/${id}`),
++    getPublic: (id: number) => request<Survey>(`/surveys/${id}`),
+     byFeature: (featureId: number, activeOnly = true) =>
+       request<Survey[]>(`${activeOnly ? "" : "/admin"}/surveys/by-feature/${featureId}`, {
+         params: activeOnly ? {} : { active: "false" },
+diff --git a/client/src/components/SurveyWidget.tsx b/client/src/components/SurveyWidget.tsx
+index 15935089..05a2146c 100644
+--- a/client/src/components/SurveyWidget.tsx
++++ b/client/src/components/SurveyWidget.tsx
+@@ -15,6 +15,8 @@ interface OpenOptions {
+   version?: string;
+   clientOrgId?: string;
+   respondentId?: string;
++  userCreatedDate?: string;
++  userCreatedAt?: string;
+   accountCreatedDate?: string;
+   accountCreatedAt?: string;
+   usageCount?: number;
+@@ -27,9 +29,32 @@ async function fetchJson<T>(base: string, path: string): Promise<T> {
+   return res.json();
+ }
+ 
++function appendDeliveryParams(q: URLSearchParams, opts: OpenOptions) {
++  if (opts.clientOrgId) q.set("clientOrgId", opts.clientOrgId);
++  if (opts.respondentId) q.set("respondentId", opts.respondentId);
++  const userCreatedDate = opts.userCreatedDate ?? opts.userCreatedAt ?? opts.accountCreatedDate ?? opts.accountCreatedAt;
++  if (userCreatedDate) q.set("userCreatedDate", userCreatedDate);
++  if (opts.usageCount != null && Number.isFinite(opts.usageCount)) q.set("usageCount", String(opts.usageCount));
++}
++
++async function resolvePublicFeature(apiBaseUrl: string, featureIdOrSlug: number | string): Promise<Feature> {
++  if (typeof featureIdOrSlug === "number") {
++    return fetchJson<Feature>(apiBaseUrl, `/features/${featureIdOrSlug}`);
++  }
++
++  return fetchJson<Feature>(apiBaseUrl, `/features/by-slug/${encodeURIComponent(featureIdOrSlug)}`).catch((slugError) => {
++    if (!/^\d+$/.test(featureIdOrSlug)) {
++      throw slugError;
++    }
++
++    return fetchJson<Feature>(apiBaseUrl, `/features/${featureIdOrSlug}`);
++  });
++}
++
+ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyWidgetProps) {
+   const [openOptions, setOpenOptions] = useState<OpenOptions | null>(null);
+   const [feature, setFeature] = useState<Feature | null>(null);
++  const [displayFeature, setDisplayFeature] = useState<Feature | null>(null);
+   const [survey, setSurvey] = useState<Survey | null>(null);
+   const [loading, setLoading] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+@@ -47,6 +72,7 @@ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyW
+       setLoading(true);
+       setError(null);
+       setFeature(null);
++      setDisplayFeature(null);
+       setSurvey(null);
+       setMainScore(null);
+       setMainComment(undefined);
+@@ -56,27 +82,36 @@ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyW
+       setCustomAnswers({});
+       setCurrentPage(0);
+       try {
++        const f = await resolvePublicFeature(apiBaseUrl, opts.featureId);
++
+         if (opts.surveyId != null) {
+-          const s = await fetchJson<Survey>(apiBaseUrl, `/surveys/${opts.surveyId}`);
+-          const f = await fetchJson<Feature>(apiBaseUrl, `/features/${s.featureId}`);
++          const q = new URLSearchParams();
++          appendDeliveryParams(q, opts);
++          q.set("surveyId", String(opts.surveyId));
++          q.set("render", "true");
++          const list = await fetchJson<Survey[]>(apiBaseUrl, `/features/${f.id}/surveys?${q.toString()}`);
++          const selectedSurvey = list.filter((s) => s.active)[0] ?? null;
++          const selectedFeature =
++            selectedSurvey && selectedSurvey.featureId !== f.id
++              ? await fetchJson<Feature>(apiBaseUrl, `/features/${selectedSurvey.featureId}`)
++              : f;
+           setFeature(f);
+-          setSurvey(s);
++          setDisplayFeature(selectedFeature);
++          setSurvey(selectedSurvey);
++          if (!selectedSurvey) setError("No eligible survey for this subject.");
+         } else {
+-          const featureIdOrSlug = opts.featureId;
+-          const isId = typeof featureIdOrSlug === "number" || /^\d+$/.test(String(featureIdOrSlug));
+-          const f = isId
+-            ? await fetchJson<Feature>(apiBaseUrl, `/features/${featureIdOrSlug}`)
+-            : await fetchJson<Feature>(apiBaseUrl, `/features/by-slug/${encodeURIComponent(String(featureIdOrSlug))}`);
+           setFeature(f);
+           const q = new URLSearchParams();
+-          if (opts.clientOrgId) q.set("clientOrgId", opts.clientOrgId);
+-          if (opts.respondentId) q.set("respondentId", opts.respondentId);
+-          const accountCreatedDate = opts.accountCreatedDate ?? opts.accountCreatedAt;
+-          if (accountCreatedDate) q.set("accountCreatedDate", accountCreatedDate);
+-          if (opts.usageCount != null && Number.isFinite(opts.usageCount)) q.set("usageCount", String(opts.usageCount));
++          appendDeliveryParams(q, opts);
+           const list = await fetchJson<Survey[]>(apiBaseUrl, `/features/${f.id}/surveys${q.toString() ? `?${q.toString()}` : ""}`);
+           const active = list.filter((s) => s.active);
+-          setSurvey(active[0] ?? null);
++          const selectedSurvey = active[0] ?? null;
++          const selectedFeature =
++            selectedSurvey && selectedSurvey.featureId !== f.id
++              ? await fetchJson<Feature>(apiBaseUrl, `/features/${selectedSurvey.featureId}`)
++              : f;
++          setDisplayFeature(selectedFeature);
++          setSurvey(selectedSurvey);
+           if (active.length === 0) setError("No active survey for this subject.");
+         }
+       } catch (e) {
+@@ -99,6 +134,7 @@ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyW
+   const close = useCallback(() => {
+     setOpenOptions(null);
+     setFeature(null);
++    setDisplayFeature(null);
+     setSurvey(null);
+     setError(null);
+     setMainScore(null);
+@@ -128,11 +164,28 @@ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyW
+           context: { trigger: "in_app", triggerFeatureId: feature.id, triggerFeatureSlug: feature.slug },
+         };
+         if (customAns && Object.keys(customAns).length > 0) body.customAnswers = customAns;
+-        await fetch(`${apiBaseUrl.replace(/\/$/, "")}/responses`, {
++        const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/responses`, {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           body: JSON.stringify(body),
+         });
++
++        if (!response.ok) {
++          const errorText = await response.text();
++          let message = errorText || `Failed to submit survey response (${response.status})`;
++
++          try {
++            const parsed = JSON.parse(errorText) as { error?: unknown };
++            if (typeof parsed.error === "string" && parsed.error.trim()) {
++              message = parsed.error;
++            }
++          } catch {
++            // Keep the raw response text when the server does not return JSON.
++          }
++
++          throw new Error(message);
++        }
++
+         onSubmit?.();
+         close();
+       } catch (e) {
+@@ -143,12 +196,13 @@ export function SurveyWidget({ apiBaseUrl = "/api", onClose, onSubmit }: SurveyW
+   );
+ 
+   if (!openOptions) return null;
++  const modalTitle = survey?.isGeneralSurvey ? "General Survey" : displayFeature?.name ?? feature?.name ?? "Survey";
+ 
+   return (
+     <div className="veevart-modal-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+-      <div className="veevart-panel flex h-[85dvh] max-h-[85dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl rounded-b-none sm:h-auto sm:max-h-[90dvh] sm:rounded-[14px]">
++      <div className="veevart-panel flex h-[85dvh] max-h-[85dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl rounded-b-none sm:h-auto sm:w-fit sm:min-w-[24rem] sm:max-h-[90dvh] sm:rounded-[14px]">
+         <div className="flex shrink-0 items-center justify-between border-b border-[#d7e0ea] px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+-          <h2 className="veevart-title font-semibold">{feature?.name ?? "Survey"}</h2>
++          <h2 className="veevart-title font-semibold">{modalTitle}</h2>
+           <button
+             type="button"
+             onClick={close}
+@@ -424,6 +478,8 @@ export function registerSurveyWidgetTrigger(_apiBaseUrl = "/api") {
+             version: options.version,
+             clientOrgId: options.clientOrgId,
+             respondentId: options.respondentId,
++            userCreatedDate: options.userCreatedDate,
++            userCreatedAt: options.userCreatedAt,
+             accountCreatedDate: options.accountCreatedDate,
+             accountCreatedAt: options.accountCreatedAt,
+             usageCount: options.usageCount,
+diff --git a/client/src/pages/SurveyRespondPage.test.ts b/client/src/pages/SurveyRespondPage.test.ts
+index 09cc4baf..378e8cff 100644
+--- a/client/src/pages/SurveyRespondPage.test.ts
++++ b/client/src/pages/SurveyRespondPage.test.ts
+@@ -7,6 +7,8 @@ describe("SurveyRespondPage preview fallback params", () => {
+     const params = buildPublicPreviewFallbackParams({
+       clientOrgId: "museum-demo",
+       respondentId: "user@example.com",
++      userCreatedDate: "2026-06-29T15:58:58.000Z",
++      surveyId: 42,
+       usageCount: 3,
+       today: "2026-06-29",
+     });
+@@ -14,6 +16,8 @@ describe("SurveyRespondPage preview fallback params", () => {
+     assert.deepEqual(params, {
+       clientOrgId: "museum-demo",
+       respondentId: "user@example.com",
++      userCreatedDate: "2026-06-29T15:58:58.000Z",
++      surveyId: 42,
+       usageCount: 3,
+       today: "2026-06-29",
+       render: true,
+diff --git a/client/src/pages/SurveyRespondPage.tsx b/client/src/pages/SurveyRespondPage.tsx
+index 868faa7d..e3834f55 100644
+--- a/client/src/pages/SurveyRespondPage.tsx
++++ b/client/src/pages/SurveyRespondPage.tsx
+@@ -7,7 +7,7 @@ import { CSATForm } from "../components/CSATForm";
+ type SurveyLookupParams = NonNullable<Parameters<typeof api.features.surveys>[1]>;
+ 
+ export function buildPublicPreviewFallbackParams(
+-  lookupParams: Pick<SurveyLookupParams, "clientOrgId" | "respondentId" | "usageCount" | "today">
++  lookupParams: Pick<SurveyLookupParams, "clientOrgId" | "respondentId" | "usageCount" | "today" | "userCreatedDate" | "accountCreatedDate" | "surveyId">
+ ): SurveyLookupParams {
+   return {
+     ...lookupParams,
+@@ -15,17 +15,35 @@ export function buildPublicPreviewFallbackParams(
+   };
+ }
+ 
++function resolvePublicFeature(featureKey: string): Promise<Feature> {
++  return api.features.getBySlug(featureKey).catch((slugError) => {
++    if (!/^\d+$/.test(featureKey)) {
++      throw slugError;
++    }
++
++    return api.features.getPublic(Number(featureKey));
++  });
++}
++
+ export function SurveyRespondPage() {
+   const { featureKey } = useParams<{ featureKey: string }>();
+   const [searchParams] = useSearchParams();
+   const version = searchParams.get("version") ?? undefined;
+   const clientOrgId = searchParams.get("clientOrgId") ?? searchParams.get("orgId") ?? undefined;
+   const respondentId = searchParams.get("respondentId") ?? searchParams.get("userId") ?? undefined;
+-  const accountCreatedDate = searchParams.get("accountCreatedDate") ?? searchParams.get("accountCreatedAt") ?? undefined;
++  const surveyIdRaw = searchParams.get("surveyId") ?? undefined;
++  const surveyId = surveyIdRaw != null && surveyIdRaw !== "" ? Number(surveyIdRaw) : undefined;
++  const userCreatedDate =
++    searchParams.get("userCreatedDate") ??
++    searchParams.get("userCreatedAt") ??
++    searchParams.get("accountCreatedDate") ??
++    searchParams.get("accountCreatedAt") ??
++    undefined;
+   const previewMode = searchParams.get("preview") === "1" || searchParams.get("preview") === "true";
+   const usageCountRaw = searchParams.get("usageCount") ?? searchParams.get("counter") ?? undefined;
+   const usageCount = usageCountRaw != null && usageCountRaw !== "" ? Number(usageCountRaw) : undefined;
+   const [feature, setFeature] = useState<Feature | null>(null);
++  const [displayFeature, setDisplayFeature] = useState<Feature | null>(null);
+   const [surveys, setSurveys] = useState<Survey[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [error, setError] = useState<string | null>(null);
+@@ -58,19 +76,40 @@ export function SurveyRespondPage() {
+     let active = true;
+     setLoading(true);
+     setError(null);
++    setDisplayFeature(null);
+ 
+     const loadSurvey = async () => {
+-      const f = await api.features.getBySlug(featureKey);
+-      if (!active) return;
+-
+       const lookupParams = {
+         clientOrgId,
+         respondentId,
+-        accountCreatedDate,
++        userCreatedDate,
++        surveyId: surveyId != null && Number.isFinite(surveyId) ? surveyId : undefined,
+         usageCount: usageCount != null && Number.isFinite(usageCount) ? usageCount : undefined,
+         today: searchParams.get("today") ?? searchParams.get("date") ?? undefined,
+       };
+ 
++      if (surveyId != null && Number.isFinite(surveyId)) {
++        const triggerFeature = await resolvePublicFeature(featureKey);
++        const list = await api.features.surveys(triggerFeature.id, {
++          ...lookupParams,
++          render: true,
++        });
++        const selectedSurvey = list[0];
++        const selectedFeature =
++          selectedSurvey && selectedSurvey.featureId !== triggerFeature.id
++            ? await api.features.getPublic(selectedSurvey.featureId)
++            : triggerFeature;
++        if (active) {
++          setFeature(triggerFeature);
++          setDisplayFeature(selectedFeature);
++          setSurveys(selectedSurvey?.active ? [selectedSurvey] : []);
++        }
++        return;
++      }
++
++      const f = await resolvePublicFeature(featureKey);
++      if (!active) return;
++
+       let list: Survey[];
+       if (previewMode) {
+         try {
+@@ -90,8 +129,16 @@ export function SurveyRespondPage() {
+       }
+ 
+       if (active) {
++        const visibleSurveys = previewMode ? list : list.filter((s) => s.active);
++        const selectedSurvey = visibleSurveys[0];
++        const selectedFeature =
++          selectedSurvey && selectedSurvey.featureId !== f.id
++            ? await api.features.getPublic(selectedSurvey.featureId)
++            : f;
++        if (!active) return;
+         setFeature(f);
+-        setSurveys(previewMode ? list : list.filter((s) => s.active));
++        setDisplayFeature(selectedFeature);
++        setSurveys(visibleSurveys);
+       }
+     };
+ 
+@@ -106,7 +153,7 @@ export function SurveyRespondPage() {
+     return () => {
+       active = false;
+     };
+-  }, [featureKey, clientOrgId, respondentId, accountCreatedDate, usageCount, searchParams, previewMode]);
++  }, [featureKey, clientOrgId, respondentId, surveyId, userCreatedDate, usageCount, searchParams, previewMode]);
+ 
+   const handleSubmit = (surveyId: number, featureId: number, score: number, comment?: string, companyRecommendScore?: number, customAns?: Record<string, string>, scoreReason?: string) => {
+     return api.responses.create({
+@@ -141,10 +188,12 @@ export function SurveyRespondPage() {
+   }
+ 
+   const survey = surveys[0];
++  const titleFeature = displayFeature ?? feature;
++  const surveyTitle = survey?.isGeneralSurvey ? "General Survey" : titleFeature.name;
+   if (!survey) {
+     return (
+       <div className="veevart-panel mx-auto max-w-md p-6">
+-        <h1 className="veevart-title text-lg font-semibold">{feature.name}</h1>
++        <h1 className="veevart-title text-lg font-semibold">{surveyTitle}</h1>
+         <p className="veevart-muted mt-2">{previewMode ? "No surveys found for this subject." : "No active survey for this subject."}</p>
+       </div>
+     );
+@@ -321,7 +370,7 @@ export function SurveyRespondPage() {
+   if (!hasCombinedForm) {
+     return (
+       <div className="veevart-panel mx-auto max-w-md p-6">
+-        <h1 className="veevart-title text-lg font-semibold">{feature.name}</h1>
++        <h1 className="veevart-title text-lg font-semibold">{surveyTitle}</h1>
+         {mainFormBlock}
+       </div>
+     );
+@@ -366,7 +415,7 @@ export function SurveyRespondPage() {
+               })();
+     return (
+       <div className="veevart-panel mx-auto max-w-md p-6">
+-        <h1 className="veevart-title text-lg font-semibold">{feature.name}</h1>
++        <h1 className="veevart-title text-lg font-semibold">{surveyTitle}</h1>
+         <p className="veevart-muted mt-1 text-xs">
+           Question {pageIndex + 1} of {orderedBlocks.length}
+         </p>
+@@ -417,7 +466,7 @@ export function SurveyRespondPage() {
+ 
+   return (
+     <div className="veevart-panel mx-auto max-w-md p-6">
+-      <h1 className="veevart-title text-lg font-semibold">{feature.name}</h1>
++      <h1 className="veevart-title text-lg font-semibold">{surveyTitle}</h1>
+       <form onSubmit={onCombinedSubmit} className="space-y-0">
+         {orderedBlocks.map(({ key, el }, i) => (
+           <div key={key} className={i > 0 ? "mt-6 border-t border-slate-200 pt-6" : undefined}>
+diff --git a/client/src/pages/SurveysPage.tsx b/client/src/pages/SurveysPage.tsx
+index f1432cba..3e0f16b4 100644
+--- a/client/src/pages/SurveysPage.tsx
++++ b/client/src/pages/SurveysPage.tsx
+@@ -325,7 +325,7 @@ export function SurveysPage() {
+       return;
+     }
+     if (form.isGeneralSurvey && (form.accountCreatedDelayDays.trim() === "" || Number(form.accountCreatedDelayDays) < 0)) {
+-      setError("Please enter how many days after Account.CreatedDate the general survey should appear.");
++      setError("Please enter how many days after User.CreatedDate the general survey should appear.");
+       return;
+     }
+     if (form.triggerType === "date" && !form.triggerDate.trim()) {
+@@ -1973,7 +1973,7 @@ function GeneralSurveySettings({
+             <p className="mt-1 text-xs text-slate-500">Must match the clientOrgId sent by the Salesforce trigger.</p>
+           </div>
+           <div>
+-            <label className="block text-sm font-medium text-slate-700">Show after Account.CreatedDate</label>
++            <label className="block text-sm font-medium text-slate-700">Show after User.CreatedDate</label>
+             <div className="mt-1 flex items-center gap-2">
+               <input
+                 type="number"
+@@ -1985,7 +1985,7 @@ function GeneralSurveySettings({
+               />
+               <span className="text-sm text-slate-600">days</span>
+             </div>
+-            <p className="mt-1 text-xs text-slate-500">The embedding app must pass Account.CreatedDate as accountCreatedDate.</p>
++            <p className="mt-1 text-xs text-slate-500">The embedding app must pass Salesforce User.CreatedDate as userCreatedDate.</p>
+           </div>
+         </div>
+       )}
+diff --git a/server/src/db/schema.ts b/server/src/db/schema.ts
+index e6c74f30..7ebc9bcd 100644
+--- a/server/src/db/schema.ts
++++ b/server/src/db/schema.ts
+@@ -44,7 +44,7 @@ export const surveys = sqliteTable("surveys", {
+   maxDismissals: integer("max_dismissals"), // stop showing after user closes without responding this many times
+   isGeneralSurvey: integer("is_general_survey", { mode: "boolean" }).notNull().default(false),
+   generalClientOrgId: text("general_client_org_id"), // client org/subdomain this general survey belongs to
+-  accountCreatedDelayDays: integer("account_created_delay_days"), // show general survey after this many days from Account.CreatedDate
++  accountCreatedDelayDays: integer("account_created_delay_days"), // show general survey after this many days from Salesforce User.CreatedDate
+   createdAt: text("created_at").default(sql`(datetime('now'))`),
+ });
+ 
+diff --git a/server/src/lib/surveyRuntime.test.ts b/server/src/lib/surveyRuntime.test.ts
+index a0f69529..0ac5c50f 100644
+--- a/server/src/lib/surveyRuntime.test.ts
++++ b/server/src/lib/surveyRuntime.test.ts
+@@ -48,7 +48,7 @@ describe("toSurveyDeliveryContext", () => {
+   it("accepts User.CreatedDate aliases from embedding apps", () => {
+     const ctx = toSurveyDeliveryContext({ userCreatedDate: "2025-01-15T15:58:58.000Z" });
+ 
+-    assert.equal(ctx.accountCreatedDate, "2025-01-15T15:58:58.000Z");
++    assert.equal(ctx.userCreatedDate, "2025-01-15T15:58:58.000Z");
+   });
+ 
+   it("prefers User.CreatedDate aliases over legacy Account.CreatedDate aliases", () => {
+@@ -57,7 +57,13 @@ describe("toSurveyDeliveryContext", () => {
+       accountCreatedDate: "2024-12-01T00:00:00.000Z",
+     });
+ 
+-    assert.equal(ctx.accountCreatedDate, "2025-01-15T15:58:58.000Z");
++    assert.equal(ctx.userCreatedDate, "2025-01-15T15:58:58.000Z");
++  });
++
++  it("keeps Account.CreatedDate as a legacy alias for User.CreatedDate", () => {
++    const legacyCtx = toSurveyDeliveryContext({ accountCreatedDate: "2024-01-01T00:00:00.000Z" });
++
++    assert.equal(legacyCtx.userCreatedDate, "2024-01-01T00:00:00.000Z");
+   });
+ });
+ 
+@@ -110,7 +116,7 @@ describe("evaluateSurveyEligibility — general survey", () => {
+     accountCreatedDelayDays: 30,
+   };
+ 
+-  it("returns ok=false when Account.CreatedDate is missing", () => {
++  it("returns ok=false when User.CreatedDate is missing", () => {
+     const result = evaluateSurveyEligibility({
+       survey,
+       ctx: { ...baseCtx, clientOrgId: "museum-demo", respondentId: "003xx000001" },
+@@ -118,24 +124,24 @@ describe("evaluateSurveyEligibility — general survey", () => {
+     });
+ 
+     assert.equal(result.ok, false);
+-    assert.equal(result.reason, "account_created_date_missing");
++    assert.equal(result.reason, "user_created_date_missing");
+   });
+ 
+-  it("returns ok=false before the configured Account.CreatedDate delay", () => {
++  it("returns ok=false before the configured User.CreatedDate delay", () => {
+     const result = evaluateSurveyEligibility({
+       survey,
+-      ctx: { ...baseCtx, clientOrgId: "museum-demo", respondentId: "003xx000001", accountCreatedDate: "2025-01-01T00:00:00.000Z" },
++      ctx: { ...baseCtx, clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T00:00:00.000Z" },
+       responseCount: 0,
+     });
+ 
+     assert.equal(result.ok, false);
+-    assert.equal(result.reason, "account_created_delay_not_reached");
++    assert.equal(result.reason, "user_created_delay_not_reached");
+   });
+ 
+-  it("returns ok=true once the configured Account.CreatedDate delay is reached", () => {
++  it("returns ok=true once the configured User.CreatedDate delay is reached", () => {
+     const result = evaluateSurveyEligibility({
+       survey,
+-      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", accountCreatedDate: "2025-01-01T00:00:00.000Z" },
++      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T00:00:00.000Z" },
+       responseCount: 0,
+     });
+ 
+@@ -145,7 +151,7 @@ describe("evaluateSurveyEligibility — general survey", () => {
+   it("returns ok=true for positive delays once the UTC calendar date threshold is reached", () => {
+     const result = evaluateSurveyEligibility({
+       survey,
+-      ctx: { today: "2025-01-31", clientOrgId: "museum-demo", respondentId: "003xx000001", accountCreatedDate: "2025-01-01T23:59:59.000Z" },
++      ctx: { today: "2025-01-31", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T23:59:59.000Z" },
+       responseCount: 0,
+     });
+ 
+@@ -155,7 +161,7 @@ describe("evaluateSurveyEligibility — general survey", () => {
+   it("returns ok=true for delay 0 when the created date is later on the same UTC day", () => {
+     const result = evaluateSurveyEligibility({
+       survey: { ...survey, accountCreatedDelayDays: 0 },
+-      ctx: { today: "2026-07-01", clientOrgId: "museum-demo", respondentId: "003xx000001", accountCreatedDate: "2026-07-01T15:58:58.000Z" },
++      ctx: { today: "2026-07-01", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2026-07-01T15:58:58.000Z" },
+       responseCount: 0,
+     });
+ 
+@@ -165,7 +171,7 @@ describe("evaluateSurveyEligibility — general survey", () => {
+   it("returns ok=false when the respondent already answered", () => {
+     const result = evaluateSurveyEligibility({
+       survey,
+-      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", accountCreatedDate: "2025-01-01T00:00:00.000Z" },
++      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T00:00:00.000Z" },
+       responseCount: 0,
+       lastRespondedAt: "2025-02-01 10:00:00",
+     });
+@@ -173,6 +179,29 @@ describe("evaluateSurveyEligibility — general survey", () => {
+     assert.equal(result.ok, false);
+     assert.equal(result.reason, "already_answered");
+   });
++
++  it("returns ok=false after a general survey dismissal when no maxDismissals is configured", () => {
++    const result = evaluateSurveyEligibility({
++      survey: { ...survey, maxDismissals: null },
++      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T00:00:00.000Z" },
++      responseCount: 0,
++      dismissalCount: 1,
++    });
++
++    assert.equal(result.ok, false);
++    assert.equal(result.reason, "max_dismissals_reached");
++  });
++
++  it("honors configured maxDismissals for general surveys", () => {
++    const result = evaluateSurveyEligibility({
++      survey: { ...survey, maxDismissals: 3 },
++      ctx: { today: "2025-02-01", clientOrgId: "museum-demo", respondentId: "003xx000001", userCreatedDate: "2025-01-01T00:00:00.000Z" },
++      responseCount: 0,
++      dismissalCount: 1,
++    });
++
++    assert.deepEqual(result, { ok: true });
++  });
+ });
+ 
+ describe("evaluateSurveyEligibility — unknown_trigger_type", () => {
+diff --git a/server/src/lib/surveyRuntime.ts b/server/src/lib/surveyRuntime.ts
+index ab0e7ae7..173d31fb 100644
+--- a/server/src/lib/surveyRuntime.ts
++++ b/server/src/lib/surveyRuntime.ts
+@@ -9,7 +9,7 @@ export type ParsedSurvey = Omit<Survey, "questionOrder" | "followUpOptions" | "c
+ export type SurveyDeliveryContext = {
+   clientOrgId?: string;
+   respondentId?: string;
+-  accountCreatedDate?: string;
++  userCreatedDate?: string;
+   usageCount?: number;
+   today: string;
+ };
+@@ -73,6 +73,7 @@ export function toSurveyDeliveryContext(
+     return s.length > 0 ? s : undefined;
+   };
+   const getNumber = (v: unknown): number | undefined => {
++    if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+     const s = getString(v);
+     if (!s) return undefined;
+     const n = Number(s);
+@@ -87,7 +88,7 @@ export function toSurveyDeliveryContext(
+   return {
+     clientOrgId: getString(query.clientOrgId),
+     respondentId: getString(query.respondentId),
+-    accountCreatedDate: getString(query.userCreatedDate ?? query.userCreatedAt ?? query.accountCreatedDate ?? query.accountCreatedAt),
++    userCreatedDate: getString(query.userCreatedDate ?? query.userCreatedAt ?? query.accountCreatedDate ?? query.accountCreatedAt),
+     usageCount: getNumber(query.usageCount ?? query.counter),
+     today,
+   };
+@@ -162,11 +163,11 @@ export function evaluateSurveyEligibility(input: EligibilityInput): { ok: boolea
+     }
+     if (!ctx.respondentId) return { ok: false, reason: "general_respondent_missing" };
+     if (lastRespondedAt) return { ok: false, reason: "already_answered" };
+-    if (!ctx.accountCreatedDate) return { ok: false, reason: "account_created_date_missing" };
+-    const accountAgeDays = calendarDaysBetween(ctx.accountCreatedDate, ctx.today);
+-    if (accountAgeDays == null) return { ok: false, reason: "account_created_date_invalid" };
++    if (!ctx.userCreatedDate) return { ok: false, reason: "user_created_date_missing" };
++    const userAgeDays = calendarDaysBetween(ctx.userCreatedDate, ctx.today);
++    if (userAgeDays == null) return { ok: false, reason: "user_created_date_invalid" };
+     const delayDays = survey.accountCreatedDelayDays ?? 0;
+-    if (accountAgeDays < delayDays) return { ok: false, reason: "account_created_delay_not_reached" };
++    if (userAgeDays < delayDays) return { ok: false, reason: "user_created_delay_not_reached" };
+   }
+ 
+   const audience = survey.audience ?? "everyone";
+@@ -226,6 +227,7 @@ export function evaluateSurveyEligibility(input: EligibilityInput): { ok: boolea
+   if (maxImpr != null && impressionCount >= maxImpr) return { ok: false, reason: "max_impressions_reached" };
+ 
+   // Max dismissals check — stop showing after user closes without responding N times
++  if (survey.isGeneralSurvey && survey.maxDismissals == null && dismissalCount > 0) return { ok: false, reason: "max_dismissals_reached" };
+   if (survey.maxDismissals != null && dismissalCount >= survey.maxDismissals) return { ok: false, reason: "max_dismissals_reached" };
+ 
+   return { ok: true };
+diff --git a/server/src/routes/apiBoundary.test.ts b/server/src/routes/apiBoundary.test.ts
+index ee21b507..a7c188ce 100644
+--- a/server/src/routes/apiBoundary.test.ts
++++ b/server/src/routes/apiBoundary.test.ts
+@@ -22,7 +22,7 @@ const { responsesPublicRouter, responsesAdminRouter } = await import("./response
+ const { settingsRouter } = await import("./settings.js");
+ const { createSessionCookie, requireAdminAuth } = await import("../lib/auth.js");
+ const { db } = await import("../db/index.js") as { db: typeof DbType };
+-const { features, responses, surveys } = await import("../db/schema.js");
++const { features, responses, surveyDismissals, surveyImpressions, surveys } = await import("../db/schema.js");
+ 
+ process.env.AUTH_COOKIE_SECRET = "test-secret-with-at-least-thirty-two-characters";
+ process.env.COGNITO_DOMAIN = "https://auth.example.com";
+@@ -103,6 +103,8 @@ function createSurveyBoundaryFixture() {
+     inactiveSurvey,
+     cleanup: () => {
+       db.delete(responses).where(eq(responses.featureId, feature.id)).run();
++      db.delete(surveyDismissals).where(eq(surveyDismissals.surveyId, activeSurvey.id)).run();
++      db.delete(surveyImpressions).where(eq(surveyImpressions.surveyId, activeSurvey.id)).run();
+       db.delete(surveys).where(eq(surveys.featureId, feature.id)).run();
+       db.delete(features).where(eq(features.id, feature.id)).run();
+     },
+@@ -188,6 +190,26 @@ describe("public/admin API boundary", () => {
+     }
+   });
+ 
++  it("does not let public render mode without surveyId bypass audience eligibility", async () => {
++    const fixture = createSurveyBoundaryFixture();
++    try {
++      db.update(surveys)
++        .set({ audience: "specific_users", audienceDetails: "allowed-user@example.com" })
++        .where(eq(surveys.id, fixture.activeSurvey.id))
++        .run();
++
++      await withBoundaryApp(async (baseUrl) => {
++        const res = await fetch(`${baseUrl}/api/features/${fixture.feature.id}/surveys?render=true`);
++        const body = await res.json() as Array<{ id: number }>;
++
++        assert.equal(res.status, 200);
++        assert.deepEqual(body, []);
++      });
++    } finally {
++      fixture.cleanup();
++    }
++  });
++
+   it("prioritizes an eligible general survey over the trigger feature survey", async () => {
+     const triggerFeature = db
+       .insert(features)
+@@ -230,7 +252,7 @@ describe("public/admin API boundary", () => {
+         const params = new URLSearchParams({
+           clientOrgId: "museum-demo",
+           respondentId: "003xx000001",
+-          accountCreatedDate: "2020-01-01T00:00:00.000Z",
++          userCreatedDate: "2020-01-01T00:00:00.000Z",
+         });
+         const res = await fetch(`${baseUrl}/api/features/${triggerFeature.id}/surveys?${params.toString()}`);
+         const body = await res.json() as Array<{ id: number; featureId: number; isGeneralSurvey: boolean }>;
+@@ -250,6 +272,248 @@ describe("public/admin API boundary", () => {
+     }
+   });
+ 
++  it("filters requested surveyId through public eligibility and general survey priority", async () => {
++    const triggerFeature = db
++      .insert(features)
++      .values({ name: "Requested Quick Save", slug: `requested-quick-save-${Date.now()}-${Math.random().toString(36).slice(2)}` })
++      .returning()
++      .all()[0];
++    const generalFeature = db
++      .insert(features)
++      .values({ name: "Requested General NPS", slug: `requested-general-nps-${Date.now()}-${Math.random().toString(36).slice(2)}` })
++      .returning()
++      .all()[0];
++    const specificSurvey = db
++      .insert(surveys)
++      .values({
++        featureId: triggerFeature.id,
++        type: "nps",
++        scale: 10,
++        questionText: "Requested specific survey?",
++        active: true,
++      })
++      .returning()
++      .all()[0];
++    const generalSurvey = db
++      .insert(surveys)
++      .values({
++        featureId: generalFeature.id,
++        type: "nps",
++        scale: 10,
++        questionText: "Requested general survey?",
++        active: true,
++        isGeneralSurvey: true,
++        generalClientOrgId: "museum-demo",
++        accountCreatedDelayDays: 30,
++      })
++      .returning()
++      .all()[0];
++
++    try {
++      await withBoundaryApp(async (baseUrl) => {
++        const params = new URLSearchParams({
++          clientOrgId: "museum-demo",
++          respondentId: "003xx000010",
++          userCreatedDate: "2020-01-01T00:00:00.000Z",
++          render: "true",
++          surveyId: String(specificSurvey.id),
++        });
++        const blockedSpecific = await fetch(`${baseUrl}/api/features/${triggerFeature.id}/surveys?${params.toString()}`);
++        const blockedSpecificBody = await blockedSpecific.json() as Array<{ id: number }>;
++
++        params.set("surveyId", String(generalSurvey.id));
++        const allowedGeneral = await fetch(`${baseUrl}/api/features/${triggerFeature.id}/surveys?${params.toString()}`);
++        const allowedGeneralBody = await allowedGeneral.json() as Array<{ id: number; isGeneralSurvey: boolean }>;
++
++        assert.equal(blockedSpecific.status, 200);
++        assert.deepEqual(blockedSpecificBody, []);
++        assert.equal(allowedGeneral.status, 200);
++        assert.deepEqual(allowedGeneralBody.map((survey) => survey.id), [generalSurvey.id]);
++      });
++    } finally {
++      db.delete(responses).where(eq(responses.featureId, triggerFeature.id)).run();
++      db.delete(responses).where(eq(responses.featureId, generalFeature.id)).run();
++      db.delete(surveys).where(eq(surveys.featureId, triggerFeature.id)).run();
++      db.delete(surveys).where(eq(surveys.featureId, generalFeature.id)).run();
++      db.delete(features).where(eq(features.id, triggerFeature.id)).run();
++      db.delete(features).where(eq(features.id, generalFeature.id)).run();
++    }
++  });
++
++  it("does not return a requested active surveyId from another feature", async () => {
++    const fixtureA = createSurveyBoundaryFixture();
++    const fixtureB = createSurveyBoundaryFixture();
++    try {
++      await withBoundaryApp(async (baseUrl) => {
++        const params = new URLSearchParams({
++          render: "true",
++          surveyId: String(fixtureB.activeSurvey.id),
++        });
++        const res = await fetch(`${baseUrl}/api/features/${fixtureA.feature.id}/surveys?${params.toString()}`);
++        const body = await res.json() as Array<{ id: number }>;
++
++        assert.equal(res.status, 200);
++        assert.deepEqual(body, []);
++      });
++    } finally {
++      fixtureA.cleanup();
++      fixtureB.cleanup();
++    }
++  });
++
++  it("renders a selected survey after its opening impression reaches maxImpressions", async () => {
++    const fixture = createSurveyBoundaryFixture();
++    try {
++      db.update(surveys)
++        .set({ maxImpressions: 1 })
++        .where(eq(surveys.id, fixture.activeSurvey.id))
++        .run();
++      db.insert(surveyImpressions)
++        .values({
++          surveyId: fixture.activeSurvey.id,
++          respondentId: "respondent-with-impression",
++          clientOrgId: "museum-demo",
++        })
++        .run();
++
++      await withBoundaryApp(async (baseUrl) => {
++        const params = new URLSearchParams({
++          render: "true",
++          surveyId: String(fixture.activeSurvey.id),
++          respondentId: "respondent-with-impression",
++        });
++        const res = await fetch(`${baseUrl}/api/features/${fixture.feature.id}/surveys?${params.toString()}`);
++        const body = await res.json() as Array<{ id: number }>;
++
++        assert.equal(res.status, 200);
++        assert.deepEqual(body.map((survey) => survey.id), [fixture.activeSurvey.id]);
++      });
++    } finally {
++      fixture.cleanup();
++    }
++  });
++
++  it("records a public impression only for an eligible survey in the routed feature context", async () => {
++    const fixture = createSurveyBoundaryFixture();
++    try {
++      await withBoundaryApp(async (baseUrl) => {
++        const res = await fetch(`${baseUrl}/api/features/${fixture.feature.id}/impressions`, {
++          method: "POST",
++          headers: { "Content-Type": "application/json" },
++          body: JSON.stringify({
++            surveyId: fixture.activeSurvey.id,
++            respondentId: "eligible-impression-user",
++            clientOrgId: "museum-demo",
++          }),
++        });
++
++        assert.equal(res.status, 201);
++      });
++    } finally {
++      fixture.cleanup();
++    }
++  });
++
++  it("rejects public dismissals for a survey from another feature", async () => {
++    const fixtureA = createSurveyBoundaryFixture();
++    const fixtureB = createSurveyBoundaryFixture();
++    try {
++      await withBoundaryApp(async (baseUrl) => {
++        const res = await fetch(`${baseUrl}/api/features/${fixtureA.feature.id}/dismissals`, {
++          method: "POST",
++          headers: { "Content-Type": "application/json" },
++          body: JSON.stringify({
++            surveyId: fixtureB.activeSurvey.id,
++            respondentId: "forged-dismissal-user",
++            clientOrgId: "museum-demo",
++          }),
++        });
++        const body = await res.json() as { error: string };
++
++        assert.equal(res.status, 400);
++        assert.equal(body.error, "surveyId is not eligible for this feature context");
++      });
++    } finally {
++      fixtureA.cleanup();
++      fixtureB.cleanup();
++    }
++  });
++
++  it("falls back to the feature survey after the eligible general survey is dismissed", async () => {
++    const triggerFeature = db
++      .insert(features)
++      .values({ name: "Dismissal Quick Save", slug: `dismissal-quick-save-${Date.now()}-${Math.random().toString(36).slice(2)}` })
++      .returning()
++      .all()[0];
++    const generalFeature = db
++      .insert(features)
++      .values({ name: "Dismissal General NPS", slug: `dismissal-general-nps-${Date.now()}-${Math.random().toString(36).slice(2)}` })
++      .returning()
++      .all()[0];
++    const specificSurvey = db
++      .insert(surveys)
++      .values({
++        featureId: triggerFeature.id,
++        type: "nps",
++        scale: 10,
++        questionText: "Dismissal specific survey?",
++        active: true,
++      })
++      .returning()
++      .all()[0];
++    const generalSurvey = db
++      .insert(surveys)
++      .values({
++        featureId: generalFeature.id,
++        type: "nps",
++        scale: 10,
++        questionText: "Dismissal general survey?",
++        active: true,
++        isGeneralSurvey: true,
++        generalClientOrgId: "museum-demo",
++        accountCreatedDelayDays: 0,
++        maxDismissals: null,
++      })
++      .returning()
++      .all()[0];
++
++    try {
++      await withBoundaryApp(async (baseUrl) => {
++        const eventBody = {
++          surveyId: generalSurvey.id,
++          respondentId: "003xx000020",
++          clientOrgId: "museum-demo",
++          userCreatedDate: "2020-01-01T00:00:00.000Z",
++        };
++        const dismissal = await fetch(`${baseUrl}/api/features/${triggerFeature.id}/dismissals`, {
++          method: "POST",
++          headers: { "Content-Type": "application/json" },
++          body: JSON.stringify(eventBody),
++        });
++
++        const params = new URLSearchParams({
++          clientOrgId: eventBody.clientOrgId,
++          respondentId: eventBody.respondentId,
++          userCreatedDate: eventBody.userCreatedDate,
++        });
++        const res = await fetch(`${baseUrl}/api/features/${triggerFeature.id}/surveys?${params.toString()}`);
++        const body = await res.json() as Array<{ id: number }>;
++
++        assert.equal(dismissal.status, 201);
++        assert.equal(res.status, 200);
++        assert.deepEqual(body.map((survey) => survey.id), [specificSurvey.id]);
++      });
++    } finally {
++      db.delete(surveyDismissals).where(eq(surveyDismissals.surveyId, generalSurvey.id)).run();
++      db.delete(responses).where(eq(responses.featureId, triggerFeature.id)).run();
++      db.delete(responses).where(eq(responses.featureId, generalFeature.id)).run();
++      db.delete(surveys).where(eq(surveys.featureId, triggerFeature.id)).run();
++      db.delete(surveys).where(eq(surveys.featureId, generalFeature.id)).run();
++      db.delete(features).where(eq(features.id, triggerFeature.id)).run();
++      db.delete(features).where(eq(features.id, generalFeature.id)).run();
++    }
++  });
++
+   it("allows authenticated admin feature survey lookup to include inactive surveys", async () => {
+     const fixture = createSurveyBoundaryFixture();
+     try {
+@@ -309,7 +573,7 @@ describe("public/admin API boundary", () => {
+         const params = new URLSearchParams({
+           clientOrgId: "museum-demo",
+           respondentId: "003xx000002",
+-          accountCreatedDate: "2020-01-01T00:00:00.000Z",
++          userCreatedDate: "2020-01-01T00:00:00.000Z",
+         });
+         const res = await fetch(`${baseUrl}/api/surveys/by-feature/${triggerFeature.id}?${params.toString()}`);
+         const body = await res.json() as Array<{ id: number; isGeneralSurvey: boolean }>;
+@@ -353,6 +617,36 @@ describe("public/admin API boundary", () => {
+     }
+   });
+ 
++  it("rejects public responses from respondents outside the survey audience", async () => {
++    const fixture = createSurveyBoundaryFixture();
++    try {
++      db.update(surveys)
++        .set({ audience: "specific_users", audienceDetails: "allowed-user@example.com" })
++        .where(eq(surveys.id, fixture.activeSurvey.id))
++        .run();
++
++      await withBoundaryApp(async (baseUrl) => {
++        const res = await fetch(`${baseUrl}/api/responses`, {
++          method: "POST",
++          headers: { "Content-Type": "application/json" },
++          body: JSON.stringify({
++            surveyId: fixture.activeSurvey.id,
++            featureId: fixture.feature.id,
++            score: 9,
++            respondentId: "blocked-user@example.com",
++            clientOrgId: "museum-demo",
++          }),
++        });
++        const body = await res.json() as { error: string };
++
++        assert.equal(res.status, 400);
++        assert.equal(body.error, "respondentId does not match the survey audience");
++      });
++    } finally {
++      fixture.cleanup();
++    }
++  });
++
+   it("requires public general survey responses to match the survey client org", async () => {
+     const feature = db
+       .insert(features)
+@@ -399,7 +693,7 @@ describe("public/admin API boundary", () => {
+     }
+   });
+ 
+-  it("rejects converting a survey to general without org and account-age delay", async () => {
++  it("rejects converting a survey to general without org and user-age delay", async () => {
+     const fixture = createSurveyBoundaryFixture();
+     try {
+       await withBoundaryApp(async (baseUrl) => {
+@@ -418,7 +712,7 @@ describe("public/admin API boundary", () => {
+     }
+   });
+ 
+-  it("allows converting a survey to general with org and account-age delay", async () => {
++  it("allows converting a survey to general with org and user-age delay", async () => {
+     const fixture = createSurveyBoundaryFixture();
+     try {
+       await withBoundaryApp(async (baseUrl) => {
+diff --git a/server/src/routes/features.ts b/server/src/routes/features.ts
+index ffee3f4b..0c6b37fc 100644
+--- a/server/src/routes/features.ts
++++ b/server/src/routes/features.ts
+@@ -21,7 +21,7 @@ function resolveFeatureId(raw: string): number | null {
+   return row[0]?.id ?? null;
+ }
+ 
+-function getSurveyEligibilityVerdict(survey: ParsedSurvey, ctx: SurveyDeliveryContext) {
++function getSurveyEligibilityVerdict(survey: ParsedSurvey, ctx: SurveyDeliveryContext, options: { ignoreImpressionCount?: boolean } = {}) {
+   const responseCount = db
+     .select({ id: responses.id })
+     .from(responses)
+@@ -67,11 +67,104 @@ function getSurveyEligibilityVerdict(survey: ParsedSurvey, ctx: SurveyDeliveryCo
+     ctx,
+     responseCount,
+     lastRespondedAt: lastForRespondent?.createdAt ?? null,
+-    impressionCount,
++    impressionCount: options.ignoreImpressionCount ? 0 : impressionCount,
+     dismissalCount,
+   });
+ }
+ 
++function selectEligibleSurveysForFeature(
++  featureId: number,
++  ctx: SurveyDeliveryContext,
++  options: { requestedSurveyId?: number; skipDeliveryCaps?: boolean } = {}
++): ParsedSurvey[] {
++  const list = db
++    .select()
++    .from(surveys)
++    .where(and(eq(surveys.featureId, featureId), eq(surveys.active, true)))
++    .orderBy(surveys.id)
++    .all();
++  const parsed = list.map(parseSurveyRow);
++
++  const maxSurveysPerDay = getMaxSurveysPerDay();
++  if (!options.skipDeliveryCaps && maxSurveysPerDay != null && ctx.respondentId) {
++    const shownToday = db
++      .select({ id: surveyImpressions.id })
++      .from(surveyImpressions)
++      .where(
++        and(
++          eq(surveyImpressions.respondentId, ctx.respondentId),
++          gte(surveyImpressions.shownAt, sql`date('now')`)
++        )
++      )
++      .all().length;
++    if (shownToday >= maxSurveysPerDay) {
++      return [];
++    }
++  }
++
++  const generalClientOrgId = ctx.clientOrgId?.trim().toLowerCase();
++  const generalSurveys = generalClientOrgId
++    ? db
++        .select()
++        .from(surveys)
++        .where(and(eq(surveys.active, true), eq(surveys.isGeneralSurvey, true), eq(surveys.generalClientOrgId, generalClientOrgId)))
++        .orderBy(surveys.id)
++        .all()
++        .map(parseSurveyRow)
++    : [];
++  const eligibleGeneralSurvey = generalSurveys.find((survey) => {
++    const verdict = getSurveyEligibilityVerdict(survey, ctx, { ignoreImpressionCount: options.skipDeliveryCaps });
++    if (!verdict.ok && verdict.reason?.startsWith("user_created_date_")) {
++      console.warn("General survey skipped", {
++        reason: verdict.reason,
++        surveyId: survey.id,
++        hasClientOrgId: ctx.clientOrgId != null,
++        hasRespondentId: ctx.respondentId != null,
++      });
++    }
++    return verdict.ok;
++  });
++  if (eligibleGeneralSurvey) {
++    const eligible = [eligibleGeneralSurvey];
++    return options.requestedSurveyId != null ? eligible.filter((survey) => survey.id === options.requestedSurveyId) : eligible;
++  }
++
++  const eligible = parsed.filter((survey) =>
++    !survey.isGeneralSurvey && getSurveyEligibilityVerdict(survey, ctx, { ignoreImpressionCount: options.skipDeliveryCaps }).ok
++  );
++  return options.requestedSurveyId != null ? eligible.filter((survey) => survey.id === options.requestedSurveyId) : eligible;
++}
++
++function getSurveyEventBody(req: Request): { surveyId: number; ctx: SurveyDeliveryContext } | { error: string } {
++  const { surveyId, respondentId } = req.body as { surveyId?: unknown; respondentId?: unknown };
++  if (typeof surveyId !== "number" || !Number.isFinite(surveyId) || surveyId <= 0 || typeof respondentId !== "string" || !respondentId.trim()) {
++    return { error: "surveyId (number) and respondentId (string) are required" };
++  }
++  const ctx = toSurveyDeliveryContext(req.body as Record<string, unknown>);
++  if (!ctx.respondentId) {
++    return { error: "surveyId (number) and respondentId (string) are required" };
++  }
++  return { surveyId, ctx };
++}
++
++function validateSurveyEvent(req: Request, options: { skipDeliveryCaps: boolean }): { surveyId: number; ctx: SurveyDeliveryContext } | { error: string; status: number } {
++  const featureId = resolveFeatureId(req.params.featureId);
++  if (featureId == null) return { error: "Feature not found", status: 404 };
++
++  const parsed = getSurveyEventBody(req);
++  if ("error" in parsed) return { error: parsed.error, status: 400 };
++
++  const eligible = selectEligibleSurveysForFeature(featureId, parsed.ctx, {
++    requestedSurveyId: parsed.surveyId,
++    skipDeliveryCaps: options.skipDeliveryCaps,
++  });
++  if (!eligible.some((survey) => survey.id === parsed.surveyId)) {
++    return { error: "surveyId is not eligible for this feature context", status: 400 };
++  }
++
++  return parsed;
++}
++
+ featuresAdminRouter.get("/", (_req, res) => {
+   try {
+     const list = db.select().from(features).orderBy(features.id).all();
+@@ -101,11 +194,17 @@ export function getFeatureSurveys(req: Request, res: Response, options: { allowA
+     if (featureId == null) return res.status(404).json({ error: "Feature not found" });
+ 
+     const previewMode = options.allowAdminLookup && (req.query.preview === "1" || req.query.preview === "true");
+-    // Render mode: the survey was already decided eligible and the standalone page
+-    // just needs the active survey's data to display. Skips eligibility re-evaluation
+-    // (including the daily cap) so the page doesn't get blocked by the impression it
+-    // just recorded when the modal opened.
++    // Render mode with surveyId still validates the selected survey against this
++    // feature context, but skips delivery caps affected by the just-opened modal.
+     const renderMode = req.query.render === "1" || req.query.render === "true";
++    const requestedSurveyIdRaw = req.query.surveyId;
++    const requestedSurveyId =
++      requestedSurveyIdRaw != null && String(requestedSurveyIdRaw).trim() !== ""
++        ? Number(String(requestedSurveyIdRaw))
++        : undefined;
++    if (requestedSurveyId != null && (!Number.isFinite(requestedSurveyId) || requestedSurveyId <= 0)) {
++      return res.status(400).json({ error: "Invalid surveyId" });
++    }
+     const activeOnly = options.allowAdminLookup ? (previewMode ? false : req.query.active !== "false") : true;
+     const list = db
+       .select()
+@@ -118,60 +217,15 @@ export function getFeatureSurveys(req: Request, res: Response, options: { allowA
+       .orderBy(surveys.id)
+       .all();
+     const parsed = list.map(parseSurveyRow);
+-    if (!activeOnly || previewMode || renderMode) {
++    if (!activeOnly || previewMode) {
+       return res.json(parsed);
+     }
+ 
+     const ctx = toSurveyDeliveryContext(req.query as Record<string, unknown>, { allowDateOverride: options.allowAdminLookup });
+-
+-    // Global daily cap: across ALL surveys, a respondent should not be shown more
+-    // than N surveys per day. Counts today's impressions for this respondent over
+-    // every survey. Configured in app_settings (max_surveys_per_user_per_day).
+-    const maxSurveysPerDay = getMaxSurveysPerDay();
+-    if (maxSurveysPerDay != null && ctx.respondentId) {
+-      const shownToday = db
+-        .select({ id: surveyImpressions.id })
+-        .from(surveyImpressions)
+-        .where(
+-          and(
+-            eq(surveyImpressions.respondentId, ctx.respondentId),
+-            gte(surveyImpressions.shownAt, sql`date('now')`)
+-          )
+-        )
+-        .all().length;
+-      if (shownToday >= maxSurveysPerDay) {
+-        return res.json([]);
+-      }
+-    }
+-
+-    const generalClientOrgId = ctx.clientOrgId?.trim().toLowerCase();
+-    const generalSurveys = generalClientOrgId
+-      ? db
+-          .select()
+-          .from(surveys)
+-          .where(and(eq(surveys.active, true), eq(surveys.isGeneralSurvey, true), eq(surveys.generalClientOrgId, generalClientOrgId)))
+-          .orderBy(surveys.id)
+-          .all()
+-          .map(parseSurveyRow)
+-      : [];
+-    const eligibleGeneralSurvey = generalSurveys.find((survey) => {
+-      const verdict = getSurveyEligibilityVerdict(survey, ctx);
+-      if (!verdict.ok && verdict.reason?.startsWith("account_created_date_")) {
+-        console.warn("General survey skipped", {
+-          reason: verdict.reason,
+-          surveyId: survey.id,
+-          hasClientOrgId: ctx.clientOrgId != null,
+-          hasRespondentId: ctx.respondentId != null,
+-        });
+-      }
+-      return verdict.ok;
+-    });
+-    if (eligibleGeneralSurvey) {
+-      return res.json([eligibleGeneralSurvey]);
+-    }
+-
+-    const eligible = parsed.filter((survey) => !survey.isGeneralSurvey && getSurveyEligibilityVerdict(survey, ctx).ok);
+-    res.json(eligible);
++    res.json(selectEligibleSurveysForFeature(featureId, ctx, {
++      requestedSurveyId,
++      skipDeliveryCaps: renderMode && requestedSurveyId != null,
++    }));
+   } catch (e) {
+     res.status(500).json({ error: String(e) });
+   }
+@@ -188,15 +242,13 @@ featuresAdminRouter.get("/:featureId/surveys", (req, res) => {
+ 
+ // Record a survey dismissal (called by the widget when user closes without responding)
+ featuresPublicRouter.post("/:featureId/dismissals", (req, res) => {
+-  const { surveyId, respondentId, clientOrgId } = req.body as { surveyId?: unknown; respondentId?: unknown; clientOrgId?: unknown };
+-  if (typeof surveyId !== "number" || typeof respondentId !== "string" || !respondentId.trim()) {
+-    return res.status(400).json({ error: "surveyId (number) and respondentId (string) are required" });
+-  }
+   try {
++    const event = validateSurveyEvent(req, { skipDeliveryCaps: true });
++    if ("error" in event) return res.status(event.status).json({ error: event.error });
+     db.insert(surveyDismissals).values({
+-      surveyId,
+-      respondentId: respondentId.trim(),
+-      clientOrgId: typeof clientOrgId === "string" ? clientOrgId.trim() || null : null,
++      surveyId: event.surveyId,
++      respondentId: event.ctx.respondentId!,
++      clientOrgId: event.ctx.clientOrgId ?? null,
+     }).run();
+     res.status(201).json({ ok: true });
+   } catch (e) {
+@@ -206,15 +258,13 @@ featuresPublicRouter.post("/:featureId/dismissals", (req, res) => {
+ 
+ // Record a survey impression (called by the widget after opening the modal)
+ featuresPublicRouter.post("/:featureId/impressions", (req, res) => {
+-  const { surveyId, respondentId, clientOrgId } = req.body as { surveyId?: unknown; respondentId?: unknown; clientOrgId?: unknown };
+-  if (typeof surveyId !== "number" || typeof respondentId !== "string" || !respondentId.trim()) {
+-    return res.status(400).json({ error: "surveyId (number) and respondentId (string) are required" });
+-  }
+   try {
++    const event = validateSurveyEvent(req, { skipDeliveryCaps: false });
++    if ("error" in event) return res.status(event.status).json({ error: event.error });
+     db.insert(surveyImpressions).values({
+-      surveyId,
+-      respondentId: respondentId.trim(),
+-      clientOrgId: typeof clientOrgId === "string" ? clientOrgId.trim() || null : null,
++      surveyId: event.surveyId,
++      respondentId: event.ctx.respondentId!,
++      clientOrgId: event.ctx.clientOrgId ?? null,
+     }).run();
+     res.status(201).json({ ok: true });
+   } catch (e) {
+diff --git a/server/src/routes/responses.ts b/server/src/routes/responses.ts
+index aaccce73..ceb09595 100644
+--- a/server/src/routes/responses.ts
++++ b/server/src/routes/responses.ts
+@@ -50,6 +50,14 @@ function normalizeClientOrgId(value: string | null | undefined): string | null {
+   return trimmed ? trimmed.toLowerCase() : null;
+ }
+ 
++function audienceTokens(details: string | null | undefined): string[] {
++  if (!details) return [];
++  return details
++    .split(/[\n,;]+/g)
++    .map((x) => x.trim().toLowerCase())
++    .filter(Boolean);
++}
++
+ function buildResponseConditions(query: Record<string, unknown>) {
+   const { featureId, surveyId, from, to, version, clientOrgId, respondentId, qualityStatus, exportIncluded } = query;
+   const conditions: Array<ReturnType<typeof eq> | ReturnType<typeof gte> | ReturnType<typeof lte>> = [];
+@@ -87,6 +95,20 @@ responsesPublicRouter.post("/", (req, res) => {
+     if (surveyRow.featureId !== parsed.data.featureId) {
+       return res.status(400).json({ error: "featureId does not match the survey" });
+     }
++    if (surveyRow.audience === "organization") {
++      const responseClientOrgId = normalizeClientOrgId(parsed.data.clientOrgId);
++      const allowed = audienceTokens(surveyRow.audienceDetails);
++      if (!responseClientOrgId || (allowed.length > 0 && !allowed.includes(responseClientOrgId))) {
++        return res.status(400).json({ error: "clientOrgId does not match the survey audience" });
++      }
++    }
++    if (surveyRow.audience === "specific_users") {
++      const respondentId = parsed.data.respondentId?.trim().toLowerCase();
++      const allowed = audienceTokens(surveyRow.audienceDetails);
++      if (!respondentId || allowed.length === 0 || !allowed.includes(respondentId)) {
++        return res.status(400).json({ error: "respondentId does not match the survey audience" });
++      }
++    }
+     if (surveyRow.isGeneralSurvey) {
+       const responseClientOrgId = normalizeClientOrgId(parsed.data.clientOrgId);
+       const surveyClientOrgId = normalizeClientOrgId(surveyRow.generalClientOrgId);
