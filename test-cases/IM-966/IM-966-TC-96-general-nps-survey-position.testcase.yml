@@ -1,58 +1,89 @@
 schemaVersion: '1.0'
 id: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
 key: TC-96
-title: IM-966 — Add general (non-feature) NPS survey position (survey-tool + widget)
+title: IM-966 — Add general (non-feature) NPS survey position (survey-tool + widget, Rentals Quick Save trigger)
 description: |
   Cobertura QA de IM-966 (Add general NPS survey position), bajo el epic IM-970
   NPS Survey Tool delivery. Extiende el modelo de surveys product-feature-scoped
-  a un survey NPS general no atado a ninguna feature, disparable desde un
-  entry point acordado (típicamente login u otro).
+  a un survey NPS **general** no atado a ninguna feature, que se sirve
+  piggybacking desde los triggers de Salesforce existentes cuando la eligibility
+  del general placement lo permite.
+
+  Contexto pinneado (per QA-NPS-Survey-Tool.md):
+  - Env dev: `https://surveytool.dev.veevart.ai`
+  - Client org id: `computing-power-944-dev-ed` (scratch org validada)
+  - Trigger validado: **Rentals Quick Save** (mismo path que TC-78 runtime)
+  - Placement general se evalúa ANTES que el feature-specific
+  - Delay del general usa Salesforce `User.CreatedDate`
+
+  Config concreta esperada del general survey:
+    Subject / Feature: General Veevart NPS
+    Feature slug: general-veevart
+    Type: NPS
+    Active: true
+    General survey: true
+    Client org: computing-power-944-dev-ed
+    Show after User.CreatedDate: 0 days
+    Max dismissals: 1
+    Audience: everyone
+    Trigger: No trigger
+
+  Eligibility response shape esperada cuando el general es eligible:
+    {
+      "isGeneralSurvey": true,
+      "generalClientOrgId": "computing-power-944-dev-ed",
+      "accountCreatedDelayDays": 0
+    }
+
+  Iframe URL contract cuando eligibility retorna el general desde un trigger
+  de Rentals:
+    /survey/rentals?surveyId=<generalSurveyId>&clientOrgId=<org>&respondentId=<user>&userCreatedDate=<date>
 
   Repos en scope:
-  - `survey-tool` — admin flow para crear/activar la posición general +
-    public endpoint que la devuelve al widget
-  - `AuctiferaDX` — widget integration del trigger general
-  - `NFPFundraising` — si el trigger debe existir también en flujos nonprofit
-    (pending package cross-test, igual que TC-78 AC7)
-
-  El technical scope indica "should build on the dynamic placement model when
-  available, rather than adding another hardcoded slug path" → el widget-side
-  ideal depende de que la dynamic placement esté disponible. Si no está,
-  hay riesgo de que el dev caiga en un slug hardcoded como fallback y ese
-  camino se convierta en deuda.
+  - `survey-tool` — admin flow + public endpoint del general placement
+  - `AuctiferaDX` — widget integration del trigger Rentals (validado)
+  - `NFPFundraising` — namespace `vnfp`, widget NPS pendiente en branch
+    `origin/story/nps-surveys-implementation-for-REN-394` (no en `main`)
 
   Validar:
-  1) admin puede crear + activar un general NPS survey independiente de los
-     product-specific surveys,
-  2) con placement general activo, el trigger acordado de Salesforce puede
-     pedir + mostrar el survey general via el public endpoint,
-  3) con placement general inactivo, no se muestra survey,
-  4) product-specific surveys siguen funcionando sin regresión cuando
-     coexisten con el general,
-  5) el trigger point exacto queda documentado (login vs otro entry) — TBD
-     hasta que el PM/dev definan.
+  1) admin puede crear + activar general NPS independiente de product-specific,
+  2) con general active + delay elapsed + no prior response/dismissal, Rentals
+     Quick Save muestra modal con título "General Survey" (no "Rentals"),
+  3) fallback a Rentals con título "Rentals" cuando: general inactive / delay
+     not elapsed / already answered / max dismissals reached / general exhausted,
+  4) coexistencia no regresa product-specific behavior (39/39 boundary tests),
+  5) missing userCreatedDate → general no evaluable,
+  6) iframe URL preserva surveyId + userCreatedDate (si falta cualquiera, modal
+     dice "No active survey for this subject"),
+  7) admin reset route disponible para QA state management,
+  8) implementación construida sobre dynamic placement model (no slug hardcoded),
+  9) NFPFundraising cross-test blocked hasta unblock via beta/scratch/source deploy.
 
   QA Sub-task asociada: IM-1006
   Riesgos abiertos:
-  - Trigger point exacto (login? App Launcher? record-page open?) NO está
-    pinneado en la story. Bloqueará AC2 hasta definirse.
-  - Dynamic placement model dependency: si no está lista, revisar si el dev
-    metió un slug hardcoded como fallback — eso sería deuda técnica.
-  - NFPFundraising cross-test dependerá del pending package (mismo issue que
-    TC-78 AC7).
+  - Dynamic placement dependency: si el dev metió slug hardcoded como fallback,
+    es deuda técnica — validar approach en PR review.
+  - NFPFundraising widget NPS está en branch pending, no en `main` — cross-test
+    blocked hasta beta package, scratch preparado, o source deploy autorizado.
+  - Priority rule 8 (missing userCreatedDate) es data-quality issue: si el
+    Salesforce trigger no envía User.CreatedDate, el general no funcionará
+    aunque esté activo — validar el trigger context antes de exigir el AC.
 type: integration
 priority: medium
 status: active
 preconditions:
-- Build del `survey-tool` con IM-966 desplegado en env dev (`surveytool.dev.veevart.ai`)
-- Widget integration en AuctiferaDX / scratch org con el trigger general enganchado (o pendiente de definirse — flag como blocker si no está)
-- Admin user del survey-tool con permisos para crear surveys
-- Un product-specific survey activo en paralelo (para regression AC4) — reutilizar el fixture de TC-78
-- Browser con DevTools (Network + Console) para inspeccionar la request al general endpoint
+- Build de `survey-tool` con IM-966 desplegado en `surveytool.dev.veevart.ai`
+- Widget AuctiferaDX enganchado al Rentals Quick Save trigger (validado en TR-087)
+- Admin user del survey-tool con Google `@veevart.com` (Cognito Hosted UI)
+- Organization creada en survey-tool con `clientOrgId = computing-power-944-dev-ed`
+- Product-specific Rentals survey activo (fixture reutilizado de TC-78) — slug `rentals`, NPS, active
+- General Veevart NPS survey configurable (slug `general-veevart`, general=true, activable/desactivable durante los scenarios)
+- Browser con DevTools (Network + Console) — inspección de eligibility payload y iframe URL
 - Cliente HTTP (curl) para hits directos al public endpoint sin cookies
+- Acceso al admin reset endpoint `DELETE /api/admin/features/:featureId/respondent-state/:respondentId` para reset entre scenarios
 format: gherkin
 scenarios:
-- title: IM-966 — Admin creates a general NPS survey configured independently from product-specific surveys
+- title: IM-966 — Admin creates a general NPS survey with the expected concrete config
   tags:
   - happy-path
   - im-966
@@ -62,17 +93,18 @@ scenarios:
   - admin
   - survey-tool
   given:
-  - un admin user autenticado en el survey-tool
-  - existe (o puede coexistir) al menos un product-specific NPS survey ya configurado
+  - un admin autenticado en `surveytool.dev.veevart.ai` (Cognito + Google `@veevart.com`)
+  - existe la organization con `clientOrgId = computing-power-944-dev-ed`
+  - existe un product-specific Rentals survey activo (slug `rentals`, NPS)
   when:
-  - el admin crea una nueva survey con placement = general (no feature-scoped)
-  - configura preguntas, escala, eligibility rules y activa la survey
+  - "el admin crea una nueva survey con la config: Subject `General Veevart NPS`, slug `general-veevart`, Type NPS, Active true, General survey true, Client org `computing-power-944-dev-ed`, Show after User.CreatedDate 0 days, Max dismissals 1, Audience everyone, Trigger `No trigger`"
+  - activa la survey
   then:
-  - la survey general queda persistida con el placement general
-  - su configuración es independiente de cualquier product-specific survey (no comparte slug, ni feature id, ni targeting)
+  - la general survey queda persistida con placement general (`isGeneralSurvey=true`)
+  - "config es independiente de cualquier product-specific survey: no comparte slug, ni feature id, ni targeting"
+  - el admin endpoint distingue placement=general de placement=feature en el response schema
   - queda activable/desactivable desde el admin UI
-  - el response schema del admin endpoint distingue placement=general de placement=feature
-- title: IM-966 — Active general NPS placement responds via the public endpoint when the agreed Salesforce trigger fires
+- title: IM-966 — Rentals Quick Save serves the general survey when eligible (title "General Survey", eligibility + iframe URL contract)
   tags:
   - happy-path
   - im-966
@@ -81,35 +113,97 @@ scenarios:
   - ac-2
   - widget
   - salesforce
+  - rentals
+  - priority-rule-1
+  - priority-rule-2
+  - priority-rule-3
   given:
-  - una general NPS survey activa creada en scenario 1
-  - el widget está enganchado al trigger acordado (login u otro entry point definido por PM/dev)
+  - la general survey `general-veevart` está active con delay=0 días
+  - "no hay prior response ni dismissal del general para el `respondentId` bajo test"
+  - "el widget está enganchado a Rentals Quick Save en el scratch org `computing-power-944-dev-ed` (mismo path validado en TR-087)"
   when:
-  - el trigger se dispara en el entorno target (Lightning login handler, App home load, o el trigger acordado)
-  - el widget hace request al public endpoint del general placement
+  - "el usuario dispara Rentals Quick Save (cmp `Auctifera__AddManageResourcesToRentalEvent` → botón Quick Save)"
+  - el widget hace GET a `/api/features/rentals/surveys?clientOrgId=...&respondentId=...&userCreatedDate=...&today=...&usageCount=...`
   then:
-  - el public endpoint retorna 200 con el payload del general survey
+  - "response es 200 con eligibility payload: `isGeneralSurvey: true`, `generalClientOrgId: computing-power-944-dev-ed`, `accountCreatedDelayDays: 0`"
   - NO hay redirect a Cognito (mismo gate que TC-78 AC1)
-  - el widget renderiza el survey general
-  - la request es anónima (sin admin cookie, mismo gate que TC-78 AC6)
-- title: IM-966 — General NPS survey inactive returns no survey to the widget
+  - request es anónima sin admin cookie (mismo gate que TC-78 AC6)
+  - "iframe/modal URL incluye AMBOS `surveyId=<generalSurveyId>` Y `userCreatedDate=<date>` en query"
+  - "el modal renderiza el general survey — título dice exactamente `General Survey`, NO `Rentals`"
+- title: IM-966 — Rentals fallback with title "Rentals" when the general survey is inactive
   tags:
-  - negative
+  - happy-path
   - im-966
   - im-1006
   - im-970
   - ac-3
-  - widget
+  - fallback
+  - rentals
   given:
-  - la general NPS survey está en estado inactive (nunca activada, desactivada, o placement general deshabilitado)
+  - la general survey está inactive (nunca activada o desactivada, o placement general disabled)
+  - el product-specific Rentals survey está active y eligible
   when:
-  - el trigger acordado se dispara
-  - el widget hace request al public endpoint del general placement
+  - Rentals Quick Save trigger fires
+  - el widget hace GET al eligibility endpoint
   then:
-  - el response indica NO mostrar survey (payload vacío, eligibility=false, o 204)
-  - el widget NO renderiza ningún survey
-  - NO hay error en console — es un no-op silencioso esperado
-- title: IM-966 — Product-specific surveys keep working when a general survey coexists (no eligibility regression)
+  - "response NO indica general survey (`isGeneralSurvey` no está o es false)"
+  - "el widget renderiza el Rentals survey — título dice exactamente `Rentals`"
+  - no hay error en console
+- title: IM-966 — Rentals fallback when general delay has not elapsed (priority rule 4)
+  tags:
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - ac-3
+  - priority-rule-4
+  - user-created-date
+  given:
+  - la general survey está active con `Show after User.CreatedDate` > age del user en días
+  - el respondent user tiene `User.CreatedDate` reciente (delay no ha pasado)
+  - el product-specific Rentals survey está active y eligible
+  when:
+  - Rentals Quick Save fires
+  then:
+  - eligibility response NO retorna el general
+  - el general NO aparece
+  - el Rentals survey aparece si es eligible (título `Rentals`)
+- title: IM-966 — General survey is hidden after the same respondent already answered it (priority rule 5)
+  tags:
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - ac-3
+  - priority-rule-5
+  - repeat-suppression
+  given:
+  - la general survey está active y fue eligible en un run anterior
+  - el mismo `respondentId` SUBMITED una response al general
+  when:
+  - Rentals Quick Save fires otra vez para el mismo respondent
+  then:
+  - el general NO aparece de nuevo
+  - "eligibility response del general endpoint indica no-show (isGeneralSurvey ausente/false o accountCreatedDelayDays lock)"
+  - el Rentals survey puede aparecer si su propia eligibility lo permite
+- title: IM-966 — General survey is hidden after reaching Max dismissals (priority rule 6)
+  tags:
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - ac-3
+  - priority-rule-6
+  - dismissal-suppression
+  given:
+  - la general survey está active con `Max dismissals = 1`
+  - el mismo `respondentId` alcanzó el max dismissals (dismissed una vez)
+  when:
+  - Rentals Quick Save fires otra vez para el mismo respondent
+  then:
+  - el general NO aparece de nuevo
+  - el Rentals survey puede aparecer si su propia eligibility lo permite
+- title: IM-966 — Product-specific Rentals survey keeps working when a general survey coexists (no regression, boundary 39/39)
   tags:
   - regression
   - im-966
@@ -118,33 +212,53 @@ scenarios:
   - ac-4
   - eligibility
   - regression-evidence
+  - priority-rule-7
   given:
-  - una general NPS survey activa
-  - al menos un product-specific survey activo (feature-scoped, ej. rentals — mismo fixture que TC-78)
+  - la general survey está active
+  - el Rentals product-specific survey está active
+  - la general survey NO es eligible (delay/answered/dismissed exhausted)
   when:
-  - el trigger product-specific se dispara en su feature normal
-  - el widget hace request al public endpoint del feature
+  - Rentals Quick Save fires
   then:
-  - el response del feature endpoint retorna el product-specific survey (no el general)
-  - la eligibility del product survey NO se ve afectada por la existencia del general
-  - los boundary tests que lockearon el contrato en IM-963 (apiBoundary.test) siguen pasando 39/39
-  - no hay cross-contamination entre general y feature en el response payload
-- title: IM-966 — Trigger point definition (TBD in story) — validate agreed entry point once documented
+  - el response del Rentals feature endpoint retorna el Rentals survey (no el general)
+  - la eligibility del Rentals NO se ve afectada por la existencia del general
+  - los apiBoundary tests que lockearon el contrato en IM-963 siguen 39/39 en el CI
+  - NO hay cross-contamination entre general y feature en el response payload
+- title: IM-966 — Missing User.CreatedDate is treated as data-quality issue (priority rule 8)
   tags:
-  - missing-doc
+  - negative
   - im-966
   - im-1006
   - im-970
-  - ac-2
-  - trigger-tbd
+  - ac-3
+  - priority-rule-8
+  - missing-doc
+  - data-quality
   given:
-  - la story dice "such as login or another agreed application entry point" — el trigger exacto NO está pinneado
+  - la general survey está active con delay=0
+  - el Salesforce trigger context NO envía `userCreatedDate` (missing / null)
   when:
-  - el PM/dev definen el trigger final
+  - Rentals Quick Save fires
   then:
-  - actualizar este scenario con el trigger específico (login vs App home vs otro)
-  - re-ejecutar AC2 contra el trigger definido y capturar screenshot de la Lightning page donde dispara
-  - documentar el trigger point en el runbook del widget para futuros dev-ops
+  - la general survey NO es evaluada como eligible (delay-based delivery no puede evaluarse)
+  - QA registra el missing `User.CreatedDate` como config/data-quality issue contra el widget o el trigger context
+  - "el server NO crashea: retorna gracefully (feature-specific fallback si aplica, o empty payload)"
+- title: IM-966 — Iframe URL contract — missing surveyId or userCreatedDate makes the modal show "No active survey for this subject"
+  tags:
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - iframe-contract
+  - network-contract
+  given:
+  - eligibility retorna el general survey con `surveyId` + `userCreatedDate` válidos
+  when:
+  - "QA inspecciona el iframe/modal request URL: `/survey/rentals?surveyId=...&clientOrgId=...&respondentId=...&userCreatedDate=...`"
+  then:
+  - "si AMBOS `surveyId` Y `userCreatedDate` están en el query: el modal renderiza el general survey correctamente"
+  - "si cualquiera de los dos falta: el modal muestra `No active survey for this subject` — esto es el failure mode que QA debe reproducir para validar el error path"
+  - este scenario también actúa como regression guard para futuros cambios del widget/iframe contract
 - title: IM-966 — Dynamic placement model dependency (fallback to hardcoded slug = tech debt)
   tags:
   - missing-doc
@@ -152,15 +266,33 @@ scenarios:
   - im-1006
   - im-970
   - dependency
-  - edge-case
+  - architecture
   given:
-  - technical scope pide "build on the dynamic placement model when available, rather than adding another hardcoded slug path"
+  - technical scope de IM-966 pide "build on the dynamic placement model when available, rather than adding another hardcoded slug path"
   when:
-  - QA revisa el PR
+  - QA revisa el PR del survey-tool
   then:
-  - si el dev usó el dynamic placement model → PASS y queda alineado con la arquitectura target
-  - si el dev metió un slug hardcoded como fallback → raiseo defect linkeando a la story del dynamic placement, marco este scenario como fail y pido refactor cuando el dynamic placement esté listo
-- title: IM-966 — NFPFundraising cross-test (blocked if package not ready)
+  - si el dev usó el dynamic placement model → PASS y alineado con la arquitectura target
+  - si el dev metió slug hardcoded como fallback → raiseo defect linkeando a la story del dynamic placement, marco este scenario fail y pido refactor cuando el dynamic placement esté listo
+- title: IM-966 — Admin reset endpoint enables repeatable QA runs (DELETE respondent state)
+  tags:
+  - qa-tooling
+  - im-966
+  - im-1006
+  - im-970
+  - admin
+  - reset
+  given:
+  - un respondent ya ejecutó submissions/dismissals contra el general survey
+  - QA necesita re-correr los scenarios 4-7 sin cambiar de user
+  when:
+  - QA llama `DELETE /api/admin/features/:featureId/respondent-state/:respondentId` con admin auth
+  then:
+  - el endpoint retorna 200/204
+  - la request requiere admin authentication (Cognito Hosted UI cookie); sin cookie retorna 401/302 a login (mismo gate que otros admin endpoints)
+  - post-reset, Rentals Quick Save vuelve a mostrar el general survey (state limpio)
+  - este endpoint queda documentado en el runbook de QA como el mecanismo canónico de reset entre runs
+- title: IM-966 — NFPFundraising cross-test (blocked until beta / prepared scratch / source deploy authorized)
   tags:
   - regression-evidence
   - im-966
@@ -170,12 +302,15 @@ scenarios:
   - cross-test
   - blocked-if-missing
   given:
-  - el pending package integration de NFPFundraising está disponible y desplegado en un sandbox
+  - "el widget NPS de NFPFundraising está en branch `origin/story/nps-surveys-implementation-for-REN-394` — no en `main`, no en un installed package version"
+  - "el package usa namespace `vnfp`; la branch incluye `lwc/npsWidget/*`, `classes/NpsWidgetController.cls`, `staticresources/SurveyWidgetTrigger.js` + Aura integrations para Fundraising/Payment/Ticketing"
   when:
-  - QA repite scenarios 2-4 desde el sandbox NFPFundraising
+  - "una de las siguientes esté disponible: (a) beta/installable package version de NFPFundraising con el widget, (b) scratch org preparada con la branch deployed, (c) approval para source deploy de la branch a scratch"
   then:
-  - el widget general se comporta igual que en AuctiferaDX
-  - si el package no está disponible, este scenario queda `blocked` con nota explícita en el TR (mismo patrón que TC-78 AC7)
+  - QA re-ejecuta scenarios 2-8 desde el sandbox NFPFundraising con namespace `vnfp`
+  - el general widget se comporta igual que en AuctiferaDX
+  - se validan trigger context values (featureSlug, clientOrgId, respondentId, userCreatedDate, selected surveyId) desde los triggers Fundraising/Membership
+  - "MIENTRAS el package/scratch no esté disponible: scenario queda `blocked` con nota explícita — NO es blocker de IM-966 en AuctiferaDX; es cross-package coverage con dependencia externa"
 tags:
 - im-966
 - im-1006
@@ -187,9 +322,11 @@ tags:
 - salesforce
 - auctifera-dx
 - nfpfundraising
-version: 1
+- rentals
+- priority-rules
+version: 2
 metadata:
   createdBy: codex
   createdAt: '2026-07-02T20:00:00Z'
   lastModifiedBy: codex
-  lastModifiedAt: '2026-07-02T20:00:00Z'
+  lastModifiedAt: '2026-07-03T14:00:00Z'
