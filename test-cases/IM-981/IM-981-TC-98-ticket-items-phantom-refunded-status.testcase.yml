@@ -1,0 +1,207 @@
+schemaVersion: "1.0"
+
+id: "8d4e9a72-1c56-4b83-9e18-3a7f6d24b5e2"
+key: "TC-98"
+title: "Ticket item migration (Altru -> Veevart): status Refunded solo debe emitirse cuando el ticket item tiene refund real en Altru IM-981 / Order #12510469"
+description: |
+  Cobertura QA de IM-981 bajo el epic IM-70 Altru Queries. Valida que
+  la logica de migracion de ticket items no marca `Status = Refunded`
+  para tickets cuya orden Altru esta en estado `Complete` con
+  `Refunds = $0.00 (0)`.
+
+  Cliente reportado: Illinois Holocaust Museum (IHM). Sara reporto
+  que la Order #12510469 (Altru, 2024-01-15, Total $0.00, status
+  Complete, 0 refunds) genero en Salesforce el Ticket R-205440 con
+  los 5 Ticket Items siguientes, TODOS marcados con
+  `Status = Refunded`:
+
+  * MOF-112584
+  * MOF-191798
+  * MOF-19671
+  * MOF-252544
+  * MOF-265776
+
+  Esto es un falso positivo: en Altru los tickets tienen
+  Quantity y Price = $0.00 pero NO estan reembolsados. El estado
+  correcto post-fix depende de la logica de negocio (candidatos:
+  `Complete`, `Active`, `Used`, `Void`, o el status que Veevart use
+  para tickets de complementary/free con orden cerrada sin refund).
+  El PR del fix debe explicitar cual es el status esperado.
+
+  Comportamiento esperado post-fix:
+
+  * Ticket items cuya orden Altru esta `Complete` y NO tiene refunds
+    NO deben emitir `Status = Refunded` en la migracion.
+  * Ticket items que SI tienen refund real en Altru (refund
+    financial transaction linkeada a la SALESORDER via CREDITPAYMENT
+    o al SALESORDERITEM directamente) siguen emitiendo
+    `Status = Refunded` correctamente (no-regression del universo
+    hoy correcto).
+  * La logica que decide `Refunded` debe basarse en evidencia de
+    refund line-level (analoga al gate IM-562 de fund assignment
+    refunds), no en un heuristico de Quantity/Price = 0 o en
+    campos que confunden orden gratis con orden reembolsada.
+
+  Query en scope: `ticket_items.sql` / `tickets.sql` (o el nombre
+  real del extractor en Veevarts/MigrationToolETL bajo
+  `queries/tickets/` o `queries/ticketing/`). El PR de fix aun no
+  esta creado — el nombre exacto se ajustara cuando el dev abra el
+  PR.
+
+  Referencias:
+  - Issue: https://veevart.atlassian.net/browse/IM-981
+  - QA sub-task: https://veevart.atlassian.net/browse/IM-1008
+  - Epic: https://veevart.atlassian.net/browse/IM-70
+  - Altru source: SALESORDER #12510469, recordId
+    `EBEC173C-CABD-4C97-A52A-EB76A5BAD216`.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Acceso de lectura a Altru source DB Illinois_db_2 (profile safesql `illinois_2`) via bastion + keychain"
+  - "PR del fix disponible (branch + head SHA) — a rellenar cuando el dev abra el PR contra `main` en Veevarts/MigrationToolETL"
+  - "Sandbox IllinoisTrainingsSandbox accesible para reproducir el falso positivo y validar el fix via mock dataset (ticket + ticket items + orden)"
+  - "IHM target org accesible en Lightning para validacion post-load tras re-migration"
+  - "Para la behavioral del query: Node + safesql instalado (`~/tools/safesql/safesql.mjs`)"
+
+format: gherkin
+scenarios:
+  - title: "Source Altru confirma que Order #12510469 esta Complete, tiene 0 refunds, y sus 5 SALESORDERITEMTICKET IDs son MOF-112584 / MOF-191798 / MOF-19671 / MOF-252544 / MOF-265776"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - illinois-holocaust-museum
+      - regression-evidence
+      - ac-1
+    given:
+      - "Profile `illinois_2` disponible en safesql"
+      - "Query de caracterizacion `/tmp/im981-order-12510469.sql` que dado `@userDefinedId = '12510469'` y/o `@salesOrderId = 'EBEC173C-CABD-4C97-A52A-EB76A5BAD216'` extrae: (a) SALESORDER row con status/complete flag/total; (b) SALESORDERITEMTICKET rows con userDefinedId / MOF-*; (c) CREDITPAYMENT rows con CREDITID -> SALESORDERPAYMENT / SALESORDER 12510469 (refunds candidatos); (d) FINANCIALTRANSACTION TYPE='Refund' linkeadas via CREDITPAYMENT.REVENUEID"
+    when:
+      - "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im981-order-12510469.sql`"
+    then:
+      - "SALESORDER: 1 fila con USERDEFINEDID='12510469', total=$0.00, ORDERSTATUSCODE / status = 'Complete' (o el equivalente Altru), fecha 2024-01-15"
+      - "SALESORDERITEMTICKET: 5 filas con USERDEFINEDID / MOF-ID coincidiendo con MOF-112584, MOF-191798, MOF-19671, MOF-252544, MOF-265776. Ninguna con flag de refund a nivel line-item"
+      - "CREDITPAYMENT / FINANCIALTRANSACTION TYPE='Refund': 0 filas linkeadas a la SALESORDER 12510469. Confirma que Altru NO tiene refund registrado para esta orden"
+      - "Evidencia: `attachments/tr-<NN>-tc-98/safesql/illinois_2-order-12510469.json`"
+      - "FLAG (a rellenar cuando el PR abra): confirmar contra el schema Altru el nombre exacto de la columna status (ORDERSTATUSCODE vs STATUS vs otro) y el valor de 'Complete' (int vs string) segun se use en el pre-fix query de tickets"
+
+  - title: "Side-by-side y scope-fit del PR del fix confirman que el gate de status Refunded se apoya en refund line-level real, no en heuristico de Quantity/Price=0 ni en un flag order-level ambiguo"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+      - ac-2
+    given:
+      - "PR abierto por el dev sobre branch `fix/im981-*` head <SHA> en Veevarts/MigrationToolETL"
+    when:
+      - "QA descarga el diff completo del PR y mapea el AC implicito (Refunded solo si hay refund real) contra las lineas tocadas"
+    then:
+      - "El query `ticket_items.sql` (o el nombre real del extractor de tickets/ticket-items) cambia la expresion que decide `Auctifera__Status__c` para que 'Refunded' se emita SOLO cuando existe una linea CREDITPAYMENT / REFUND FT que apunte especificamente a la SALESORDERITEMTICKET (o su parent SALESORDER cuando el refund es full-order y explicitamente asociado)"
+      - "El pre-fix probablemente decidia 'Refunded' por un heuristico order-level (e.g. `EXISTS refund on the same SALESORDER`) o por un flag derivado de Quantity/Price = 0 — el fix reemplaza esa logica por evidencia line-level directa (analogo al gate IM-562 line-level en fund_assignments_membership_refunds)"
+      - "Los tests de regresion (`ticket-items-query.spec.ts` / `.integration.spec.ts` si existen) agregan al menos un caso IM-981 con un fixture que replica la Order #12510469: SALESORDER Complete + 5 SALESORDERITEMTICKET + 0 refunds. El test asserta que las 5 filas emitidas NO tienen `Status = Refunded`"
+      - "Los tests agregan tambien un caso positivo: SALESORDER con 1 ticket + 1 refund line-level real (mirror del universo hoy correcto). El test asserta que ESE ticket SI emite `Status = Refunded`. Esto cierra el gate de no-regression"
+      - "Touch radius limpio: solo SQL de tickets + spec. NO toca pipelines/entities/mappers ni triggers Auctifera. NO toca queries de fund-assignment (donation ni membership)"
+      - "FLAG (a ajustar cuando el PR abra): nombre exacto del query, del branch, y del head SHA se rellenan aqui. Confirmar tambien el nombre del status post-fix ('Complete' / 'Active' / 'Used' / 'Void' segun decida el dev)"
+
+  - title: "Source illinois_2 aggregate confirma que TODOS los ticket items con Status=Refunded post-fix tienen un refund line-level real, y que ninguna orden Complete-sin-refunds emite Refunded"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - regression
+      - ac-3
+    given:
+      - "Profile `illinois_2` disponible"
+      - "Query agregada `/tmp/im981-ticket-status-audit.sql` que replica el query post-fix del PR y, para cada fila con `Auctifera__Status__c = 'Refunded'`, computa: (a) `has_refund_ft_linked` (booleano = existe FINANCIALTRANSACTION TYPE='Refund' linkeada line-level via CREDITPAYMENT o campo directo); (b) `is_order_complete_no_refunds` (booleano = la parent SALESORDER esta Complete y no tiene refunds asociados en la source)"
+    when:
+      - "QA ejecuta la query agregada contra illinois_2"
+    then:
+      - "`refunded_rows` = todos los tickets emitidos con status Refunded"
+      - "`has_refund_ft_linked = 1` count = `refunded_rows` — TODOS los Refunded post-fix tienen refund line-level real"
+      - "`is_order_complete_no_refunds = 1` count = 0 — NINGUN ticket Refunded proviene de una orden Complete-sin-refunds (bug IM-981 eliminado)"
+      - "El row correspondiente a la Order #12510469: las 5 filas (MOF-*) emiten con `Auctifera__Status__c != 'Refunded'` (valor exacto a validar contra la decision del dev en el PR)"
+      - "Evidencia: `attachments/tr-<NN>-tc-98/safesql/illinois_2-ticket-status-audit.json`"
+
+  - title: "Regression-gate: tickets con refund real (universo hoy correcto) siguen emitiendo Status=Refunded post-fix — no-regression"
+    tags:
+      - regression
+      - no-regression
+      - edge-cases
+      - ac-4
+    given:
+      - "Query pre-fix (branch `main`) y post-fix (branch del PR) ejecutables sobre el mismo profile `illinois_2`"
+    when:
+      - "QA corre ambas versiones y hace un JOIN por `vnfp__Implementation_External_ID__c` (o el external ID del ticket item / MOF-*) para clasificar cada fila en 3 buckets: (A) 'Refunded' en pre y post — no-regression; (B) 'Refunded' pre pero no post — casos IM-981 recuperados; (C) 'no Refunded' pre y post — universo estable"
+    then:
+      - "Bucket A: filas con refund line-level real. Post-fix mantiene `Status=Refunded`. Diff sobre otros campos = 0"
+      - "Bucket B: casos IM-981 (Order Complete-sin-refunds mal marcada). Post-fix NO emite `Refunded`. Debe incluir las 5 filas MOF-* de Order #12510469"
+      - "Bucket C: universo grande de tickets normales — sin cambios post-fix"
+      - "El PR debe declarar cifra exacta de cada bucket. Si el bucket B es grande (>50 tickets), levantar con el cliente el alcance real del bug antes del load"
+
+  - title: "Sandbox reconciliation: reproducir el falso positivo Order #12510469 en IllinoisTrainingsSandbox insertando el Ticket + 5 Ticket Items y verificando que el status post-fix NO es Refunded (mock dataset via savepoint+rollback)"
+    tags:
+      - functional
+      - sandbox
+      - salesforce
+      - reconciliation
+      - illinois-holocaust-museum
+    given:
+      - "Sandbox `illinois-trainings` accesible con permisos de insert sobre Ticket (`vnfp__Ticket__c` o equivalente) y Ticket Item (`vnfp__Ticket_Item__c` o equivalente)"
+      - "Un mock dataset que replica la Order #12510469: 1 Ticket R-205440-MOCK con 5 Ticket Items (MOF-112584-MOCK, MOF-191798-MOCK, MOF-19671-MOCK, MOF-252544-MOCK, MOF-265776-MOCK), external IDs prefixados `IM-981-MOCK-`"
+    when:
+      - "QA abre savepoint via Anonymous Apex, hace insert bulk del ticket + ticket items, lee de vuelta el status de cada item, y rollback"
+    then:
+      - "Insert succeeds (los triggers Auctifera aceptan tickets con status no-Refunded en orden Complete)"
+      - "Read-back: los 5 Ticket Items MOF-*-MOCK tienen `Status = <valor esperado post-fix, NOT 'Refunded'>`"
+      - "Rollback elimina el ticket + 5 items — 0 residuo"
+      - "FLAG: el status esperado depende del PR (Complete / Active / Used / Void). Confirmar antes de la corrida final"
+
+  - title: "Functional UI post-load: los 5 Ticket Items de Order #12510469 en IHM target org tienen el Status correcto (no Refunded) tras la re-migration"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - salesforce
+      - post-load
+      - illinois-holocaust-museum
+    given:
+      - "Re-migration ejecutada en IHM target org con la nueva version del migration tool (PR IM-981 mergeado y `dist/` reconstruido)"
+      - "QA tiene acceso de lectura al Illinois target org en Lightning"
+    when:
+      - "QA busca el Ticket R-205440 y sus 5 Ticket Items (MOF-112584, MOF-191798, MOF-19671, MOF-252544, MOF-265776) en Lightning"
+      - "QA captura screenshots del Ticket detail + related list Ticket Items + un Ticket Item individual"
+    then:
+      - "Ticket R-205440: existe con la Order #12510469 linkeada. [SCREENSHOT: im981-ticket-r205440.png]"
+      - "Los 5 Ticket Items MOF-*: `Status` NO es 'Refunded'. Valor exacto segun decision del dev en el PR (Complete / Active / Used / Void). [SCREENSHOT: im981-ticket-items-list.png]"
+      - "Uno de los items en detalle: mismo status no-Refunded. [SCREENSHOT: im981-ticket-item-mof-112584-detail.png]"
+      - "Spot-check de un ticket con refund real (bucket A del scenario anterior): sigue apareciendo con Status=Refunded — no-regression"
+      - "FLAG a documentar en IM-981 antes de cerrar: confirmar con Sara el valor definitivo del status esperado para tickets de orden Complete/gratis"
+
+tags:
+  - im-981
+  - im-1008
+  - im-70
+  - migration-tool-etl
+  - altru-queries
+  - ticketing
+  - ticket-item
+  - refund
+  - status-refunded
+  - sql-server
+  - salesforce
+  - sandbox
+  - illinois-holocaust-museum
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-06T02:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-06T02:00:00Z"
+  version: 1

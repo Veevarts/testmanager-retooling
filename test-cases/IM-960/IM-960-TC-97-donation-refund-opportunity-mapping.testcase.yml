@@ -1,0 +1,206 @@
+schemaVersion: "1.0"
+
+id: "b2f76a15-9e83-4c1d-8f27-6b3d92a0f4c1"
+key: "TC-97"
+title: "Donation refund fund-assignment migration (Altru -> Veevart): vnfp__Opportunity__c debe mapear la Opportunity de la donacion, no el ID del payment/revenue IM-960"
+description: |
+  Cobertura QA de IM-960 bajo el epic IM-70 Altru Queries. Valida que
+  el query `Donations Fund Assignments Refunds` mapea correctamente
+  el External ID de la Opportunity de la donacion original en el
+  campo `vnfp__Opportunity__c`, y NO el External ID del payment /
+  revenue transaction (bug reportado por Sara / IHM).
+
+  Cliente reportado: Illinois Holocaust Museum (IHM). Sara reporto
+  que el sheet de validacion tiene multiples registros con
+  `Auctifera__Status__c = Refunded` cuyo `vnfp__Opportunity__c`
+  apunta a un ID de payment de Altru en vez del ID de la donacion,
+  bloqueando la carga completa del lote de Fund Assignment Refunds.
+
+  Ejemplo concreto reportado (unico ejemplo en la issue):
+
+  * External ID incorrecto: `5701BD79-05F3-4ED5-A1D1-B882AB44C299`
+  * En Altru corresponde al payment `rev-10299682`
+    - Constituent: Lois Uretz
+    - Date: 2021-02-13
+    - Amount: $36.00
+    - Order #: 11216662
+  * Naturaleza real: Order payment (Financial Transaction Payment),
+    NO una Opportunity/Donation.
+
+  Comportamiento esperado post-fix:
+
+  * `vnfp__Opportunity__c` debe recibir el External ID de la
+    Opportunity (donacion) que el refund cancela, en el mismo grain
+    que otros queries de fund-assignment lo hacen para casos
+    non-refund (ver `fund_assignments_donation.sql` y el patron de
+    `membership_transactions.sql` / `fund_assignments_membership_refunds.sql`
+    IM-561 line-specific mt.ID / IM-811 non-POS credit-item).
+  * Los mismos registros que hoy quedan bloqueados por el ID
+    invalido deben poder cargarse en Salesforce y linkear a la
+    Opportunity correcta.
+  * Los refunds que HOY se cargan bien (si los hay) NO deben
+    verse afectados por el fix (no-regression sobre el universo
+    pre-fix cargado).
+
+  Query en scope: `fund_assignments_donation_refunds.sql` (nombre
+  probable en el repo Veevarts/MigrationToolETL, mismo folder que
+  `fund_assignments_membership_refunds.sql`). El PR de fix aun no
+  esta creado — este test case se genera desde la descripcion del
+  ticket y se ajustara con el nombre exacto del PR / branch cuando
+  el dev abra el PR.
+
+  Referencias:
+  - Issue: https://veevart.atlassian.net/browse/IM-960
+  - QA sub-task: https://veevart.atlassian.net/browse/IM-1007
+  - Epic: https://veevart.atlassian.net/browse/IM-70
+  - Related (mismo folder de queries, patron de resolucion de
+    Opportunity a nivel line-item): IM-811 / TC-39 non-POS credit-item
+    membership refund.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Acceso de lectura a Altru source DB Illinois_db_2 (profile safesql `illinois_2`) via bastion + keychain"
+  - "PR del fix disponible (branch + head SHA) — a rellenar cuando el dev abra el PR contra `main` en Veevarts/MigrationToolETL"
+  - "Sandbox IllinoisTrainingsSandbox accesible para validacion de insert (savepoint+rollback) sobre Auctifera__Fund_Donation_Assignment__c ligado a una Opportunity real, con Auctifera__Status__c=Refunded"
+  - "IHM target org accesible en Lightning para validacion post-load tras re-migration"
+  - "Para la behavioral del query: Node + safesql instalado (`~/tools/safesql/safesql.mjs`)"
+
+format: gherkin
+scenarios:
+  - title: "Source Altru (illinois_2) confirma que 5701BD79-05F3-4ED5-A1D1-B882AB44C299 es un payment (rev-10299682, Lois Uretz, 2021-02-13, $36, Order #11216662) y NO una Opportunity"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - illinois-holocaust-museum
+      - regression-evidence
+      - ac-1
+    given:
+      - "Profile `illinois_2` disponible en safesql"
+      - "Query de caracterizacion `/tmp/im960-payment-vs-opportunity.sql` que dado `@id = '5701BD79-05F3-4ED5-A1D1-B882AB44C299'` extrae: (a) si aparece en FINANCIALTRANSACTION.ID con TYPE='Payment'; (b) si aparece como REVENUEID de alguna SALESORDER; (c) si aparece como Opportunity/donation candidate en membership_transactions / order_membership / donation_transactions"
+    when:
+      - "QA ejecuta `node ~/tools/safesql/safesql.mjs run illinois_2 /tmp/im960-payment-vs-opportunity.sql`"
+    then:
+      - "El ID aparece en FINANCIALTRANSACTION con TYPE='Payment' (o 'Order' segun el schema Altru) — confirma su naturaleza de payment"
+      - "El CALCULATEDUSERDEFINEDID del row es `rev-10299682`, la fecha `2021-02-13`, el monto `$36.00`, el constituent tiene apellido `Uretz`, y hay un SALESORDERPAYMENT que lo asocia a la SALESORDER 11216662"
+      - "El mismo ID NO aparece como Opportunity/donation candidate en ningun query del pipeline `donation_transactions` / `membership_transactions` — confirmando que el mapeo actual del refund query es un cross-table mismatch (payment vs opportunity)"
+      - "Evidencia: `attachments/tr-<NN>-tc-97/safesql/illinois_2-payment-characterization.json`"
+      - "FLAG (informativo, no defect): la issue no adjunta el sheet completo de validacion — la cifra de cuantos refunds estan mal mapeados no esta disponible en el ticket. Recomendado: pedir a Sara el CSV/export del sheet antes de la corrida QA final para poder validar N registros, no solo 1"
+
+  - title: "Side-by-side y scope-fit del PR del fix confirman que solo se toca el mapeo de vnfp__Opportunity__c en el query de refunds de donaciones"
+    tags:
+      - data-review
+      - side-by-side
+      - scope-fit
+      - ac-2
+    given:
+      - "PR abierto por el dev sobre branch `fix/im960-*` head <SHA> en Veevarts/MigrationToolETL"
+    when:
+      - "QA descarga el diff completo del PR y mapea el AC implicito (vnfp__Opportunity__c debe apuntar a la Opportunity, no al payment) contra las lineas tocadas"
+    then:
+      - "El query `fund_assignments_donation_refunds.sql` (o el nombre real usado por el pipeline de donation refunds) cambia el SELECT del campo `vnfp__Opportunity__c` de un valor derivado del payment (payment_ft.CALCULATEDUSERDEFINEDID o similar) a un valor derivado de la donacion (donation_ft.CALCULATEDUSERDEFINEDID / opportunity resolution via revenue split / cimf equivalente para donaciones)"
+      - "El COALESCE o expression usado para resolver la Opportunity respeta la jerarquia establecida en `membership_transactions.sql` / `fund_assignments_membership_refunds.sql`: prefer line-specific (revenue_split, gift_designation) > order-level (order_donation, sales_order) > fallback heuristic. NO se agrega un fallback que reintroduzca IDs de payment"
+      - "Los tests de regresion (`fund-assignment-donation-refunds-query.spec.ts` / `.integration.spec.ts` si existen, mirror del patron IM-811) agregan al menos un caso IM-960 que asserta `vnfp__Opportunity__c !== payment.ID` y `vnfp__Opportunity__c === donation_opportunity.ID` sobre un fixture equivalente al `rev-10299682 / Order #11216662`"
+      - "Touch radius limpio: solo SQL del extractor + spec + docs. NO toca pipelines, entities, mappers ni triggers Auctifera. NO toca `fund_assignments_donation.sql` (query de dues, no de refunds) — solo el query de refunds de donaciones"
+      - "FLAG (a ajustar cuando el PR abra): nombre exacto del query, del branch, y del head SHA se rellenan aqui"
+
+  - title: "Source illinois_2 aggregate confirma que TODOS los refunds de donaciones ahora mapean a un ID que existe como Opportunity, no como payment"
+    tags:
+      - data-review
+      - source-validation
+      - behavioral
+      - safesql
+      - regression
+      - ac-3
+    given:
+      - "Profile `illinois_2` disponible"
+      - "Query agregada `/tmp/im960-refund-mapping-audit.sql` que replica el query post-fix del PR, y para cada fila calcula: (a) `emitted_opportunity_id`; (b) `is_payment` (booleano = existe en FINANCIALTRANSACTION.ID con TYPE='Payment' / 'Order'); (c) `is_opportunity` (booleano = existe como opportunity segun `donation_transactions.sql` / `membership_transactions.sql`)"
+    when:
+      - "QA ejecuta la query agregada contra illinois_2"
+    then:
+      - "Resultado esperado: `is_payment=1` count = 0 (post-fix ningun refund emite un ID de payment)"
+      - "`is_opportunity=1` count = `total_rows` (todos los refunds resuelven a una Opportunity valida)"
+      - "El row del ejemplo (`rev-10299682` / Order #11216662 / Lois Uretz / $36 / 2021-02-13) aparece con `emitted_opportunity_id != 5701BD79-05F3-4ED5-A1D1-B882AB44C299` y `is_opportunity=1`"
+      - "Evidencia: `attachments/tr-<NN>-tc-97/safesql/illinois_2-refund-mapping-audit.json`"
+
+  - title: "Regression-gate: refunds de donaciones que HOY se cargan bien (si los hay) NO cambian su emitted_opportunity_id post-fix"
+    tags:
+      - regression
+      - no-regression
+      - edge-cases
+      - ac-4
+    given:
+      - "Query pre-fix del branch `main` y query post-fix del branch del PR, ambos disponibles localmente"
+      - "Universo del audit: todos los refunds de donaciones en Illinois_db_2"
+    when:
+      - "QA corre ambas versiones (pre y post) sobre el mismo universo y hace un JOIN por `vnfp__Implementation_External_ID__c`"
+    then:
+      - "Filas que pre-fix emitian un ID que YA era una Opportunity valida (no un payment): post-fix deben emitir EXACTAMENTE el mismo ID. Diff = 0"
+      - "Filas que pre-fix emitian un ID de payment (bug): post-fix ahora emiten el ID de la Opportunity correcta. Diff = N filas con nuevo Opportunity ID + N filas dropped del ID payment"
+      - "Cifra clave declarada por el PR: `pre_fix_valid_opportunity_rows` (que no cambian) + `pre_fix_broken_payment_rows` (que ahora resuelven) = `post_fix_total_rows`"
+      - "FLAG: si el PR declara que TODOS los rows pre-fix estaban rotos (i.e. `pre_fix_valid_opportunity_rows = 0`), documentar explicitamente que este fix es 100% additive sobre records nuevos y no toca ningun record ya cargado"
+
+  - title: "Sandbox reconciliation: insertar un Fund Donation Assignment con status=Refunded ligado a una Opportunity real en IllinoisTrainingsSandbox (savepoint+rollback)"
+    tags:
+      - functional
+      - sandbox
+      - salesforce
+      - reconciliation
+    given:
+      - "Sandbox `illinois-trainings` accesible con permisos de insert sobre `Auctifera__Fund_Donation_Assignment__c`"
+      - "Una Opportunity existente en el sandbox (idealmente de tipo Donation, no Membership) para linkear el refund test"
+      - "Un record mirror del ejemplo IM-960: `Auctifera__Donated_Amount__c=-36`, `Auctifera__Status__c='Refunded'`, `Auctifera__Accounting_Status__c='Posted'`, `Auctifera__Specific_Fund__c=<Id fund valido>`, `vnfp__Opportunity__c=<Id Opportunity donation valida>`, `Auctifera__Posted_Date__c=2021-02-13`, `Auctifera__Implementation_External_ID__c='IM-960-TEST-<epoch>'`"
+    when:
+      - "QA abre savepoint via Anonymous Apex, hace insert, lee el record de vuelta, y rollback"
+    then:
+      - "Insert succeeds (los triggers Auctifera aceptan un refund con Opportunity valida y Status=Refunded)"
+      - "Read-back confirma `vnfp__Opportunity__c` linked a la Opportunity real (no a un payment). El related list de la Opportunity muestra el Fund Donation Assignment"
+      - "Rollback elimina el record test — 0 residuo"
+      - "Este scenario replica exactamente el mismo tipo de gate que IM-811 / TC-39 Scenario 5 hizo para membership refunds, aplicado al lado donation refunds"
+
+  - title: "Functional UI post-load: los Fund Donation Assignment refunds recuperados aparecen en IHM target org con vnfp__Opportunity__c apuntando a la Opportunity, y el record de la Opportunity muestra el refund en su related list"
+    tags:
+      - functional
+      - ui-evidence
+      - screenshots
+      - salesforce
+      - post-load
+      - illinois-holocaust-museum
+    given:
+      - "Re-migration ejecutada en IHM target org con la nueva version del migration tool (PR IM-960 mergeado y `dist/` reconstruido)"
+      - "QA tiene acceso de lectura al Illinois target org en Lightning"
+    when:
+      - "QA busca el Fund Donation Assignment refund del ejemplo (Lois Uretz / 2021-02-13 / $36 / Order #11216662) por Implementation_External_ID"
+      - "QA captura screenshot del record detail + related list de la Opportunity linkeada"
+    then:
+      - "El Fund Donation Assignment: `Donated Amount = -$36.00`, `Posted Date = 2021-02-13`, `Status = Refunded`, `Opportunity` linkeado a un record que es una donacion (no un payment ficticio) [SCREENSHOT: im960-refund-lois-uretz.png]"
+      - "El Opportunity detail muestra el Fund Donation Assignment en su related list [SCREENSHOT: im960-opp-related-list.png]"
+      - "Spot-check de 5-10 refunds adicionales del sheet de validacion: todos con `vnfp__Opportunity__c` populado a una Opportunity real (no a un payment ID). Verificar en un list view de Auctifera__Fund_Donation_Assignment__c filtrado por Status=Refunded"
+      - "Reporte agregado: total records de refunds de donaciones 2021+ en IHM target org debe coincidir con el conteo declarado por Sara del sheet de validacion (a rellenar con el numero exacto cuando este disponible)"
+
+tags:
+  - im-960
+  - im-1007
+  - im-70
+  - migration-tool-etl
+  - altru-queries
+  - donation
+  - refund
+  - fund-assignment
+  - sql-server
+  - salesforce
+  - sandbox
+  - illinois-holocaust-museum
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-06T02:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-06T02:00:00Z"
+  version: 1
