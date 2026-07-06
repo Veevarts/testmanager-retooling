@@ -14,8 +14,8 @@ environment:
 summary:
   total: 8
   passed: 5
-  failed: 0
-  notRun: 3
+  failed: 1
+  notRun: 2
   blocked: 0
   skipped: 0
   passRate: 62.5
@@ -150,40 +150,53 @@ results:
   testCaseFilePath: test-cases/IM-939/IM-939-TC-92-ic-9-1-merchant-batches.testcase.yml
   scenarioTitle: 9.1 Merchant Batches — Stripe verified no-op success
   scenarioIndex: 2
-  status: not-run
+  status: failed
   stepResults:
   - order: 1
-    status: not-run
+    status: failed
     phase: given
     text: el operator selecciona "Stripe" como Payment merchant
     actual: pendiente MigrationApp UI run con input Stripe.
     attachments: []
   - order: 2
-    status: not-run
+    status: failed
     phase: when
     text: el case corre
     actual: pendiente.
     attachments: []
   - order: 3
-    status: not-run
+    status: failed
     phase: then
     text: no se enqueue ningún Square reconciliation batch
     actual: verificar via SOQL AsyncApexJob post-run.
     attachments: []
   - order: 4
-    status: not-run
+    status: failed
     phase: then
     text: el step completa como SUCCESS con nota "skipped as success"
     actual: verificar en MigrationApp UI output.
     attachments: []
-  notes: |
-    Pendiente de tu parte:
-      1. Run `ic-9-1-merchant-batches` v3 con input Stripe.
-      2. Screenshot case COMPLETED + nota "skipped as success".
-      3. SOQL: no nuevos SquareChargeFix / SquareRefundStatusUpdate AsyncApexJob rows post-run.
-      4. Drop en attachments/tr-101-tc-92/scenario-3/.
-  attachments: []
-  defects: []
+  notes: 'FAIL. Defect raised: IM-1010. Actual Stripe behavior es correcto (no new Square AsyncApexJob rows por Stripe run), pero verify method flaggy — detecta leftover rows del Square run previo. Fix
+    propuesto: snapshot pre-existing Square Ids antes del case body, assert on NEW-only post-body (pattern de TC-94 S2 ContactRolesCreationBatch).'
+  attachments:
+  - name: asyncapexjob-square-timeline-stripe-run-2026-07-06.csv
+    path: attachments/tr-101-tc-92/scenario-3/asyncapexjob-square-timeline-stripe-run-2026-07-06.csv
+    mimeType: text/csv
+  - name: batch-settings-post-stripe-run-2026-07-06.csv
+    path: attachments/tr-101-tc-92/scenario-3/batch-settings-post-stripe-run-2026-07-06.csv
+    mimeType: text/csv
+  defects:
+  - jiraKey: IM-1010
+    url: https://veevart.atlassian.net/browse/IM-1010
+    severity: Medium
+    summary: '[IC 9.1 Merchant Batches] Stripe path verify emits spurious FAIL when org has recent Square AsyncApexJob rows'
+  executedAt: '2026-07-06T20:00:00Z'
+  actual: |-
+    FAIL — IE corrió ic-9-1-merchant-batches con Payment merchant = Stripe post-run-Square. Case reportó FAILED con:
+
+      VerifyException: [9.1] verify failed: Stripe path must not enqueue Square batches but found 2 recent Square AsyncApexJob row(s)
+
+    Root cause: el verify method del Stripe path detecta 2 rows Square AsyncApexJob del run Square previo (SquareChargeFixBatch + SquareRefundBatch @ 2026-07-06T19:45:36Z), no distingue si son leftover vs new-from-this-run. SOQL post-Stripe-run confirma que el Stripe path NO enqueueó NADA nuevo (Schedule_Square sigue true del run previo — no fue modificado; Schedule_Stripe=false; no new Square AsyncApexJob rows attribuibles al Stripe run). El actual behavior es correcto; el verify method es lo que falla — case defect. Ver defect IM-1010 para detalle + pattern sugerido (snapshot pre-existing IDs, mismo que TC-94 S2 usa para ContactRolesCreationBatch).
 - testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
   testCaseKey: TC-92
   testCaseTitle: IC 9.1 — Run Merchant Batches (delivery hybrid, Square/Stripe branching)
@@ -413,11 +426,19 @@ history:
   reason: 'IE corrió ic-9-1-merchant-batches con Payment merchant = Square desde MigrationApp catalog contra illinois-trainings ~19:45 UTC. SOQL verify post-run confirmó S0 (Square path AC1 completo: 5/5
     assertions PASS), S4 (verification gate — enqueue/schedule no completion), S5 (payment sync informational job scheduled). 3 scenarios promovidos not-run → passed. Nuevo verdict: 5/8 PASS · 3 not-run
     (S2 Stripe path + S3 unrecognized merchant + S7 prod catalog seed) · pass rate 62.5%.'
+- action: updated
+  timestamp: '2026-07-06T20:05:00Z'
+  user: codex
+  from: in-progress
+  to: in-progress
+  reason: 'IE corrió ic-9-1-merchant-batches con Payment merchant = Stripe post-Square-run. Case FAILED con VerifyException: verify method detecta 2 rows Square AsyncApexJob leftover del run Square previo.
+    SOQL confirma actual behavior es correcto (no new Square rows del Stripe path) — el bug está en verify. S2 promovido not-run → failed. Defect IM-1010 raised (Medium, Develop-found, linked to IM-939)
+    con pattern sugerido: snapshot pre-existing IDs (mismo que TC-94 S2). Nuevo verdict: 5/8 PASS · 1 FAIL · 2 not-run.'
 metadata:
   createdBy: codex
   createdAt: '2026-07-06T17:30:00Z'
   updatedBy: codex
-  updatedAt: '2026-07-06T19:50:00Z'
+  updatedAt: '2026-07-06T20:05:00Z'
   runType: sign-off-audit
   parentStory: IM-939
   qaSubtask: IM-1001
