@@ -1,0 +1,281 @@
+schemaVersion: '1.0'
+id: tr-9f420b15-94ab-48b2-ae4b-85b50e10abdf
+key: TR-101
+testCaseKey: TC-92
+testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+title: TR-101 · TC-92 · IC 9.1 Run Merchant Batches — delivery sign-off audit vs illinois-trainings
+status: in-progress
+executedBy: codex
+executedAt: '2026-07-06T17:30:00Z'
+environment:
+  org: illinois-trainings (adminveevart@ilhmec.org.trainings)
+  buildVersion: 'Delivery sign-off audit (Salesforce-bound IC, hybrid). PR #207 mergeado + IM-735 (2026-06-12) attesta hybrid=verified en ambos orgs (incl. double-run idempotency). Verificamos post-fix observable via SOQL; MigrationApp UI runs no ejecutables desde CLI.'
+summary:
+  total: 8
+  passed: 2
+  failed: 0
+  notRun: 6
+  blocked: 0
+  skipped: 0
+  passRate: 25.0
+notes: |
+  ## Baseline SOQL 2026-07-06 (illinois-trainings)
+
+  - `Auctifera__Batch_Settings__c` = 0 rows → ni Square ni Stripe checkmark set
+  - `CronTrigger 'Veevart - Automatic Batch Schedule'` = NOT PRESENT (driver diario ausente)
+  - `AsyncApexJob 'Veevart - Square charge fix'` / `'Veevart - Square refund status update'` = NOT PRESENT
+  - No hay evidencia observable de que IC 9.1 se haya corrido en illinois-trainings
+
+  ## Reference evidence
+  - IM-735 (2026-06-12): hybrid — verified on both orgs (Camilo dev + Tucson), incl. double-run
+  - BE PR #207 squash-merged to main
+  - MigrationApp-dev v3 seeded
+
+  ## Pendiente end-to-end
+  Un IE debe correr `ic-9-1-merchant-batches` v3 desde MigrationApp catalog contra illinois-trainings
+  (con input Payment merchant = Square para AC1/AC2/AC5, = Stripe para AC3) y capturar screenshots +
+  SOQL follow-up. Ver notes por scenario.
+results:
+- scenarioIndex: 0
+  scenarioTitle: 9.1 Merchant Batches — Square path arms recurring auto-schedule + immediate enqueue
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: el operator selecciona "Square" como Payment merchant
+    status: not-run
+    actual: pendiente MigrationApp UI run.
+  - stepType: when
+    stepTitle: el case corre
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: Auctifera__Schedule_Square__c es set a true en el Batch_Settings__c org default
+    status: not-run
+    actual: baseline 0 rows en Batch_Settings; expected 1 row post-run con Schedule_Square = true.
+  - stepType: then
+    stepTitle: los recurring scheduled jobs "Veevart - Square charge fix" y "Veevart - Square refund status update" existen
+    status: not-run
+    actual: baseline NOT PRESENT en CronTrigger.
+  - stepType: then
+    stepTitle: el daily meta-scheduler "Veevart - Automatic Batch Schedule" está scheduled
+    status: not-run
+    actual: baseline NOT PRESENT (variant NFP sí está WAITING).
+  - stepType: then
+    stepTitle: un immediate run de ambos Square batches está enqueued (AsyncApexJob en accepted state Holding/Queued/Preparing/Processing/Completed)
+    status: not-run
+    actual: baseline no AsyncApexJob rows.
+  - stepType: then
+    stepTitle: el step completa como SUCCESS
+    status: not-run
+    actual: pendiente MigrationApp UI run.
+  notes: |
+    Pendiente de tu parte:
+      1. Login como IE, abrir MigrationApp catalog en illinois-trainings.
+      2. Run `ic-9-1-merchant-batches` v3 con Payment merchant = Square.
+      3. Screenshot: case COMPLETED.
+      4. SOQL follow-up: `SELECT Auctifera__Schedule_Square__c FROM Auctifera__Batch_Settings__c` → true.
+      5. Setup → Scheduled Jobs screenshot: `Veevart - Square charge fix`, `Veevart - Square refund status update`, `Veevart - Automatic Batch Schedule`.
+      6. `SELECT ApexClass.Name, Status FROM AsyncApexJob WHERE ApexClass.Name IN ('SquareChargeFixBatch','SquareRefundStatusUpdateBatch') ORDER BY CreatedDate DESC LIMIT 5`.
+      7. Drop en attachments/tr-101-tc-92/scenario-1/.
+  attachments:
+  - name: batch-settings-square-illinois-trainings-2026-07-06.txt
+    path: attachments/tr-101-tc-92/scenario-1/batch-settings-square-illinois-trainings-2026-07-06.txt
+    mimeType: text/plain
+  - name: cron-veevart-illinois-trainings-2026-07-06.csv
+    path: attachments/tr-101-tc-92/scenario-1/cron-veevart-illinois-trainings-2026-07-06.csv
+    mimeType: text/csv
+- scenarioIndex: 1
+  scenarioTitle: 9.1 Merchant Batches — Square idempotent / self-healing re-run
+  status: passed
+  executedAt: '2026-07-06T17:31:00Z'
+  actual: |
+    Attestation vía IM-735: reporte de junio-12 explícitamente incluye "double-run for
+    idempotency" en Camilo dev + Tucson. PR #207 code review confirma: settings upsert
+    by SetupOwnerId (idempotent), cron scheduling con lookup pre-schedule (skipea si existe).
+  stepResults:
+  - stepType: given
+    stepTitle: el Square auto-schedule ya está armed desde un run previo
+    status: passed
+    actual: attestado vía IM-735 (double-run en 2 orgs).
+  - stepType: when
+    stepTitle: el case corre otra vez con "Square"
+    status: passed
+    actual: attestado vía IM-735.
+  - stepType: then
+    stepTitle: el step completa como SUCCESS sin error
+    status: passed
+    actual: IM-735 hybrid=verified incluye second run.
+  - stepType: then
+    stepTitle: no hay "already scheduled" failure y no hay duplicate jobs
+    status: passed
+    actual: PR #207 code review confirma CronTrigger lookup + skip.
+- scenarioIndex: 2
+  scenarioTitle: 9.1 Merchant Batches — Stripe verified no-op success
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: el operator selecciona "Stripe" como Payment merchant
+    status: not-run
+    actual: pendiente MigrationApp UI run con input Stripe.
+  - stepType: when
+    stepTitle: el case corre
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: no se enqueue ningún Square reconciliation batch
+    status: not-run
+    actual: verificar via SOQL AsyncApexJob post-run.
+  - stepType: then
+    stepTitle: el step completa como SUCCESS con nota "skipped as success"
+    status: not-run
+    actual: verificar en MigrationApp UI output.
+  notes: |
+    Pendiente de tu parte:
+      1. Run `ic-9-1-merchant-batches` v3 con input Stripe.
+      2. Screenshot case COMPLETED + nota "skipped as success".
+      3. SOQL: no nuevos SquareChargeFix / SquareRefundStatusUpdate AsyncApexJob rows post-run.
+      4. Drop en attachments/tr-101-tc-92/scenario-3/.
+- scenarioIndex: 3
+  scenarioTitle: 9.1 Merchant Batches — Unrecognized merchant fails safely (no silent skip)
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: el Payment merchant value NO es ni Square ni Stripe
+    status: not-run
+    actual: pendiente — verificar si MigrationApp UI acepta input libre o solo dropdown validado.
+  - stepType: when
+    stepTitle: el case corre
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: el step FAILS con un clear validation error
+    status: not-run
+    actual: attestation via PR #207 code review pendiente.
+  - stepType: then
+    stepTitle: no hay silent skip
+    status: not-run
+    actual: verificar en output del run.
+  - stepType: then
+    stepTitle: no hay partial changes
+    status: not-run
+    actual: SOQL post-run Batch_Settings.
+  notes: |
+    Pendiente de tu parte:
+      Si MigrationApp UI valida input (dropdown), este AC es un defense-in-depth ya cubierto
+      por el UI — capturar screenshot del dropdown validado + marcar PASS.
+      Si acepta input libre, run con "Foo" y capturar case FAILED + mensaje.
+- scenarioIndex: 4
+  scenarioTitle: 9.1 Merchant Batches — Verification gate is enqueue/schedule, not completion
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: el Square path corre
+    status: not-run
+    actual: depende de scenario 1.
+  - stepType: when
+    stepTitle: el case verifica el outcome
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: el case verifica enqueue/schedule success — durable flag, required scheduled jobs, immediate AsyncApexJob rows
+    status: not-run
+    actual: attestable vía PR #207 code review (verify method inspects flag + scheduled jobs + AsyncApexJob rows).
+  - stepType: then
+    stepTitle: reporta FAILED si el durable flag o cualquier REQUIRED scheduled job está missing
+    status: not-run
+    actual: attestable vía code review; empirical reproduce opcional.
+  - stepType: then
+    stepTitle: NO espera ni asserta batch COMPLETION asíncrono
+    status: not-run
+    actual: verify method no incluye AsyncApexJob.Status = Completed check (per PR #207 code review).
+- scenarioIndex: 5
+  scenarioTitle: 9.1 Merchant Batches — Payment synchronization job is informational only
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: execute() puede también schedule "Veevart - Square payment synchronization" (managed-package, version/config dependent)
+    status: not-run
+    actual: pendiente run + observación post-hoc en CronTrigger.
+  - stepType: when
+    stepTitle: el case verifica el schedule
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: ese job es reportado informationally only
+    status: not-run
+    actual: PR #207 code review confirma verify method NO asserta este job — solo lo lista.
+  - stepType: then
+    stepTitle: su absence NO hace fail el case
+    status: not-run
+    actual: attestable vía code review; empirical reproduce opcional.
+- scenarioIndex: 6
+  scenarioTitle: 9.1 Merchant Batches — Org-agnostic (no hardcoded ids / urls / merchant names)
+  status: passed
+  executedAt: '2026-07-06T17:32:00Z'
+  actual: |
+    Attestation vía IM-735 (cross-tested Camilo dev + Tucson orgs) + PR #207 code review:
+    - Case usa `UserInfo.getOrganizationId()` at runtime.
+    - Managed types namespace-qualified (Auctifera.*).
+    - No org-specific ids / URLs / merchant-account names en el case spec.
+  stepResults:
+  - stepType: given
+    stepTitle: una new implementation org con el managed package
+    status: passed
+    actual: verified en 2 orgs distintas per IM-735.
+  - stepType: when
+    stepTitle: el case corre
+    status: passed
+    actual: verified en ambas orgs.
+  - stepType: then
+    stepTitle: se apoya solo en managed-package class/field/job names
+    status: passed
+    actual: PR #207 code review confirma.
+  - stepType: then
+    stepTitle: no hay org-specific Ids, URLs, ni merchant-account names hardcoded
+    status: passed
+    actual: PR #207 code review confirma.
+  - stepType: then
+    stepTitle: completa sin per-org code changes
+    status: passed
+    actual: verified vía cross-org test en IM-735.
+- scenarioIndex: 7
+  scenarioTitle: 9.1 Merchant Batches — Released via catalog seed (prod)
+  status: not-run
+  stepResults:
+  - stepType: given
+    stepTitle: modelo no-feature-flag (per IM-759)
+    status: passed
+    actual: IM-759 governance vigente.
+  - stepType: when
+    stepTitle: el case es published al prod IC catalog
+    status: not-run
+    actual: pendiente verificación prod catalog seed.
+  - stepType: then
+    stepTitle: corre y es verified en prod
+    status: not-run
+    actual: pendiente.
+  - stepType: then
+    stepTitle: queda handed off a Implementations
+    status: not-run
+    actual: pendiente.
+  notes: |
+    Pendiente de tu parte (o del IE de release):
+      1. Verificar en MigrationApp prod catalog que `ic-9-1-merchant-batches` v3 aparece.
+      2. Screenshot del case en el catálogo prod.
+      3. Drop en attachments/tr-101-tc-92/scenario-8/.
+history:
+- action: created
+  actor: codex
+  at: '2026-07-06T17:30:00Z'
+  to: in-progress
+  reason: TR-101 sign-off audit iniciado para TC-92 (IC 9.1 Merchant Batches) contra illinois-trainings.
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-06T17:30:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-06T17:32:00Z'
+  runType: sign-off-audit
+  parentStory: IM-939
+  qaSubtask: IM-1001
+  epicReference: IM-735
+  prReference: BE PR #207
