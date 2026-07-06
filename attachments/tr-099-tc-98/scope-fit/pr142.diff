@@ -1,0 +1,181 @@
+diff --git a/docs/im-981-ticket-item-refund-validation.md b/docs/im-981-ticket-item-refund-validation.md
+new file mode 100644
+index 00000000..d2ecd78c
+--- /dev/null
++++ b/docs/im-981-ticket-item-refund-validation.md
+@@ -0,0 +1,67 @@
++# IM-981 — Ticket item `Refunded` status: rule and per-customer validation
++
++## Rule (ticket_item_program.sql)
++
++A program ticket item migrates with `Auctifera__Status__c = 'Refunded'` only when:
++
++1. **Canceled-refund path** — every ticket is `ISREFUNDED = 1` **and** `STATUS = 'Canceled'`
++   (the refund voided the tickets), **or**
++2. **Full-net-refund path** — every ticket is flagged `ISREFUNDED = 1`, the item's net
++   paid amount is positive, and the money refunded against the item covers it:
++   `SUM(refund credit lines) >= soi.TOTAL + DiscountAmount` (DiscountAmount is negative;
++   sourced from `CREDITITEM_EXT` rows on `FINANCIALTRANSACTION` rows of `TYPE = 'Refund'`).
++
++Raw `TICKET.ISREFUNDED` alone is unreliable: Altru also sets it for **$0 refund
++transactions** that move no money and keep tickets active (IM-981, order #12510469 —
++one ID-less $0 Refund FT with no `CREDITPAYMENT` and a NULL order `REVENUEID` flagged
++all 141 tickets).
++
++## Known residual risk: refunds without per-item attribution
++
++The full-net-refund path only sees refund money attributed per item through
++`CREDITITEM_EXT.SALESORDERITEMID`. A source database that books refunds at order level
++(refund line items without credit-item attribution) would under-count `RefundedAmount`
++and let genuinely refunded active-ticket items migrate as `Sold`/`Confirmed`.
++
++None of the six validated backups (illinois_2, high_desert, everson, tucson, moad,
++aspen) showed this pattern, but **run this detector against every new customer backup
++before loading ticket items**:
++
++```sql
++-- Items whose tickets are all flagged refunded but carry no attributable refund money.
++-- A large count here means the source books refunds at order level: investigate before load.
++WITH t_summary AS (
++    SELECT SALESORDERITEMTICKETID,
++           SUM(CAST(ISREFUNDED AS INT)) AS FlaggedRefundedQuantity,
++           SUM(CASE WHEN ISREFUNDED = 1 AND STATUS = 'Canceled' THEN 1 ELSE 0 END) AS RefundedQuantity
++    FROM TICKET
++    GROUP BY SALESORDERITEMTICKETID
++),
++item_refund_summary AS (
++    SELECT cie.SALESORDERITEMID, SUM(ftl.TRANSACTIONAMOUNT) AS RefundedAmount
++    FROM CREDITITEM_EXT cie
++    JOIN FINANCIALTRANSACTIONLINEITEM ftl ON ftl.ID = cie.ID
++    JOIN FINANCIALTRANSACTION refundft ON refundft.ID = ftl.FINANCIALTRANSACTIONID
++    WHERE refundft.[TYPE] = 'Refund' AND cie.SALESORDERITEMID IS NOT NULL
++    GROUP BY cie.SALESORDERITEMID
++)
++SELECT COUNT(*) AS UnattributedFlaggedItems,
++       SUM(soi.TOTAL) AS GrossAtRisk
++FROM SALESORDERITEM soi
++JOIN SALESORDERITEMTICKET soit ON soit.ID = soi.ID
++JOIN t_summary ts ON ts.SALESORDERITEMTICKETID = soit.ID
++LEFT JOIN item_refund_summary irs ON irs.SALESORDERITEMID = soi.ID
++WHERE ts.FlaggedRefundedQuantity = soi.QUANTITY
++  AND ts.RefundedQuantity <> soi.QUANTITY      -- not refunded via the canceled path
++  AND soi.TOTAL > 0
++  AND COALESCE(irs.RefundedAmount, 0) = 0;     -- flagged but no refund money attributed
++```
++
++Expected result on a healthy backup: a small count consisting only of 100%-discounted
++items (net paid $0). Anything else deserves row-level tracing before load.
++
++## Related queries not yet aligned (follow-up)
++
++`charge_item_tickets.sql`, `attendance_program.sql`, and `program_total_visitors.sql`
++still derive refund state from raw `ISREFUNDED` and can disagree with ticket items for
++the same orders. Align them with the rule above in a follow-up ticket.
+diff --git a/src/data-migration/infrastructure/destination/sql-server/queries/ticket-item/ticket_item_program.sql b/src/data-migration/infrastructure/destination/sql-server/queries/ticket-item/ticket_item_program.sql
+index ce049a29..6ba4ff9d 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/queries/ticket-item/ticket_item_program.sql
++++ b/src/data-migration/infrastructure/destination/sql-server/queries/ticket-item/ticket_item_program.sql
+@@ -6,7 +6,8 @@ DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);
+ ;WITH t_summary AS (
+ SELECT
+         SALESORDERITEMTICKETID,
+-        SUM(CAST(ISREFUNDED AS INT)) AS RefundedQuantity,
++        SUM(CASE WHEN ISREFUNDED = 1 AND STATUS = 'Canceled' THEN 1 ELSE 0 END) AS RefundedQuantity,
++        SUM(CAST(ISREFUNDED AS INT)) AS FlaggedRefundedQuantity,
+         SUM(CASE WHEN STATUS = 'Canceled' THEN 1 ELSE 0 END) AS CanceledQuantity,
+         MAX(CASE WHEN STATUS = 'Active' THEN 1 ELSE 0 END) AS HasActive,
+         MAX(CASE WHEN SCANDATEWITHTIMEOFFSET IS NOT NULL THEN 1 ELSE 0 END) AS HasScanDate,
+@@ -68,6 +69,25 @@ WHERE
+ GROUP BY
+         so.ID
+ ),
++-- Money actually refunded against each item (refund credit lines).
++-- Needed because TICKET.ISREFUNDED alone is unreliable: Altru sets it even for
++-- $0 refunds that move no money and keep the tickets active (IM-981).
++item_refund_summary AS (
++SELECT
++        cie.SALESORDERITEMID,
++        SUM(ftl.TRANSACTIONAMOUNT) AS RefundedAmount
++FROM
++        CREDITITEM_EXT cie
++JOIN FINANCIALTRANSACTIONLINEITEM ftl ON
++        ftl.ID = cie.ID
++JOIN FINANCIALTRANSACTION refundft ON
++        refundft.ID = ftl.FINANCIALTRANSACTIONID
++WHERE
++        refundft.[TYPE] = 'Refund'
++        AND cie.SALESORDERITEMID IS NOT NULL
++GROUP BY
++        cie.SALESORDERITEMID
++),
+ proportional_discount_summary AS (
+ SELECT
+         soi.ID AS SALESORDERITEMID,
+@@ -117,6 +137,14 @@ SELECT
+         CASE
+                 WHEN t_summary.CanceledQuantity = soi.QUANTITY AND t_summary.RefundedQuantity = 0 THEN 'Canceled'
+                 WHEN t_summary.RefundedQuantity = soi.QUANTITY THEN 'Refunded'
++                -- Tickets kept active but every ticket flagged refunded AND the item's
++                -- money fully returned: still a real refund (IM-981). Compared against
++                -- the net paid amount (TOTAL minus discounts; DiscountAmount is negative)
++                -- so discounted full refunds qualify; net must be > 0 so $0 orders and
++                -- 100%-discounted items never count as refunded.
++                WHEN t_summary.FlaggedRefundedQuantity = soi.QUANTITY
++                        AND (soi.TOTAL + COALESCE(disc.DiscountAmount, 0)) > 0
++                        AND COALESCE(irs.RefundedAmount, 0) >= (soi.TOTAL + COALESCE(disc.DiscountAmount, 0)) THEN 'Refunded'
+                 WHEN so.STATUS = 'Tentative' OR so.STATUSCODE = 2 THEN 'Reserved'
+                 WHEN COALESCE(t_summary.HasActive, 0) = 1
+                         AND COALESCE(t_summary.HasScanDate, 0) = 0 THEN 'Sold'
+@@ -159,7 +187,9 @@ LEFT JOIN t_summary ON
+         t_summary.SALESORDERITEMTICKETID = soit.ID
+ LEFT JOIN soitx_summary ON
+         soitx_summary.SALESORDERITEMID = soi.ID
+-LEFT JOIN proportional_discount_summary disc 
++LEFT JOIN item_refund_summary irs ON
++        irs.SALESORDERITEMID = soi.ID
++LEFT JOIN proportional_discount_summary disc
+ ON
+         disc.SALESORDERITEMID = soi.ID
+ WHERE
+diff --git a/src/data-migration/infrastructure/destination/sql-server/query-regression/ticket-item-program-query.spec.ts b/src/data-migration/infrastructure/destination/sql-server/query-regression/ticket-item-program-query.spec.ts
+index 4f79b2c6..8725ba6e 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/query-regression/ticket-item-program-query.spec.ts
++++ b/src/data-migration/infrastructure/destination/sql-server/query-regression/ticket-item-program-query.spec.ts
+@@ -31,6 +31,37 @@ describe('ticket_item_program.sql', () => {
+     });
+   });
+ 
++  describe('IM-981: refunded status requires canceled tickets or full net refund', () => {
++    it('counts refunded quantity only from tickets both flagged and canceled', () => {
++      expect(compactQuery).toContain(
++        "SUM(CASE WHEN ISREFUNDED = 1 AND STATUS = 'Canceled' THEN 1 ELSE 0 END) AS RefundedQuantity",
++      );
++    });
++
++    it('keeps the raw flag count separately for the full-refund rule', () => {
++      expect(compactQuery).toContain(
++        'SUM(CAST(ISREFUNDED AS INT)) AS FlaggedRefundedQuantity',
++      );
++    });
++
++    it('sums refunded money per item from refund credit lines only', () => {
++      expect(query).toMatch(
++        /item_refund_summary\s+AS\s*\(\s*SELECT\s+cie\.SALESORDERITEMID,\s*SUM\(ftl\.TRANSACTIONAMOUNT\)\s+AS\s+RefundedAmount[\s\S]+?refundft\.\[TYPE\]\s*=\s*'Refund'\s+AND\s+cie\.SALESORDERITEMID\s+IS\s+NOT\s+NULL/i,
++      );
++    });
++
++    it('marks active-ticket items refunded only when the net paid amount was fully returned', () => {
++      expect(query).toMatch(
++        /WHEN\s+t_summary\.RefundedQuantity\s*=\s*soi\.QUANTITY\s+THEN\s+'Refunded'[\s\S]+?WHEN\s+t_summary\.FlaggedRefundedQuantity\s*=\s*soi\.QUANTITY\s+AND\s+\(soi\.TOTAL\s*\+\s*COALESCE\(disc\.DiscountAmount,\s*0\)\)\s*>\s*0\s+AND\s+COALESCE\(irs\.RefundedAmount,\s*0\)\s*>=\s*\(soi\.TOTAL\s*\+\s*COALESCE\(disc\.DiscountAmount,\s*0\)\)\s+THEN\s+'Refunded'[\s\S]+?WHEN\s+so\.STATUS\s*=\s*'Tentative'/i,
++      );
++    });
++
++    it('joins the refund summary without changing the item grain', () => {
++      expect(query).toContain('LEFT JOIN item_refund_summary irs ON');
++      expect(query).toContain('irs.SALESORDERITEMID = soi.ID');
++    });
++  });
++
+   describe('IM-891: reservation-backed ticket date precedence', () => {
+     it('joins reservations without changing the sales order grain', () => {
+       expect(query).toContain('LEFT JOIN RESERVATION r ON');

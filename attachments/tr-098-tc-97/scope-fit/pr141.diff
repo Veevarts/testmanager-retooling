@@ -1,0 +1,429 @@
+diff --git a/src/data-migration/infrastructure/destination/sql-server/queries/fund-assignment/fund_assingments_donation_refunds.sql b/src/data-migration/infrastructure/destination/sql-server/queries/fund-assignment/fund_assingments_donation_refunds.sql
+index c4eb1d2..0e3535d 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/queries/fund-assignment/fund_assingments_donation_refunds.sql
++++ b/src/data-migration/infrastructure/destination/sql-server/queries/fund-assignment/fund_assingments_donation_refunds.sql
+@@ -3,15 +3,15 @@ DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+ DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+ DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);
+ 
+-/* 
++/*
+ Purpose: create fund-assignment rows for donation-related refunds.
+ Approach:
+  1) MembershipLineItems filters out membership splits; refunds tied to membership are excluded.
+- 2) RefundLineItems pulls refund FT line items, keeps source line item reference and original payment transaction id.
+- 3) Final select negates refund amounts, derives fund from the source line's revenue split, and links back to the original payment's sales order when present (else the refund SO).
++ 2) RefundLineItems pulls refund FT line items and keeps the SOURCELINEITEMID reference to the original donation line; the CREDITPAYMENT join only filters to refunds that credit a payment.
++ 3) Final select negates refund amounts, derives fund from the source line's revenue split, and anchors the opportunity/sales-order links on the source donation line item's transaction (matching fund_assignment_donations.sql). The original SO resolves via SALESORDER.REVENUEID first, then via SALESORDERPAYMENT, and finally falls back to the refund transaction's own SO.
+ Key assumptions/notes:
+  - Revenue_ID_legacy__c is blank on refunds in this source system.
+- - vnfp__Opportunity__c points to the original donation opportunity transaction, so refunds do not create separate donation opportunities.
++ - vnfp__Opportunity__c must equal the original donation opportunity key (the source line's FINANCIALTRANSACTIONID, or its recurring installment), NOT the CREDITPAYMENT payment revenue id. IM-960: Altru order-based donations carry the donation split on the Order transaction while CREDITPAYMENT.REVENUEID points to the separate Payment transaction, so keying on the payment mapped the wrong record and left the sales-order links (LookUp/POS Purchase) empty.
+  - Only donation/recurring/planned/matching gift applications are allowed for fund lookup; other applications will be filtered out.
+ */
+ WITH 
+@@ -38,23 +38,33 @@ RecurringInstallments AS (
+       ON rgi.ID = rgp.RECURRINGGIFTINSTALLMENTID
+     GROUP BY rgp.PAYMENTID
+ ),
+--- CREDITPAYMENT can have multiple rows per refund; pick a single payment id to avoid duplicate refund line items
++-- CREDITPAYMENT can have multiple rows per refund; collapse to one row per credit so the join
++-- below filters to donation refunds that credit a payment without fanning out the refund line items.
+ CreditPaymentPerRefund AS (
+     SELECT
+-        CREDITID,
+-        MIN(REVENUEID) AS OriginalPaymentTransactionId
++        CREDITID
+     FROM
+         CREDITPAYMENT
+     GROUP BY
+         CREDITID
+ ),
++-- Sales orders reachable through a payment link rather than SALESORDER.REVENUEID; mirrors the
++-- donation-opportunity resolution in fund_assignment_donations.sql so both queries agree on the SO.
++SalesOrdersByPayment AS (
++    SELECT
++        sop.PAYMENTID,
++        MIN(sop.SALESORDERID) AS SalesOrderID
++    FROM
++        SALESORDERPAYMENT sop
++    GROUP BY
++        sop.PAYMENTID
++),
+ RefundLineItems AS (
+     SELECT
+         refund_ft.ID AS FinancialTransactionID,
+         rli.ID AS LineItemID,
+         rli.TRANSACTIONAMOUNT AS RefundAmount,
+-        rli.SOURCELINEITEMID,
+-        cp.OriginalPaymentTransactionId
++        rli.SOURCELINEITEMID
+     FROM
+         FINANCIALTRANSACTIONLINEITEM rli
+     INNER JOIN FINANCIALTRANSACTION refund_ft
+@@ -73,7 +83,7 @@ RefundLineItems AS (
+ )
+ SELECT
+     rli.LineItemID AS vnfp__Implementation_External_ID__c,
+-    COALESCE(original_so.LOOKUPID, refund_so.LOOKUPID) AS LookUp_ID_Legacy,
++    COALESCE(original_so.LOOKUPID, payment_so.LOOKUPID, refund_so.LOOKUPID) AS LookUp_ID_Legacy,
+     CAST(source_rse.DESIGNATIONID AS VARCHAR(36)) AS Auctifera__Specific_Fund__c,
+     d.NAME AS Auctifera__Specific_Fund_Name__c,
+     'Posted' AS Auctifera__Accounting_Status__c,
+@@ -83,9 +93,9 @@ SELECT
+     'Acknowledged' AS vnfp__Acknowledgment_Status__c,
+     COALESCE(
+         CAST(rgi.RecurringInstallmentID AS VARCHAR(36)),
+-        CAST(rli.OriginalPaymentTransactionId AS VARCHAR(36))
++        CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36))
+     ) AS vnfp__Opportunity__c,
+-    COALESCE(original_so.ID, refund_so.ID) AS vnfp__Opportunity_POS_Purchase__c --TODO: When IM-87 is implemented, modify accordingly to support refunds linked to non-SO transactions
++    COALESCE(original_so.ID, payment_so.ID, refund_so.ID) AS vnfp__Opportunity_POS_Purchase__c --TODO: When IM-87 is implemented, modify accordingly to support refunds linked to non-SO transactions
+ FROM
+     RefundLineItems rli
+ INNER JOIN FINANCIALTRANSACTION ft
+@@ -97,12 +107,17 @@ INNER JOIN REVENUESPLIT_EXT source_rse
+     ON source_rse.ID = rli.SOURCELINEITEMID
+     AND source_rse.APPLICATION IN ('Donation', 'Recurring gift', 'Planned gift', 'Matching gift')
+     AND source_rse.[TYPE] NOT IN ('Membership')
+--- Link to the original sales order through the original payment transaction
++-- Link to the original donation's sales order through the source line item's transaction
+ LEFT JOIN SALESORDER original_so
+-    ON original_so.REVENUEID = rli.OriginalPaymentTransactionId
++    ON original_so.REVENUEID = source_dli.FINANCIALTRANSACTIONID
++-- Fallback to the sales order reachable through SALESORDERPAYMENT for the same transaction
++LEFT JOIN SalesOrdersByPayment sop
++    ON sop.PAYMENTID = source_dli.FINANCIALTRANSACTIONID
++LEFT JOIN SALESORDER payment_so
++    ON payment_so.ID = sop.SalesOrderID
+ LEFT JOIN RecurringInstallments rgi
+-    ON rgi.installmentPaymentFinancialTransactionId = rli.OriginalPaymentTransactionId
+--- Fallback to refund transaction's sales order if original not found
++    ON rgi.installmentPaymentFinancialTransactionId = source_dli.FINANCIALTRANSACTIONID
++-- Final fallback to the refund transaction's own sales order if no original SO is found
+ LEFT JOIN SALESORDER refund_so
+     ON refund_so.REVENUEID = ft.ID
+ LEFT JOIN DESIGNATION d
+diff --git a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query-fixture.ts b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query-fixture.ts
+index f265f96..e03822c 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query-fixture.ts
++++ b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query-fixture.ts
+@@ -3,6 +3,11 @@ import { ConnectionPool } from 'mssql';
+ 
+ export const SQL_SERVER_TEST_DB = 'MigrationQueryIntegrationTest';
+ 
++// IM-960: Altru order-based donations carry the donation split on the Order transaction, while
++// CREDITPAYMENT.REVENUEID points to a separate Payment transaction. The Opportunity / sales-order
++// links must anchor on the Order transaction (the source donation line's FINANCIALTRANSACTIONID),
++// NOT on the CREDITPAYMENT payment. The fixture models both transactions so the regression guards it.
++export const RECURRING_ORDER_FT_ID = '11111111-1111-1111-1111-11111111110d';
+ export const RECURRING_PAYMENT_FT_ID = '11111111-1111-1111-1111-111111111111';
+ export const RECURRING_INSTALLMENT_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+ export const RECURRING_SO_ID = '22222222-2222-2222-2222-222222222222';
+@@ -15,6 +20,7 @@ export const RECURRING_REFUND_LINE_1_ID =
+ export const RECURRING_REFUND_LINE_2_ID =
+   '55555555-5555-5555-5555-555555555552';
+ 
++export const SINGLE_ORDER_FT_ID = '66666666-6666-6666-6666-66666666660d';
+ export const SINGLE_PAYMENT_FT_ID = '66666666-6666-6666-6666-666666666666';
+ export const SINGLE_SO_ID = '77777777-7777-7777-7777-777777777777';
+ export const SINGLE_SO_LOOKUP = 'SO-SINGLE-DONATION';
+@@ -22,6 +28,25 @@ export const SINGLE_LINE_ID = '88888888-8888-8888-8888-888888888888';
+ export const SINGLE_REFUND_FT_ID = '99999999-9999-9999-9999-999999999999';
+ export const SINGLE_REFUND_LINE_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+ 
++// Scenario 3: original donation SO reachable only through SALESORDERPAYMENT (not SALESORDER.REVENUEID),
++// mirroring fund_assignment_donations.sql's payment-linked SO fallback.
++export const SOP_ORDER_FT_ID = 'b0b0b0b0-0000-0000-0000-0000000000ff';
++export const SOP_PAYMENT_FT_ID = 'b0b0b0b0-0000-0000-0000-0000000000aa';
++export const SOP_LINE_ID = 'b0b0b0b0-0000-0000-0000-0000000000cc';
++export const SOP_SO_ID = 'b0b0b0b0-0000-0000-0000-0000000000d0';
++export const SOP_SO_LOOKUP = 'SO-SALESORDERPAYMENT-DONATION';
++export const SOP_REFUND_FT_ID = 'b0b0b0b0-0000-0000-0000-0000000000e0';
++export const SOP_REFUND_LINE_ID = 'b0b0b0b0-0000-0000-0000-0000000000f0';
++
++// Scenario 4: original donation Order FT has NO sales order, so POS Purchase / LookUp fall back to
++// the refund transaction's own sales order (refund_so).
++export const RSO_ORDER_FT_ID = 'c0c0c0c0-0000-0000-0000-0000000000ff';
++export const RSO_LINE_ID = 'c0c0c0c0-0000-0000-0000-0000000000cc';
++export const RSO_REFUND_FT_ID = 'c0c0c0c0-0000-0000-0000-0000000000e0';
++export const RSO_REFUND_LINE_ID = 'c0c0c0c0-0000-0000-0000-0000000000f0';
++export const RSO_REFUND_SO_ID = 'c0c0c0c0-0000-0000-0000-0000000000d0';
++export const RSO_REFUND_SO_LOOKUP = 'SO-REFUND-FALLBACK';
++
+ export const DESIGNATION_1_ID = '10101010-1010-1010-1010-101010101010';
+ export const DESIGNATION_2_ID = '20202020-2020-2020-2020-202020202020';
+ 
+@@ -62,6 +87,11 @@ CREATE TABLE SALESORDER (
+   REVENUEID UNIQUEIDENTIFIER NULL
+ );
+ 
++CREATE TABLE SALESORDERPAYMENT (
++  PAYMENTID UNIQUEIDENTIFIER NOT NULL,
++  SALESORDERID UNIQUEIDENTIFIER NOT NULL
++);
++
+ CREATE TABLE RECURRINGGIFTINSTALLMENT (
+   ID UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+   REVENUEID UNIQUEIDENTIFIER NULL
+@@ -82,9 +112,11 @@ VALUES
+   ('${DESIGNATION_1_ID}', 'General Fund'),
+   ('${DESIGNATION_2_ID}', 'Capital Campaign');
+ 
+--- Scenario 1: recurring donation payment with two designations
++-- Scenario 1: recurring order-based donation with two designations. The donation splits live on
++-- the Order transaction; the Payment is separate and is what CREDITPAYMENT.REVENUEID references.
+ INSERT INTO FINANCIALTRANSACTION (ID, CALCULATEDUSERDEFINEDID, [TYPE], CALCULATEDDATE)
+ VALUES
++  ('${RECURRING_ORDER_FT_ID}', 'REV-REC-ORD', 'Order', '2025-01-15T00:00:00'),
+   ('${RECURRING_PAYMENT_FT_ID}', 'REV-REC', 'Payment', '2025-01-15T00:00:00'),
+   ('${RECURRING_REFUND_FT_ID}', 'REV-REC-REF', 'Refund', '2025-02-10T00:00:00');
+ 
+@@ -92,8 +124,8 @@ INSERT INTO FINANCIALTRANSACTIONLINEITEM (
+   ID, FINANCIALTRANSACTIONID, [TYPE], TRANSACTIONAMOUNT, SOURCELINEITEMID
+ )
+ VALUES
+-  ('${RECURRING_LINE_1_ID}', '${RECURRING_PAYMENT_FT_ID}', 'Standard', 25.00, NULL),
+-  ('${RECURRING_LINE_2_ID}', '${RECURRING_PAYMENT_FT_ID}', 'Standard', 75.00, NULL),
++  ('${RECURRING_LINE_1_ID}', '${RECURRING_ORDER_FT_ID}', 'Standard', 25.00, NULL),
++  ('${RECURRING_LINE_2_ID}', '${RECURRING_ORDER_FT_ID}', 'Standard', 75.00, NULL),
+   ('${RECURRING_REFUND_LINE_1_ID}', '${RECURRING_REFUND_FT_ID}', 'Standard', 25.00, '${RECURRING_LINE_1_ID}'),
+   ('${RECURRING_REFUND_LINE_2_ID}', '${RECURRING_REFUND_FT_ID}', 'Standard', 75.00, '${RECURRING_LINE_2_ID}');
+ 
+@@ -103,20 +135,23 @@ VALUES
+   ('${RECURRING_LINE_2_ID}', 'Donation', 'Gift', '${DESIGNATION_2_ID}');
+ 
+ INSERT INTO SALESORDER (ID, LOOKUPID, REVENUEID)
+-VALUES ('${RECURRING_SO_ID}', '${RECURRING_SO_LOOKUP}', '${RECURRING_PAYMENT_FT_ID}');
++VALUES ('${RECURRING_SO_ID}', '${RECURRING_SO_LOOKUP}', '${RECURRING_ORDER_FT_ID}');
+ 
+ INSERT INTO RECURRINGGIFTINSTALLMENT (ID, REVENUEID)
+-VALUES ('${RECURRING_INSTALLMENT_ID}', '${RECURRING_PAYMENT_FT_ID}');
++VALUES ('${RECURRING_INSTALLMENT_ID}', '${RECURRING_ORDER_FT_ID}');
+ 
+ INSERT INTO RECURRINGGIFTINSTALLMENTPAYMENT (RECURRINGGIFTINSTALLMENTID, PAYMENTID)
+-VALUES ('${RECURRING_INSTALLMENT_ID}', '${RECURRING_PAYMENT_FT_ID}');
++VALUES ('${RECURRING_INSTALLMENT_ID}', '${RECURRING_ORDER_FT_ID}');
+ 
+ INSERT INTO CREDITPAYMENT (CREDITID, REVENUEID)
+ VALUES ('${RECURRING_REFUND_FT_ID}', '${RECURRING_PAYMENT_FT_ID}');
+ 
+--- Scenario 2: single-line non-recurring donation refund fallback
++-- Scenario 2: single-line non-recurring order-based donation refund. Again the donation split lives
++-- on the Order transaction and CREDITPAYMENT.REVENUEID points at the separate Payment transaction;
++-- the refund fund assignment must anchor its opportunity/SO on the Order, not the Payment.
+ INSERT INTO FINANCIALTRANSACTION (ID, CALCULATEDUSERDEFINEDID, [TYPE], CALCULATEDDATE)
+ VALUES
++  ('${SINGLE_ORDER_FT_ID}', 'REV-SINGLE-ORD', 'Order', '2025-03-01T00:00:00'),
+   ('${SINGLE_PAYMENT_FT_ID}', 'REV-SINGLE', 'Payment', '2025-03-01T00:00:00'),
+   ('${SINGLE_REFUND_FT_ID}', 'REV-SINGLE-REF', 'Refund', '2025-03-12T00:00:00');
+ 
+@@ -124,7 +159,7 @@ INSERT INTO FINANCIALTRANSACTIONLINEITEM (
+   ID, FINANCIALTRANSACTIONID, [TYPE], TRANSACTIONAMOUNT, SOURCELINEITEMID
+ )
+ VALUES
+-  ('${SINGLE_LINE_ID}', '${SINGLE_PAYMENT_FT_ID}', 'Standard', 40.00, NULL),
++  ('${SINGLE_LINE_ID}', '${SINGLE_ORDER_FT_ID}', 'Standard', 40.00, NULL),
+   ('${SINGLE_REFUND_LINE_ID}', '${SINGLE_REFUND_FT_ID}', 'Standard', 40.00, '${SINGLE_LINE_ID}');
+ 
+ INSERT INTO REVENUESPLIT_EXT (ID, APPLICATION, [TYPE], DESIGNATIONID)
+@@ -132,9 +167,63 @@ VALUES
+   ('${SINGLE_LINE_ID}', 'Donation', 'Gift', '${DESIGNATION_1_ID}');
+ 
+ INSERT INTO SALESORDER (ID, LOOKUPID, REVENUEID)
+-VALUES ('${SINGLE_SO_ID}', '${SINGLE_SO_LOOKUP}', '${SINGLE_PAYMENT_FT_ID}');
++VALUES ('${SINGLE_SO_ID}', '${SINGLE_SO_LOOKUP}', '${SINGLE_ORDER_FT_ID}');
+ 
+ INSERT INTO CREDITPAYMENT (CREDITID, REVENUEID)
+ VALUES ('${SINGLE_REFUND_FT_ID}', '${SINGLE_PAYMENT_FT_ID}');
++
++-- Scenario 3: original donation SO is linked only through SALESORDERPAYMENT (the SALESORDER row has
++-- no REVENUEID back to the Order FT), exercising the payment-linked SO fallback.
++INSERT INTO FINANCIALTRANSACTION (ID, CALCULATEDUSERDEFINEDID, [TYPE], CALCULATEDDATE)
++VALUES
++  ('${SOP_ORDER_FT_ID}', 'REV-SOP-ORD', 'Order', '2025-04-01T00:00:00'),
++  ('${SOP_PAYMENT_FT_ID}', 'REV-SOP', 'Payment', '2025-04-01T00:00:00'),
++  ('${SOP_REFUND_FT_ID}', 'REV-SOP-REF', 'Refund', '2025-04-12T00:00:00');
++
++INSERT INTO FINANCIALTRANSACTIONLINEITEM (
++  ID, FINANCIALTRANSACTIONID, [TYPE], TRANSACTIONAMOUNT, SOURCELINEITEMID
++)
++VALUES
++  ('${SOP_LINE_ID}', '${SOP_ORDER_FT_ID}', 'Standard', 60.00, NULL),
++  ('${SOP_REFUND_LINE_ID}', '${SOP_REFUND_FT_ID}', 'Standard', 60.00, '${SOP_LINE_ID}');
++
++INSERT INTO REVENUESPLIT_EXT (ID, APPLICATION, [TYPE], DESIGNATIONID)
++VALUES
++  ('${SOP_LINE_ID}', 'Donation', 'Gift', '${DESIGNATION_1_ID}');
++
++-- No SALESORDER.REVENUEID back to the Order FT; the SO is reachable only via SALESORDERPAYMENT.
++INSERT INTO SALESORDER (ID, LOOKUPID, REVENUEID)
++VALUES ('${SOP_SO_ID}', '${SOP_SO_LOOKUP}', NULL);
++
++INSERT INTO SALESORDERPAYMENT (PAYMENTID, SALESORDERID)
++VALUES ('${SOP_ORDER_FT_ID}', '${SOP_SO_ID}');
++
++INSERT INTO CREDITPAYMENT (CREDITID, REVENUEID)
++VALUES ('${SOP_REFUND_FT_ID}', '${SOP_PAYMENT_FT_ID}');
++
++-- Scenario 4: original donation Order FT has NO sales order at all, so POS Purchase / LookUp fall
++-- back to the refund transaction's own sales order (refund_so).
++INSERT INTO FINANCIALTRANSACTION (ID, CALCULATEDUSERDEFINEDID, [TYPE], CALCULATEDDATE)
++VALUES
++  ('${RSO_ORDER_FT_ID}', 'REV-RSO-ORD', 'Order', '2025-05-01T00:00:00'),
++  ('${RSO_REFUND_FT_ID}', 'REV-RSO-REF', 'Refund', '2025-05-12T00:00:00');
++
++INSERT INTO FINANCIALTRANSACTIONLINEITEM (
++  ID, FINANCIALTRANSACTIONID, [TYPE], TRANSACTIONAMOUNT, SOURCELINEITEMID
++)
++VALUES
++  ('${RSO_LINE_ID}', '${RSO_ORDER_FT_ID}', 'Standard', 30.00, NULL),
++  ('${RSO_REFUND_LINE_ID}', '${RSO_REFUND_FT_ID}', 'Standard', 30.00, '${RSO_LINE_ID}');
++
++INSERT INTO REVENUESPLIT_EXT (ID, APPLICATION, [TYPE], DESIGNATIONID)
++VALUES
++  ('${RSO_LINE_ID}', 'Donation', 'Gift', '${DESIGNATION_1_ID}');
++
++-- Only the refund transaction has a sales order.
++INSERT INTO SALESORDER (ID, LOOKUPID, REVENUEID)
++VALUES ('${RSO_REFUND_SO_ID}', '${RSO_REFUND_SO_LOOKUP}', '${RSO_REFUND_FT_ID}');
++
++INSERT INTO CREDITPAYMENT (CREDITID, REVENUEID)
++VALUES ('${RSO_REFUND_FT_ID}', '${RSO_ORDER_FT_ID}');
+ `);
+ }
+diff --git a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.integration.spec.ts b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.integration.spec.ts
+index 17e99f2..c58632a 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.integration.spec.ts
++++ b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.integration.spec.ts
+@@ -19,10 +19,18 @@ import {
+   RECURRING_REFUND_LINE_2_ID,
+   RECURRING_SO_ID,
+   RECURRING_SO_LOOKUP,
+-  SINGLE_PAYMENT_FT_ID,
++  SINGLE_ORDER_FT_ID,
+   SINGLE_REFUND_LINE_ID,
+   SINGLE_SO_ID,
+   SINGLE_SO_LOOKUP,
++  SOP_ORDER_FT_ID,
++  SOP_REFUND_LINE_ID,
++  SOP_SO_ID,
++  SOP_SO_LOOKUP,
++  RSO_ORDER_FT_ID,
++  RSO_REFUND_LINE_ID,
++  RSO_REFUND_SO_ID,
++  RSO_REFUND_SO_LOOKUP,
+   SQL_SERVER_TEST_DB,
+   seedDonationRefundFundAssignmentsFixture,
+ } from './fund-assignment-donation-refunds-query-fixture';
+@@ -229,7 +237,7 @@ function normalizeUuid(value: string | null | undefined): string | null {
+       expect(row2!.Auctifera__Donated_Amount__c).toBe(-75);
+     });
+ 
+-    it('preserves single-line non-recurring refund behavior by falling back to the original payment financial transaction id', () => {
++    it('anchors single-line non-recurring refunds on the source donation line transaction (Order), not the CREDITPAYMENT payment (IM-960)', () => {
+       const singleRow = rows.find(
+         (row) =>
+           normalizeUuid(row.vnfp__Implementation_External_ID__c) ===
+@@ -238,7 +246,7 @@ function normalizeUuid(value: string | null | undefined): string | null {
+ 
+       expect(singleRow).toBeDefined();
+       expect(normalizeUuid(singleRow!.vnfp__Opportunity__c)).toBe(
+-        SINGLE_PAYMENT_FT_ID,
++        SINGLE_ORDER_FT_ID,
+       );
+       expect(normalizeUuid(singleRow!.vnfp__Opportunity_POS_Purchase__c)).toBe(
+         SINGLE_SO_ID,
+@@ -247,5 +255,43 @@ function normalizeUuid(value: string | null | undefined): string | null {
+       expect(singleRow!.Auctifera__Specific_Fund__c).toBe(DESIGNATION_1_ID);
+       expect(singleRow!.Auctifera__Donated_Amount__c).toBe(-40);
+     });
++
++    it('resolves POS Purchase / LookUp through SALESORDERPAYMENT when the original SO is not linked via REVENUEID', () => {
++      const sopRow = rows.find(
++        (row) =>
++          normalizeUuid(row.vnfp__Implementation_External_ID__c) ===
++          SOP_REFUND_LINE_ID,
++      );
++
++      expect(sopRow).toBeDefined();
++      expect(normalizeUuid(sopRow!.vnfp__Opportunity__c)).toBe(SOP_ORDER_FT_ID);
++      expect(normalizeUuid(sopRow!.vnfp__Opportunity_POS_Purchase__c)).toBe(
++        SOP_SO_ID,
++      );
++      expect(sopRow!.LookUp_ID_Legacy).toBe(SOP_SO_LOOKUP);
++      expect(sopRow!.Auctifera__Specific_Fund__c).toBe(DESIGNATION_1_ID);
++      expect(sopRow!.Auctifera__Donated_Amount__c).toBe(-60);
++    });
++
++    it('falls back to the refund transaction sales order when the original donation has no SO, while still anchoring the opportunity on the source transaction', () => {
++      const refundFallbackRow = rows.find(
++        (row) =>
++          normalizeUuid(row.vnfp__Implementation_External_ID__c) ===
++          RSO_REFUND_LINE_ID,
++      );
++
++      expect(refundFallbackRow).toBeDefined();
++      expect(normalizeUuid(refundFallbackRow!.vnfp__Opportunity__c)).toBe(
++        RSO_ORDER_FT_ID,
++      );
++      expect(
++        normalizeUuid(refundFallbackRow!.vnfp__Opportunity_POS_Purchase__c),
++      ).toBe(RSO_REFUND_SO_ID);
++      expect(refundFallbackRow!.LookUp_ID_Legacy).toBe(RSO_REFUND_SO_LOOKUP);
++      expect(refundFallbackRow!.Auctifera__Specific_Fund__c).toBe(
++        DESIGNATION_1_ID,
++      );
++      expect(refundFallbackRow!.Auctifera__Donated_Amount__c).toBe(-30);
++    });
+   },
+ );
+diff --git a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.spec.ts b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.spec.ts
+index ab257f0..a1587a7 100644
+--- a/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.spec.ts
++++ b/src/data-migration/infrastructure/destination/sql-server/query-regression/fund-assignment-donation-refunds-query.spec.ts
+@@ -18,17 +18,39 @@ describe('fund_assingments_donation_refunds.sql', () => {
+     );
+   });
+ 
+-  it('links refund fund assignments back to the recurring-installment-aware donation opportunity key', () => {
++  it('anchors the refund opportunity key on the source donation line transaction, not the CREDITPAYMENT payment (IM-960)', () => {
+     const query = readFileSync(queryPath, 'utf8');
+ 
+     expect(query).toContain('RecurringInstallments AS (');
+     expect(query).toContain('LEFT JOIN RecurringInstallments rgi');
++    expect(query).toContain('CAST(rgi.RecurringInstallmentID AS VARCHAR(36))');
++    // The opportunity key falls back to the source donation line's transaction (the Order in
++    // order-based Altru donations), which is also what the sales-order links anchor on.
+     expect(query).toContain(
+-      'CAST(rli.OriginalPaymentTransactionId AS VARCHAR(36))',
++      'CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36))',
+     );
+-    expect(query).toContain('CAST(rgi.RecurringInstallmentID AS VARCHAR(36))');
+-    expect(query).not.toContain(
+-      'CAST(source_dli.FINANCIALTRANSACTIONID AS VARCHAR(36)) AS vnfp__Opportunity__c',
++    expect(query).toContain(
++      'original_so.REVENUEID = source_dli.FINANCIALTRANSACTIONID',
++    );
++    expect(query).toContain(
++      'rgi.installmentPaymentFinancialTransactionId = source_dli.FINANCIALTRANSACTIONID',
++    );
++    // The payment revenue id from CREDITPAYMENT must no longer drive any linkage.
++    expect(query).not.toContain('OriginalPaymentTransactionId');
++  });
++
++  it('resolves the sales-order links via REVENUEID, then SALESORDERPAYMENT, then the refund SO (mirrors fund_assignment_donations.sql)', () => {
++    const query = readFileSync(queryPath, 'utf8');
++
++    expect(query).toContain('SalesOrdersByPayment AS (');
++    expect(query).toContain(
++      'sop.PAYMENTID = source_dli.FINANCIALTRANSACTIONID',
++    );
++    expect(query).toContain(
++      'COALESCE(original_so.ID, payment_so.ID, refund_so.ID)',
++    );
++    expect(query).toContain(
++      'COALESCE(original_so.LOOKUPID, payment_so.LOOKUPID, refund_so.LOOKUPID)',
+     );
+   });
+ });
