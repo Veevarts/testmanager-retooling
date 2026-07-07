@@ -1,0 +1,45 @@
+S6 attestation-strong via source code review of case ic-8-02-resources-setup v6
+
+Source: https://github.com/Veevarts/MigrationAppBackend/blob/main/src/implementations/infrastructure/seeds/specs/ic-8-02-resources-setup.json
+
+Case description (verbatim, relevant fragment):
+  "The default record is created by case 3.03 (Rename Tabs and Labels), on
+  which this case depends, so it must exist: a missing default fails the
+  step with a controlled error. Deleting/unchecking the default is blocked
+  by an Auctifera validation rule, so it only edits fields."
+
+Step 1 Apex source (verbatim):
+  class VerifyException extends Exception {}
+
+  final String TECH_NAME = 'Technical Record Do Not Modify';
+
+  List<Auctifera__Display_Storage_Location__c> defaults = [
+      SELECT Id, Name, Auctifera__Type__c, Auctifera__Capacity__c, Auctifera__GL_Code__c,
+             Auctifera__Tax_GL_Code__c, Auctifera__Store_Default_Location__c
+      FROM Auctifera__Display_Storage_Location__c
+      WHERE Auctifera__Store_Default_Location__c = true
+  ];
+  if (defaults.isEmpty()) {
+      throw new VerifyException('[8.02-1] verify failed: no default Store location (Store_Default_Location__c = true) found; case 3.03 (Rename Tabs and Labels), which creates it, must run and COMPLETE before this case.');
+  }
+
+Master template prereq declaration (scripts/seed-master-template.ts):
+  'ic-8-02-resources-setup': ['ic-3-03-rename-tabs-and-labels'],
+
+AC7 claims verified via source:
+  (A) Controlled error `[8.02-x] verify failed:` prefix — PRESENT verbatim `[8.02-1] verify failed:`
+  (B) Names 3.03 as prerequisite — PRESENT verbatim "case 3.03 (Rename Tabs and Labels)"
+  (C) No fake default + no continue to steps 2/3 — GUARANTEED by throw-before-DML
+      (the throw fires immediately if defaults.isEmpty(), before any insert/update)
+
+Additional attestations:
+  * VerifyException is a typed exception, matches the same pattern verified
+    empirically in S5 (`[8.02-2] verify failed: 2 locations named Location Test`)
+  * The case design explicitly acknowledges the Auctifera validation rule
+    that blocks unchecking default — same blocker QA found during S6 reproduction
+    attempt. This means the code path is empirically unreachable in a
+    trainings sandbox but WOULD fire in a customer scratch org before 3.03 runs.
+
+Empirical reproduction path (documented for future audits):
+  Scratch org fresh → deploy Auctifera + configure Accounting → run 8.02
+  without 3.03 first → expect step 1 to throw with the exact string above.
