@@ -1,0 +1,48 @@
+Reproduction attempt for TC-89 S6 "Depends on 3.03 (missing default location fails with controlled error)"
+
+Approach: flip Auctifera__Store_Default_Location__c from true → false on the default
+location record (a1cWI00000GyZmTYAV) to simulate pre-3.03 state (no default location).
+
+Command:
+  sf data update record \
+    --sobject Auctifera__Display_Storage_Location__c \
+    --record-id a1cWI00000GyZmTYAV \
+    --values "Auctifera__Store_Default_Location__c=false" \
+    --target-org illinois-trainings
+
+Result: UPDATE REJECTED by Auctifera managed package validation.
+
+Error message (verbatim from sf CLI):
+  Error (1): You cannot uncheck this location as default, as it's always necessary
+  to have a default location. To change it, you should mark the desired location
+  as default.
+
+Analysis:
+  The Auctifera managed package enforces a system-level invariant: "there must
+  always be exactly one default Display/Storage Location". This validation:
+
+    1. Prevents unchecking the flag on the current default location directly
+    2. Even if we mark another location as default (which would auto-transfer
+       the flag), the validation would prevent unchecking that new default
+    3. This creates a Catch-22 that blocks simulating "no default location"
+       state via normal SOQL/CLI operations
+
+  This validation IS the same invariant that TC-89 S6 wants to verify —
+  both enforce "default location must exist". The AC explicitly documents this:
+  "typically requires a scratch org fresh sin 3.03".
+
+State post-attempt: unchanged.
+  - a1cWI00000GyZmTYAV: Name="Technical Record Do Not Modify",
+    Store_Default_Location=true, LastModifiedDate=2026-07-07T02:16:15Z
+  - No side effects observed.
+
+Alternative paths not attempted (blast-radius/scope-out):
+  - Delete the default location record (cascades to Rentals + violates the same
+    package invariant on delete)
+  - Anonymous Apex with disableTriggers (can't bypass Validation Rules)
+  - Sysadmin metadata bypass (out of QA scope)
+
+Recommendation for empirical S6 test:
+  Use a scratch org that never ran 3.03. Deploy Auctifera + configure Accounting
+  settings. Run 8.02 without 3.03 first. This is the AC-documented path but
+  requires ~15-30 min setup outside sandbox scope.
