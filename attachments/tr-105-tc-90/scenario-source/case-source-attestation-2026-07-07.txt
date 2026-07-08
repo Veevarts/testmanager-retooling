@@ -1,0 +1,58 @@
+Case ic-8-03-rental-event-status v1 — source code review
+
+Source: https://github.com/Veevarts/MigrationAppBackend/blob/main/src/implementations/infrastructure/seeds/specs/ic-8-03-rental-event-status.json
+
+Case metadata:
+  caseId: ic-8-03-rental-event-status
+  version: 1
+  name: "Manage the rental event status by the paid amount"
+  category: RENTALS
+  feasibility: auto
+  description: "Turns on the Auctifera rental setting that drives a rental event's
+                status from how much has been paid."
+
+Single step (declarative, no Apex):
+  name: "Enable 'Manage the rental event status by the paid amount' on the rental settings"
+  tool: T3 (reusable declarative customSetting op)
+  kind: AUTOMATED
+  inputPayload:
+    op: customSetting
+    object: Auctifera__Rental_Setting__c
+    values:
+      Auctifera__Manage_Status_by_Payment__c: true
+
+Key observations:
+  1. No custom Apex code — case delegates to reusable T3 op
+  2. Only writes the single target field Auctifera__Manage_Status_by_Payment__c
+  3. Object is Auctifera__Rental_Setting__c (singular) — SetupOwnerId-keyed
+  4. Value is hardcoded literal `true` — case enables the setting unconditionally
+  5. T3 op semantics (per case description + T3 tool contract):
+     - Upsert by SetupOwnerId = UserInfo.getOrganizationId()
+     - Create record if not exists
+     - Update existing record in-place if exists
+     - Only writes fields in `values` dict (surgical)
+     - Reports FAILED via MigrationApp T-step error propagation on save failure
+
+TC-90 schema mismatch observations (documentation-only, not blocking):
+  1. Object name: TC-90 says "Auctifera__Rental_Settings__c" (plural)
+     Real: Auctifera__Rental_Setting__c (singular)
+  2. Field name: TC-90 says "Auctifera__Manage_Rental_Event_Status_By_Paid_Amount__c"
+     Real: Auctifera__Manage_Status_by_Payment__c
+  Both are shorter API names for the same UI-labeled fields.
+
+AC coverage via source + observation:
+  S0 (create org-default when never configured): T3 op contract handles create;
+      cannot verify empirically (record exists since 2026-04-17)
+  S1 (update in-place when off): T3 op contract handles update; can be verified
+      empirically by flipping field + re-running
+  S2 (idempotent no-op): OBSERVABLE — LastModifiedDate 2026-04-17 unchanged
+      despite case Done today (2026-07-07). T3 op detected already-true state
+      and did true no-op write.
+  S3 (only touches target): Auctifera__Edit_paid__c on the row remained false
+      (untouched). Combined with T3 op contract (writes only fields in `values`),
+      surgical behavior confirmed.
+  S4 (failed save FAILED): T3 op contract propagates errors via MigrationApp
+      T-step framework — same mechanism as any other T-step; not case-specific
+  S5 (release prod catalog): Case already in prod catalog per IM-735 + user
+      confirmed the case runs from MigrationApp UI on illinois-trainings
+      (evidenced by plan run 694c1358)
