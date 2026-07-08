@@ -1,0 +1,75 @@
+Case ic-9-3-fundraising-batches v4 — source code review
+
+Source: https://github.com/Veevarts/MigrationAppBackend/blob/main/src/implementations/infrastructure/seeds/specs/ic-9-3-fundraising-batches.json
+
+Case metadata:
+  caseId: ic-9-3-fundraising-batches
+  version: 4
+  name: "Run Fundraising Batches"
+  feasibility: hybrid
+  description: "Enables the Veevart Nonprofit Settings automatic schedule for the
+                Membership, Donation, and Specific Fund batches, runs the Create
+                Contact Roles fundraising batch, and guides the operator to run
+                the two remaining one-time membership batches."
+
+4 steps (2 automated T6 Apex + 2 manual guided):
+
+  Step 1 [AUTOMATED/T6] "Enable the Fundraising Automatic Schedule and run the scheduler"
+    - Sets 3 checkmarks on Batch_Settings org-default: Auctifera__Schedule_Membership__c,
+      vnfp__Schedule_Donation__c, vnfp__Schedule_Specific_Fund__c = true
+    - Invokes vnfp.AutomaticBatchSchedule.execute(null) for immediate run
+    - Registers/ensures daily "Veevart NFP - Automatic Batch Schedule" CronTrigger
+
+  Step 2 [AUTOMATED/T6] "Run the Create Contact Roles Batch"
+    - Snapshot pre-existing vnfp.ContactRolesCreationBatch AsyncApexJob Ids
+    - Enqueue via Callable path
+    - Assert NEW job in accepted state post-call
+
+  Step 3 [MANUAL] "Run the Opportunity Origin Assignment Batch (manual)"
+    - Guide instructs: App Launcher → Veevart Nonprofit Settings → Batches
+      → Fundraising Batches → Membership Batches section → click Run on
+      "Opportunity Origin Assignment Batch"
+    - Reason for manual: vnfp.FixOpportunityOriginBatch is public (non-global)
+      → Type.forName returns null from anonymous Apex (verified live on im696-tucson)
+    - Operator confirms FixOpportunityOriginBatch job in Setup > Apex Jobs
+
+  Step 4 [MANUAL] "Run the Fix Contact Roles Batch (manual)"
+    - Same UI path, click Run on "Fix Contact Roles Batch"
+    - Same rationale: vnfp.FixContactRolesBatch is public (non-global)
+
+Plan run 010ee15f (2026-07-08 UTC / 2026-07-07 local):
+  - 2 done ✓ (both automated T6 steps COMPLETED)
+  - 1 blocked (step 3 manual "Needs you", displayed with full detail)
+  - 1 pending (step 4 manual "In queue")
+  - 0 failed
+
+SOQL evidence post-run:
+  * Auctifera__Batch_Settings__c row a1GWI00001CtY9h2AF:
+    - Auctifera__Schedule_Membership__c = true
+    - vnfp__Schedule_Donation__c = true
+    - vnfp__Schedule_Specific_Fund__c = true
+    - LastModifiedDate = 2026-07-08T02:38:38Z
+  * CronTrigger "Veevart NFP - Automatic Batch Schedule":
+    - State = WAITING
+    - NextFireTime = 2026-07-08T23:00:00Z
+    - TimesTriggered = 7 (7 fires historical, no duplicate created)
+    - CreatedDate = 2026-07-01T03:37:59Z (pre-existing, no re-create)
+  * AsyncApexJob ContactRolesCreationBatch:
+    - 2 rows CreatedDate 2026-07-08T02:38:59Z, both Completed
+    - CompletedDate 2026-07-08T02:39:13Z (14s execution)
+
+MigrationApp screenshot verification (step 3 manual detail displayed):
+  Title: "Run the Opportunity Origin Assignment Batch (manual)"
+  Why-manual: "The 'Opportunity Origin Assignment Batch' (vnfp.FixOpportunityOriginBatch)
+              is a public (non-global) managed class, so it cannot be enqueued from
+              anonymous Apex (Type.forName returns null, verified live on org im696-tucson).
+              Run it once by hand from the same UI button the automated steps replay."
+  WHAT TO DO:
+    1. App Launcher > search 'Veevart Nonprofit Settings' and open it.
+    2. Under 'Batches' open 'Fundraising Batches'.
+    3. In the 'Membership Batches' section, on 'Opportunity Origin Assignment
+       Batch' click 'Run'.
+    4. Confirm a FixOpportunityOriginBatch job appears in Setup > Apex Jobs.
+       Mark this step done once the job is queued (it runs async).
+  ETA: ~3 min
+  Button: "Mark step as done"
