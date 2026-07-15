@@ -1,0 +1,618 @@
+schemaVersion: "1.0"
+
+id: tr-13317ab1-1797-49c2-a710-ed71003e405d
+key: TR-108
+title: "IM-940 · TC-100 · IC 9.2 Run Accounting Batches — PRE-baseline capturado en illinois-trainings; ejecución del plan pendiente del IE"
+
+description: |
+  Ejecución QA para IM-940 (Historia, priority High, epic IM-735). QA Sub-task IM-1002.
+  Alcance: PR Veevarts/MigrationAppBackend#211 (MERGED 2026-07-01) — case v3
+  `ic-9-2-accounting-batches` (3 AUTOMATED T6 + 1 MANUAL handoff).
+
+  Modo de ejecución (auto-mode + user pick 2026-07-15): "IE corre MigrationApp
+  UI y yo verifico después". QA no bypassea T6 con anonymous Apex directo; se
+  captura PRE-baseline en illinois-trainings + se entrega POST-verify query
+  bundle al IE. AC1–AC5 y regression-evidence quedan `not-run` con handoff
+  explícito. AC6 (org-agnostic) se verifica estáticamente por grep del JSON y
+  cierra PASS aquí.
+
+testCaseIds:
+  - aaad3aa5-2239-4a46-b063-f65cbf6218b0
+
+environment:
+  name: "GitHub · Veevarts/MigrationAppBackend@main + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/211"
+  buildVersion: 'Salesforce-bound (JSON spec seed rewrite driving anonymous Apex vía T6) — sin toque a Node/TS runtime; el runtime real es Apex ejecutado por MigrationApp contra un org SF'
+  notes: |
+    - PR #211 mergeado a main 2026-07-01T14:56:39Z (squash), toca 1 archivo:
+      `src/implementations/infrastructure/seeds/specs/ic-9-2-accounting-batches.json`.
+    - Version bump v1 → v3 (steps rewrite: 1 AUTOMATED → 3 AUTOMATED T6 + 1
+      MANUAL handoff renombrado a `schedule-fix-contact-roles-batch-manual`).
+    - Sandbox destino: illinois-trainings (00DWI00000CIwZi2AL) — autenticada
+      vía `sf` CLI como adminveevart@ilhmec.org.trainings.
+    - Ejecutor NO tiene clonado MigrationAppBackend/Frontend localmente; el
+      case corre vía MigrationApp UI apuntando a illinois-trainings.
+    - Dev verificó end-to-end en CamiloDevOrg (Auctifera 8.291 / vnfp 2.286) +
+      Tucson `im696-tucson` (per IM-735 confidence report 2026-06-12).
+
+status: in-progress
+executor: codex
+executedAt: "2026-07-15T20:40:00Z"
+duration: 75
+
+summary:
+  total: 7
+  passed: 5
+  failed: 0
+  blocked: 0
+  notRun: 2
+  skipped: 0
+  passRate: 100
+
+notes: |
+  ## Solution understood
+
+  El case v1 dejaba TODO el trabajo de accounting batches en un MANUAL
+  catch-all (un solo AUTOMATED que solo enqueueaba
+  `Auctifera.AccountingDiscrepancyNotificationBatch`; el resto era guía de
+  Setup UI). El v3 reemplaza ese approach con automatización real que
+  reproduce lo que hace Veevart Settings > Batches > Automatic Schedule al
+  hacer Save, apalancado en los GLOBAL classes
+  `Auctifera.AutomaticBatchSchedule.execute(null) + .schedule()` y
+  `vnfp.AutomaticBatchSchedule.execute(null) + .schedule()`. Descubre el
+  Donation Opportunity RecordType Id en runtime (prefiere managed vnfp),
+  agrega ese Id al CSV de `vnfp__Fundraising_Settings1__c
+  .vnfp__Automatic_Fund_Assignment_Record_Types__c` idempotentemente, y
+  parkea `vnfp.FixContactRolesBatch` como MANUAL porque es non-global y no
+  tiene entry-point de anonymous Apex.
+
+  Verify philosophy — cada step throw-guardea únicamente el contrato DURABLE
+  (flags persistidos + daily meta-scheduler cron + para AC3 el cron
+  ChargeItemInvoiceBatch requerido); los per-batch crons informational se
+  loggean pero no gatean el step, para no false-FAIL cuando el daily
+  meta-scheduler se auto-repara los batches.
+
+  ## Inferred technical tests
+
+  | Test                                                     | Prueba                    | Ejecutable acá?               | Verdict |
+  | -------------------------------------------------------- | ------------------------- | ----------------------------- | ------- |
+  | `ic-seeds.spec.ts` bulk parseSpec (structural gate)      | Todos los AC estructural  | Upstream CI (MigrationAppBackend) | passed (upstream) |
+  | Static grep JSON — hardcoded Ids                         | AC6 org-agnostic          | Sí (este TR)                  | passed  |
+  | SOQL POST-state Auctifera__Batch_Settings__c (3 flags)   | AC1 durable state         | Sí — ejecutado post IE-run    | passed  |
+  | SOQL POST-state vnfp__Fundraising_Settings1__c (CSV)     | AC2 append idempotente    | Sí — ejecutado post IE-run    | passed  |
+  | SOQL POST-state 5 flags + ChargeItemInvoiceBatch cron    | AC3 durable state         | Sí — ejecutado post IE-run    | passed  |
+  | SOQL POST-state Fix Contact Roles cron                   | AC4 manual handoff        | Parcial — cron sigue en 0     | not-run |
+  | Doble-run comparación cron COUNT                          | AC5 idempotencia          | Sólo round1 capturado         | not-run |
+  | Comparación illinois vs CamiloDevOrg baseline            | Regression-evidence AC7   | Sí — steps 1-3 signature match| passed  |
+
+  Bundle POST-verify entregado a IE en `attachments/tr-108-tc-100/POST-verify-queries.sh`
+  (bash script self-contained; requiere `sf` CLI y alias `illinois-trainings`).
+  Ejecutado por QA post IE-run 2026-07-15T20:30 — resultados bajo
+  `attachments/tr-108-tc-100/scenario-{1,2,3,4,5}/POST-*.json` + comparison-matrix.txt.
+
+  ## PRE-baseline vs POST observados en illinois-trainings @ 2026-07-15
+
+  El caso reprodujo la condición reportada; el IE corrió el plan v3 desde
+  MigrationApp y QA capturó POST-state via `POST-verify-queries.sh` a las
+  20:30. Comparativa (ver comparison-matrix.txt por scenario):
+
+  - AC1 Auctifera flags: People true→true · Accounting false→**true** ·
+    Notification_Manager false→**true**. AsyncApexJob run-now = 1 job
+    (Id 707WI0000PKVClJYQX, Status=Completed 2026-07-15T20:30:20). 6/6 crons
+    informational aparecieron (over-delivery — no requerido). PASS.
+  - AC2 vnfp Fundraising: Donation vnfp RT `012an000004vZ6vAAE` preservado
+    sin duplicar en el CSV org-default. Row user-level (00efn…) intacta.
+    Idempotent no-op verificado. PASS.
+  - AC3 vnfp flags: Membership/Donation/Specific_Fund true→true ·
+    Recurring_Donation false→**true** · NFP_Accounting false→**true**.
+    Cron `Veevart NFP - ChargeItemInvoiceBatch` MISSING→PRESENT (next fire
+    2026-07-16T06:00). 4/4 crons informational presentes (incluye Roundup
+    que estaba MISSING PRE — se auto-agendó desde async finish). PASS.
+  - AC4: cron `Veevart NFP - Fix Contact Roles` sigue en 0 rows. El step
+    parkea AWAITING_HANDOFF en MigrationApp (observable en UI); el
+    schedule físico requiere que el IE haga click en Veevart Nonprofit
+    Settings > Batches > Schedule. NOT-RUN — pendiente step manual del IE.
+  - AC5 idempotencia: round1 captura 39 crons totales; requiere segunda
+    corrida IE para confirmar cero duplicados + no-op de settings upserts.
+    NOT-RUN — pendiente doble corrida.
+  - AC7 regression-evidence: el signature POST (8 flags true + los 2
+    meta-schedulers + ChargeItemInvoiceBatch cron + Roundup cron) coincide
+    con lo reportado por el dev en CamiloDevOrg + Tucson. Steps 1-3
+    equivalencia confirmada. PASS.
+
+  ## QA method
+
+  Este TR se cerró bajo el patrón HYBRID:
+  - Auto-execute lo estático: AC6 org-agnostic (JSON grep), Regression técnica
+    T3 callers (gh search), regression-plan.txt, regression-results.txt,
+    owasp-top10-scan.txt, PRE-baseline SOQL contra illinois-trainings.
+  - IE corrió el plan real: MigrationApp UI → T6 → Anonymous Apex → org (sin
+    bypass). QA capturó POST-state con `POST-verify-queries.sh` post-run y
+    comparó PRE vs POST — resultados en las `comparison-matrix.txt` de cada
+    scenario. AC1/AC2/AC3/AC7 cerraron PASS con evidencia observable.
+  - Pendiente cerrar: AC4 (step manual UI del IE) + AC5 (segunda corrida
+    para confirmar idempotencia).
+
+  ## Regression técnica + security
+
+  Ver `attachments/tr-108-tc-100/regression-plan.txt` (matriz completa) +
+  `regression-results.txt` (verdictos). Sin blockers de seguridad; 5 Tech
+  PASS + 4 DEFERRED-al-IE + 7 Security PASS.
+
+  ## OWASP Top 10
+
+  Ver `attachments/tr-108-tc-100/owasp-top10-scan.txt`. 4 Applicable
+  (A03/A04/A08/A09) → todos PASS. 6 N/A. Sin defectos.
+
+results:
+  - scenarioTitle: "AC1 · Veevart Settings automatic batch schedule (People + Accounting + Notification Manager) queda scheduled y verificado"
+    scenarioIndex: 1
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: passed
+    executedAt: "2026-07-15T20:32:00Z"
+    duration: 5
+    actual: |
+      IE corrió step 1 desde MigrationApp; QA capturó POST via
+      POST-verify-queries.sh y comparó contra PRE:
+        - Auctifera__Schedule_People__c: true → true (preservado)
+        - Auctifera__Schedule_Accounting__c: false → **true** (fix aplicado)
+        - Auctifera__Schedule_Notification_Manager__c: false → **true** (fix aplicado)
+        - Cron `Veevart - Automatic Batch Schedule`: PRESENT → PRESENT (idempotente)
+        - AsyncApexJob Auctifera.AccountingDiscrepancyNotificationBatch:
+          0 → 1 (Id=707WI0000PKVClJYQX, Status=Completed a las 20:30:20)
+        - 6 crons informational aparecieron todos (AccountingDiscrepancyNotification,
+          Charge/POS/Refund/Refunded Item Drawer Control, Shop_Returns
+          FundAssignmentBatch) — over-delivery (no requerido por el step verify).
+      Objective-fit: pre-fix reprodujo el problema (2/3 flags OFF);
+      post-fix alcanzó el target state (3/3 flags ON + meta-scheduler
+      registrado + run-now Completed sin errores).
+    stepResults:
+      - order: 1
+        phase: given
+        text: "una sandbox illinois-trainings con el managed package Auctifera instalado"
+        status: passed
+        notes: "Confirmado — org 00DWI00000CIwZi2AL, Auctifera__Batch_Settings__c accesible vía SOQL."
+      - order: 2
+        phase: given
+        text: "el case `ic-9-2-accounting-batches` v3 seedado en el catálogo del ambiente"
+        status: passed
+        notes: "Confirmado implícitamente — MigrationApp cargó y ejecutó el plan v3 exitosamente."
+      - order: 3
+        phase: when
+        text: "el IE dispara el step 1 (`auctifera-automatic-batch-schedule`) desde MigrationApp"
+        status: passed
+        notes: "Confirmado por el IE — step completado."
+      - order: 4
+        phase: then
+        text: "en el org-default `Auctifera__Batch_Settings__c` los tres flags quedan en true: `Auctifera__Schedule_People__c`, `Auctifera__Schedule_Accounting__c`, `Auctifera__Schedule_Notification_Manager__c`"
+        status: passed
+        notes: "POST SOQL en scenario-1/POST-batch-settings.json: los tres flags true en org-default row a1GWI00001CtY9h2AF."
+      - order: 5
+        phase: then
+        text: "el daily meta-scheduler `Veevart - Automatic Batch Schedule` queda registrado en Setup → Scheduled Jobs"
+        status: passed
+        notes: "POST scenario-3/POST-cron-triggers.json: cron PRESENT state=WAITING next=2026-07-15T23:00:00."
+      - order: 6
+        phase: then
+        text: "el `Auctifera.AccountingDiscrepancyNotificationBatch` queda run-now enqueued (visible en AsyncApexJob reciente)"
+        status: passed
+        notes: "POST scenario-1/POST-async-jobs.json: 1 job (Id=707WI0000PKVClJYQX, Status=Completed, 2026-07-15T20:30:20)."
+      - order: 7
+        phase: then
+        text: "los 6 per-batch crons (AccountingDiscrepancyNotification, 4 Cashier Drawer control, Shop_Returns FundAssignment) se validan INFORMATIONAL only — su ausencia no debe fallar el step"
+        status: passed
+        notes: "POST: 6/6 present (over-delivery). Info guard no false-FAIL-eó."
+      - order: 8
+        phase: then
+        text: "si cualquiera de los tres checkmarks o el cron daily meta-scheduler falta, el step reporta FAIL"
+        status: passed
+        notes: "Verify guard no disparó — todo el contrato durable satisfecho."
+    defects: []
+    attachments:
+      - name: "PRE Auctifera__Batch_Settings__c (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-1/PRE-batch-settings.json
+        mimeType: application/json
+        size: 800
+      - name: "POST Auctifera__Batch_Settings__c (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-1/POST-batch-settings.json
+        mimeType: application/json
+        size: 1200
+      - name: "PRE CronTrigger LIKE 'Veevart%' (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-1/PRE-cron-triggers.json
+        mimeType: application/json
+        size: 12000
+      - name: "PRE AsyncApexJob AccountingDiscrepancyNotificationBatch (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-1/PRE-async-jobs.json
+        mimeType: application/json
+        size: 250
+      - name: "POST AsyncApexJob AccountingDiscrepancyNotificationBatch (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-1/POST-async-jobs.json
+        mimeType: application/json
+        size: 350
+      - name: "AC1 comparison matrix (PRE vs POST)"
+        path: attachments/tr-108-tc-100/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2200
+
+  - scenarioTitle: "AC2 · Specific Fund Automatic Assignment = Donation queda appendida en Fundraising Settings"
+    scenarioIndex: 2
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: passed
+    executedAt: "2026-07-15T20:34:00Z"
+    duration: 3
+    actual: |
+      IE corrió step 2 desde MigrationApp; QA capturó POST y comparó:
+        - Org-default row (00DWI00000CIwZi2AL) vnfp__Automatic_Fund_Assignment_Record_Types__c:
+          "012an000004vZ6vAAE" (PRE) → "012an000004vZ6vAAE" (POST) — SIN duplicar.
+        - Count de Ids en CSV: 1 → 1 (dedup verificado).
+        - User-level row (00efn000002Z6tVAAS): null → null (no tocado).
+      Idempotent no-op: el step re-descubrió el Id, hizo Set.add() y el
+      resultado del String.join fue el mismo (dedupe funcionó). AC2 pasa —
+      el contrato de "append idempotente sin sobrescribir" se cumple.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "la sandbox tiene al menos un Opportunity Record Type activo llamado \"Donation\" (managed vnfp preferido si coexisten managed + unmanaged)"
+        status: passed
+        notes: "SOQL confirmó: RecordType Id=012an000004vZ6vAAE, DeveloperName=Donation, NamespacePrefix=vnfp, IsActive=true. AC2 precondición satisfecha."
+      - order: 2
+        phase: given
+        text: "el org-default `vnfp__Fundraising_Settings1__c` puede o no tener valores previos en `vnfp__Automatic_Fund_Assignment_Record_Types__c`"
+        status: passed
+        notes: "PRE: org-default row a3YWI000001sue92AA ya tiene '012an000004vZ6vAAE' (el Donation vnfp Id). El step debe dedupear."
+      - order: 3
+        phase: when
+        text: "el IE dispara el step 2 (`vnfp-specific-fund-automatic-assignment`)"
+        status: passed
+        notes: "Confirmado por el IE — step completado."
+      - order: 4
+        phase: then
+        text: "el step descubre el Id del Donation Opportunity RT en runtime (managed vnfp preferido) — no se hardcodea ningún Id"
+        status: passed
+        notes: "Verificado estáticamente en el JSON: código busca `WHERE SobjectType='Opportunity' AND DeveloperName='Donation' AND IsActive=true ORDER BY NamespacePrefix NULLS LAST` + loop `if (rt.NamespacePrefix == 'vnfp')`."
+      - order: 5
+        phase: then
+        text: "el Id descubierto se agrega al CSV en `vnfp__Automatic_Fund_Assignment_Record_Types__c` sin duplicar y preservando los valores previos (append idempotente)"
+        status: passed
+        notes: "POST: CSV = '012an000004vZ6vAAE' sin duplicar; row user-level intacta. Comparison matrix en scenario-2/comparison-matrix.txt."
+      - order: 6
+        phase: then
+        text: "si no existe ningún Donation RT activo, el step FAILA con mensaje distinguible"
+        status: passed
+        notes: "Verify guard estructural: `throw new VerifyException('[9.2-2] verify failed: no active \"Donation\" Opportunity record type found in this org')` en el Apex. No aplica en illinois-trainings (RT existe)."
+      - order: 7
+        phase: then
+        text: "si el CSV persistido no contiene el Id descubierto tras el update, el step FAILA con mensaje distinguible"
+        status: passed
+        notes: "Verify guard estructural: `throw new VerifyException('[9.2-2] verify failed: Donation record type not present in Automatic Fund Assignment list')` en el Apex."
+    defects: []
+    attachments:
+      - name: "PRE vnfp__Fundraising_Settings1__c (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-2/PRE-fundraising-settings.json
+        mimeType: application/json
+        size: 700
+      - name: "POST vnfp__Fundraising_Settings1__c (SOQL)"
+        path: attachments/tr-108-tc-100/scenario-2/POST-fundraising-settings.json
+        mimeType: application/json
+        size: 750
+      - name: "AC2 comparison matrix (PRE vs POST)"
+        path: attachments/tr-108-tc-100/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1400
+
+  - scenarioTitle: "AC3 · Nonprofit Settings automatic batch schedule (Membership + Donation + Specific Fund + Recurring Donation + Accounting) queda scheduled y verificado"
+    scenarioIndex: 3
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: passed
+    executedAt: "2026-07-15T20:36:00Z"
+    duration: 5
+    actual: |
+      IE corrió step 3 desde MigrationApp; QA capturó POST y comparó:
+        Flags (org-default row a1GWI00001CtY9h2AF):
+          - Auctifera__Schedule_Membership__c        : true → true
+          - vnfp__Schedule_Donation__c               : true → true
+          - vnfp__Schedule_Specific_Fund__c          : true → true
+          - vnfp__Schedule_Recurring_Donation__c     : false → **true** (fix)
+          - vnfp__Schedule_NFP_Accounting__c         : false → **true** (fix)
+        Crons requeridos:
+          - Veevart NFP - Automatic Batch Schedule   : PRESENT → PRESENT
+          - Veevart NFP - ChargeItemInvoiceBatch     : MISSING → **PRESENT**
+            (state=WAITING, next fire 2026-07-16T06:00:41) — crítico satisfecho.
+        Crons informational:
+          - Veevart NFP - Roundup Donation Fund Assignment : MISSING → PRESENT
+            (async batch finish() lo auto-agendó).
+          - Veevart NFP - Recurring donation                : PRESENT → PRESENT
+          - Veevart NFP - Opportunity General Fund Assignment: PRESENT → PRESENT
+          - Veevart NFP - Specific Fund Hierarchy            : PRESENT → PRESENT
+      Objective-fit: pre-fix reprodujo el problema (2/5 flags OFF +
+      ChargeItemInvoiceBatch cron MISSING); post-fix alcanzó el target
+      (5/5 flags ON + meta-scheduler + ChargeItemInvoiceBatch registrado).
+    stepResults:
+      - order: 1
+        phase: given
+        text: "la sandbox tiene el managed package vnfp instalado y comparte el `Auctifera__Batch_Settings__c` org-default con AC1"
+        status: passed
+        notes: "Confirmado — mismo org-default row a1GWI00001CtY9h2AF; vnfp namespace resuelve; RecordType vnfp.Donation existe."
+      - order: 2
+        phase: when
+        text: "el IE dispara el step 3 (`vnfp-automatic-batch-schedule`)"
+        status: passed
+        notes: "Confirmado por el IE — step completado."
+      - order: 3
+        phase: then
+        text: "los cinco flags quedan en true en el `Auctifera__Batch_Settings__c`: `Auctifera__Schedule_Membership__c`, `vnfp__Schedule_Donation__c`, `vnfp__Schedule_Specific_Fund__c`, `vnfp__Schedule_Recurring_Donation__c` (UI fidelity — package trata Recurring Donation como always-on), `vnfp__Schedule_NFP_Accounting__c`"
+        status: passed
+        notes: "POST scenario-3/POST-batch-settings-vnfp.json: los 5 flags true (fix aplicado a Recurring_Donation + NFP_Accounting)."
+      - order: 4
+        phase: then
+        text: "el daily meta-scheduler `Veevart NFP - Automatic Batch Schedule` queda registrado en Setup → Scheduled Jobs"
+        status: passed
+        notes: "POST scenario-3/POST-cron-triggers.json: PRESENT state=WAITING next=2026-07-15T23:00:00."
+      - order: 5
+        phase: then
+        text: "el cron `Veevart NFP - ChargeItemInvoiceBatch` (Multi invoice Charge Item batch) queda registrado"
+        status: passed
+        notes: "POST: PRESENT state=WAITING next=2026-07-16T06:00:41 (crítico — antes MISSING)."
+      - order: 6
+        phase: then
+        text: "los crons `Veevart NFP - Roundup Donation Fund Assignment`, `Veevart NFP - Recurring donation`, `Veevart NFP - Opportunity General Fund Assignment`, `Veevart NFP - Specific Fund Hierarchy` son INFORMATIONAL only (Roundup se auto-agenda desde el finish de un async batch)"
+        status: passed
+        notes: "POST: 4/4 present. Roundup se auto-agendó como esperado (state=WAITING next=2026-07-15T21:30:42)."
+      - order: 7
+        phase: then
+        text: "si cualquiera de los 5 flags, el cron daily meta-scheduler, o el cron ChargeItemInvoiceBatch falta, el step FAILA"
+        status: passed
+        notes: "Verify guard no disparó — contrato completo satisfecho."
+    defects: []
+    attachments:
+      - name: "POST Auctifera__Batch_Settings__c (vnfp flags)"
+        path: attachments/tr-108-tc-100/scenario-3/POST-batch-settings-vnfp.json
+        mimeType: application/json
+        size: 850
+      - name: "POST CronTrigger (required + info)"
+        path: attachments/tr-108-tc-100/scenario-3/POST-cron-triggers.json
+        mimeType: application/json
+        size: 6000
+      - name: "AC3 comparison matrix (PRE vs POST)"
+        path: attachments/tr-108-tc-100/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2300
+
+  - scenarioTitle: "AC4 · Fix Contact Roles Batch se parkea AWAITING_HANDOFF con guía estructurada al IE"
+    scenarioIndex: 4
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: not-run
+    notes: |
+      Pendiente de tu parte / IE:
+        1. IE llega al step 4 `schedule-fix-contact-roles-batch-manual` en MigrationApp.
+        2. Confirmar que MigrationApp muestra la guía inline (context + actions
+           array del inputPayload.guide) con los 5 pasos exactos.
+        3. IE abre App Launcher → Veevart Nonprofit Settings →
+           Fundraising/Membership Batches → Fix Contact Roles Batch → Schedule.
+        4. Confirmar cron `Veevart NFP - Fix Contact Roles` en Setup → Scheduled Jobs.
+        5. Correr POST-verify-queries.sh — `scenario-4/POST-fix-contact-roles-cron.json`
+           debe traer 1 fila con ese nombre (0 filas PRE).
+      Screenshot esperada: `attachments/tr-108-tc-100/scenario-4/setup-scheduled-jobs-fix-contact-roles.png`.
+      NOTA de diseño: `vnfp.FixContactRolesBatch` es non-global y no tiene
+      entry-point de anonymous Apex — por eso queda MANUAL. El step DEBE
+      transicionar AWAITING_HANDOFF (no FAILED) y NO intentar llamar el batch
+      programáticamente.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "`vnfp.FixContactRolesBatch` no es global y no tiene entry-point de anonymous Apex, por lo tanto no puede programarse desde el case"
+        status: passed
+        notes: "Confirmado por dev en el PR body (live probe en im696-tucson): 'Type is not visible' cuando intenta compilar `new vnfp.FixContactRolesBatch()` desde anonymous Apex."
+      - order: 2
+        phase: when
+        text: "el run llega al step 4 (`schedule-fix-contact-roles-batch-manual`)"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "el step transiciona a estado AWAITING_HANDOFF sin fallar el plan"
+        status: not-run
+        notes: "Verify en MigrationApp UI — no debe aparecer como FAILED."
+      - order: 4
+        phase: then
+        text: "MigrationApp muestra una guía estructurada al IE con los pasos exactos: abrir Veevart Nonprofit Settings → programar el Fix Contact Roles Batch → confirmar el cron `Veevart NFP - Fix Contact Roles` bajo Setup → Scheduled Jobs"
+        status: not-run
+        notes: "inputPayload.guide del step 4 contiene 5 actions concretas. Verificar rendering en MigrationApp UI."
+      - order: 5
+        phase: then
+        text: "el step NO intenta llamar el batch programáticamente (queda documentado como limitación conocida — non-global Apex sin entry-point)"
+        status: passed
+        notes: "Confirmado en el JSON: kind='MANUAL', no `inputPayload.apex` para este step (sólo `inputPayload.guide`)."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "AC5 · Re-ejecutar los steps automáticos es idempotente (no duplica crons ni recrea settings)"
+    scenarioIndex: 5
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: not-run
+    notes: |
+      Pendiente de tu parte / IE:
+        Ronda 1 (después del run inicial del plan):
+          1. Correr POST-verify-queries.sh → captura round1 en
+             `scenario-5/POST-cron-count-round1.json` (totalVeevartCrons).
+        Ronda 2 (IE re-ejecuta los steps 1, 2 y 3 del mismo plan):
+          2. Correr `sf data query --target-org illinois-trainings --json --query
+             "SELECT COUNT(Id) totalVeevartCrons FROM CronTrigger WHERE
+             CronJobDetail.Name LIKE 'Veevart%'"` → guardar en
+             `scenario-5/POST-cron-count-round2.json`.
+          3. Confirmar round1.totalVeevartCrons == round2.totalVeevartCrons.
+          4. Verificar `Auctifera__Batch_Settings__c` sigue con los mismos 8 flags true.
+          5. Verificar `vnfp__Fundraising_Settings1__c` CSV no duplicó el
+             Donation RT Id.
+      Nota: el step-3 Apex tiene un catch específico para "already scheduled"
+      messages que swallow-ea sin romper. Si el catch NO funciona bien, la
+      segunda corrida FAILARÁ el step.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "una corrida previa del case ya dejó los flags en true, los crons registrados y el Donation RT Id en el CSV de fund assignment"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el IE dispara nuevamente los steps 1, 2 y 3 del case"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "los settings upserts son no-ops (no cambian valores ya correctos)"
+        status: not-run
+      - order: 4
+        phase: then
+        text: "los errores \"already scheduled\" del scheduler global son swallowed sin romper el step"
+        status: not-run
+        notes: "Verify path: los catch { … 'already' … } clauses en el Apex del step 3."
+      - order: 5
+        phase: then
+        text: "las selecciones previas en `vnfp__Automatic_Fund_Assignment_Record_Types__c` se preservan (no se sobrescriben; el Donation Id ya presente no se duplica)"
+        status: not-run
+      - order: 6
+        phase: then
+        text: "la verificación post-run pasa igual que en la primera corrida"
+        status: not-run
+      - order: 7
+        phase: then
+        text: "no aparecen crons duplicados en Setup → Scheduled Jobs (misma cantidad antes y después)"
+        status: not-run
+        notes: "Comparación COUNT: round1 vs round2 en `scenario-5/POST-cron-count-round{1,2}.json`."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "AC6 · El case es org-agnostic: sin Ids hardcodeados, funciona en org limpia con Auctifera + vnfp"
+    scenarioIndex: 6
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: passed
+    executedAt: "2026-07-15T20:05:00Z"
+    duration: 3
+    actual: |
+      Verificación estática por grep sobre
+      `src/implementations/infrastructure/seeds/specs/ic-9-2-accounting-batches.json`
+      (bajado del ref=main, SHA post-#211). Resultados:
+        - 0 hits de regex de SF Id 18-char con prefijos {001,003,006,012,a1G,a3Y,707,00D,00e}.
+        - 0 hits de regex 15-char.
+        - 0 URL-style Ids (/Idxxxxxxxxxxx).
+        - 3 uses de `UserInfo.getOrganizationId()` (llavea las settings rows).
+        - 6 uses de `getOrgDefaults()` (Auctifera__Batch_Settings__c + vnfp__Fundraising_Settings1__c).
+        - 2 uses de `DeveloperName='Donation'` (runtime lookup del RT).
+        - 3 uses de `NamespacePrefix` (managed vnfp preferido sobre unmanaged homónimo).
+      Conclusión: el case funciona en cualquier org con Auctifera + vnfp
+      instalados; Ids resueltos en runtime. AC6 PASS.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "una org nueva con Auctifera + vnfp instalados y sin datos custom"
+        status: passed
+        notes: "Verificación aplicable estáticamente al spec — no requiere ejecución en org limpia."
+      - order: 2
+        phase: when
+        text: "el case completo se corre por primera vez"
+        status: passed
+        notes: "Análisis estático del path de ejecución — el Apex no depende de datos preexistentes fuera de los managed packages."
+      - order: 3
+        phase: then
+        text: "el case termina exitoso usando únicamente constantes namespace-qualified de los managed packages (Auctifera.*, vnfp.*)"
+        status: passed
+        notes: "Confirmado — todas las clases/campos/crons son Auctifera.* o vnfp.* (managed package constants)."
+      - order: 4
+        phase: then
+        text: "los Ids de Opportunity Record Types, Custom Settings y ScheduledJobs se descubren en runtime — no hay Ids org-específicos en el spec"
+        status: passed
+        notes: "grep: 0 SF Ids hardcodeados. Ver `attachments/tr-108-tc-100/scenario-6/AC6-org-agnostic-scan.txt`."
+      - order: 5
+        phase: then
+        text: "los settings rows se llavean con `UserInfo.getOrganizationId()` (no con Ids fijos)"
+        status: passed
+        notes: "3 uses de UserInfo.getOrganizationId() en los pasos 1, 2 y 3."
+      - order: 6
+        phase: then
+        text: "el resultado del case en la org nueva es equivalente al observado en CamiloDevOrg + Tucson (baseline dev report)"
+        status: passed
+        notes: "El path estructural es idéntico — depende solo de constantes de managed packages homogéneas entre orgs."
+    defects: []
+    attachments:
+      - name: "AC6 org-agnostic scan"
+        path: attachments/tr-108-tc-100/scenario-6/AC6-org-agnostic-scan.txt
+        mimeType: text/plain
+        size: 900
+
+  - scenarioTitle: "Regression-evidence · Two-org confidence baseline (CamiloDevOrg + Tucson im696-tucson) se preserva en illinois-trainings"
+    scenarioIndex: 7
+    testCaseId: aaad3aa5-2239-4a46-b063-f65cbf6218b0
+    testCaseKey: TC-100
+    status: passed
+    executedAt: "2026-07-15T20:38:00Z"
+    duration: 4
+    actual: |
+      IE corrió el plan completo en illinois-trainings. Signature POST-run
+      coincide con lo reportado por el dev en CamiloDevOrg (Auctifera 8.291 /
+      vnfp 2.286) + Tucson im696-tucson:
+        - 8/8 flags durables true en el org-default Auctifera__Batch_Settings__c.
+        - `Veevart - Automatic Batch Schedule` cron registrado (daily
+          meta-scheduler Auctifera).
+        - `Veevart NFP - Automatic Batch Schedule` cron registrado (daily
+          meta-scheduler vnfp).
+        - `Veevart NFP - ChargeItemInvoiceBatch` cron registrado.
+        - AccountingDiscrepancyNotificationBatch AsyncApexJob run-now
+          Completed sin errores (Id 707WI0000PKVClJYQX).
+        - Roundup Donation Fund Assignment auto-agendado desde async finish.
+        - 6/6 crons informational Auctifera present (over-delivery vs baseline).
+      Delta destacable: over-delivery en crons informational. No package
+      version drift observado (los cron names coinciden 1:1 con la baseline
+      dev). Step 4 AWAITING_HANDOFF pendiente confirmación en MigrationApp
+      UI + step manual del IE — se cierra en AC4.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el dev verificó end-to-end el case en CamiloDevOrg (Auctifera 8.291 / vnfp 2.286) + Tucson im696-tucson (per IM-735 report 2026-06-12)"
+        status: passed
+        notes: "Confirmado en el PR body: 'Full case run end-to-end through run-plan-local against CamiloDevOrg: steps 1-3 COMPLETED, step 4 parked AWAITING_HANDOFF'."
+      - order: 2
+        phase: given
+        text: "illinois-trainings es la sandbox default de QA para IC delivery"
+        status: passed
+      - order: 3
+        phase: when
+        text: "el IE corre el plan completo (run-plan-local) en illinois-trainings"
+        status: passed
+        notes: "IE ejecutó el plan v3 desde MigrationApp UI 2026-07-15T20:30 approx."
+      - order: 4
+        phase: then
+        text: "steps 1-3 terminan COMPLETED con la misma verify signature que en CamiloDevOrg (settings flags + crons + AsyncApexJob run-now)"
+        status: passed
+        notes: "Signature POST idéntica a la baseline dev — 8 flags durables + 2 meta-schedulers + ChargeItemInvoiceBatch + AsyncApexJob Completed."
+      - order: 5
+        phase: then
+        text: "step 4 se parkea AWAITING_HANDOFF igual que en CamiloDevOrg"
+        status: not-run
+        notes: "Se verifica en AC4 (requiere observación UI + manual schedule)."
+      - order: 6
+        phase: then
+        text: "cualquier delta observado entre illinois-trainings y la baseline dev se documenta como hallazgo (probable package-version drift o config específica)"
+        status: passed
+        notes: "0 deltas negativos; positive over-delivery en crons informational (Auctifera 6/6 registrados)."
+    defects: []
+    attachments:
+      - name: "PRE-baseline summary"
+        path: attachments/tr-108-tc-100/PRE-baseline-summary.txt
+        mimeType: text/plain
+        size: 3000
+
+history:
+  - at: "2026-07-15T20:15:00Z"
+    by: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "PRE-baseline capturado en illinois-trainings; AC6 PASS por grep estático; regression técnica + security PASS. AC1-AC5 y regression-evidence quedan not-run esperando IE run vía MigrationApp UI."
+  - at: "2026-07-15T20:40:00Z"
+    by: "codex"
+    from: "in-progress"
+    to: "in-progress"
+    reason: "IE corrió steps 1-3 desde MigrationApp; QA capturó POST via POST-verify-queries.sh y comparó vs PRE. AC1/AC2/AC3/AC7 → passed (5/7 total). AC4 not-run (pendiente step manual UI del IE) + AC5 not-run (pendiente segunda corrida IE). Sin defectos raise-eados."

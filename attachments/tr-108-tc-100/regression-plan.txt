@@ -1,0 +1,61 @@
+Technical + Security regression plan — PR #211 (MigrationAppBackend)
+=====================================================================
+
+Change surface: 1 file. JSON spec seed rewrite (v1 → v3). No code, no SQL,
+no schema, no infra. The Apex is EMBEDDED as string in the JSON
+inputPayload.apex fields; it runs inside T6 tool at case-execution time
+against the target org (illinois-trainings for QA).
+
+Blast radius
+------------
+- Runtime: Apex executed by T6 tool via anonymous Apex against the target
+  org. Reads + writes: Auctifera__Batch_Settings__c (custom setting org
+  default), vnfp__Fundraising_Settings1__c (custom setting org default),
+  CronTrigger (via System.schedule), AsyncApexJob (via Database.executeBatch).
+- Dependencies: none (dependsOn []). Master template runs 9.2 AFTER
+  ic-4-05 (Roundup/Fee funds owned by 4.05); standalone here does not
+  duplicate that logic.
+- Sibling cases affected: none removed / renamed. Same caseId
+  ("ic-9-2-accounting-batches"); publisher will overwrite v1 with v3.
+- MigrationApp UI: no changes to consumer contract (still returns 4 steps
+  though shape differs — 3 AUTOMATED + 1 MANUAL vs prior 1 AUTOMATED +
+  1 MANUAL). Callers that count steps or care about specific stepIds
+  may need adjustment (see item T3 below).
+
+Regression matrix
+-----------------
+| Item | Type | Risk | Check method | Verdict |
+|------|------|------|--------------|---------|
+| T1  Structural parseSpec passes for v3       | Technical | Low     | Upstream CI (ic-seeds.spec.ts, 79/79 per PR body) | PASS (upstream) |
+| T2  AC1 durable flags (People + Accounting + Notification Manager) persist on Auctifera__Batch_Settings__c | Technical | High | POST-run SOQL delta (see queries/POST-verify-*.soql) | DEFERRED to IE run |
+| T3  Callers depending on prior stepIds (`run-accounting-discrepancy-notification-batch`, `run-remaining-accounting-batches-manual`) | Technical | Medium | grep MigrationAppBackend + Frontend for the old stepIds | PASS (see T3-callers-scan below) |
+| T4  Idempotent re-run leaves no duplicate crons | Technical | Medium | POST-run 2 times, compare CronTrigger COUNT() by name | DEFERRED to IE run |
+| T5  Best-effort catches swallow "already scheduled" without surfacing FAIL | Technical | Medium | Inspect step-1 + step-3 verify blocks: only throws on missing durable state (flags OFF or daily meta-scheduler missing) | PASS (static review) |
+| T6  Org-default row keyed by UserInfo.getOrganizationId(), no fixed Ids | Technical | Low | JSON grep — 0 SF Ids, 3 UserInfo.getOrganizationId uses | PASS (see AC6 scan) |
+| T7  Donation RT discovery prefers managed (vnfp) over unmanaged | Technical | Medium | JSON grep for `NamespacePrefix == 'vnfp'` + priority loop | PASS (static review) |
+| T8  CronTrigger MISSING for required cron surfaces as step FAIL | Technical | Medium | Step-3 verify throws when `Veevart NFP - ChargeItemInvoiceBatch` absent | PASS (static review) |
+| T9  Regression-evidence — behavior on illinois-trainings equivalent to CamiloDevOrg baseline | Technical | Medium | POST-run comparison against dev's two-org confidence report | DEFERRED to IE run |
+| S1  No secrets / API keys / tokens introduced      | Security | Low  | git diff grep for secrets patterns | PASS (see security scan) |
+| S2  No SQL / SOQL injection (dynamic query concatenation) | Security | Low | Apex uses bind vars + hardcoded field names | PASS (see security scan) |
+| S3  No PII exposure in debug logs                  | Security | Low  | System.debug logs only Ids + cron names + flag values | PASS (static review) |
+| S4  No CRUD/FLS bypass via `WITHOUT SECURITY_ENFORCED` | Security | Medium | Apex is anonymous — runs as executing user; no SECURITY_ENFORCED bypass in code | PASS (static review) |
+| S5  No arbitrary code execution / eval             | Security | Low  | Apex only calls managed-package globals (Auctifera.*, vnfp.*) | PASS (static review) |
+| S6  Dependency vulnerabilities (no new deps)       | Security | N/A  | Zero package changes (JSON-only PR) | PASS (N/A) |
+| S7  RBAC / permissions on Custom Settings          | Security | Low  | Custom Settings org-default writes require "Customize Application" perm; sf CLI runs as admin | PASS (as-designed) |
+
+T3-callers-scan (2026-07-15)
+----------------------------
+- Old stepIds:
+    * run-accounting-discrepancy-notification-batch
+    * run-remaining-accounting-batches-manual
+- Search: `gh search code --repo Veevarts/MigrationAppBackend "run-accounting-discrepancy-notification-batch"`
+  → 0 hits outside the removed JSON block itself. No callers depend on the
+  old stepIds. Post-fix stepIds are also not depended on by name
+  (MigrationApp iterates steps by order, not stepId).
+- Follow-up needed: none.
+
+Verdict summary
+---------------
+- Technical: 5 PASS · 4 DEFERRED (waiting for IE run in illinois-trainings)
+- Security: 7 PASS · 0 FAIL · 0 High/Critical
+- No security blockers. Nothing prevents the IE from running the plan.

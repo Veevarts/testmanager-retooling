@@ -1,0 +1,52 @@
+Regression results — PR #211 (MigrationAppBackend) — executed 2026-07-15
+==========================================================================
+
+Technical
+---------
+- T1 parseSpec validation: PASS (upstream CI on MigrationAppBackend; PR body confirms 79/79)
+- T2 AC1 flags durable: DEFERRED — waiting IE run in illinois-trainings (queries handed off)
+- T3 Callers of old stepIds: PASS — `gh search code` returned 0 hits across
+     MigrationAppBackend + MigrationAppFrontend for both:
+       - `run-accounting-discrepancy-notification-batch`
+       - `run-remaining-accounting-batches-manual`
+     No downstream code depends on the renamed stepIds.
+- T4 Idempotent re-run no duplicate crons: DEFERRED — requires 2 IE runs back-to-back.
+- T5 Best-effort catches don't false-FAIL: PASS (static) — step-1 verify
+     only throws on {flag missing, daily meta-scheduler missing};
+     step-3 verify only throws on {5 flags missing, daily meta-scheduler
+     missing, ChargeItemInvoiceBatch cron missing}. All "info" crons are
+     inspected + debug-logged but never asserted.
+- T6 Org-agnostic (no hardcoded Ids): PASS — see AC6-org-agnostic-scan.txt.
+- T7 Donation RT discovery prefers managed vnfp: PASS (static) — code
+     orders by `NamespacePrefix NULLS LAST` and then explicitly loops
+     `if (rt.NamespacePrefix == 'vnfp') { donationRtId = rt.Id; break; }`.
+- T8 Missing required cron surfaces as FAIL: PASS (static) — throws
+     VerifyException with distinguishable message per required-cron miss.
+- T9 illinois-trainings equivalence to CamiloDevOrg baseline: DEFERRED —
+     compare POST-run against dev's 2026-06-12 IM-735 confidence report.
+
+Security
+--------
+- S1 No secrets introduced: PASS — grep on JSON found 0 matches for
+     {password, api_key, secret, bearer, .env, -----BEGIN, private_key}.
+- S2 No SOQL injection: PASS — 0 uses of Database.query(String) or
+     String.escapeSingleQuotes in the spec Apex. All queries hardcoded
+     with `:variable` bind vars.
+- S3 No PII in debug logs: PASS — only Ids + cron names + boolean flags.
+- S4 No CRUD/FLS bypass: PASS — no SECURITY_ENFORCED bypass; runs as
+     executing user (admin).
+- S5 No arbitrary code execution: PASS — only calls managed-package
+     globals (Auctifera.AutomaticBatchSchedule, vnfp.AutomaticBatchSchedule,
+     Auctifera.AccountingDiscrepancyNotificationBatch). No eval, no
+     ScriptEngine, no HTTP callouts.
+- S6 Dependency vulns: PASS (N/A) — zero package changes.
+- S7 RBAC / CS perms: PASS — Custom Settings org-default writes require
+     "Customize Application" permission (SF platform enforced).
+
+Verdict
+-------
+- Technical: 5 PASS · 4 DEFERRED to IE run · 0 FAIL
+- Security: 7 PASS · 0 FAIL · 0 High/Critical
+- No security blockers. Nothing prevents the IE from executing the plan.
+- Regression-plan Verdicts that stayed DEFERRED will re-run automatically
+  once the IE captures POST-state (see POST-verify-queries.sh handoff).

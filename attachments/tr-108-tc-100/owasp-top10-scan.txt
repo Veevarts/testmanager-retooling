@@ -1,0 +1,26 @@
+OWASP Top 10 (2021) applicability scan — PR #211 (MigrationAppBackend)
+=======================================================================
+
+Change surface: JSON spec seed. No new endpoints, no code paths introduced
+in Node/TS; Apex embedded as string runs against a Salesforce org via T6
+tool (managed environment, admin-executed).
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | No new authorization surface. Apex writes to Custom Settings org-default (requires "Customize Application" perm — enforced by SF platform). No user-facing endpoint. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No crypto operations, no secret storage. |
+| A03  | Injection                                    | Applicable  | PASS    | SOQL uses bind vars (`:jobId`, `:allWanted`, `:infoCrons`); field/class names hardcoded (Auctifera.*, vnfp.*). No dynamic query concatenation from user input. Grep confirms 0 uses of `Database.query(String)` or string-built SOQL. |
+| A04  | Insecure Design                              | Applicable  | PASS    | Design is idempotent by AC5, catches "already scheduled" as no-op, prefers managed RT over unmanaged (safer default), guards missing durable state with explicit throw. Best-effort try/catch is deliberate (documented in code comments). |
+| A05  | Security Misconfiguration                    | N/A         | —       | JSON is a case spec, not deployment config. No exposed cred file, no default password, no debug flag toggled. |
+| A06  | Vulnerable & Outdated Components             | N/A         | —       | Zero dependency changes (JSON-only PR). No new npm/apex libs. |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. Case runs under the executing user's SF session (admin). |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | Spec loaded by publish CLI; parseSpec validates structure before write to DynamoDB. Case body is embedded, not fetched from untrusted URL. No SRI needed. |
+| A09  | Security Logging & Monitoring Failures       | Applicable  | PASS    | Uses `System.debug(LoggingLevel.INFO/WARN)` on success + swallow paths; explicit throw on FAIL. SF platform logs anonymous Apex debug output in Setup → Debug Logs. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP callouts. No `HttpRequest` / `Http.send`. |
+
+Summary
+-------
+- Applicable: 4 (A03, A04, A08, A09)
+- PASS: 4 · FAIL: 0 · N/A: 6
+- No High/Critical blockers.
+- No defects to raise from OWASP.
