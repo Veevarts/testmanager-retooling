@@ -1,0 +1,152 @@
+schemaVersion: "1.0"
+
+id: "877e062d-0cfd-43ba-acda-bdbf904277a2"
+key: "TC-101"
+title: "Illinois Sales Items · 4977 residual errors — gap de Item_Variant External IDs tras IM-809"
+description: |
+  Cobertura QA para IM-1005 (Historia, priority High, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1092 (creada 2026-07-15).
+
+  Contexto:
+  - Cliente: Illinois Holocaust Museum and Education Center (IHMEC).
+  - Tras la resolución de IM-809 se corrió el upsert masivo de Sales Items
+    contra la sandbox del cliente. De 79,713 registros totales, 74,736
+    subieron correctamente y 4,977 (~6.24%) fallaron con el mismo patrón:
+
+      Foreign key external ID: <UUID> not found for field
+      Implementation_External_ID__c in entity Auctifera__Item_Variant__c
+
+  - Ejemplo concreto reportado: UUID `3cf8166e-b2df-41a6-b11c-cab43a066ae0`.
+  - Attachment fuente: `error070126113014923` (log de 4977 errores adjunto
+    al ticket).
+  - Objetivo QA: identificar por qué esos 4,977 Item_Variant no existen en
+    Salesforce con ese External ID, categorizar la causa, validar el fix
+    (nueva query / migración de Item_Variant / reconciliación) y confirmar
+    que la carga completa 79,713 = 74,736 + 4,977 termina consistente.
+
+  Riesgos abiertos:
+  - No hay PR asociado todavía; el fix puede ser (a) una nueva migración
+    de Item_Variant que llene el gap, (b) un cambio en la query de sales
+    items para skip-ear los que no tienen Item_Variant match, o (c) un
+    script de reconciliación. QA debe validar lo que aparezca en el PR.
+  - No hay AC formal en la historia — el objetivo se infiere del error
+    reportado. Los escenarios reflejan lo que el error describe; si el
+    fix cambia el alcance, hay que re-abrir.
+  - Solo tenemos 1 UUID de muestra explícito; los otros 4,976 pueden tener
+    causas mixtas (missing / stale / duplicate) — AC2 categoriza.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Acceso al org/sandbox de Illinois (illinois-trainings + org de producción del cliente) con permisos de SOQL para `Auctifera__Item_Variant__c` y objetos relacionados."
+  - "Acceso al source Altru (safesql profile `illinois_2` u homólogo) para las tablas de Item Variants + Sales Items."
+  - "Attachment `error070126113014923` descargado de IM-1005 (los 4977 external IDs errored, uno por línea)."
+  - "Rango de 74,736 upserts exitosos disponible (sea por log de la corrida, por AsyncApexJob, o por consulta directa a SF filtrando por `Implementation_External_ID__c` reciente)."
+  - "PR del fix identificable (a partir del changelog / branch del assignee Camilo) cuando exista."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Root-cause del UUID de muestra 3cf8166e-b2df-41a6-b11c-cab43a066ae0"
+    tags:
+      - ac-1
+      - root-cause
+      - regression-evidence
+      - illinois
+    given:
+      - "el error reportado apunta al Item_Variant External ID `3cf8166e-b2df-41a6-b11c-cab43a066ae0`"
+    when:
+      - "QA consulta el org destino: `SELECT Id, Name, Implementation_External_ID__c FROM Auctifera__Item_Variant__c WHERE Implementation_External_ID__c = '3cf8166e-b2df-41a6-b11c-cab43a066ae0'`"
+      - "QA consulta Altru source por ese UUID en la tabla de Item Variants"
+    then:
+      - "el resultado SOQL en SF es 0 filas — confirma que el Item_Variant no existe con ese External ID"
+      - "Altru source SÍ tiene un row para ese UUID (confirma que el registro es real y debería estar migrado)"
+      - "la categoría de la falla queda documentada como una de: (a) Item_Variant nunca migrado, (b) migrado con External ID distinto, (c) Item_Variant inactivo/soft-deleted en Altru, (d) otro"
+      - "esta categorización sirve de plantilla para AC2 (el batch completo)"
+
+  - title: "AC2 · Categorización del batch completo (4977 rows) por causa de falla"
+    tags:
+      - ac-2
+      - batch-analysis
+      - illinois
+    given:
+      - "el attachment `error070126113014923` con los 4977 external IDs errored está descargado y parseado a un CSV (una columna, un UUID por fila)"
+    when:
+      - "QA left-joins los 4977 UUIDs contra `Auctifera__Item_Variant__c.Implementation_External_ID__c` en SF"
+      - "QA left-joins los 4977 UUIDs contra la tabla source de Altru para confirmar existencia + estado en source"
+    then:
+      - "cada UUID queda etiquetado con una categoría entre: `missing-in-sf`, `present-different-id`, `stale-source`, `duplicate-source`, u `other`"
+      - "el conteo total por categoría suma exactamente 4977"
+      - "la categoría dominante determina la estrategia de fix esperada (migración vs skip vs reconciliación)"
+      - "el resultado se persiste como matriz de categorías para trazabilidad (input para el fix del dev y para el AC4 post-fix)"
+
+  - title: "AC3 · Reconciliation baseline — Altru source vs SF antes del fix"
+    tags:
+      - ac-3
+      - baseline
+      - reconciliation
+      - illinois
+    given:
+      - "Altru source expone la relación Sales Items → Item Variants"
+      - "SF tiene registros ya migrados en `Auctifera__Item_Variant__c`"
+    when:
+      - "QA cuenta en Altru: `COUNT(DISTINCT item_variant_uuid)` que participa en la carga de Sales Items de Illinois"
+      - "QA cuenta en SF: `SELECT COUNT() FROM Auctifera__Item_Variant__c` filtrado por el mismo scope"
+    then:
+      - "el delta Altru−SF debe explicar los 4977 errores (± overlap con Item_Variants sin Sales Item asociado)"
+      - "si el delta > 4977, hay Item_Variants source que aún no se han migrado más allá de los 4977 reportados — hallazgo adicional"
+      - "si el delta < 4977, hay 4977 rows cuyo UUID no matchea contra el naming source (posible mismatch de External ID scheme) — hallazgo adicional"
+
+  - title: "AC4 · Post-fix retry — los 4977 rows terminan upserted con 0 residual errors"
+    tags:
+      - ac-4
+      - post-fix
+      - happy-path
+      - illinois
+    given:
+      - "el PR del fix está mergeado y la nueva migración / query corregida está desplegada"
+      - "la lista de 4977 external IDs de AC2 está lista para re-upsert"
+    when:
+      - "QA re-ejecuta la carga de Sales Items limitada a los 4977 rows previamente errored"
+    then:
+      - "el batch termina con 4977 rows procesadas y 0 errores residuales por `Foreign key external ID not found for Implementation_External_ID__c`"
+      - "todos los Item_Variant referenced existen ahora en SF (SOQL: `COUNT(Implementation_External_ID__c) WHERE Id IN :fixed_uuids` = 4977)"
+      - "los Sales Items correspondientes están visibles en SF con su Item_Variant lookup poblado"
+
+  - title: "AC5 · Regression — los 74,736 rows exitosos previos no se re-procesan ni duplican"
+    tags:
+      - ac-5
+      - regression
+      - illinois
+    given:
+      - "los 74,736 Sales Items ya cargados exitosamente están en SF con sus External IDs originales"
+    when:
+      - "el fix corre (sea migración de Item_Variant nueva, sea retry limitado a 4977, sea reconciliación)"
+    then:
+      - "el `COUNT()` de Sales Items en SF para Illinois es exactamente 79,713 (74,736 previos + 4,977 nuevos) sin duplicados"
+      - "los CreatedDate de los 74,736 rows originales se preservan (el fix no re-inserta ni sobrescribe rows sanos)"
+      - "los `Implementation_External_ID__c` de los 74,736 originales no cambian (no re-key ni re-map)"
+      - "ningún AsyncApexJob nuevo procesa los 74,736 rows sanos (delta = 4,977 únicamente)"
+
+tags:
+  - im-1005
+  - im-70
+  - im-1092
+  - altru
+  - queries
+  - illinois
+  - ihmec
+  - sales-items
+  - item-variant
+  - external-id-gap
+  - data-validation
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-15T21:05:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-15T21:05:00Z"
+  version: 1
