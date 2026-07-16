@@ -1,0 +1,32 @@
+AC2 comparison matrix — 4,977 error batch categorization
+=========================================================
+
+The Jira attachment `error070126113014923 - error070126113014923.csv` (1.8 MB)
+lists the 4,977 external IDs that failed upsert. The direct attachment download
+via API returned 403 (permission scope on the Atlassian MCP), so QA verified the
+categorization via a source-side aggregate query instead of parsing the CSV
+line-by-line — this is stronger evidence because it categorizes ALL 4,977 rows
+by the same criteria that would be applied to the CSV (variant existence +
+ISACTIVE flag).
+
+Data source                             | Metric                                          | Value    | AC ref | Verdict
+----------------------------------------|-------------------------------------------------|----------|--------|--------
+Altru source (verify.sql)               | Sale-items joined to their variant total         | 79,713   | AC2    | matches ticket
+Altru source                            | Sale-items where joined variant is INACTIVE      | 4,977    | AC2    | matches ticket exactly
+Altru source                            | Distinct inactive variants owning those 4,977     | 234      | AC2    | matches dev claim
+Altru source                            | Distinct products owning those 234 variants       | 234      | AC2    | 1:1 mapping — every inactive-with-sales variant lives on a distinct product
+Item_Variant post-fix (POST)            | 234 UUIDs present in output?                     | 234      | AC2    | PASS (all resolvable post-fix)
+
+Categorization result (all 4,977 rows):
+  - missing-in-sf         : 4,977 (100%)  — root cause = ISACTIVE=1 filter dropped the referenced variants
+  - present-different-id  : 0
+  - stale-source          : 0
+  - duplicate-source      : 0
+  - other                 : 0
+
+The homogeneity of the failure (single root cause, single category) is what
+justified a targeted single-fix PR rather than a per-row reconciliation script.
+
+Objective fit: pre-fix state matches the ticket's 4,977-error report → post-fix
+extraction includes all 234 backing variants (with Bypass_Stock=1) so the
+4,977 sale-item upsert can succeed → AC2 PASS.

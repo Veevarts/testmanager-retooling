@@ -1,0 +1,53 @@
+Technical + Security regression plan — PR Veevarts/MigrationToolETL#145
+========================================================================
+
+Change surface: 3 files in the SQL-server shop extractor:
+  - queries/shop/item_variant.sql          (-21 / +12 lines — removes WHERE ISACTIVE=1 filter, adds Bypass_Stock CASE, drops dead history join)
+  - queries/shop/catalog_item.sql          (-1 / +34 lines — adds Bypass_Stock CASE with EXISTS-based derivation)
+  - query-regression/shop-item-variant-coverage-query.spec.ts (NEW — 87 lines, 7 static contract assertions)
+
+Runtime: SQL text executed by the MigrationTool ETL pipeline against a customer's
+restored Altru backup (SQL Server). Output CSVs are consumed by the Salesforce
+bulk-upsert loader (`sf data upsert bulk --sobject Auctifera__Item_Variant__c` /
+`Auctifera__CatalogItem__c` / `Auctifera__Sale_Item__c`), keyed by
+`Implementation_External_ID__c`. No Apex / no Node runtime path changes.
+
+Blast radius
+------------
+- Every future Altru shop migration inherits the new extraction cardinality
+  (variants: all rows instead of ISACTIVE=1 only) and the new Bypass_Stock
+  semantics (variant-level + catalog-level).
+- MigrationTool ETL callers: no consumer breaks — the queries return more columns'
+  values but no new column names (Bypass_Stock__c already existed as literal 0).
+- Salesforce side: `Auctifera__Bypass_Stock__c` field must exist on both
+  Item_Variant__c and CatalogItem__c (confirmed by SOQL on illinois-trainings —
+  field present).
+- Related IM-809: the sibling `shop-discount-query.spec.ts` pattern is preserved;
+  this PR follows it verbatim.
+
+Regression matrix
+-----------------
+| Item | Type | Risk | Check method | Verdict |
+|------|------|------|--------------|---------|
+| T1  spec.ts contract assertions              | Technical | Low     | Simulated locally 7/7 PASS + PR body confirms npm run test:queries green (34 suites, 279 tests) | PASS |
+| T2  item_variant.sql grain unchanged from removed history join | Technical | Medium | safesql grain diff: POST 4,711 rows = source COUNT(MERCHANDISEPRODUCTINSTANCE) = 4,711 | PASS |
+| T3  item_variant.sql PRE row count matches active-only variants | Technical | Low | safesql: PRE 4,444 rows = COUNT(WHERE ISACTIVE=1) 4,444 | PASS |
+| T4  catalog_item.sql grain unchanged from EXISTS additions | Technical | Medium | safesql: PRE 4,706 = POST 4,706 | PASS |
+| T5  sale_item.sql UNCHANGED (0 grain change to the 79,713 sane rows) | Technical | High | git diff = 0 bytes changed in sale_item.sql at HEAD vs merge-base | PASS |
+| T6  stock_replenishment_order.sql UNCHANGED (spec.ts locks its ISACTIVE filter) | Technical | High | git diff = 0 bytes changed; spec.ts asserts WHERE pi.ISACTIVE = 1 | PASS |
+| T7  Bypass_Stock=1 distribution matches new predicate math | Technical | Medium | safesql: item_variant POST 267 with Bypass=1; catalog_item POST 234 with Bypass=1 (matches dev claim exactly) | PASS |
+| T8  Sample failing UUID resolves post-fix | Technical | High | safesql: 3CF8166E-B2DF-41A6-B11C-CAB43A066AE0 present in POST item_variant with Bypass=1 + availability=false | PASS |
+| T9  All 4,977 failing sale lines will resolve post-fix | Technical | High | verify.sql: 4,977 sale-items ref 234 inactive variants, ALL 234 present in POST item_variant | PASS |
+| T10 IM-809 pattern preserved (sibling spec.ts still green) | Technical | Low | Same test structure as shop-discount-query.spec.ts; no imports changed | PASS |
+| S1  No secrets introduced                          | Security | Low  | git diff grep → 0 matches on {password, api_key, secret, bearer, .env, -----BEGIN} | PASS |
+| S2  No SQL injection via string concatenation      | Security | Low  | SQL is static text; parameters use `@name` bind vars (sale_item.sql date filters); no `EXEC(@dynamic)` | PASS |
+| S3  No PII exposure in query output                | Security | Low  | safesql redacts string columns in stdout; only aggregates/ints/dates leak in-band | PASS |
+| S4  No CRUD/FLS bypass                             | Security | N/A  | Read-only ETL extractor; runs against restored Altru backup, not against SF org | PASS |
+| S5  No arbitrary code execution                    | Security | Low  | Pure SELECT with EXISTS/CASE; no `EXEC`, no dynamic SQL, no user input concat | PASS |
+| S6  Dependency vulnerabilities                     | Security | N/A  | Zero package changes | PASS (N/A) |
+| S7  RBAC — safesql runs read-only account           | Security | Low  | safesql profile illinois_2 uses a read-only credentials (per profile schema) | PASS |
+
+Verdict summary
+---------------
+- Technical: 10/10 PASS · 0 FAIL
+- Security: 7 items · 5 PASS · 2 N/A · 0 FAIL · 0 High/Critical blockers

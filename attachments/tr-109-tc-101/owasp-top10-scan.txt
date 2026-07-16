@@ -1,0 +1,25 @@
+OWASP Top 10 (2021) applicability scan — PR Veevarts/MigrationToolETL#145
+==========================================================================
+
+Change surface: 2 static SQL files (SELECT-only) + 1 static test contract. Runtime
+target is a customer's restored Altru SQL Server backup (read-only) → CSV → SF
+bulk upsert (existing loader, unchanged).
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | No new authorization surface. Extractor runs under a read-only DB account per safesql profile. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No crypto ops. No token / secret storage introduced. |
+| A03  | Injection                                    | Applicable  | PASS    | SQL is static text. Existing `@name` parameter bindings preserved (sale_item.sql date filters). Zero `EXEC(@dynamic)` or string concatenation into SQL. |
+| A04  | Insecure Design                              | Applicable  | PASS    | Design deliberately targets narrowest bypass window (variant-level: only inactive; product-level: only when active-non-primary count is zero AND inactive-with-sales exists). Documented tradeoff (active-primary-only + inactive-sold products bypass at catalog level) is quantified as 0 in Illinois, protected by variant-level Bypass=0 for the primary. IM-809 pattern preserved. |
+| A05  | Security Misconfiguration                    | N/A         | —       | No exposed config. No default passwords. safesql profile is a runtime concern owned by the operator, not this PR. |
+| A06  | Vulnerable & Outdated Components             | N/A         | —       | Zero package.json / package-lock.json changes. |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | New spec.ts locks the SQL text contract so a future edit that reintroduces the ISACTIVE filter fails CI. sale_item.sql and stock_replenishment_order.sql invariants also locked. |
+| A09  | Security Logging & Monitoring Failures       | Applicable  | PASS    | safesql writes runtime output to `/Users/veevart/tools/safesql/out/` with mode 0600. `Bypass_Stock__c` values are numeric and print in-band; row-level PII is redacted. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP callouts. |
+
+Summary
+-------
+- Applicable: 4 (A03, A04, A08, A09)
+- PASS: 4 · FAIL: 0 · N/A: 6
+- No High/Critical blockers. No defects to raise from OWASP.

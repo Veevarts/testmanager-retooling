@@ -1,0 +1,53 @@
+--- BASE/item_variant.sql
++++ HEAD/item_variant.sql
+@@ -2,7 +2,14 @@
+     pi.ID AS Implementation_External_ID__c,
+     pi.ISACTIVE AS Auctifera__Available_Collection_Online__c,
+     pi.ISACTIVE AS Auctifera__Available_for_sale__c,
+-    0 AS Auctifera__Bypass_Stock__c,
++    -- Inactive variants get no stock replenishment rows (stock_replenishment_order.sql
++    -- keeps ISACTIVE = 1), so their historical Sold sale items would drive
++    -- Quantity_Available negative and trip the Total_stock_validation2 rule
++    -- ("Out of Stock") on non-primary variants. Bypass stock for them (IM-1005).
++    CASE
++        WHEN pi.ISACTIVE = 1 THEN 0
++        ELSE 1
++    END AS Auctifera__Bypass_Stock__c,
+     pi.SEQUENCEID AS Auctifera__Position__c,
+     pi.SALEPRICE AS Auctifera__Price__c,
+     CASE
+@@ -39,24 +46,6 @@
+ FROM MERCHANDISEPRODUCTINSTANCE pi
+     LEFT JOIN MERCHANDISEPRODUCT mp ON mp.ID = pi.MERCHANDISEPRODUCTID
+     LEFT JOIN PRODUCT p ON p.ID = mp.ID
+-    LEFT JOIN (
+-        SELECT MERCHANDISEPRODUCTINSTANCEID,
+-            SUM(ABS(QUANTITY)) AS total_adjusted,
+-            SUM(
+-                CASE
+-                    WHEN QUANTITY < 0 THEN ABS(QUANTITY)
+-                    ELSE 0
+-                END
+-            ) AS total_sold,
+-            SUM(
+-                CASE
+-                    WHEN QUANTITY > 0 THEN QUANTITY
+-                    ELSE 0
+-                END
+-            ) AS total_received
+-        FROM MERCHANDISEPRODUCTINSTANCEHISTORY
+-        GROUP BY MERCHANDISEPRODUCTINSTANCEID
+-    ) history ON history.MERCHANDISEPRODUCTINSTANCEID = pi.ID
+     OUTER APPLY (
+         SELECT MAX(
+                 CASE
+@@ -82,5 +71,7 @@
+                     JOIN MERCHANDISEPRODUCTOPTIONVALUE pov ON pov.ID = piov.MERCHANDISEPRODUCTOPTIONVALUEID
+                 WHERE piov.MERCHANDISEPRODUCTINSTANCEID = pi.ID
+             ) opt
+-    ) option_values
+-WHERE pi.ISACTIVE = 1;
++    ) option_values;
++-- No ISACTIVE filter (IM-1005): sale_item.sql emits Item_Variant FKs for every sold
++-- variant regardless of active state, so inactive variants must still be loaded.
++-- pi.ISACTIVE drives the availability flags above, keeping them unsellable in Veevart.

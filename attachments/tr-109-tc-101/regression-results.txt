@@ -1,0 +1,51 @@
+Regression results — PR Veevarts/MigrationToolETL#145 — executed 2026-07-16
+=============================================================================
+
+Technical
+---------
+- T1  spec.ts contract assertions:   PASS (simulated 7/7 locally; PR body confirms npm run test:queries 34/34 suites green)
+- T2  item_variant grain unchanged post history-join removal: PASS
+      · POST 4,711 rows == source `SELECT COUNT(*) FROM MERCHANDISEPRODUCTINSTANCE` = 4,711
+      · No row multiplication from the removed subquery (dev claim verified independently)
+- T3  item_variant PRE row count = active-only:  PASS
+      · PRE 4,444 rows == source `SELECT COUNT(*) FROM MERCHANDISEPRODUCTINSTANCE WHERE ISACTIVE = 1` = 4,444
+- T4  catalog_item grain unchanged:               PASS
+      · PRE 4,706 = POST 4,706 (no row change; only Bypass_Stock__c distribution shifts)
+- T5  sale_item.sql UNCHANGED:                    PASS
+      · `git diff BASE..HEAD -- sale_item.sql` = empty (0 bytes changed)
+      · 74,736 successful rows preserved by construction (query text identical)
+- T6  stock_replenishment_order.sql UNCHANGED:    PASS
+      · `git diff BASE..HEAD -- stock_replenishment_order.sql` = empty
+      · spec.ts asserts its ISACTIVE=1 filter remains (invariant lock)
+- T7  Bypass_Stock=1 distribution matches new predicate math: PASS
+      · item_variant POST: 267 rows with Bypass_Stock=1 (matches source `variants_inactive_only` = 267)
+      · catalog_item POST: 234 rows with Bypass_Stock=1 (matches source `distinct_inactive_products_with_sales` = 234)
+      · Old zero-active-variant proxy would have bypassed 267 products; new predicate correctly narrows to 234
+- T8  Sample failing UUID resolves post-fix:      PASS
+      · UUID 3CF8166E-B2DF-41A6-B11C-CAB43A066AE0 present in POST item_variant (0 in PRE)
+      · Attributes: Bypass_Stock=1, Available_for_sale=false, Available_Collection_Online=false
+      · Source: ISACTIVE=0, 27 sale lines reference this variant (verify.sql confirmed)
+- T9  All 4,977 failing sale lines will resolve:  PASS
+      · verify.sql: 4,977 sale-items reference 234 distinct inactive variants
+      · ALL 234 variants present in POST item_variant (with Bypass_Stock=1)
+      · Post-fix retry expected to produce 4,977 successful upserts + 0 residual FK errors
+- T10 IM-809 pattern preserved:                   PASS
+      · shop-discount-query.spec.ts sibling unchanged; same test structure/regex approach
+
+Security
+--------
+- S1  No secrets:            PASS — 0 secret pattern matches in git diff
+- S2  No SQL injection:      PASS — static text + preserved `@bind` params; 0 dynamic-SQL patterns
+- S3  No PII exposure:       PASS — safesql redacts string columns from stdout
+- S4  No CRUD/FLS bypass:    PASS (N/A) — read-only ETL against restored Altru backup
+- S5  No arbitrary code exec: PASS — pure SELECT / EXISTS / CASE, no EXEC
+- S6  Dep vulns:              PASS (N/A) — zero package changes
+- S7  RBAC:                   PASS — read-only safesql profile
+
+Verdict
+-------
+- Technical: 10 PASS · 0 FAIL
+- Security: 5 PASS · 2 N/A · 0 FAIL · 0 High/Critical
+- OWASP Top 10: 4 Applicable · 4 PASS · 0 FAIL · 6 N/A
+- No blockers. PR safe to merge from a QA regression standpoint. AC4 (post-fix
+  retry in SF) remains a manual handoff after Camilo re-runs the load.

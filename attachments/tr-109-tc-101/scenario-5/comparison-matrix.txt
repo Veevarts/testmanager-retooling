@@ -1,0 +1,38 @@
+AC5 comparison matrix — regression on the 74,736 successful rows
+=================================================================
+
+The 74,736 sale-items that already loaded successfully are indexed by their
+`Implementation_External_ID__c`. This scenario verifies the PR does NOT alter
+their extraction, keys, or grain — i.e. a re-run of the ETL against the same
+Illinois source produces the same 74,736 rows with the same shape.
+
+Verification anchor                                 | PRE            | POST           | Delta       | AC ref | Verdict
+----------------------------------------------------|----------------|----------------|-------------|--------|--------
+sale_item.sql file contents (BASE vs HEAD)           | 5,772 bytes    | 5,772 bytes    | 0           | AC5    | PASS
+`git diff BASE..HEAD -- queries/shop/sale_item.sql`  | (0 hunks)      | (0 hunks)      | empty diff  | AC5    | PASS
+Sale-item join grain in source                       | 79,713         | 79,713         | 0           | AC5    | PASS
+  · Sane rows (variant is active or will resolve)    | 74,736         | 74,736         | 0           | AC5    | PASS
+  · Newly-resolvable rows (previously errored)       | 4,977          | 4,977          | 0           | AC5    | PASS
+Item_Variant Bypass_Stock=0 rows                     | 4,444          | 4,444          | 0 (preserved)| AC5   | PASS
+Item_Variant Bypass_Stock=1 rows                     | 0              | 267            | +267 (new)  | AC5    | PASS (opt-in, doesn't affect the 4,444 sane)
+Catalog_Item Bypass_Stock=0 rows                     | 4,706          | 4,472          | -234 (flipped to =1) | AC5 | PASS (only where the CatalogItem stock validation would false-FAIL)
+Sale_Item Implementation_External_ID__c values       | (deterministic from Altru PK) | (same) | 0     | AC5    | PASS (query-derived from stable soim.ID)
+
+Additional invariants locked by the new spec.ts (contract lock — future regressions caught in CI):
+  - sale_item.sql joins variants WITHOUT ISACTIVE condition (unchanged)
+  - stock_replenishment_order.sql KEEPS its ISACTIVE=1 filter (unchanged) —
+    prevents inactive stock from inflating inventory.
+
+Sanity check on the 234 catalog flips:
+  - Every product flipped to Bypass_Stock=1 has EXISTS an inactive variant with
+    sale lines AND does NOT have an active non-primary variant. This is the
+    minimum set required to unblock the failed sale lines while preserving stock
+    control on every other product.
+  - The 34 fully-discontinued products (active-primary-only + inactive-sold
+    mixed shape) do NOT exist in Illinois (0 rows). Predicate protects future
+    migrations where they might.
+
+Objective fit: sale_item.sql is identical → the 74,736 sane rows extract
+identically → they cannot be duplicated, re-keyed, or lost by this PR. The 267
+new Bypass_Stock=1 variants + 234 catalog flips affect ONLY the previously-failing
+subset. Regression PASS.

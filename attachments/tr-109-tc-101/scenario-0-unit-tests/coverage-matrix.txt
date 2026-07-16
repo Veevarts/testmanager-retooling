@@ -1,0 +1,41 @@
+Unit test coverage — PR Veevarts/MigrationToolETL#145
+======================================================
+
+Test file added: src/data-migration/infrastructure/destination/sql-server/
+                 query-regression/shop-item-variant-coverage-query.spec.ts (87 lines, 7 assertions)
+
+Type: static contract-lock on the SQL text (whitespace-normalized regex assertions).
+Follows the same pattern as shop-discount-query.spec.ts introduced by IM-809.
+
+Assertions (all simulated locally against HEAD SQL files — 7/7 PASS):
+  1. item_variant.sql does NOT contain `WHERE pi.ISACTIVE` (root-cause protection).
+  2. item_variant.sql keeps availability flags derived from pi.ISACTIVE.
+  3. item_variant.sql derives Bypass_Stock__c via CASE on ISACTIVE.
+  4. catalog_item.sql gates bypass on active NON-PRIMARY variants (mirrors Number_of_variants2__c).
+  5. catalog_item.sql bypasses stock only when inactive variants w/ sale lines exist.
+  6. sale_item.sql joins Item_Variants WITHOUT an ISACTIVE condition (invariant).
+  7. stock_replenishment_order.sql KEEPS its `WHERE pi.ISACTIVE = 1` filter (invariant — inactive stock must not inflate inventory).
+
+AC ↔ test coverage
+------------------
+| AC   | Structural (spec.ts) | Behavioral (safesql live) | Verdict                             |
+|------|----------------------|---------------------------|-------------------------------------|
+| AC1  | Tests 1, 2, 3        | Sample UUID + ISACTIVE=0 in Altru; POST extraction includes it | PASS |
+| AC2  | Tests 1, 2, 3        | verify.sql → 4,977 sales ref inactive + 234 distinct variants | PASS |
+| AC3  | Tests 1, 2, 3, 4, 5  | verify.sql → 4,711 total / 4,444 active / 267 inactive        | PASS |
+| AC4  | (n/a — post-fix load) | Not runnable here (requires SF upsert after dev delivers)     | not-run |
+| AC5  | Tests 6, 7 + sale_item unchanged | POST item_variant preserves 4,444 active baseline; catalog grain 4,706 unchanged | PASS |
+
+Gap conclusion
+--------------
+Every AC that can be validated pre-load is covered by the new spec.ts. AC4 (post-fix
+retry with actual SF upsert) is not test-covered — evidence lives in the sandbox
+load documented in the PR body (CamiloDevOrg, 3 discontinued products + 3 inactive
+variants incl. the ticket's failing UUID, load clean with Bypass changes and FAILs
+without them).
+
+Runner check: `npm test` cannot be executed here (MigrationToolETL is not cloned in
+this workspace). The 7 assertions were re-simulated in Python against the HEAD SQL
+files fetched via `gh api contents?ref=<HEAD-sha>` — 7/7 PASS. PR body claims
+`npm run test:queries` green (34 suites, 279 tests) — not blocking; upstream CI gate
+enforces it.

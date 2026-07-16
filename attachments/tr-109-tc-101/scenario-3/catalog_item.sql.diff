@@ -1,0 +1,44 @@
+--- BASE/catalog_item.sql
++++ HEAD/catalog_item.sql
+@@ -33,7 +33,40 @@
+ 	COALESCE(t.TOTALTAX, 0) AS 'Auctifera__Tax__c',
+ 	mp.ISACTIVE AS 'Auctifera__Active__c',
+ 	CASE WHEN mp.ISDISCOUNTABLE = 1 THEN 0 ELSE 1 END AS 'Auctifera__Discount_Exempt__c',
+-	0 AS 'Auctifera__Bypass_Stock__c',
++	-- Veevart's Number_of_variants2__c rollup counts only ACTIVE NON-PRIMARY variants
++	-- (Available_for_sale = TRUE AND Primary = FALSE — Auctifera
++	-- CatalogItemTriggerHandler.rollUpNumberOfVariants), and the CatalogItem "Out of Stock"
++	-- validation (Total_stock_validation) fires when that count is 0 and Total_Stock < 0.
++	-- Both live in Salesforce package config this repo cannot see; the coverage spec only
++	-- locks this SQL's text, so drift in those artifacts must be caught by sandbox
++	-- validation before each load, not by CI.
++	-- Inactive variants get no stock replenishment rows, so their historical sale items
++	-- drive Total_Stock negative. Bypass stock exactly for products where the rule stays
++	-- live (no active non-primary variant) AND unbacked sales are coming (inactive variants
++	-- with sale lines). Ordinary single-variant active products keep Bypass_Stock = 0 so
++	-- real stock control is untouched. Accepted tradeoff: a mixed-shape product whose only
++	-- ACTIVE variant is the PRIMARY one also matches the second branch, so CatalogItem-level
++	-- stock control is bypassed while that primary variant stays sellable (its variant-level
++	-- Bypass_Stock = 0 protection still applies). IM-1005; Illinois: all 234 such products
++	-- are fully discontinued — the mixed shape does not occur there.
++	CASE
++		WHEN EXISTS (
++			SELECT 1
++			FROM MERCHANDISEPRODUCTINSTANCE pi_active
++			WHERE pi_active.MERCHANDISEPRODUCTID = mp.ID
++				AND pi_active.ISACTIVE = 1
++				AND pi_active.SEQUENCEID <> 1
++		) THEN 0
++		WHEN EXISTS (
++			SELECT 1
++			FROM MERCHANDISEPRODUCTINSTANCE pi_inactive
++			INNER JOIN SALESORDERITEMMERCHANDISE soim_hist
++				ON soim_hist.MERCHANDISEPRODUCTINSTANCEID = pi_inactive.ID
++			WHERE pi_inactive.MERCHANDISEPRODUCTID = mp.ID
++				AND pi_inactive.ISACTIVE = 0
++		) THEN 1
++		ELSE 0
++	END AS 'Auctifera__Bypass_Stock__c',
+ 	0 AS 'Auctifera__Miscellaneous_Shop_item__c',
+ 	po.Option1 AS 'Auctifera__Option_1__c',
+ 	po.Option2 AS 'Auctifera__Option_2__c',
