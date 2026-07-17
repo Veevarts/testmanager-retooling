@@ -1,0 +1,96 @@
+--- BASE v2
++++ HEAD v3
+@@ -1,35 +1,84 @@
+ {
+     "case": {
+         "caseId": "ic-5-23-campaigns-page-layout",
+-        "version": 2,
++        "version": 3,
+         "name": "Update Campaigns Page Layout",
+-        "description": "Makes the Veevart Campaign page layout the active layout for the Campaign object across all profiles.",
++        "description": "Makes the operator-selected Veevart Campaign page layout the active layout for the Campaign object across all profiles, then hands off the End Date field reorder and the Lightning Record Page org-default assignment for manual completion.",
+         "category": "FUNDRAISING",
+         "defaultOrder": 523,
+-        "feasibility": "auto",
++        "feasibility": "hybrid",
+         "active": true
+     },
+     "steps": [
+         {
+             "stepId": "assign-veevart-campaign-layout",
+             "order": 1,
+-            "name": "Assign the Veevart Campaign layout as the active Campaign page layout",
+-            "description": "T2 mode:'assign'. Re-points the Campaign object's DEFAULT (recordType Campaign.Default) page-layout assignment to 'Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024' across all discovered profiles (the per-record-type entries already point at it). Layout fullName carries the vnfp__ managed-package namespace — confirmed via metadata.read('Profile','Admin'), NOT the namespace-stripped name `sf org list metadata` reports. Verified by reading each Profile back (rules §6). KNOWN LIMITATION: the adapter writes the whole Profile back; a mature-org Profile's thousands of tabVisibilities make metadata.update('Profile') fail with 'not a valid tab' errors, so this step FAILS in im696-tucson irrespective of the layout name.",
++            "name": "Select and assign the Veevart Campaign page layout as active",
++            "description": "PART 1. T2 mode:'assign'. Declares a single layout `select` and, in the same step, re-points the standard Campaign object's page-layout assignments to {{campaignLayout}} across all discovered profiles. The select's options are DISCOVERED live from the org (discovery kind 'layouts') and carry the real assignable fullName with whatever managed namespace the org uses (the discovery adapter reconstructs the vnfp__/Auctifera__ prefix listMetadata strips) — org- and version-agnostic, so the version-suffixed layout fullName (e.g. 'Veevart Campaign Layout V2/V3') is NOT hardcoded; the operator picks the most-recent one. RECORD-TYPE CAVEAT (the Medium driver): the prior spec hardcoded recordType 'Campaign.Default', which is NOT present on every org (Campaign has no custom record types on many orgs, only Master). This step OMITS recordType entirely, so the assign op re-points EVERY layout assignment the object carries (the default/Master assignment plus any per-record-type assignments the org happens to have) to the selected layout — record-type-agnostic by construction, so it never references and never depends on 'Campaign.Default' and cannot fail when it is absent. Verified by Profile read-back (rules section 6).",
+             "kind": "AUTOMATED",
+             "toolName": "T2",
+             "inputPayload": {
+                 "mode": "assign",
+                 "object": "Campaign",
+-                "layout": "Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024",
+-                "recordType": "Campaign.Default"
++                "layout": "{{campaignLayout}}",
++                "requiredInputs": [
++                    {
++                        "key": "campaignLayout",
++                        "type": "select",
++                        "label": "Campaign page layout to make active (latest 'Veevart Campaign Layout Vx')",
++                        "discovery": {
++                            "kind": "layouts",
++                            "object": "Campaign"
++                        }
++                    }
++                ]
++            }
++        },
++        {
++            "stepId": "reorder-end-date-below-start-date-manual",
++            "order": 2,
++            "name": "Move the End Date field below Start Date on the Campaign layout (manual)",
++            "description": "Reorder the 'End Date' field to sit directly below 'Start Date' in the Campaign Information section of the assigned layout.",
++            "kind": "MANUAL",
++            "inputPayload": {
++                "guide": {
++                    "context": "Repositioning an existing field within a page-layout section has no reliable subscriber-writable Metadata API path — the layout-edit tool can only add a field to the END of a section/column or remove one, never move an existing field to an arbitrary position, and rewriting the whole managed layout section by hand is risky. So do this drag-and-drop by hand on the SAME Veevart Campaign layout the automated step assigned as active, and mark done when the order matches.",
++                    "actions": [
++                        "In Setup -> Object Manager -> Campaign -> Page Layouts, open the Veevart Campaign layout you assigned as active in this run (the most-recent 'Veevart Campaign Layout Vx').",
++                        "In the 'Campaign Information' section, drag the 'End Date' field so it sits directly below 'Start Date'.",
++                        "Click Save.",
++                        "Confirm 'End Date' now renders immediately below 'Start Date' in the Campaign Information section."
++                    ],
++                    "estimatedMinutes": 3
++                }
++            }
++        },
++        {
++            "stepId": "assign-campaign-record-page-org-default-manual",
++            "order": 3,
++            "name": "Assign the Veevart Campaign Lightning Record Page as Org Default (manual)",
++            "description": "Set the 'Veevart Campaign Record Page' as the Campaign object's org-default Lightning record page for desktop and phone.",
++            "kind": "MANUAL",
++            "inputPayload": {
++                "guide": {
++                    "context": "Salesforce has no subscriber-writable Metadata API to set a Lightning record page (FlexiPage) as an org default (same reason the 5.02 and 6.02 cases leave it manual), so do this by hand. The automated step already activated the correct page LAYOUT; this sets the LIGHTNING record-page default. If 'Veevart Campaign Record Page' is absent in this org, the org does not have that component — skip and note it.",
++                    "actions": [
++                        "Setup -> Object Manager -> Campaign -> Lightning Record Pages.",
++                        "Select 'Veevart Campaign Record Page'. If it does not appear, skip this step and note it.",
++                        "Click View -> Activation -> 'Assign as Org Default'.",
++                        "Choose 'Desktop and phone' -> Next -> Save.",
++                        "Confirm 'Veevart Campaign Record Page' shows as the active Org Default for Campaign."
++                    ],
++                    "estimatedMinutes": 4
++                }
+             }
+         }
+     ],
+     "template": {
+         "templateId": "ic-5-23-campaigns-page-layout",
+-        "version": 2,
++        "version": 3,
+         "name": "IC 5.23: Update Campaigns Page Layout",
+-        "description": "Single-case template for implementation case 5.23 (AUTO: one T2 mode:'assign' step that makes the Veevart Campaign layout the active page layout for the standard Campaign object across all discovered profiles, verified by Profile read-back). Standalone; in the real DAG this would dependsOn the package-install cases that create the Veevart Campaign layout.",
++        "description": "Single-case template for implementation case 5.23 (HYBRID). AUTOMATED: one T2 mode:'assign' step that makes the OPERATOR-SELECTED Veevart Campaign layout active for the standard Campaign object across all discovered profiles (live-discovered `select`, version/namespace-robust — NO hardcoded layout fullName) and omits recordType so it re-points every layout assignment the object carries — record-type-agnostic, never dependent on the 'Campaign.Default' record type that is absent on many orgs (the Medium caveat) — verified by Profile read-back. MANUAL handoffs: reorder the End Date field below Start Date on the assigned layout (no Metadata-safe field-reposition op), and assign the 'Veevart Campaign Record Page' Lightning record page as the org default (FlexiPage org-default is not subscriber-writable via the CRUD Metadata API). Standalone; in the real DAG this would dependsOn the package-install cases that create the Veevart Campaign layout and record page.",
+         "order": 1,
+         "dependsOn": []
+     }

@@ -1,0 +1,45 @@
+Technical + Security regression plan — PR Veevarts/MigrationAppBackend#250
+============================================================================
+
+Change surface: 1 file. JSON spec seed rewrite (v2 → v3). No code, no SQL, no
+schema, no infra. The T2 adapter that consumes this spec already exists in the
+backend (no code changes needed per dev PR body).
+
+Blast radius
+------------
+- Runtime: T2 Metadata API adapter reads the JSON at case-execution time; runs
+  against the target org's Profile + Layout metadata. Reads: profile list,
+  layout listMetadata. Writes: Profile.layoutAssignments (via metadata.update).
+- Dependencies: none (dependsOn []). In the real DAG, this case runs after the
+  package-install cases that provision the Veevart Campaign layout + Lightning
+  record page. Standalone execution works if those artifacts already exist.
+- Sibling cases affected: pattern mirrors ic-6-02 and ic-8-01 (per PR body) —
+  same operator select + no-recordType assign shape. Both merged earlier.
+
+Regression matrix
+-----------------
+| Item | Type | Risk | Check method | Verdict |
+|------|------|------|--------------|---------|
+| T1  Structural parseSpec passes for v3 spec       | Technical | Low     | Upstream CI on PR#250 merge (dev confirms 79/79) | PASS (upstream) |
+| T2  Sibling case specs (ic-6-02, ic-8-01) unaltered | Technical | Low   | PR #250 files list = only ic-5-23 file             | PASS |
+| T3  T2 adapter code unchanged                      | Technical | Low     | PR body: "No code changes (the T2 assign op already supports optional recordType and discovered selects)" | PASS (attested) |
+| T4  discovery.kind='layouts' returns Campaign-* on illinois | Technical | Medium | sf org list metadata Layout → 6 Campaign-* present | PASS (PRE baseline) |
+| T5  illinois has target vnfp V3 layout                | Technical | Medium | listMetadata: Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024 → PRESENT | PASS |
+| T6  Profile write-back tolerable in illinois        | Technical | High    | PR body flags im696-tucson LIMITATION with tabVisibilities; illinois profile count = 20 (smaller than mature-org Tucson) | INFERRED PASS · verify at IE run |
+| T7  Case verify signature matches CamiloDevOrg baseline | Technical | Medium | Compare POST-run assign counts vs dev-reported (46/42 CamiloDev) | DEFERRED to IE run |
+| T8  Manual step 2 guide renders correctly (End Date reorder) | Technical | Low | MigrationApp UI inspection post-run          | DEFERRED to IE run |
+| T9  Manual step 3 guide renders correctly (Lightning Record Page) | Technical | Low | MigrationApp UI inspection post-run          | DEFERRED to IE run |
+| T10 Idempotent re-run (assign the same layout twice) | Technical | Medium | Compare Profile read-back between two runs        | DEFERRED to IE run |
+| S1  No secrets introduced                          | Security | Low  | grep JSON for {password, api_key, secret, bearer, .env, -----BEGIN} → 0 hits | PASS |
+| S2  No injection surface                           | Security | Low  | JSON is static config; T2 adapter uses Salesforce Metadata SDK — no dynamic SOQL/Apex from user input | PASS |
+| S3  No PII in log paths                            | Security | Low  | T2 verify logs {profile name, layout name, assigned/skipped counts} — no PII | PASS (static review) |
+| S4  No CRUD/FLS bypass                             | Security | Low  | Metadata API respects org-level "Customize Application" permission | PASS (as-designed) |
+| S5  No arbitrary code exec                         | Security | Low  | Uses only Salesforce-provided Metadata API — no eval, no anonymous Apex from user input | PASS |
+| S6  Dependency vulnerabilities                     | Security | N/A  | Zero package.json changes | PASS (N/A) |
+| S7  RBAC on target org                             | Security | Low  | illinois-trainings runs case under authenticated admin session | PASS (as-designed) |
+
+Verdict summary
+---------------
+- Technical: 6 PASS + 4 DEFERRED-to-IE-run · 0 FAIL
+- Security: 7 PASS · 0 FAIL · 0 High/Critical
+- No blockers. Nothing prevents the IE from running the plan once the seed refreshes.

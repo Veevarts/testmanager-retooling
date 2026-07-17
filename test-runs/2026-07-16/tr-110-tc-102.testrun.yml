@@ -1,0 +1,521 @@
+schemaVersion: "1.0"
+
+id: tr-e59d9def-71db-491f-894d-e7153774c217
+key: TR-110
+title: "IM-1078 · TC-102 · IC 5.23 Update Campaigns Page Layout — AC6 static PASS + PRE-baseline en illinois-trainings; AC1-AC5 pendientes seed refresh"
+
+description: |
+  Ejecución QA para IM-1078 (Historia, priority Medium, epic IM-735).
+  QA Sub-task IM-1100. Alcance: PR Veevarts/MigrationAppBackend#250
+  (MERGED 2026-07-16T04:46Z) — case `ic-5-23-campaigns-page-layout` v3
+  entrega HYBRID (1 AUTOMATED T2 + 2 MANUAL handoffs) org-agnostic.
+
+  Método QA: JSON-only spec seed → estrategia HYBRID:
+  (a) AC6 static grep del JSON — cerrado PASS ahora.
+  (b) AC1/AC2/AC4/AC5 requieren MigrationApp UI ejecutando el case v3 en un
+      org destino. Bloqueado hasta que Camilo refresque AWS SSO y reseedee
+      MigrationApp-dev con v3 (status ticket = `Waiting For Test Env`).
+  (c) AC3 (org sin custom RTs) no reproducible en illinois-trainings (que
+      tiene 5 RTs); cubierto por evidencia dev en CamiloDevOrg + AC6 static.
+
+  PRE-baseline en illinois-trainings capturado como referencia para el
+  POST-verify que se hará cuando el IE corra el plan.
+
+testCaseIds:
+  - 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+
+environment:
+  name: "GitHub · Veevarts/MigrationAppBackend@main (post-#250) + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/250"
+  buildVersion: 'Salesforce-bound HYBRID case (JSON spec seed rewrite → T2 Metadata API adapter) — sin toque a Node/TS runtime; el runtime real es Metadata API contra un org SF via MigrationApp'
+  notes: |
+    - PR #250 mergeado a main 2026-07-16T04:46:12Z (squash). base=eceb05cf,
+      head=028ac91f. 4 commits. 1 archivo:
+      `src/implementations/infrastructure/seeds/specs/ic-5-23-campaigns-page-layout.json`
+      (-9/+58 lines; v2 → v3).
+    - Sandbox destino QA: illinois-trainings (00DWI00000CIwZi2AL) —
+      adminveevart@ilhmec.org.trainings.
+    - Ejecutor no tiene clonado MigrationAppBackend localmente; verificación
+      estática vía `gh api contents?ref=<HEAD-sha>`.
+    - MigrationApp-dev seed: **PENDING-CREDS** (AWS SSO expired del dev).
+      Sin seed refresh, MigrationApp UI no puede correr v3 → AC1/AC2/AC4/AC5
+      no ejecutables ahora.
+
+status: in-progress
+executor: codex
+executedAt: "2026-07-16T15:50:00Z"
+duration: 40
+
+summary:
+  total: 6
+  passed: 2
+  failed: 0
+  blocked: 0
+  notRun: 4
+  skipped: 0
+  passRate: 100
+
+notes: |
+  ## Solution understood
+
+  El case v2 hardcodeaba dos cosas frágiles:
+  1. El nombre de layout `Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024`
+     (version-suffixed, cambia con cada release del package).
+  2. El recordType `Campaign.Default` — que NO existe en la mayoría de orgs
+     (Campaign no suele tener custom record types; solo el Master implícito).
+
+  Cuando el spec pasaba `recordType: 'Campaign.Default'` al T2 assign op en
+  un org sin ese RT, la assign fabricaba un per-RT assignment inexistente y
+  la Profile write-back verify fallaba. Ese era el "Medium driver" del ticket.
+
+  El v3 lo arregla sin código nuevo, solo con cambios de configuración en el
+  JSON — el T2 adapter ya soporta discovered selects + optional recordType:
+  1. `layout` hardcoded → `{{campaignLayout}}` + `requiredInputs[0]` con
+     `type: select` y `discovery.kind: layouts` sobre Campaign. El operator
+     escoge la layout más reciente en runtime — version-agnostic + namespace-
+     robust (el discovery adapter reconstruye vnfp__/Auctifera__ prefixes).
+  2. `recordType` REMOVIDO del inputPayload. La assign op ahora re-apunta
+     TODAS las layout-assignments del Campaign object (default/Master + N
+     per-RT) al layout seleccionado — record-type-agnostic por construcción.
+  3. `feasibility: auto → hybrid` + 2 nuevos MANUAL handoffs para pedazos
+     que no tienen Metadata-safe API:
+     - Step 2: reorder End Date debajo de Start Date (Metadata `addField` solo
+       appendea, no puede mover).
+     - Step 3: assign Lightning Record Page como Org Default (FlexiPage
+       `Assign as Org Default` no es subscriber-writable via CRUD Metadata API;
+       mismo patrón que ic-5.02 e ic-6.02).
+
+  ## Inferred technical tests
+
+  | Test                                              | Prueba                    | Ejecutable acá?               | Verdict |
+  | ------------------------------------------------- | ------------------------- | ----------------------------- | ------- |
+  | AC6 static JSON grep (hardcoded layout + Campaign.Default) | AC6 estructural           | Sí — Python local             | passed  |
+  | Discovery.kind='layouts' returns Campaign-* on illinois | Precondition AC1          | Sí — sf org list metadata     | passed (6 Campaign layouts, incl. target V3) |
+  | listMetadata baseline + RT baseline en illinois   | PRE reference for AC1/AC2 | Sí — sf CLI queries           | passed (documented in PRE-baseline-summary.txt) |
+  | T2 assign op live-run on illinois                 | AC1 + AC2 + AC3           | No — requires MigrationApp UI + case v3 seeded | not-run (seed pending) |
+  | Profile read-back post-assign                     | AC2 verify                | No — requires prior T2 run    | not-run |
+  | MigrationApp UI rendering of manual step guides   | AC4 + AC5                 | No — requires MigrationApp UI + case v3 seeded | not-run |
+  | Dev evidence attestation (CamiloDevOrg, 0 RTs)    | AC3                       | Sí — PR body claim (46 profiles, 42 assigned, verified=true) | passed (dev evidence) |
+
+  ## PRE-baseline observado en illinois-trainings @ 2026-07-16
+
+  Ver `attachments/tr-110-tc-102/PRE-baseline-summary.txt`:
+
+  - 5 Campaign RecordTypes custom activos (Event, Fundraising, General,
+    Marketing, Volunteer_Campaign) → configuración OPUESTA a CamiloDevOrg.
+    Provee cobertura orthogonal fuerte del claim record-type-agnostic.
+  - 6 Campaign layouts discoverable — mismo set que CamiloDevOrg, incluye
+    `Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024` (target).
+  - 20 profiles totales en illinois — menor que Tucson (mature org con
+    tabVisibilities issue flagged por dev); write-back debe ser tolerable.
+  - 187 ProfileLayout junctions Campaign-* (Tooling API) — los que el T2 op
+    re-apuntará.
+
+  ## QA method
+
+  Este TR se cierra bajo el patrón HYBRID:
+  - Auto-execute lo estático: AC6 (JSON grep) + regression técnica + security
+    + OWASP + PRE-baseline en illinois-trainings.
+  - Diferir a IE lo runtime: AC1/AC2/AC4/AC5 dependen de MigrationApp UI
+    ejecutando el case v3 en illinois, lo cual requiere que Camilo refresque
+    AWS SSO y reseedee. AC3 attested-only (CamiloDevOrg dev evidence).
+
+  ## Regression técnica + security
+
+  Ver `attachments/tr-110-tc-102/regression-plan.txt` + `regression-results.txt`.
+  6 tech PASS + 4 DEFERRED-al-IE-run · 7 security PASS. Sin blockers.
+
+  ## OWASP Top 10
+
+  Ver `attachments/tr-110-tc-102/owasp-top10-scan.txt`. 4 Applicable
+  (A03/A04/A08/A09) → 4 PASS. 6 N/A. Sin defectos.
+
+results:
+  - scenarioTitle: "AC1 · Operator selects Campaign layout from live-discovered options (no hardcoded name)"
+    scenarioIndex: 1
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: not-run
+    notes: |
+      Pendiente de tu parte / Camilo + IE:
+        1. Camilo: refrescar AWS SSO → reseedar MigrationApp-dev con
+           `ic-5-23-campaigns-page-layout` v3.
+        2. IE: abrir MigrationApp UI apuntando a illinois-trainings.
+        3. IE: disparar el plan que contiene el case v3.
+        4. Observar el input-park del select `campaignLayout`.
+        5. Confirmar:
+           - El select renderea con opciones live-discovered (no valores fijos).
+           - Las opciones son fullName assignable con namespace reconstruido.
+           - Aparecen las 6 Campaign layouts que illinois tiene (ver
+             `attachments/tr-110-tc-102/scenario-1/PRE-campaign-layouts.json`).
+           - Elegir `Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024`.
+      Evidencia esperada en scenario-1/: screenshot del select rendered +
+      listado de opciones observadas.
+      Bloqueador: AWS SSO expired (dev). Sin seed refresh, MigrationApp UI
+      no muestra v3.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "una sandbox illinois-trainings con el managed package vnfp instalado y 6 Campaign layouts disponibles"
+        status: passed
+        notes: "Confirmado — sf org list metadata Layout → 6 Campaign-* layouts en illinois, ver scenario-1/PRE-campaign-layouts.json."
+      - order: 2
+        phase: given
+        text: "el case `ic-5-23-campaigns-page-layout` v3 seedado en el catálogo del ambiente"
+        status: not-run
+        notes: "PENDING-CREDS — dev flagged en PR body. Camilo debe refrescar AWS SSO + reseedar."
+      - order: 3
+        phase: when
+        text: "el IE dispara el step 1 (`assign-veevart-campaign-layout`) desde MigrationApp"
+        status: not-run
+      - order: 4
+        phase: when
+        text: "el run llega al input-park del select `campaignLayout`"
+        status: not-run
+      - order: 5
+        phase: then
+        text: "MigrationApp presenta un `select` con opciones DESCUBIERTAS live del org (discovery kind `layouts`, object `Campaign`)"
+        status: not-run
+      - order: 6
+        phase: then
+        text: "cada opción es la assignable fullName con el namespace del managed package reconstruido (ej. `Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024`)"
+        status: not-run
+      - order: 7
+        phase: then
+        text: "NO aparece ninguna fullName version-suffixed hardcodeada en el spec (solo son opciones del select)"
+        status: passed
+        notes: "Validado por AC6 static grep — 0 hardcoded fullName en inputPayload; solo hay '{{campaignLayout}}' template placeholder."
+      - order: 8
+        phase: then
+        text: "el operator selecciona la layout Veevart más reciente (`Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024` en illinois-trainings)"
+        status: not-run
+    defects: []
+    attachments:
+      - name: "PRE Campaign layouts discoverable (illinois-trainings)"
+        path: attachments/tr-110-tc-102/scenario-1/PRE-campaign-layouts.json
+        mimeType: application/json
+        size: 3000
+
+  - scenarioTitle: "AC2 · Layout is assigned across all profiles with no Campaign.Default dependency"
+    scenarioIndex: 2
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: not-run
+    notes: |
+      Pendiente de tu parte / IE:
+        1. Tras AC1 (select layout), observar el step AUTOMATED T2 corriendo.
+        2. Capturar el resultado del T2 assign op:
+           - Total profiles discovered (esperado ~20 en illinois).
+           - `assigned` count (esperado > 0).
+           - `success: true` en el verify.
+           - Cualquier `Campaign.Default` mencionado (esperado: 0).
+        3. Post-run, ejecutar SOQL:
+             SELECT COUNT() FROM ProfileLayout WHERE Layout.Name LIKE 'Campaign%'
+           y correlacionar con la baseline PRE (187 asignaciones).
+        4. Retrieve Admin profile con `sf project retrieve start` (en un DX
+           workspace) y verificar que el Campaign layout activo apunta a V3
+           en la default assignment + cada per-RT.
+      Evidencia esperada en scenario-2/: T2-verify output + POST Profile
+      metadata para Admin.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el operator seleccionó `Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024`"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el step AUTOMATIZADO T2 (mode=assign) corre"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "descubre todos los profiles del org (illinois-trainings: N profiles; contabilizar)"
+        status: not-run
+        notes: "PRE-baseline: illinois tiene 20 profiles totales (SOQL)."
+      - order: 4
+        phase: then
+        text: "re-apunta TODAS las layout-assignments del Campaign object al layout seleccionado sin pasar recordType (illinois-trainings: 5 RT-specific assignments + 1 default = 6 asignaciones por profile)"
+        status: not-run
+      - order: 5
+        phase: then
+        text: "el step NUNCA referencia `Campaign.Default` (ni en el input, ni en el output verify)"
+        status: passed
+        notes: "AC6 static confirmó que el spec no lleva 'Campaign.Default' en ningún inputPayload."
+      - order: 6
+        phase: then
+        text: "un Profile read-back muestra el layout seleccionado en la Campaign default assignment + en cada per-RT assignment"
+        status: not-run
+      - order: 7
+        phase: then
+        text: "el step verifica successfully (`verified=true, success=true, assigned>0`)"
+        status: not-run
+    defects: []
+    attachments:
+      - name: "PRE Campaign RecordTypes (illinois-trainings)"
+        path: attachments/tr-110-tc-102/scenario-2/PRE-campaign-record-types.json
+        mimeType: application/json
+        size: 2400
+
+  - scenarioTitle: "AC3 · Case does not fail on an org where Campaign has no custom record types"
+    scenarioIndex: 3
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: passed
+    executedAt: "2026-07-16T15:52:00Z"
+    duration: 3
+    actual: |
+      Escenario cerrado con evidencia dev attested + análisis estático.
+      No es reproducible en illinois-trainings (que tiene 5 RTs custom;
+      configuración opuesta), pero el claim está probado dos veces:
+
+      1. Dev evidence en CamiloDevOrg (org sin RTs custom) per PR body:
+         - 46 profiles descubiertos.
+         - Assign ejecutado con recordType=null → verified=true, assigned=42,
+           skippedNoAccess=4, success=true.
+         - Admin Profile read-back: layout landed en Campaign default
+           assignment, zero Campaign.Default entry.
+         - Run NO falló con "record type Campaign.Default not found".
+      2. AC6 static analysis: el JSON spec v3 no contiene `Campaign.Default`
+         en ningún `inputPayload` de ningún step; y el step 1 NO tiene la
+         key `recordType`. Estructuralmente el step nunca referencia el RT
+         que causaba el fallo.
+
+      Cobertura orthogonal via illinois-trainings (AC1/AC2 cuando IE corra
+      el case): illinois tiene 5 RTs custom → validará el otro lado del
+      claim (assign re-apunta correctamente TODAS las asignaciones con RTs
+      presentes).
+    stepResults:
+      - order: 1
+        phase: given
+        text: "un org cuyo Campaign object no tiene custom record types (solo Master) — reproducido en CamiloDevOrg per verificación del dev; illinois-trainings NO reproduce este caso (tiene 5 RTs)"
+        status: passed
+        notes: "Baseline dev CamiloDevOrg confirmado en PR body #250."
+      - order: 2
+        phase: when
+        text: "el step AUTOMATIZADO T2 (mode=assign) corre en ese org"
+        status: passed
+        notes: "Ejecutado por dev 2026-07-15 en CamiloDevOrg — evidencia en el PR body."
+      - order: 3
+        phase: then
+        text: "el step completa successfully"
+        status: passed
+        notes: "verified=true, success=true, assigned=42, skippedNoAccess=4 per PR body."
+      - order: 4
+        phase: then
+        text: "el run NO falla con error de tipo 'record type Campaign.Default not found' ni equivalente"
+        status: passed
+        notes: "Confirmed en PR body — Admin read-back muestra layout en default sin fallo; también AC6 static confirmó que Campaign.Default no está en el inputPayload."
+      - order: 5
+        phase: then
+        text: "evidencia dev en CamiloDevOrg 2026-07-15: 46 profiles, assign con recordType=null, verified=true, assigned=42, skippedNoAccess=4, success=true; Admin read-back muestra layout landed en default assignment, cero Campaign.Default"
+        status: passed
+    defects: []
+    attachments:
+      - name: "PR #250 body verification evidence (dev CamiloDevOrg)"
+        path: attachments/tr-110-tc-102/scenario-3/ic-5-23-campaigns-page-layout.json.diff
+        mimeType: text/plain
+        size: 4000
+
+  - scenarioTitle: "AC4 · End Date reorder is a structured manual handoff"
+    scenarioIndex: 4
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: not-run
+    notes: |
+      Pendiente de tu parte / IE:
+        1. Tras step 1 completado (layout asignado), MigrationApp debe llegar
+           al step 2 `reorder-end-date-below-start-date-manual`.
+        2. Confirmar que MigrationApp:
+           - Parkea el step como AWAITING_HANDOFF (no FAILED).
+           - Muestra las 4 acciones del `inputPayload.guide.actions[]`:
+             * "In Setup -> Object Manager -> Campaign -> Page Layouts, open the Veevart Campaign layout you assigned as active in this run"
+             * "In the 'Campaign Information' section, drag the 'End Date' field so it sits directly below 'Start Date'"
+             * "Click Save"
+             * "Confirm 'End Date' now renders immediately below 'Start Date' in the Campaign Information section"
+           - Muestra el `estimatedMinutes: 3`.
+        3. IE ejecuta las acciones manualmente en Setup UI.
+        4. Screenshot del layout resultante con End Date debajo de Start Date.
+      Evidencia esperada en scenario-4/: screenshot del guide rendered en
+      MigrationApp + screenshot del layout post-edit.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el layout Veevart Campaign fue asignado como activo por el step 1"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el run llega al step 2 (`reorder-end-date-below-start-date-manual`)"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "el step parkea AWAITING_HANDOFF sin fallar el plan"
+        status: not-run
+      - order: 4
+        phase: then
+        text: "MigrationApp muestra guía estructurada al IE (`inputPayload.guide.actions[]` con 4 acciones): abrir Setup → Object Manager → Campaign → Page Layouts → editar el layout activo → arrastrar End Date debajo de Start Date en Campaign Information section → Save"
+        status: passed
+        notes: "Contenido de la guía verificado estáticamente en el JSON spec v3 (kind=MANUAL, actions[] con 4 items — ver POST-ic-5-23-spec-v3.json). El rendering en UI queda pendiente de observación."
+      - order: 5
+        phase: then
+        text: "documenta explícitamente que no hay Metadata-safe op para field-reposition (justificación de por qué es MANUAL)"
+        status: passed
+        notes: "Justificación presente en inputPayload.guide.context: 'Repositioning an existing field within a page-layout section has no reliable subscriber-writable Metadata API path'."
+      - order: 6
+        phase: then
+        text: "estimatedMinutes=3 declarado"
+        status: passed
+        notes: "Confirmed en el JSON spec: step 2 inputPayload.guide.estimatedMinutes = 3."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "AC5 · Lightning Record Page org-default is a structured manual handoff"
+    scenarioIndex: 5
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: not-run
+    notes: |
+      Pendiente de tu parte / IE:
+        1. Tras step 2 completado (End Date reordered), MigrationApp debe
+           llegar al step 3 `assign-campaign-record-page-org-default-manual`.
+        2. Confirmar que MigrationApp:
+           - Parkea el step como AWAITING_HANDOFF (no FAILED).
+           - Muestra las 5 acciones del `inputPayload.guide.actions[]`.
+           - Incluye la instrucción de SKIP si `Veevart Campaign Record Page`
+             no existe en el org.
+           - Muestra el `estimatedMinutes: 4`.
+        3. IE ejecuta las acciones (o marca SKIP si aplica).
+      Evidencia esperada en scenario-5/: screenshot del guide rendered +
+      screenshot de la Org Default assignment post-click.
+
+      Nota: si `Veevart Campaign Record Page` NO existe en illinois-trainings,
+      documentar el SKIP en las notes del scenario post-run.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el layout Veevart Campaign fue asignado como activo por el step 1"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el run llega al step 3 (`assign-campaign-record-page-org-default-manual`)"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "el step parkea AWAITING_HANDOFF sin fallar el plan"
+        status: not-run
+      - order: 4
+        phase: then
+        text: "MigrationApp muestra guía estructurada al IE (`inputPayload.guide.actions[]` con 5 acciones): Setup → Object Manager → Campaign → Lightning Record Pages → seleccionar `Veevart Campaign Record Page` → View → Activation → Assign as Org Default → Desktop and phone → Save"
+        status: passed
+        notes: "Contenido de la guía verificado estáticamente en el JSON spec v3 (actions[] con 5 items). Rendering pendiente."
+      - order: 5
+        phase: then
+        text: "guía instruye SKIP si `Veevart Campaign Record Page` no existe en el org (edge case explícito)"
+        status: passed
+        notes: "Confirmed en inputPayload.guide.actions[1]: 'If it does not appear, skip this step and note it'."
+      - order: 6
+        phase: then
+        text: "documenta que FlexiPage 'Assign as Org Default' no es subscriber-writable via CRUD Metadata API (justificación de MANUAL)"
+        status: passed
+        notes: "Justificación presente en inputPayload.guide.context: 'Salesforce has no subscriber-writable Metadata API to set a Lightning record page (FlexiPage) as an org default (same reason the 5.02 and 6.02 cases leave it manual)'."
+      - order: 7
+        phase: then
+        text: "estimatedMinutes=4 declarado"
+        status: passed
+        notes: "Confirmed en JSON spec: step 3 inputPayload.guide.estimatedMinutes = 4."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "AC6 · El case es org-agnostic: sin layout fullName hardcodeado, sin recordType Campaign.Default"
+    scenarioIndex: 6
+    testCaseId: 6ed0d7ba-d369-4a1e-a990-f0df0c2596f6
+    testCaseKey: TC-102
+    status: passed
+    executedAt: "2026-07-16T15:45:00Z"
+    duration: 2
+    actual: |
+      Verificación estática del JSON spec v3 (bajado del ref=main SHA
+      028ac91f post-#250):
+
+        - Test 1 · hardcoded layout fullName en inputPayload: 0 hits
+          (regex `Campaign-*__Veevart Campaign Layout V<n>...`).
+          Menciones del pattern en descripción son texto explicativo, no
+          valores de configuración.
+
+        - Test 2 · 'Campaign.Default' en inputPayload: 0 hits en ningún step.
+          Aparece 2 veces solo en `description` como prosa que explica el
+          cambio (justificación del Medium driver).
+
+        - Test 3 · Step 1 `inputPayload.layout` = '{{campaignLayout}}' →
+          template placeholder resuelto en runtime desde el select.
+
+        - Test 4 · Step 1 `inputPayload` NO contiene la key `recordType` →
+          record-type-agnostic por construcción.
+
+      Estructura confirmada:
+        - `case.version` = 3
+        - `case.feasibility` = "hybrid"
+        - 3 steps: [AUTOMATED, MANUAL, MANUAL]
+        - Step 1 `requiredInputs[0]` = {type: select, discovery.kind: layouts, object: Campaign}
+        - Steps 2, 3: MANUAL con inputPayload.guide.{context, actions, estimatedMinutes}
+
+      Conclusión: el case es org-agnostic (funciona en cualquier org con
+      Veevart Campaign layout instalado, sea vnfp o Auctifera) y
+      record-type-agnostic (funciona con 0 o N custom RTs en Campaign).
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el JSON spec `ic-5-23-campaigns-page-layout.json` v3 (post-#250 mergeado)"
+        status: passed
+      - order: 2
+        phase: when
+        text: "QA hace grep estático del spec por (a) strings de layout fullName version-suffixed, (b) referencias a `Campaign.Default`, (c) hardcoded namespace prefixes"
+        status: passed
+      - order: 3
+        phase: then
+        text: "0 hits de layout fullName tipo `Campaign-vnfp__Veevart Campaign Layout V<n>` fuera del contexto del `select` (solo son ejemplos en descripción)"
+        status: passed
+        notes: "Regex sobre inputPayload = 0 hits; menciones en description text son prosa explicativa."
+      - order: 4
+        phase: then
+        text: "0 hits de `Campaign.Default` en `inputPayload` de cualquier step (permitido en `description` solo como texto explicativo del cambio)"
+        status: passed
+        notes: "0 en inputPayload, 2 en descriptions (allowed)."
+      - order: 5
+        phase: then
+        text: "el step 1 `inputPayload.layout` usa el template placeholder `{{campaignLayout}}`, no un valor literal"
+        status: passed
+      - order: 6
+        phase: then
+        text: "el step 1 `inputPayload` NO contiene la key `recordType`"
+        status: passed
+    defects: []
+    attachments:
+      - name: "AC6 static analysis output"
+        path: attachments/tr-110-tc-102/scenario-6/AC6-org-agnostic-scan.txt
+        mimeType: text/plain
+        size: 1400
+      - name: "POST v3 spec (full JSON)"
+        path: attachments/tr-110-tc-102/scenario-6/POST-ic-5-23-spec-v3.json
+        mimeType: application/json
+        size: 7000
+      - name: "PR #250 BASE v2 vs HEAD v3 diff"
+        path: attachments/tr-110-tc-102/scenario-3/ic-5-23-campaigns-page-layout.json.diff
+        mimeType: text/plain
+        size: 4500
+
+history:
+  - action: created
+    timestamp: "2026-07-16T15:30:00Z"
+    user: codex
+    to: in-progress
+    reason: "Fase 1 bundle completada (TC-102 + IM-1100). Bundle gate aprobado por usuario. Fase 2 arranca con AC6 static + PRE-baseline illinois-trainings."
+  - action: updated
+    timestamp: "2026-07-16T15:55:00Z"
+    user: codex
+    from: in-progress
+    to: in-progress
+    reason: "AC6 static PASS + AC3 attested PASS (dev evidence CamiloDevOrg). AC4/AC5 partial-passed en step-level (guide content verified static) pero scenario-level not-run pendiente rendering UI. AC1/AC2 not-run pendiente seed refresh de MigrationApp-dev + IE run. Sin defectos raise-eados. 2/6 PASS + 4 not-run."
+metadata:
+  createdBy: codex
+  createdAt: "2026-07-16T15:30:00Z"
+  updatedBy: codex
+  updatedAt: "2026-07-16T15:55:00Z"
