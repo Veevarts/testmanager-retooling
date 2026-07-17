@@ -1,0 +1,219 @@
+schemaVersion: "1.0"
+
+id: "d0cfa3d4-c2d5-4dd3-ba7a-d36882a1ee9e"
+key: "TC-104"
+title: "Altru migration · Charge query for future pledge payments — field contracts, bijection y multi-tenant scope"
+description: |
+  Cobertura QA para IM-865 (Historia, priority High, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1104 (creada 2026-07-17).
+
+  Contexto:
+  - Repositorio: `MigrationToolETL`, extractor SQL Server para el query
+    `Pledge Payments Unpaid Charges` que produce CSVs para bulk-upsert
+    en `Auctifera__Charge__c`.
+  - PR bajo prueba: `Veevarts/MigrationToolETL#147` (OPEN, 5 commits) —
+    branch `story/charge-query-for-future-payments-migration-IM-865` —
+    título "fix(migration): make future pledge payments collectable IM-865".
+  - Reporte del bug: future pledge payments migran, pero clientes no
+    pueden procesar/aplicar payments contra esos pledges post-go-live
+    porque los Charge records requeridos no aparecen — o quedan mal
+    linkeados a la Pay flow.
+
+  Root cause identificado por dev (PR body):
+  - El query ya existía; producía Charge rows que el Veevart Pay flow
+    no podía consumir. Tres field contracts estaban mal:
+    1. `vnfp__Opportunity_Payment__c` = bare `InstallmentID` → debe ser
+       `{PledgeID}-{InstallmentID}` (llave real del OppPayment).
+    2. `vnfp__Technical_Charge__c` no se emitía → debe ser `1`
+       (`OpportunityPaymentPayController` filtra por esto).
+    3. `Auctifera__Status__c` = `'Pending'` → debe ser `'Unpaid'` con
+       `Type` NULL (con `Pending`, NFP `updateOpportunitiesByCharge`
+       marcaría `npe01__Paid__c=true` en insert — peor que el bug).
+
+  Fixes adicionales:
+  - Opportunity linkea vía `vnfp__Donation__c` (no `vnfp__Opportunity__c`
+    cuyo label es "Membership").
+  - `Revenue_ID_legacy__c` ahora NULL (era único y colisionaba entre
+    installments del mismo pledge → `DUPLICATE_VALUE` en carga).
+  - `Auctifera__POS_Purchase__c` deliberadamente vacío
+    (`PaymentService.getTechnicalCharge` matchea por POS con `LIMIT 1`,
+    y `OpportunityTriggerHandler` sobreescribe `Auctifera__Amount__c`
+    con el pledge total → poblarlo clobbering-ea todos los charges).
+  - Payment/write-off totals y pledge scope mirror `opportunity_payments.sql`.
+  - Matching-gift claims ahora incluidos (el viejo gate `TYPE='Pledge'`
+    los excluía; MG-claims comparten el pledge installment model).
+
+  Scope (safesql, 8 profiles):
+  - Total: 804 unpaid installments (~$37.1M future payments).
+  - MG-claim installments por tenant: MOAD 113, Long Island 40, Tucson 18,
+    Everson 10, High Desert 3.
+
+  Gates de CI:
+  - `test:queries` = 300 tests pass.
+  - `test:queries:docker` = 22 tests pass en 4 suites (spec dockerizado
+    nuevo wired-in; verifica bijection Charge↔OppPayment + integridad
+    referencial POS/Opportunity contra SQL Server real).
+  - Mutación `LEFT JOIN → JOIN` falla 7 tests (regression protection lock).
+  - 18/19 tests nuevos fallan contra el query PRE-fix (evidencia empírica
+    del cambio).
+
+  Riesgos abiertos:
+  - PR aún OPEN — QA valida contra el HEAD actual. Si Camilo hace más
+    commits post-review, re-ejecutar TC.
+  - `Implementation_External_ID__c` debe existir en Charge/Opportunity/
+    OppPayment/POS Purchase en el target org por tenant antes de la carga
+    (ausente en CamiloDevOrg según PR). Confirmación es responsabilidad
+    de Implementations, no de QA source-side.
+  - Load-order: OppPayments + Opportunities deben cargarse ANTES del
+    Charge CSV (ambos lookups son por external ID). Documentar como
+    handoff a IE, no como scenario ejecutable en QA.
+  - IM-1101 filed separately (split-tender inflation en
+    `opportunity_payments.sql`) — fuera de scope de este TC.
+  - Dos suites pre-existentes fallan en `main` (unrelated):
+    `pledge-query-chain.integration.spec.ts` y
+    `donation-transaction-recurring.spec.ts`. Ninguna está en el CI gate.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "safesql runner disponible con los 8 profiles de Altru tenants activos (`node ~/tools/safesql/safesql.mjs profiles list` los muestra)."
+  - "Acceso vía `gh api contents?ref=<sha>` a los archivos SQL de `MigrationToolETL` en BASE (merge-base con main) y HEAD del PR #147."
+  - "Node + npm disponibles para correr `npm run test:queries` y `npm run test:queries:docker` sobre el checkout del PR."
+  - "Docker daemon activo (necesario para `test:queries:docker` que levanta SQL Server contra fixture real)."
+  - "Referencias: `opportunity_payments.sql` (contract del OppPayment external ID) y `docs/altru-model-context.md` (semántica de pledge/installment/MG-claim) accesibles en el repo."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Field contracts del Charge query — 7 columnas emitidas cumplen la especificación Pay-flow"
+    tags:
+      - ac-1
+      - happy-path
+      - field-contracts
+      - altru
+      - charge
+    given:
+      - "el query BASE (`gh api contents?ref=<merge-base>` de charge-pledge-payments-unpaid-charges.sql) representa la implementación PRE-fix"
+      - "el query HEAD (`gh api contents?ref=<HEAD-#147>` del mismo archivo) representa la implementación POST-fix"
+      - "el fixture dockerizado incluye un pledge multi-installment (3 installments) para exponer el caso PLEDGE↔INSTALLMENT-key"
+    when:
+      - "QA corre `safesql run tucson <path-to-HEAD-charge-query.sql>` y captura las columnas emitidas por row"
+      - "QA aplica un contract-check por columna sobre el output (script Python o awk sobre el CSV)"
+    then:
+      - "`vnfp__Opportunity_Payment__c` es EXACTAMENTE `{PledgeID}-{InstallmentID}` para el 100% de las filas (regex `^\\d+-\\d+$`)"
+      - "`vnfp__Technical_Charge__c` = `1` en el 100% de las filas"
+      - "`Auctifera__Status__c` = `'Unpaid'` en el 100% de las filas"
+      - "`Auctifera__Type__c` es NULL/vacío en el 100% de las filas"
+      - "`Revenue_ID_legacy__c` es NULL/vacío en el 100% de las filas (unique-constraint safety)"
+      - "el link a Opportunity va por `vnfp__Donation__c` (no `vnfp__Opportunity__c`)"
+      - "`Auctifera__POS_Purchase__c` es NULL/vacío en el 100% de las filas (deliberadamente empty per PR body)"
+      - "el mismo contract-check corrido contra BASE falla en ≥3 de las 7 asertividades — evidencia empírica del cambio"
+
+  - title: "AC2 · Bijection Charge↔OppPayment y unicidad de external IDs — sin dupes ni referencias colgantes"
+    tags:
+      - ac-2
+      - integrity
+      - referential
+      - altru
+      - charge
+    given:
+      - "el query HEAD del Charge query genera N filas Unpaid-installment"
+      - "el query `opportunity_payments.sql` HEAD genera el catálogo de OppPayment external IDs"
+      - "el pledge de 3 installments del fixture está presente en el output"
+    when:
+      - "QA corre `safesql run tucson <charge-query>` y `safesql run tucson <opportunity-payments>` en el mismo commit"
+      - "QA calcula: (a) cardinalidad de `vnfp__Opportunity_Payment__c` en Charge, (b) inclusión de cada valor en el catálogo de OppPayment, (c) unicidad de `Implementation_External_ID__c` en Charge, (d) unicidad efectiva de `Revenue_ID_Legacy__c` cuando no es NULL"
+    then:
+      - "cada valor de `vnfp__Opportunity_Payment__c` en Charge existe EXACTAMENTE una vez como OppPayment external ID (bijection 1:1)"
+      - "0 filas en Charge apuntan a un OppPayment que NO existe en el output de `opportunity_payments.sql` (0 dangling references)"
+      - "0 dupes en `Implementation_External_ID__c` del Charge output"
+      - "para el pledge multi-installment, cada installment produce su propio Charge row (3 filas, no 1) — evidencia de que el fix de `Revenue_ID_Legacy__c = NULL` desbloqueó el pledge-schedule"
+      - "todo `vnfp__Donation__c` referenciado existe en el output del Opportunity extractor (0 dangling Donation)"
+
+  - title: "AC3 · Scope reconciliation multi-tenant — 804 unpaid installments / ~$37.1M coinciden con el PR body en los 8 profiles"
+    tags:
+      - ac-3
+      - regression-evidence
+      - multi-tenant
+      - altru
+      - charge
+      - scope
+    given:
+      - "safesql tiene 8 profiles activos correspondientes a los 8 tenants Altru en scope (MOAD, Long Island, Tucson, Everson, High Desert, Aspen, Illinois, y el 8vo por confirmar en la lista)"
+      - "el PR body #147 declara: 804 unpaid installments totales, ~$37.1M en future payments"
+    when:
+      - "QA corre `safesql run <profile> <path-to-HEAD-charge-query.sql>` para cada uno de los 8 profiles"
+      - "QA suma row count y `SUM(vnfp__Amount__c)` (o equivalente installment amount) por profile y en total"
+    then:
+      - "el row count TOTAL agregado = 804 (±0 tolerance sobre lo reportado)"
+      - "el SUM total de future payment amounts ≈ $37.1M (±1% tolerance por rounding/currency)"
+      - "cada profile emite al menos 1 fila (0 profiles quedan vacíos silenciosamente por regresión de scope)"
+      - "el breakdown por tenant queda documentado en la evidencia del run (para trazabilidad del handoff a IE)"
+      - "el mismo run corrido contra BASE emite un total materialmente distinto (evidencia de que el fix cambió el output; no un no-op)"
+
+  - title: "AC4 · Matching-gift claims incluidos — el viejo gate `TYPE='Pledge'` ya no los excluye"
+    tags:
+      - ac-4
+      - regression-evidence
+      - mg-claim
+      - altru
+      - charge
+    given:
+      - "el PR body #147 declara conteos por tenant de MG-claim installments: MOAD 113, Long Island 40, Tucson 18, Everson 10, High Desert 3"
+      - "el query BASE (con gate `TYPE='Pledge'` estrictamente) no emite Charges para MG-claim installments"
+      - "el query HEAD relaja el gate para incluir MG-claim installments que comparten el pledge installment model"
+    when:
+      - "QA corre `safesql run <profile> <charge-query-HEAD>` para MOAD, Long Island, Tucson, Everson, High Desert"
+      - "QA identifica las filas MG-claim (columna que las marca, o join contra la tabla source de MG-claims) y las cuenta por profile"
+    then:
+      - "MOAD emite ≥113 filas MG-claim en HEAD; el mismo query corrido en BASE emite 0"
+      - "Long Island emite ≥40 filas MG-claim en HEAD; BASE emite 0"
+      - "Tucson emite ≥18 filas MG-claim en HEAD; BASE emite 0"
+      - "Everson emite ≥10 filas MG-claim en HEAD; BASE emite 0"
+      - "High Desert emite ≥3 filas MG-claim en HEAD; BASE emite 0"
+      - "las filas MG-claim siguen cumpliendo el mismo field-contract del AC1 (no son un flujo paralelo con contract distinto)"
+
+  - title: "AC5 · Test gates de CI — spec.ts wired-in, mutation testing lock, y bijection contract test"
+    tags:
+      - ac-5
+      - ci-gate
+      - regression-protection
+      - altru
+      - charge
+    given:
+      - "checkout local del PR #147 (`gh pr checkout 147` desde `MigrationToolETL`)"
+      - "Docker daemon corriendo (necesario para `test:queries:docker`)"
+      - "el PR body declara: `test:queries` 300 pass, `test:queries:docker` 22 pass en 4 suites"
+    when:
+      - "QA corre `npm run test:queries` sobre el checkout"
+      - "QA corre `npm run test:queries:docker` sobre el checkout (levanta SQL Server contra fixture real)"
+      - "QA aplica una mutación local `LEFT JOIN → JOIN` sobre el charge query y re-corre `test:queries:docker` para confirmar que el guard rompe"
+      - "QA hace checkout del merge-base con main y corre el spec nuevo del PR contra el query PRE-fix"
+    then:
+      - "`test:queries` = 300 pass, 0 fail (excluyendo los 2 suites pre-existentes fallidos en `main`, no relevantes a este TC)"
+      - "`test:queries:docker` = 22 pass across 4 suites (spec nuevo wired-in en el hard-coded list del CI)"
+      - "la mutación `LEFT JOIN → JOIN` HACE fallar exactamente los 7 tests declarados en el PR body (regression protection lock funciona)"
+      - "el spec nuevo corrido contra BASE (pre-fix query) falla 18 de sus 19 assertions (evidencia empírica del contract cambio)"
+      - "no hay tests que dependen de fecha/hora/random para pasar (flaky guard)"
+
+tags:
+  - im-865
+  - im-70
+  - im-1104
+  - altru
+  - migration
+  - charge
+  - pledge-payments
+  - future-payments
+  - mg-claim
+  - salesforce
+
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-17T22:26:15Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-17T22:26:15Z"
+  version: 1

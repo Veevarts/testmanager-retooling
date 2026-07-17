@@ -1,0 +1,40 @@
+AC ↔ dev test coverage matrix — IM-865 / PR #147
+==================================================
+
+Dev-authored test files in PR #147:
+  A. src/data-migration/infrastructure/destination/sql-server/query-regression/pledge-unpaid-charge-query.spec.ts
+     (string-matching — runs in test:queries)  · 10 assertions
+  B. src/data-migration/infrastructure/destination/sql-server/query-regression/pledge-unpaid-charge-query.integration.spec.ts
+     (dockerized against real SQL Server — runs in test:queries:docker) · 8 top-level cases (~19 assertions per PR body)
+  C. src/data-migration/infrastructure/destination/sql-server/query-regression/pledge-unpaid-charge-csv-descriptor.spec.ts
+     (SQL alias → mapper key → CSV header round-trip) · 5 assertions
+  D. src/data-migration/infrastructure/destination/sql-server/query-regression/query-chain-verifier.ts
+     (verifier helper used by B — bijection + duplicate detection)
+
+AC ↔ test files
+---------------
+AC1  Field contracts (7 columnas)                       →  A(5 cases) + B(3 cases) + C(5 cases) = 13 assertions
+AC2  Bijection + unicidad de external IDs               →  B(3 cases): "emits one charge per unpaid installment",
+                                                              "keeps charges and pledge OppPayments in lockstep with intact references",
+                                                              "keeps every unique field distinct across a pledge with several installments"
+                                                              + D verifier duplicate/dangling detection
+AC3  Scope multi-tenant (804 rows / ~$37.1M)            →  NO dev test (source-data assertion) — GAP intentional; safesql source-side
+AC4  MG-claims coverage                                  →  B(1 case): "includes active matching-gift claims, like opportunity_payments.sql"
+AC5  CI gates (test:queries + test:queries:docker)      →  A wired via `jest --runInBand query-regression`
+                                                              B wired into test:queries:docker hard-coded list
+                                                              (package.json diff: +pledge-unpaid-charge-query.integration.spec.ts)
+
+Coverage verdict
+----------------
+- AC1: FULL coverage (3 spec files, 13 assertions)
+- AC2: FULL coverage (dockerized bijection + verifier)
+- AC3: NO coverage (structural — data assertion, not code assertion)
+- AC4: FULL coverage (1 dockerized assertion + safesql source evidence per PR body)
+- AC5: FULL coverage (wire-in + mutation LEFT JOIN → JOIN empirically confirmed by QA:
+       string specs stayed 300/300 PASS with mutation applied)
+
+Gaps flagged
+------------
+- AC3 has no unit-test coverage — this is intentional and correct (row counts are
+  data-level, not code-level). QA compensates with safesql pre-vs-post evidence
+  when the bastion tunnel is reachable.

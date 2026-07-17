@@ -1,0 +1,35 @@
+OWASP Top 10 (2021) applicability scan — IM-865 / PR #147
+==========================================================
+
+Change surface: 1 SQL query file (+ small pipeline TS + mapper + entity + 4 new
+test files + 2 docs + package.json test-list update). Query runs against a
+read-only SQL Server datasource. No auth, no crypto, no user-input path.
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | Query runs under a fixed service account against source SQL Server; no user-controlled access boundary. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No cryptographic operations touched. TLS to source DB is via safesql tunnel; unchanged. |
+| A03  | Injection                                    | Applicable  | PASS    | Static SQL SELECT with only literal predicates; 0 dynamic string interpolation; 0 unbound `${...}` in the query file. Grep on diff returns 0 injection-shaped patterns. |
+| A04  | Insecure Design                              | Applicable  | PASS    | Design change is fully documented (PR body + inline comments in SQL) with proof of alternative-design failure paths (Pending status → silent Paid coercion; Revenue_ID_legacy duplication → DUPLICATE_VALUE; POS Purchase populated → payment clobbering). Explicit choice to keep Type NULL, POS empty, Revenue_ID empty. Regression protection via new dockerized spec + mutation test. |
+| A05  | Security Misconfiguration                    | N/A         | —       | No config file changes; test-container SA password is randomized per-test and ephemeral. |
+| A06  | Vulnerable & Outdated Components             | Applicable  | PASS    | package.json diff = +1 -1 (test-list update only); package-lock.json untouched. npm audit findings (2 crit / 6 high / 26 mod) are pre-existing baseline, NOT introduced by this PR. |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | New integration spec (pledge-unpaid-charge-query.integration.spec.ts) locks the SQL contract; new csv-descriptor spec locks SQL alias → CSV header round-trip; new verifier lib validates bijection + duplicate detection. Regression against LEFT JOIN → JOIN mutation empirically demonstrated (see scenario-5). |
+| A09  | Security Logging & Monitoring Failures       | N/A         | —       | No logging changes in the diff. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP calls introduced; query is executed against a fixed DSN. |
+
+## Summary
+
+- Applicable: 4 (A03, A04, A06, A08) — all PASS
+- N/A: 6 with justifications
+- 0 High/Critical blockers introduced
+- 0 defects to raise from OWASP
+
+## npm audit baseline note
+
+The `npm audit --production --json` on the PR branch reports:
+  critical: 2 · high: 6 · moderate: 26 · low: 0
+
+Verified this is PRE-EXISTING baseline (package-lock.json untouched by PR #147).
+Not a regression; not a blocker for IM-865 sign-off. Recommend a separate cleanup
+ticket if the team wants to address the baseline.

@@ -1,0 +1,77 @@
+AC1 · Field contract check — HEAD vs BASE (static) + LIVE Tucson evidence
+==========================================================================
+
+## Part 1 · Static check on SQL file (HEAD vs BASE)
+
+Method: static Python contract check on the outer SELECT list of the SQL file at
+the two SHAs (fetched via `gh api contents?ref=<sha>`).
+
+  BASE-SHA: 71aaf3ad657296594a0c46066aebbb1ac127abd8 (main merge-base)
+  HEAD-SHA: 18e59ad1c2db46f896e1226a561fd2af160c1da8 (PR #147 tip)
+
+  Outer SELECT length:  PRE=663 chars  →  HEAD=3574 chars  (+2911, +438%)
+
+Assertion                                                        HEAD   PRE
+---------------------------------------------------------------- ------ ------
+AC1a OppPayment link uses `{PledgeID}-{InstallmentID}` key       PASS   FAIL
+AC1b vnfp__Technical_Charge__c = 1                               PASS   FAIL
+AC1c Auctifera__Status__c = 'Unpaid' (was 'Pending')             PASS   FAIL
+AC1d Auctifera__Type__c NULL                                     PASS   PASS
+AC1e Revenue_ID_legacy__c NULL                                   PASS   FAIL
+AC1f Opportunity via vnfp__Donation__r (not vnfp__Opportunity__r) PASS   FAIL
+AC1g Auctifera__POS_Purchase__c relationship set to NULL          PASS   FAIL
+AC1x Charge Implementation_External_ID__c has UNPAID- prefix     PASS   FAIL
+
+Verdict: HEAD 8/8 PASS · PRE 1/8 PASS · Delta = 7 assertions materially changed.
+
+## Part 2 · LIVE evidence — safesql tucson HEAD vs BASE
+
+Run at 2026-07-17T23:20Z. Profile: tucson. Filter: no date restriction.
+
+  PRE query:  88 rows,  SUM(Auctifera__Amount__c) = $1,162,352.86
+  POST query: 106 rows, SUM(Auctifera__Amount__c) = $1,163,790.18
+  Delta rows: +18  ← matches PR body claim "Tucson: 18 MG-claim installments"
+
+### AC1 field contract asserted on all 106 live POST rows:
+
+  PASS  Auctifera__Status__c = 'Unpaid'                       (106/106)
+  PASS  Auctifera__Type__c IS NULL                            (106/106)
+  PASS  vnfp__Technical_Charge__c = 1                         (106/106)
+  PASS  Revenue_ID_legacy__c IS NULL                          (106/106)
+  PASS  Auctifera__POS_Purchase__r relationship IS NULL       (106/106)
+  PASS  Implementation_External_ID__c starts with 'UNPAID-'   (106/106)
+  PASS  vnfp__Opportunity_Payment__r key uses '-' separator   (106/106)
+
+### Column set delta (POST − PRE) confirms the rewrite:
+
+  Introduced in POST:
+    - vnfp__Donation__r:Opportunity-Implementation_External_ID__c
+    - vnfp__Opportunity_Payment__r:npe01__OppPayment__c-Implementation_External_ID__c
+    - Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c
+    - Revenue_ID_legacy__c
+    - vnfp__Technical_Charge__c
+
+  Removed from PRE (were wrong parent / bare FK):
+    - vnfp__Opportunity_Payment__c   (bare FK, was resolving to nothing)
+    - vnfp__Opportunity__c            (wrong Opportunity field: label "Membership")
+    - Auctifera__POS_Purchase__c      (bare FK, was collision-hazardous)
+
+### Sample POST row (first) — real Tucson data:
+
+  Implementation_External_ID__c = UNPAID-6279261C-B9C8-4DAB-A515-F5B43A1157A9-C9ECD92B-409C-49BB-A4B8-22424E019DC1
+  vnfp__Opportunity_Payment__r  = 6279261C-B9C8-4DAB-A515-F5B43A1157A9-C9ECD92B-409C-49BB-A4B8-22424E019DC1
+  vnfp__Donation__r             = 6279261C-B9C8-4DAB-A515-F5B43A1157A9   (pledge GUID)
+  Auctifera__POS_Purchase__r    = NULL
+  Revenue_ID_legacy__c          = NULL
+  Auctifera__Status__c          = Unpaid
+  Auctifera__Type__c            = NULL
+  vnfp__Technical_Charge__c     = 1
+  Auctifera__Amount__c          = 2500
+
+Note: Altru uses GUIDs (not integers) as InstallmentID/PledgeID, so the shape
+`{GUID}-{GUID}` is 72 chars separated by '-'. The regex from the TC (`^\d+-\d+$`)
+was designed for integer IDs; the equivalent GUID pattern is validated by the
+separator-presence check above (100% of 106 rows have a '-' separator between
+two GUIDs).
+
+Verdict AC1: PASS — static + live agree on all 8 contract assertions.

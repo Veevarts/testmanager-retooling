@@ -1,0 +1,38 @@
+Regression plan — IM-865 / PR #147 (Charge query for future pledge payments)
+==============================================================================
+
+Change surface (from `gh pr diff 147 --name-only`):
+  - 1 SQL file: charge/pledge_payments_unpaid_charges.sql (+139 / -16)
+  - 1 pipeline TS + 1 mapper TS + 1 domain entity TS (small deltas)
+  - 4 new query-regression spec / fixture / verifier TS files
+  - 2 docs + package.json test-list update
+
+Technical + security regression items
+
+| Item                                                    | Type | Risk    | Check method                                    | Verdict |
+|---------------------------------------------------------|------|---------|-------------------------------------------------|---------|
+| Field contract shape of Charge CSV                      | Tech | High    | Static SELECT-list contract check HEAD vs BASE  | PASS (attach: scenario-1/) |
+| Bijection Charge↔OppPayment (per PR key claim)          | Tech | High    | safesql pre vs post on tenant profile           | not-run (bastion down) |
+| Uniqueness of Charge Impl external IDs                  | Tech | High    | safesql + Python distinct count check           | not-run (bastion down) |
+| No dangling vnfp__Donation__c references                | Tech | Medium  | safesql cross-join charge × opportunity output  | not-run (bastion down) |
+| Multi-installment pledge: 3 rows emitted (per fixture)   | Tech | High    | docker integration spec case                    | dev-CI attested (test:queries:docker blocked locally) |
+| MG-claim installments covered                            | Tech | Medium  | Static WITH-clause check + safesql per tenant   | PASS static / not-run source (bastion) |
+| Load-order dependency (OppPayment before Charge)        | Tech | Medium  | Documented in pipeline header + PR body         | Handoff to IE (out of QA scope) |
+| Related queries untouched (charge_with_order/without)   | Tech | Low     | git diff --name-only (verify no cross-touch)    | PASS (only pledge_payments_unpaid_charges.sql touched) |
+| test:queries string specs pass                          | Tech | Low     | npm run test:queries                            | PASS 300/300 |
+| test:queries:docker wire-in                              | Tech | High    | package.json diff                                | PASS (spec added to list) |
+| Mutation LEFT JOIN → JOIN regression protection         | Tech | High    | Local mutation + rerun; must fail in docker suite | PASS locally (string specs stayed green, confirming claim); docker-side dev-attested |
+| Hardcoded secrets / API keys in diff                    | Sec  | High    | git diff | grep -iE '(password\|secret\|token)' | PASS (only test-scoped randomUUID SA password) |
+| SQL string concatenation / injection                    | Sec  | High    | grep for SELECT/INSERT with '+' + '$' patterns  | PASS (0 findings) |
+| Raw ${...} unbound in queries                            | Sec  | High    | grep for '${...}' in queries/                    | PASS (0 findings) |
+| PII exposure in logs                                    | Sec  | Medium  | grep for console.log with entity fields         | PASS (no changes to logging) |
+| Vulnerable dep introduced by this PR                    | Sec  | High    | git diff package.json / package-lock.json       | PASS (no dep changes; lock untouched) |
+| npm audit findings (pre-existing baseline)              | Sec  | -       | npm audit --production --json                    | INFO (2 crit / 6 high / 26 mod — all pre-existing, not introduced by IM-865) |
+
+Notes:
+  - Bastion tunnel (`bastion.internal.veevartapp.com:22`) times out during banner
+    exchange from the QA workstation → all safesql profiles blocked. This affects
+    AC2/AC3/AC4 source-side evidence but NOT the code-level regression checks.
+  - Docker suite is wire-configured correctly (spec present in the hard-coded list);
+    live re-run blocked by testcontainers 60s startup wait on colima+arm64 SQL Server
+    emulation. Dev's CI (Linux runner) is the attestation source for that segment.

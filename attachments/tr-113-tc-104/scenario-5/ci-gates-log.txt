@@ -1,0 +1,103 @@
+AC5 · CI gates + regression protection lock — QA re-run 2026-07-17
+====================================================================
+
+## Test 5a: `npm run test:queries` (string-matching regression suite)
+
+Command: npm run test:queries
+Result:
+  Test Suites: 11 skipped, 36 passed, 36 of 47 total
+  Tests:       42 skipped, 300 passed, 342 total
+  Time:        2.425 s
+
+PR body claim: `test:queries — 300 passed, 0 failed` ✅ MATCH.
+
+## Test 5b: `npm run test:queries:docker` wire-in inspection
+
+package.json diff (from BASE 71aaf3a → HEAD 18e59ad1):
+
+    -"test:queries:docker": "... jest --runInBand \
+    -    query-chain.integration.spec.ts \
+    -    fund-assignment-refunds-query.integration.spec.ts \
+    -    soft-credit-recognition-query.integration.spec.ts"
+    +"test:queries:docker": "... jest --runInBand \
+    +    query-chain.integration.spec.ts \
+    +    fund-assignment-refunds-query.integration.spec.ts \
+    +    soft-credit-recognition-query.integration.spec.ts \
+    +    pledge-unpaid-charge-query.integration.spec.ts"
+
+Wire-in status: `pledge-unpaid-charge-query.integration.spec.ts` IS in the
+hard-coded list of specs that `test:queries:docker` runs. ✅ MATCH the PR body claim.
+
+## Test 5c: `npm run test:queries:docker` live re-run — BLOCKED locally
+
+Live re-run against colima on Apple Silicon:
+  Test Suites: 4 failed, 4 total
+  Tests: 22 failed, 22 total
+  Failure signature: `Log stream ended and message "/.*Started.*/" was not received`
+  Duration: 22.14 s (testcontainers default startupTimeout=60s)
+
+Root cause diagnosis (bounded probe):
+  - `docker version` shows client 29.5.3 + server 29.5.2 via colima at
+    `unix:///Users/veevart/.colima/default/docker.sock`
+  - After `export DOCKER_HOST=...` testcontainers reaches the container start step.
+  - Manual `docker run mcr.microsoft.com/mssql/server:2022-latest --platform linux/amd64`
+    on colima shows SQL Server IS booting (`Database 'msdb' running the upgrade
+    step from version 947..957` at 45 s) but has not yet emitted the "Started"
+    message that the wait strategy needs.
+  - colima runs SQL Server 2022 under amd64 emulation on Apple Silicon; boot
+    takes ~90-120 s to reach "Started".
+  - The dev's CI (Linux runner, native amd64) has no such wait; PR body attests
+    `22 passed` for this suite.
+
+Verdict: The 4-suite docker run is BLOCKED locally by an environment timeout,
+not a code defect. Dev's CI is the source of truth for this test's pass count
+(22/22 per PR body).
+
+## Test 5d: Mutation `LEFT JOIN PaymentTotals → JOIN PaymentTotals` on HEAD SQL
+
+Purpose: verify the PR body's claim that string-matching specs failed to
+protect the query from this mutation (which drops every never-paid installment).
+
+Method:
+  sha PRE  mutation: 167cf0408962136c851ee6401b89deba5401e3d7514dcee771726c81eda0f4f1
+  sed -i 's/LEFT JOIN PaymentTotals/JOIN PaymentTotals/g' pledge_payments_unpaid_charges.sql
+  sha POST mutation: 4555281c52d4529141cec97d26682bd785a6175ae03c31ed55ad7d6edccc97d9
+  (verified files DIFFER by sha)
+
+Result: `npm run test:queries` STILL PASSED 300/300 in 1.775 s.
+
+Verdict: EMPIRICALLY CONFIRMS the PR body's claim that CI's string specs alone
+did NOT catch the LEFT JOIN → JOIN mutation. This is the reason dev added the
+dockerized integration spec + wired it into `test:queries:docker`. The
+dockerized suite is where the mutation MUST fail (7 tests per PR body); the
+live re-run of that suite is BLOCKED here (see Test 5c) so this specific
+mutation-fails-docker claim is attested by dev's CI, not re-verified locally.
+
+## Test 5e: New spec fails against PRE query (18 of 19 assertions)
+
+Per PR body: the new integration spec run against the PRE-fix query fails
+18/19 of its assertions (the 1 pass is the date-filter assertion that was
+already correct in PRE). Not re-verified locally due to Test 5c's timeout;
+attested by dev's CI logs.
+
+## Test 5f: Pre-existing failures on `main` (NOT introduced by this PR)
+
+Per PR body, these two suites fail on clean `main` and are NOT in the CI gate:
+- `pledge-query-chain.integration.spec.ts` (case-sensitivity bug in own assertion)
+- `donation-transaction-recurring.spec.ts` (fixture missing `STOCKDETAIL`)
+
+Local `test:queries` correctly skipped both (they're in the docker-gated group).
+No new suites broken by this PR.
+
+## Summary AC5
+
+- 5a `test:queries` = 300/300 PASS locally ✅ (matches PR body)
+- 5b wire-in of pledge-unpaid-charge-query.integration.spec.ts confirmed ✅
+- 5c live re-run of docker suite BLOCKED by testcontainers 60s timeout on colima+arm64
+       — attested by dev's CI (22/22 per PR body)
+- 5d mutation on string specs stayed green → confirms PR body's regression-protection
+       claim empirically ✅
+- 5e mutation must fail in docker suite → dev-attested, not re-verified locally
+- 5f no new suites broken, pre-existing failures unrelated ✅
+
+Verdict AC5: PASS with dev-CI corroboration for the docker-only segments.
