@@ -1,0 +1,53 @@
+Technical + Security regression plan — IM-939 IC 9.1 (PRs #207 + #271, second QA cycle)
+============================================================================================
+
+Change surface (cumulative from both PRs on main):
+  - src/implementations/infrastructure/seeds/specs/ic-9-1-merchant-batches.json
+    (v1 → v2 via PR #207, v3 → v4 via PR #271)
+  - src/implementations/infrastructure/seeds/specs/ic-9-1-merchant-batches.spec.ts
+    (+124 NEW via PR #271 — Stripe verify snapshot/diff contract lock)
+
+Runtime: T6 anonymous Apex adapter executes the spec's embedded Apex against
+the target SF org. Reads + writes: Auctifera__Batch_Settings__c (org default),
+CronTrigger (via System.schedule + AutomaticBatchSchedule.execute(null)),
+AsyncApexJob (via Database.executeBatch).
+
+Blast radius
+------------
+- Runtime: Apex vs the target org's package (Auctifera). Reads/writes are all
+  via managed package globals — no cross-namespace fragility.
+- Dependencies: none (dependsOn []). Case runs standalone.
+- Sibling cases affected: none. PR #207 pattern (single-step T6, execute(null)
+  scheduler) already established by ic-9 (People) / ic-9.2 (Accounting) /
+  ic-9.3 (Fundraising).
+- MigrationApp UI: no consumer contract change (single AUTOMATED step; select
+  input; verify contract at Apex level).
+
+Regression matrix
+-----------------
+| Item | Type | Risk | Check method | Verdict |
+|------|------|------|--------------|---------|
+| T1  spec.ts contract simulation (16 assertions)         | Technical | Low   | Python re.search 16/16 PASS + PR body 79/79 parseSpec + tsc + eslint | PASS |
+| T2  illinois-trainings Schedule_Square already true      | Technical | High  | PRE SOQL: Auctifera__Schedule_Square__c = true                       | PASS (AC1 observable) |
+| T3  All 4 required Square crons + meta-scheduler present | Technical | High  | PRE SOQL: 4/4 crons WAITING (Automatic Batch Schedule + charge fix + refund + payment sync) | PASS (AC1+AC5+AC6 observable) |
+| T4  Recent Square AsyncApexJobs present as test env      | Technical | High  | PRE SOQL: 20 Auctifera.SquareChargeFixBatch/SquareRefundBatch Completed in LAST_14_DAYS | PASS (test env for AC3 stress) |
+| T5  Stripe verify pattern: snapshot Ids + diff (post-v4) | Technical | High  | Apex source contains `Set<Id> priorSquareJobIds` + `AND Id NOT IN :priorSquareJobIds` | PASS (spec.ts IT3a/b) |
+| T6  Old v3 straySquare form REMOVED (regression protection) | Technical | High | Apex source: 0 hits on `List<AsyncApexJob> straySquare` or `must not enqueue Square batches but found ` | PASS (spec.ts IT3e) |
+| T7  Immediate Square jobs proved by-Id (not recency scan) | Technical | Medium | `WHERE Id IN (:chargeFixJobId, :refundJobId)` in Apex             | PASS (spec.ts IT4b) |
+| T8  Unrecognized merchant fails safely (AC4 structural)  | Technical | Medium | Apex contains `MERCHANT != 'square' && MERCHANT != 'stripe'` + `unrecognized merchantType` | PASS (spec.ts IT5) |
+| T9  AC2 idempotent re-run (no dup crons)                 | Technical | Medium | Requires IE second run                                            | DEFERRED to IE run |
+| T10 AC3 Stripe verified no-op runs with leftover Square jobs | Technical | High | Requires IE run of Stripe branch                                | DEFERRED to IE run |
+| T11 AC4 negative test (invalid merchant)                 | Technical | Medium | Requires IE run with invalid input (may need bypass of UI select validation) | DEFERRED to IE run + spec.ts static PASS |
+| T12 AC8 Prod seed + Implementations handoff              | Technical | Low   | Attested via IM-735 confidence report + PR body                    | DEFERRED to backend redeploy |
+| S1  No secrets introduced                              | Security | Low | git diff grep across both PRs → 0 matches | PASS |
+| S2  No SOQL injection                                    | Security | Low | Static Apex + bind vars (`:priorSquareJobIds`, `:SQUARE_BATCH_CLASSES`); 0 dynamic SQL | PASS |
+| S3  No PII in debug logs                                 | Security | Low | Apex logs only Ids + class names + flag booleans | PASS |
+| S4  No CRUD/FLS bypass                                    | Security | Low | Custom Settings write requires "Customize Application" (SF-enforced) | PASS |
+| S5  No arbitrary code exec                                | Security | Low | Only calls managed-package globals (Auctifera.AutomaticBatchSchedule, Auctifera.SquareChargeFixBatch, Auctifera.SquareRefundBatch) | PASS |
+| S6  Dependency vulnerabilities                            | Security | N/A | Zero package changes | PASS (N/A) |
+| S7  RBAC — Custom Settings write                          | Security | Low | Admin-authenticated session | PASS |
+
+Verdict summary
+---------------
+- Technical: 8/12 PASS · 4 DEFERRED-to-IE-run · 0 FAIL
+- Security: 6 PASS · 1 N/A · 0 FAIL · 0 High/Critical

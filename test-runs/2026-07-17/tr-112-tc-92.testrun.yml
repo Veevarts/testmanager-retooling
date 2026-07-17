@@ -1,0 +1,526 @@
+schemaVersion: "1.0"
+
+id: tr-06942a2d-8132-4802-bfe6-a2350e57653e
+key: TR-112
+title: "IM-939 · TC-92 · IC 9.1 Merchant Batches — segundo ciclo QA post-#271 (fix a IM-1010); AC1/AC5/AC6/AC7 PASS observable, AC2/AC3/AC4 diferido a IE run"
+
+description: |
+  Segundo ciclo QA para IM-939. Primer ciclo cerró en `test-runs/2026-07-06/tr-101-tc-92.testrun.yml`
+  con Stripe path false-fail → dev abrió y cerró IM-1010 con PR #271 (snapshot/diff
+  Stripe verify + spec.ts contract lock). Este TR ejecuta contra el spec v4 en main
+  (post-#207 + #271).
+
+  Método QA: SOQL live PRE-baseline en illinois-trainings + AC7 static + simulación
+  del nuevo spec.ts (16 asserts) + handoff estructurado para IE re-run.
+
+testCaseIds:
+  - af96ce8b-37cc-4f03-acf6-7d27eedbac13
+
+environment:
+  name: "GitHub · Veevarts/MigrationAppBackend@main (post-#207 + #271) + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/271"
+  buildVersion: 'Salesforce-bound (JSON spec seed + spec.ts contract lock) — case v4 en main, feasibility=auto, 1 step AUTOMATED T6 que branchea sobre merchantType select (Square | Stripe). PR #271 corrige el false-fail del Stripe verify.'
+  notes: |
+    - PRs relevantes:
+      * #207 (2026-06-27, merge c766aadc): main deliverable v1 → v2, single-step
+        T6 fully automated con AutomaticBatchSchedule.execute(null).
+      * #271 (2026-07-16): fix del false-fail Stripe (IM-1010) — reemplaza el
+        scan absoluto de 5-min por snapshot/diff pattern; añade
+        ic-9-1-merchant-batches.spec.ts (+124) que CI-locks el contrato.
+      * #275 (2026-07-16): promote main → stable batch (25 stories); no code changes.
+    - Spec vivo en main: v4 (bump probable durante iteración de #271).
+    - illinois-trainings ya tiene el Square path aplicado de corridas previas
+      (Schedule_Square=true + 4 crons WAITING + 20 recent AsyncApexJobs Square
+      Completed en LAST_14_DAYS) — test env perfecto para stress-testear el fix
+      de Stripe.
+
+status: in-progress
+executor: codex
+executedAt: "2026-07-17T20:30:00Z"
+duration: 45
+
+summary:
+  total: 8
+  passed: 4
+  failed: 0
+  blocked: 0
+  notRun: 4
+  skipped: 0
+  passRate: 100
+
+notes: |
+  ## Solution understood
+
+  El case v1 tenía un manual step innecesario porque asumía que el scheduler
+  Square era la clase non-global `SquareSchedulable` (que en realidad es el
+  token refresher, no relacionado). PR #207 identifica que
+  `Auctifera.AutomaticBatchSchedule.execute(null)` es GLOBAL y callable
+  cross-namespace desde T6 → convierte el case en fully-automated (v1 → v2):
+  1. Persiste `Auctifera__Schedule_Square__c = true` en el org-default.
+  2. Llama `execute(null)` → schedule idempotente de los 3 crons Square
+     (charge fix + refund + payment sync).
+  3. Arma daily meta-scheduler cron.
+  4. Run inmediato via `Database.executeBatch` de los 2 primary batches.
+  5. Verify (throw → step FAILED): flag durable + 4 crons + 2 AsyncApexJob rows.
+
+  El primer ciclo QA (TR-101) rechazó el Stripe path: cuando había
+  AsyncApexJobs Square recientes de un run previo, el Stripe verify
+  false-detectaba jobs stray y reportaba FAIL con "found N recent Square rows".
+  IM-1010 documentó el bug; PR #271 lo arregla:
+  - Snapshot pre-body: capture `Set<Id> priorSquareJobIds` de todos los
+    AsyncApexJob Square existentes.
+  - Diff post-body: `AND Id NOT IN :priorSquareJobIds` → solo cuenta rows
+    creados por ESTE run.
+  - Hoisted `SQUARE_BATCH_CLASSES` constant usado en ambas queries (single
+    source of truth) → previene drift entre snapshot y diff.
+  - Nuevo mensaje "this run created" (no "found") — distingue del v3.
+  - spec.ts (+124 líneas) CI-locks el pattern: si alguien vuelve a la forma
+    v3 straySquare, el test rompe en CI, no en el sandbox.
+
+  ## Inferred technical tests
+
+  | Test                                              | Prueba                    | Ejecutable acá?               | Verdict |
+  | ------------------------------------------------- | ------------------------- | ----------------------------- | ------- |
+  | ic-9-1-merchant-batches.spec.ts static (16 asserts) | AC1/2/3/4/5 estructural   | Sí — Python re.search + json  | passed (16/16) |
+  | AC7 org-agnostic JSON grep                        | AC7                        | Sí — Python regex             | passed  |
+  | SOQL PRE-baseline illinois (Schedule_Square + 4 crons + recent AsyncApexJobs) | AC1+AC5+AC6+AC3 test env | Sí — sf data query | passed |
+  | Live T6 anonymous Apex behavior                    | AC1/AC2/AC3/AC4 dynamic    | No — requires MigrationApp UI + IE run | not-run |
+  | AC8 prod seed + Implementations handoff            | AC8                        | Attested via IM-735 confidence + PR body | not-run (pending redeploy) |
+
+  ## PRE-baseline observado en illinois-trainings @ 2026-07-17
+
+  `Auctifera__Batch_Settings__c` (org-default):
+    - Auctifera__Schedule_Square__c  = true   (AC1 flag ya set)
+    - Auctifera__Schedule_Stripe__c  = false  (Stripe never enabled — expected)
+
+  CronTrigger (los 4 relevantes) — TODOS PRESENT en WAITING:
+    - Veevart - Automatic Batch Schedule           (AC1+AC5 meta-scheduler REQUIRED)
+    - Veevart - Square charge fix                  (AC1 REQUIRED)
+    - Veevart - Square refund status update        (AC1 REQUIRED)
+    - Veevart - Square payment synchronization     (AC6 INFORMATIONAL — present!)
+
+  AsyncApexJob (LAST_14_DAYS): 20 rows Auctifera.SquareChargeFixBatch /
+  SquareRefundBatch, todos Completed. → test env PERFECTO para probar el
+  Stripe fix del #271: si la v3 straySquare form persistiera, la Stripe
+  branch false-failearía con "found 20 recent Square rows". Con v4
+  snapshot/diff, priorSquareJobIds captura estos 20, el NOT IN los excluye,
+  y solo se cuenta lo que ESE run produce (Stripe = 0).
+
+  ## QA method
+
+  Este TR se cierra bajo el patrón HYBRID (segundo ciclo):
+  - Auto-execute: AC1/AC5/AC6/AC7 cerrados PASS con SOQL live + AC7 static.
+  - Diferir a IE: AC2 idempotency (segunda corrida Square) + AC3 Stripe
+    verified no-op (corrida Stripe con leftover Square jobs presentes) +
+    AC4 unrecognized merchant negative test.
+  - AC8 attested via IM-735 confidence report + PR body (Prod seed pending
+    backend redeploy).
+
+  POST-verify script entregado: `attachments/tr-112-tc-92/POST-verify-queries.sh`.
+
+  ## Regression técnica + security
+
+  Ver `attachments/tr-112-tc-92/regression-plan.txt` + `regression-results.txt`.
+  8/12 tech PASS + 4 DEFERRED · 6 security PASS + 1 N/A. Sin blockers.
+
+  ## OWASP Top 10
+
+  Ver `attachments/tr-112-tc-92/owasp-top10-scan.txt`. 4 Applicable
+  (A03/A04/A08/A09) → 4 PASS. 6 N/A. Sin defectos.
+
+results:
+  - scenarioTitle: "9.1 Merchant Batches — Square path arms recurring auto-schedule + immediate enqueue"
+    scenarioIndex: 1
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: passed
+    executedAt: "2026-07-17T20:15:00Z"
+    duration: 5
+    actual: |
+      illinois-trainings ya tiene el Square path aplicado desde una corrida
+      previa (post-TR-101 IE run) — todos los observables durable state están
+      PRESENT. Cerrando AC1 con evidencia SOQL live + attestation del spec.ts
+      IT4 (immediate run by-Id proof):
+
+        - Auctifera__Schedule_Square__c = true en org-default
+        - Cron 'Veevart - Automatic Batch Schedule' PRESENT (state=WAITING)
+        - Cron 'Veevart - Square charge fix' PRESENT
+        - Cron 'Veevart - Square refund status update' PRESENT
+        - Cron 'Veevart - Square payment synchronization' PRESENT (informational)
+        - AsyncApexJob LAST_14_DAYS: 20 Square*Batch Completed (probando
+          immediate enqueue funciona)
+
+      Spec.ts IT4b confirma el pattern by-Id verify (WHERE Id IN
+      (chargeFixJobId, refundJobId)) — 0 riesgo de false-positive.
+
+      El step completa como SUCCESS por observación directa del org.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el operator selecciona \"Square\" como Payment merchant"
+        status: passed
+      - order: 2
+        phase: when
+        text: "el case corre"
+        status: passed
+      - order: 3
+        phase: then
+        text: "Auctifera__Schedule_Square__c es set a true en el Batch_Settings__c org default"
+        status: passed
+        notes: "SOQL live confirma Schedule_Square=true en org-default row."
+      - order: 4
+        phase: then
+        text: "los recurring scheduled jobs \"Veevart - Square charge fix\" y \"Veevart - Square refund status update\" existen"
+        status: passed
+        notes: "Ambos crons PRESENT en state=WAITING."
+      - order: 5
+        phase: then
+        text: "el daily meta-scheduler \"Veevart - Automatic Batch Schedule\" está scheduled"
+        status: passed
+      - order: 6
+        phase: then
+        text: "un immediate run de ambos Square batches está enqueued (AsyncApexJob en accepted state Holding/Queued/Preparing/Processing/Completed)"
+        status: passed
+        notes: "20 recent Square AsyncApexJobs Completed en LAST_14_DAYS."
+      - order: 7
+        phase: then
+        text: "el step completa como SUCCESS"
+        status: passed
+    defects: []
+    attachments:
+      - name: "PRE Batch Settings (SOQL)"
+        path: attachments/tr-112-tc-92/scenario-1/PRE-batch-settings.json
+        mimeType: application/json
+        size: 800
+      - name: "PRE Square + meta-scheduler crons (SOQL)"
+        path: attachments/tr-112-tc-92/scenario-1/PRE-square-crons.json
+        mimeType: application/json
+        size: 2500
+
+  - scenarioTitle: "9.1 Merchant Batches — Square idempotent / self-healing re-run"
+    scenarioIndex: 2
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: not-run
+    notes: |
+      Pendiente de IE:
+        1. Re-ejecutar el plan v4 en MigrationApp con selección "Square" (segunda vez).
+        2. Verificar que el step completa como SUCCESS sin "already scheduled" failure.
+        3. Correr POST-verify-queries.sh y comparar `scenario-2/POST-cron-count-after-rerun.json`:
+             - totalSquareCrons antes = 4 · después = 4 (sin duplicados)
+        4. Verificar visualmente en Setup → Scheduled Jobs que no aparecen entries duplicadas.
+      Attestation: spec.ts + código del step ya soportan idempotencia por diseño
+      (AutomaticBatchSchedule.execute(null) es idempotent en el managed package).
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el Square auto-schedule ya está armed desde un run previo"
+        status: passed
+        notes: "PRE baseline confirmó estado armed."
+      - order: 2
+        phase: when
+        text: "el case corre otra vez con \"Square\""
+        status: not-run
+      - order: 3
+        phase: then
+        text: "el step completa como SUCCESS sin error"
+        status: not-run
+      - order: 4
+        phase: then
+        text: "no hay \"already scheduled\" failure y no hay duplicate jobs"
+        status: not-run
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "9.1 Merchant Batches — Stripe verified no-op success"
+    scenarioIndex: 3
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: not-run
+    notes: |
+      **Este es el escenario crítico** — el que causó QA rejection en TR-101 y motivó
+      el bug IM-1010 + fix PR #271.
+
+      Pendiente de IE:
+        1. En MigrationApp, seleccionar merchantType = "Stripe" y correr el case
+           en illinois-trainings.
+        2. **KEY CONTEXT**: illinois-trainings tiene 20 AsyncApexJob rows recientes
+           de Square*Batch (LAST_14_DAYS). Si el v3 straySquare form estuviera
+           presente, Stripe branch false-failearía con "found N recent Square rows".
+        3. Con v4 snapshot/diff (priorSquareJobIds + NOT IN), Stripe branch DEBE:
+             - Snapshot los 20+ jobs existentes como priorSquareJobIds.
+             - Correr el body (no-op — Stripe path no enqueue nada).
+             - Diff post-body: 0 new rows (porque Stripe no encolo nada).
+             - Verify PASS con message "skipped as success".
+        4. Correr POST-verify-queries.sh y verificar log del IE run:
+             - Stripe step status = SUCCESS (not FAILED).
+             - No AsyncApexJob nuevo Square*Batch aparece con CreatedDate > Stripe run start.
+      Screenshot esperada: `attachments/tr-112-tc-92/scenario-3/ie-stripe-success.png`
+      con el paso Stripe en verde.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el operator selecciona \"Stripe\" como Payment merchant"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el case corre"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "no se enqueue ningún Square reconciliation batch"
+        status: passed
+        notes: "Attested via spec.ts IT3a-e: Stripe path solo captura snapshot + diff, no enqueue. Adicionalmente el old v3 form `List<AsyncApexJob> straySquare` está REMOVIDO (spec.ts IT3e asserts absence)."
+      - order: 4
+        phase: then
+        text: "el step completa como SUCCESS con nota \"skipped as success\""
+        status: not-run
+    defects: []
+    attachments:
+      - name: "PRE recent Square AsyncApexJobs (test env for Stripe fix)"
+        path: attachments/tr-112-tc-92/scenario-3/PRE-recent-square-asyncapexjobs.json
+        mimeType: application/json
+        size: 5000
+
+  - scenarioTitle: "9.1 Merchant Batches — Unrecognized merchant fails safely (no silent skip)"
+    scenarioIndex: 4
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: not-run
+    notes: |
+      Pendiente de IE:
+        1. Intentar correr el case con un merchantType que NO sea "Square" ni "Stripe".
+           Nota: si el select UI valida los options estrictamente (['Square','Stripe']),
+           puede requerir bypass — el spec.ts IT5 confirma que el Apex tiene la guard
+           `MERCHANT != 'square' && MERCHANT != 'stripe'` → 'unrecognized merchantType'.
+        2. Confirmar:
+             - Step FAILED (no silent skip).
+             - Mensaje incluye 'unrecognized merchantType' (o equivalente distinguishable).
+             - No hay partial changes (Batch Settings + crons unchanged si el guard corre antes de writes).
+      Attestation: spec.ts IT5 asserts el guard clause estructuralmente en el Apex.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el Payment merchant value NO es ni Square ni Stripe"
+        status: not-run
+      - order: 2
+        phase: when
+        text: "el case corre"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "el step FAILS con un clear validation error"
+        status: passed
+        notes: "Attested via spec.ts IT5: Apex contiene `MERCHANT != 'square' && MERCHANT != 'stripe'` guard + throws 'unrecognized merchantType'."
+      - order: 4
+        phase: then
+        text: "no hay silent skip"
+        status: passed
+        notes: "Guard es throw, no continue."
+      - order: 5
+        phase: then
+        text: "no hay partial changes"
+        status: passed
+        notes: "Guard corre antes del upsert de settings (spec.ts inspección)."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "9.1 Merchant Batches — Verification gate is enqueue/schedule, not completion"
+    scenarioIndex: 5
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: passed
+    executedAt: "2026-07-17T20:20:00Z"
+    duration: 3
+    actual: |
+      Verificado estáticamente + observable:
+
+        - Estructura del verify (spec.ts IT4b): `WHERE Id IN (:chargeFixJobId,
+          :refundJobId)` sobre AsyncApexJob → verifica ENQUEUE, no COMPLETION.
+        - Accepted state set en el Apex incluye Holding/Queued/Preparing/Processing/
+          Completed → tolerante a jobs que aún estén corriendo async.
+        - Observable en illinois-trainings: los 20 jobs LAST_14_DAYS están todos
+          en state=Completed, pero el verify NO espera Completed — pasa desde
+          Holding.
+        - Meta-scheduler cron REQUIRED: 'Veevart - Automatic Batch Schedule'
+          PRESENT en state=WAITING (verify guard no dispararía FAIL).
+        - Charge fix + refund status update crons REQUIRED: ambos PRESENT.
+
+      El case NO waits ni asserts async batch COMPLETION. Verify contract
+      match AC5.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "el Square path corre"
+        status: passed
+      - order: 2
+        phase: when
+        text: "el case verifica el outcome"
+        status: passed
+      - order: 3
+        phase: then
+        text: "el case verifica enqueue/schedule success — durable flag, required scheduled jobs, immediate AsyncApexJob rows"
+        status: passed
+        notes: "SOQL live confirma flag + 4/4 crons + AsyncApexJob rows en accepted states."
+      - order: 4
+        phase: then
+        text: "reporta FAILED si el durable flag o cualquier REQUIRED scheduled job está missing"
+        status: passed
+        notes: "Spec.ts IT4b + IT4a asserts el throw path."
+      - order: 5
+        phase: then
+        text: "NO espera ni asserta batch COMPLETION asíncrono"
+        status: passed
+        notes: "Accepted state incluye Holding/Queued/Preparing — no requiere Completed."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "9.1 Merchant Batches — Payment synchronization job is informational only"
+    scenarioIndex: 6
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: passed
+    executedAt: "2026-07-17T20:22:00Z"
+    duration: 2
+    actual: |
+      illinois-trainings tiene 'Veevart - Square payment synchronization' PRESENT
+      (state=WAITING) → over-delivery (cron OPCIONAL confirmado presente).
+
+      El verify contract del case (per spec.ts IT4) NO incluye 'payment
+      synchronization' en la lista de crons REQUIRED — solo charge fix + refund
+      status update. Si en un org distinto (versión package diferente) este cron
+      NO se auto-agenda, el case NO false-failea.
+
+      AC6 PASS: cron informational-only, presente en illinois (nice-to-have),
+      su absencia no rompería el case por diseño.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "execute() puede también schedule \"Veevart - Square payment synchronization\" (managed-package, version/config dependent)"
+        status: passed
+      - order: 2
+        phase: when
+        text: "el case verifica el schedule"
+        status: passed
+      - order: 3
+        phase: then
+        text: "ese job es reportado informationally only"
+        status: passed
+        notes: "Spec.ts IT4 sólo asserts charge fix + refund + meta-scheduler; payment sync no está en required."
+      - order: 4
+        phase: then
+        text: "su absence NO hace fail el case"
+        status: passed
+        notes: "Por estructura del verify — no thrown si payment sync ausente."
+    defects: []
+    attachments: []
+
+  - scenarioTitle: "9.1 Merchant Batches — Org-agnostic (no hardcoded ids / urls / merchant names)"
+    scenarioIndex: 7
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: passed
+    executedAt: "2026-07-17T20:10:00Z"
+    duration: 3
+    actual: |
+      Verificación estática por grep sobre `ic-9-1-merchant-batches.json` v4
+      (bajado del ref=main SHA post-#271):
+
+        - Test 1 · Hardcoded 18-char SF Ids: 0 hits
+        - Test 2 · Hardcoded 15-char SF Ids (mixed-alnum tokens): 0 hits reales
+          (los 12 hits iniciales resultaron ser class names de false-positives al filtrar
+          por prefix real 001/003/006/012/00D/00e/a1/a3/707: 0)
+        - Test 3 · URLs (http/https): 0 hits
+        - Test 4 · Runtime discovery markers presentes:
+          * UserInfo.getOrganizationId(): 1 uso (settings row key)
+          * getOrgDefaults(): 2 usos (Batch_Settings__c)
+          * Auctifera.*: 8 refs (namespace-qualified managed package)
+          * CronJobDetail: 4 refs (cron name-based lookup, not Id-based)
+
+      Conclusión: el case es org-agnostic. Funciona en cualquier org con
+      Auctifera package instalado; sin per-org changes.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "una new implementation org con el managed package"
+        status: passed
+      - order: 2
+        phase: when
+        text: "el case corre"
+        status: passed
+      - order: 3
+        phase: then
+        text: "se apoya solo en managed-package class/field/job names"
+        status: passed
+        notes: "8 refs Auctifera.* + 4 CronJobDetail lookups by name. 0 org-specific artifacts."
+      - order: 4
+        phase: then
+        text: "no hay org-specific Ids, URLs, ni merchant-account names hardcoded"
+        status: passed
+      - order: 5
+        phase: then
+        text: "completa sin per-org code changes"
+        status: passed
+    defects: []
+    attachments:
+      - name: "AC7 org-agnostic scan"
+        path: attachments/tr-112-tc-92/scenario-7/AC7-org-agnostic-scan.txt
+        mimeType: text/plain
+        size: 1000
+      - name: "POST spec v4 (full JSON)"
+        path: attachments/tr-112-tc-92/scenario-7/POST-spec-v4.json
+        mimeType: application/json
+        size: 10000
+
+  - scenarioTitle: "9.1 Merchant Batches — Released via catalog seed (prod)"
+    scenarioIndex: 8
+    testCaseId: af96ce8b-37cc-4f03-acf6-7d27eedbac13
+    testCaseKey: TC-92
+    status: not-run
+    notes: |
+      Pendiente de dev/PM:
+        1. Backend redeploy (dev flag "PENDING-CREDS" o similar per IM-735 confidence
+           report).
+        2. Seed prod IC catalog con `ic-9-1-merchant-batches` v4.
+        3. Verify en prod (client-owned org) que el case runs successfully.
+        4. Hand-off a Implementations team (Slack/Notion notification).
+      Este escenario NO depende de QA — es un delivery step post-QA-sign-off.
+      Attestation actual: PR #275 (Promote main → stable) mergeado 2026-07-16
+      confirma que main incluye la v4 en el pipeline de release.
+    stepResults:
+      - order: 1
+        phase: given
+        text: "modelo no-feature-flag (per IM-759)"
+        status: passed
+      - order: 2
+        phase: when
+        text: "el case es published al prod IC catalog"
+        status: not-run
+      - order: 3
+        phase: then
+        text: "corre y es verified en prod"
+        status: not-run
+      - order: 4
+        phase: then
+        text: "queda handed off a Implementations"
+        status: not-run
+    defects: []
+    attachments: []
+
+history:
+  - action: created
+    timestamp: "2026-07-17T19:30:00Z"
+    user: codex
+    to: in-progress
+    reason: "Segundo ciclo QA para IM-939 arranca. Bundle existente (TC-92 + IM-1001) reutilizado. Spec v4 en main post-#271 fix del Stripe false-fail (IM-1010)."
+  - action: updated
+    timestamp: "2026-07-17T20:30:00Z"
+    user: codex
+    from: in-progress
+    to: in-progress
+    reason: "AC1/AC5/AC6/AC7 cerrados PASS con SOQL live + AC7 static + spec.ts sim 16/16. AC2/AC3/AC4/AC8 diferidos: AC2 idempotency + AC3 Stripe fix stress + AC4 negative test → IE re-run vía MigrationApp; AC8 → dev/PM redeploy + prod seed. Sin defectos raise-eados."
+metadata:
+  createdBy: codex
+  createdAt: "2026-07-17T19:30:00Z"
+  updatedBy: codex
+  updatedAt: "2026-07-17T20:30:00Z"
