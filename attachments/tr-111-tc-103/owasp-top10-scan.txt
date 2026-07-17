@@ -1,0 +1,27 @@
+OWASP Top 10 (2021) applicability scan — PR Veevarts/MigrationToolETL#146
+============================================================================
+
+Change surface: 2 SQL files (SELECT-only extractor + 1 refactor for
+DRY util) + 1 static test contract + 3 spec/util refactors + 1 docs update.
+Runtime is a customer's restored Altru SQL Server backup (read-only) → CSV
+→ SF bulk upsert (existing loader, unchanged).
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | No new authorization surface. Extractor runs under a read-only DB account per safesql profile. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No crypto ops. No token / secret storage introduced. |
+| A03  | Injection                                    | Applicable  | PASS    | SQL is static text. Zero `EXEC(@dynamic)` or string-built SQL. Existing `@name` param bindings pattern preserved in sibling queries. |
+| A04  | Insecure Design                              | Applicable  | PASS    | Design REMOVES a hand-unioned per-table pattern (fragile) and REPLACES with the Blackbaud-published V_QUERY_CONSTITUENCY view — sanctioned Altru integration surface. Adopts dedup-by-external-ID + ROW_NUMBER as defensive invariant. |
+| A05  | Security Misconfiguration                    | N/A         | —       | No exposed config. safesql profile is a runtime concern owned by the operator. |
+| A06  | Vulnerable & Outdated Components             | N/A         | —       | Zero package.json / package-lock.json changes. |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | New constituency-query.spec.ts locks the SQL text contract so a future edit that reintroduces the per-table union or drops ISACTIVE=1 fails CI. Sibling specs use extracted sql-comment-utils for consistent comment stripping (integrity of the assertion mechanism itself). |
+| A09  | Security Logging & Monitoring Failures       | Applicable  | PASS    | safesql writes runtime output to `/Users/veevart/tools/safesql/out/` with mode 0600. String columns redacted from stdout; numeric/date/bool visible. Errors surface distinguishably. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP callouts. |
+
+Summary
+-------
+- Applicable: 4 (A03, A04, A08, A09)
+- PASS: 4 · FAIL: 0 · N/A: 6
+- No High/Critical blockers.
+- No defects to raise from OWASP.

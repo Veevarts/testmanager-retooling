@@ -1,0 +1,36 @@
+Unit test coverage — PR Veevarts/MigrationToolETL#146
+=======================================================
+
+New test file added by PR:
+  src/data-migration/infrastructure/destination/sql-server/query-regression/
+    constituency-query.spec.ts (75 lines, 6 describe blocks with 9 assertions)
+
+Type: static contract-lock on the SQL text (comment-stripped, whitespace-tolerant regex).
+Follows the pattern of the sibling shop-item-variant-coverage-query.spec.ts (IM-1005).
+
+Assertions (all simulated locally against HEAD constituency.sql — 9/9 PASS):
+  1. FROM V_QUERY_CONSTITUENCY vq (root-cause protection)
+  2. No BOARDMEMBER/VOLUNTEER/STAFF/FUNDRAISER DATERANGE table refs
+  3. No 'Board Member' AS Constituency__c hardcode (tenant renames respected)
+  4. No CONSTITUENCYCODE cc (old join pattern removed)
+  5. WHERE vq.ISACTIVE = 1 (retired defs excluded)
+  6. COALESCE + SYS_ + CONSTITUENTID + CONSTITUENCYDEFINITIONID (system-derived external ID)
+  7. ROW_NUMBER PARTITION BY Implementation_External_ID__c + WHERE RowRank = 1 (dedup)
+  8. vq.CONSTITUENCY + DATEFROM + DATETO (tenant label + date range preserved)
+  9. CONSTITUENTID = ct.ID + LEFT JOIN CONSTITUENTHOUSEHOLD + ELSE ch.HOUSEHOLDID + ct.ISCONSTITUENT = 1 (routing preserved)
+
+AC ↔ test coverage
+------------------
+| AC   | Structural (spec.ts) | Behavioral (safesql live PRE vs POST)         | Verdict                                        |
+|------|----------------------|-----------------------------------------------|------------------------------------------------|
+| AC1  | Tests 1, 2, 5, 6, 7   | Tucson 22561 1→2, Aspen 104021 6→13, Joan 2→1 | PASS (all 3 ticket examples reconcile)         |
+| AC2  | Tests 6, 7            | 0 duplicate external IDs in 4 result files    | PASS (grain preserved by ROW_NUMBER dedup)     |
+| AC3  | Test 4                | Joan Grecchi HSDF/Spring segments excluded post | PASS (ISACTIVE=1 filter removes retired defs) |
+| AC4  | Behavioral only        | All 3 ticket examples POST = Altru UI count    | PASS                                            |
+| AC5  | Test file passes CI    | Upstream: PR body claims 245/245 tests pass    | PASS (attested + local sim 9/9)                |
+
+Gap conclusion
+--------------
+Dev's evidence + independent local safesql runs confirm every AC. No gaps.
+Runner check: cannot execute `npm test` here (MigrationToolETL not cloned in
+testmanager-retooling); assertions re-simulated in Python — 9/9 PASS.

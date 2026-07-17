@@ -1,0 +1,56 @@
+Technical + Security regression plan — PR Veevarts/MigrationToolETL#146
+=========================================================================
+
+Change surface: 6 files
+  - queries/constituency/constituency.sql       (-138/+129) — MAIN FIX
+  - query-regression/constituency-query.spec.ts (+75 NEW) — contract lock
+  - query-regression/donation-transaction-date-filter-query.spec.ts (-12/+1) — refactor
+  - query-regression/revenue-reference-description-query.spec.ts (-12/+1) — refactor
+  - query-regression/sql-comment-utils.ts       — new util (extracted from siblings)
+  - docs/altru-model-context.md                 (+63/-1) — documentation
+
+Runtime: SQL Server extractor query, output CSV → SF bulk upsert into
+Auctifera__Constituency__c. Consumer contract unchanged (same column set).
+
+Blast radius
+------------
+- Every Altru shop migration inherits the new constituency semantics.
+- MigrationTool ETL callers: no consumer breaks — same column names, same
+  QueryGroup, same routing (Contact/Organization/household) preserved.
+- Salesforce side: `Implementation_External_ID__c` remains the upsert key;
+  new SYS_-prefixed IDs cannot collide with GUID IDs.
+- Documentation: `docs/altru-model-context.md` gains the V_QUERY_CONSTITUENCY
+  lineage (63 lines) — helps future ETL debugging.
+- Sibling specs affected: sql-comment-utils extracted into shared util;
+  donation-transaction-date-filter-query.spec.ts and
+  revenue-reference-description-query.spec.ts refactored to use it (-12/+1
+  each). No behavior change, just DRY.
+
+Regression matrix
+-----------------
+| Item | Type | Risk | Check method | Verdict |
+|------|------|------|--------------|---------|
+| T1  Structural — new constituency-query.spec.ts contract           | Technical | Low | Simulated locally 9/9 PASS + PR body claims 245/245 tests green | PASS |
+| T2  Sibling spec.ts refactor is pure extract (no behavior change)   | Technical | Low | Diffs show -12/+1 replacing local stripComments impl with import from new sql-comment-utils | PASS (static review) |
+| T3  Total row count PRE vs POST — sanity check                       | Technical | Medium | Tucson 55,638→124,185 (+68,547); Aspen 1,316→11,427 (+10,111). Expected growth from system-derived rows | PASS (as-designed) |
+| T4  External ID uniqueness (no dupes, no NULLs)                     | Technical | High | 4/4 files (tucson + aspen × PRE + POST) show 0 dupes, 0 NULLs | PASS |
+| T5  Tucson 22561 count matches Altru UI (2)                          | Technical | High | PRE 1, POST 2 — matches ticket + PR body claim | PASS |
+| T6  Aspen 104021 count matches Altru UI (13)                         | Technical | High | PRE 6, POST 13 — matches ticket + PR body claim | PASS |
+| T7  Joan Grecchi bidirectional resolved (missing + extra fixed)      | Technical | High | PRE 2 (HSDF/Spring segments), POST 1 (Patron) — matches ticket + PR body claim | PASS |
+| T8  "Board Trustee" tenant rename preserved for Aspen (not hardcoded)| Technical | Medium | Aspen 104021 POST includes 'Board Trustee' label — dev claim reproduced | PASS |
+| T9  Retired segments excluded (ISACTIVE=1 filter)                     | Technical | Medium | Tucson distinct labels 110→32 (-78 retired) — dev claim reproduced | PASS |
+| T10 System roles added (Donor/Member/Patron/Event registrant/etc.)   | Technical | High | Aspen 104021 POST includes Donor, Member, Patron, Event registrant, Major giving prospect, Loyal donor, Major donor | PASS |
+| T11 date-ended roles preserved with Is_Active__c=0 (not dropped)     | Technical | Medium | Aspen 104021 POST includes Member with Is_Active=0 (date range 2003-2026) | PASS |
+| T12 No collision between GUID IDs and SYS_ prefixed IDs               | Technical | Medium | 4/4 files: 0 dupes across mixed pool (94,262 SYS in Tucson POST) | PASS |
+| S1  No secrets introduced                                          | Security | Low  | git diff grep on the 6 files → 0 matches on secret patterns | PASS |
+| S2  No SQL injection                                                | Security | Low  | Static SELECT; no dynamic SQL, no user input concatenation | PASS |
+| S3  No PII exposure in log paths                                    | Security | Low  | safesql redacts standard string columns from stdout; runtime output is admin-only | PASS |
+| S4  No CRUD/FLS bypass                                              | Security | N/A  | Read-only extractor; runs against restored Altru backup | PASS (N/A) |
+| S5  No arbitrary code exec                                          | Security | Low  | Pure SELECT with CTE + ROW_NUMBER + COALESCE | PASS |
+| S6  Dependency vulnerabilities                                       | Security | N/A  | Zero package.json changes | PASS (N/A) |
+| S7  RBAC — read-only safesql profile                                | Security | Low  | tucson.json and aspen.json profiles enforce read-only credentials (per skill README) | PASS |
+
+Verdict summary
+---------------
+- Technical: 12/12 PASS · 0 FAIL
+- Security: 5 PASS · 2 N/A · 0 FAIL · 0 High/Critical

@@ -1,0 +1,32 @@
+Scenario 4 · AC2 — No multiplication for multi-transaction constituents
+=========================================================================
+
+Method: check external ID uniqueness across the FULL extractor output for
+both Tucson and Aspen. If any constituent had their role multiplied by
+raw transaction/event/membership row grain, we would see duplicate
+Implementation_External_ID__c values.
+
+Result                                      | Tucson PRE | Tucson POST | Aspen PRE | Aspen POST | AC ref | Verdict
+--------------------------------------------|------------|-------------|-----------|------------|--------|--------
+Total rows                                  | 55,638      | 124,185     | 1,316     | 11,427      | AC2    | —
+Distinct Implementation_External_ID__c       | 55,638      | 124,185     | 1,316     | 11,427      | AC2    | 100% unique
+Duplicate external IDs                      | 0           | 0           | 0         | 0           | AC2    | PASS
+NULL external IDs                           | 0           | 0           | 0         | 0           | AC2    | PASS
+SYS_ prefix rows (system-derived, new)      | 0           | 94,262      | 0         | 9,892       | —      | as-expected
+
+The SQL enforces the invariant BY CONSTRUCTION:
+  - COALESCE(vq.ID, 'SYS_'||CONSTITUENTID||'_'||CONSTITUENCYDEFINITIONID)
+    → the synthesized key is at logical role grain (per constituent per role),
+    NOT per transaction/event/membership.
+  - ROW_NUMBER() OVER (PARTITION BY Implementation_External_ID__c ORDER BY
+    Date_From__c, Date_To__c) + WHERE RowRank = 1 → collapses any
+    accidental multi-row per synthesized key.
+
+Contract-lock: the new constituency-query.spec.ts includes ROW_NUMBER
++ RowRank=1 assertions (IT4) so a future edit that removes the dedup
+fails CI.
+
+Objective fit: PR body's "AC2 do not multiply a role beyond the Altru UI
+grain" is guaranteed by construction + reinforced by the CI-gated spec.ts.
+The live safesql runs show 0 duplicates in 4 result files spanning 192,566
+rows total. AC2 PASS.
