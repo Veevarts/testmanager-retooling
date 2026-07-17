@@ -1,0 +1,176 @@
+schemaVersion: "1.0"
+
+id: "a157d9ce-e77b-4e52-80be-ec7248e4e9f1"
+key: "TC-103"
+title: "Altru constituency migration · reconciliación de datos faltantes/extra (Tucson + Aspen + Joan Grecchi)"
+description: |
+  Cobertura QA para IM-694 (Historia, priority High, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1103 (creada 2026-07-17).
+
+  Contexto:
+  - Repositorio: `MigrationToolETL`, extractor SQL Server para el objeto
+    `constituency` que produce CSVs para bulk-upsert en `Auctifera__Constituency__c`.
+  - PR: `Veevarts/MigrationToolETL#146` (OPEN) — branch
+    `bug/constituencies-missing-data-after-migration-IM-694` — título
+    "fix(migration): source constituencies from Altru query view IM-694".
+  - Reporte del bug: constituencies bajo-incluidos (missing) y en algunos casos
+    sobre-incluidos (extra) tras la migración. 3 ejemplos concretos con URLs
+    tanto de Altru como de Veevart en la descripción del ticket.
+
+  Ejemplos reportados (aggregate counts):
+  - Tucson Lookup 22561 → Altru 2 constituency records · Veevart 1 (delta -1 missing)
+  - Aspen Lookup 104021 → Altru 13 · Veevart 6 (delta -7 missing)
+  - Tucson Joan Grecchi 8-10019267 → Veevart tiene 2 records que NO existen en
+    Altru + Veevart falta 1 que SÍ existe en Altru (mismatch bidireccional)
+
+  Hipótesis del dev (plan de acción 2026-05-21):
+  - El query actual `constituency.sql` solo cubre 5 paths: base `CONSTITUENCY`,
+    `BOARDMEMBERDATERANGE`, `VOLUNTEERDATERANGE`, `STAFFDATERANGE`,
+    `FUNDRAISERDATERANGE`.
+  - Under-incluye roles derivados de tablas especializadas (`Donor`, `Member`,
+    `Prospect`, `Event Registrant`) visibles en la UI de Altru.
+  - Sobre-incluye segmentation-style base `CONSTITUENCY` labels (ej.
+    `HSDF 2023 Segment C`, `Spring 2023 Segment D`) que no están en la UI.
+  - `CONSTITUENCYDATERANGE` está vacía en Tucson y Aspen → no es fuente válida
+    del reemplazo directo.
+  - Fix esperado: refactor a CTEs explícitos por role source, emit system-derived
+    roles a logical role grain (no raw revenue/event/member row grain), IDs
+    deterministas para collapsed system roles, más tests query-regression que
+    fallen si donor/member/event/prospect rows se multiplican.
+
+  Riesgos abiertos:
+  - PR aún OPEN — QA valida contra el HEAD actual. Si Camilo hace más commits
+    tras el review, re-ejecutar TC.
+  - `Missing 1 record` en Altru para Joan Grecchi es una fila que la query
+    debería recuperar; el PR debe demostrar que efectivamente aparece post-fix.
+  - Los `extra` en Veevart para Joan Grecchi pueden ser segmentation-style
+    labels que se deben excluir; el criterio para excluirlos debe estar
+    documentado en el spec.ts o en `docs/altru-model-context.md`.
+  - AC4 permite delta residual "documentado con source-data explanation" —
+    QA debe distinguir entre delta esperado documentado y regresión real.
+  - safesql profiles disponibles: `tucson.json`, `tucson_backup3.json`,
+    `aspen.json`. Illinois no aplica a este ticket.
+
+type: integration
+priority: high
+
+status: active
+
+preconditions:
+  - "safesql runner disponible con profiles `tucson` y `aspen` reachables (`node ~/tools/safesql/safesql.mjs profiles list` muestra ambos)."
+  - "Acceso vía `gh api contents?ref=<sha>` a los archivos SQL de `MigrationToolETL` en BASE (merge-base con main) y HEAD del PR #146."
+  - "Referencia Altru UI: contactos Tucson 22561, Aspen 104021, Tucson Joan Grecchi (8-10019267) accesibles para validar counts esperados si aparecen dudas (URLs en descripción del ticket)."
+  - "Acceso a los orgs Salesforce destino (tucson-trainings, aspen-trainings) para SOQL de `Auctifera__Constituency__c` post-carga — opcional, solo si se verifica AC4 end-to-end en SF (no solo source)."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC4 · Tucson Lookup 22561 — 2 constituency records en Altru quedan reconciliados post-fix (delta -1 se cierra)"
+    tags:
+      - ac-1
+      - ac-4
+      - regression-evidence
+      - tucson
+      - reconciliation
+    given:
+      - "Tucson Lookup 22561 tiene 2 constituency records visibles en la UI de Altru (Altru URL en descripción)"
+      - "el query actual (`constituency.sql` en BASE) exporta solo 1 record para ese lookup (delta -1)"
+    when:
+      - "QA corre `safesql run tucson <path-to-BASE-constituency.sql>` para capturar PRE count"
+      - "QA corre `safesql run tucson <path-to-HEAD-constituency.sql>` para capturar POST count"
+    then:
+      - "PRE count para Tucson 22561 = 1 (reproduce el bug)"
+      - "POST count para Tucson 22561 = 2 (delta cerrado; matches Altru UI)"
+      - "los 2 records POST se distinguen por (a) role source (base CONSTITUENCY vs system-derived) y (b) IDs deterministas per role — no duplican por revenue transactions"
+      - "si POST count > 2, es una regresión (multiplicación); si POST count < 2, el fix no cierra el bug"
+
+  - title: "AC1+AC4 · Aspen Lookup 104021 — 13 constituency records en Altru quedan reconciliados post-fix (delta -7 se cierra)"
+    tags:
+      - ac-1
+      - ac-4
+      - regression-evidence
+      - aspen
+      - reconciliation
+    given:
+      - "Aspen Lookup 104021 tiene 13 constituency records visibles en la UI de Altru (Altru URL en descripción)"
+      - "el query actual exporta solo 6 records para ese lookup (delta -7)"
+    when:
+      - "QA corre `safesql run aspen <path-to-BASE-constituency.sql>` para capturar PRE count"
+      - "QA corre `safesql run aspen <path-to-HEAD-constituency.sql>` para capturar POST count"
+    then:
+      - "PRE count para Aspen 104021 = 6 (reproduce el bug)"
+      - "POST count para Aspen 104021 = 13 (delta cerrado)"
+      - "los 7 records agregados son roles system-derived (Donor/Member/Prospect/Event Registrant) que no aparecían en base CONSTITUENCY"
+      - "cualquier delta residual (POST ≠ 13) debe estar documentado en las notas del PR o en `docs/altru-model-context.md` con source-data explanation (AC4 lo permite)"
+
+  - title: "AC1+AC3 · Tucson Joan Grecchi 8-10019267 — mismatch bidireccional (missing 1 en Altru + extra 2 en Veevart) queda resuelto"
+    tags:
+      - ac-1
+      - ac-3
+      - regression-evidence
+      - tucson
+      - bidirectional-mismatch
+    given:
+      - "Tucson Joan Grecchi (Lookup 8-10019267) tiene:"
+      - "  - Altru UI: 1 constituency record que NO está siendo migrada (missing)"
+      - "  - Veevart: 2 constituency records que NO existen en Altru (extra segmentation-style labels)"
+    when:
+      - "QA corre `safesql run tucson <BASE-constituency.sql>` filtrado por el Altru record ID del contacto"
+      - "QA corre `safesql run tucson <HEAD-constituency.sql>` filtrado igual"
+    then:
+      - "PRE incluye los 2 records extra (segmentation-style) y omite el 1 record UI-visible → reproduce el bug bidireccional"
+      - "POST recupera el 1 record UI-visible faltante"
+      - "POST excluye los 2 records segmentation-style (o los reetiqueta según regla documentada en `docs/altru-model-context.md`)"
+      - "delta post-fix = 0 (Altru UI count == Veevart count)"
+      - "el criterio de exclusión de segmentation-style labels queda documentado en el spec de regresión o en el context doc"
+
+  - title: "AC2 · No hay multiplicación de constituency rows para constituents con múltiples revenue/event/membership transactions"
+    tags:
+      - ac-2
+      - grain-preservation
+      - regression
+    given:
+      - "el query PRE emite rows a raw grain (por cada transaction/event/membership row en las tablas source)"
+      - "el query POST debe agregar system-derived roles a LOGICAL role grain (una fila por role, no una por transaction)"
+    when:
+      - "QA corre una aggregate query en source contra Tucson + Aspen que cuenta constituents con >1 revenue transaction / >1 event registration"
+      - "compara el COUNT(constituency rows POST) vs COUNT(distinct roles POST) para esos constituents"
+    then:
+      - "para cada constituent con múltiples transactions, POST emite exactamente 1 row por role UI-visible (no N por N transactions)"
+      - "el total row count POST no es mayor que la suma de logical roles distintos por constituent"
+      - "regression fixtures nuevos en el PR fallan CI si esta invariante se rompe (assertion en `constituency.spec.ts` o equivalente)"
+
+  - title: "AC5 · Gates de CI verdes en el PR (lint + query-regression + build)"
+    tags:
+      - ac-5
+      - ci-gates
+      - static
+    given:
+      - "el PR #146 está mergeable con branch `bug/constituencies-missing-data-after-migration-IM-694`"
+    when:
+      - "QA revisa upstream CI checks del PR (o simula asserts contract localmente sobre los archivos SQL descargados via `gh api contents?ref=<HEAD>`)"
+    then:
+      - "`npm run lint:check` pasa (0 errors)"
+      - "`npm test -- --runInBand query-regression` pasa (todos los tests incluye los nuevos que refuerzan grain + exclusion rules)"
+      - "`npm run build` pasa (0 errors)"
+      - "si algún test-regression que estaba verde en BASE ahora rompe → es una regresión y debe raise defect"
+
+tags:
+  - im-694
+  - im-70
+  - im-1103
+  - altru
+  - queries
+  - constituency
+  - tucson
+  - aspen
+  - migration-tool-etl
+  - data-validation
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-17T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-17T00:00:00Z"
+  version: 1
