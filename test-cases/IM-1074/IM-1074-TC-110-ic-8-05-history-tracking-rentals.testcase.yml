@@ -1,0 +1,216 @@
+schemaVersion: "1.0"
+
+id: "64aa88b4-d69e-48e5-95a6-df8d13d4e7bb"
+key: "TC-110"
+title: "IC 8.05 Set History Tracking for Rentals — 5 objects · 42 fields con IM-1069 matchers · rich-text Description trackable · 1 handoff MANUAL (Name fields)"
+description: |
+  Cobertura QA para IM-1074 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1111 (creada 2026-07-23).
+
+  Contexto:
+  - Post-June IM-735 continuation. IC 8.05 (Order__c 8.05 en el catálogo Auctifera SF)
+    = "Set History Tracking for Rentals".
+  - **Tier: Medium** (caveat: managed field/object API names cross-version pueden
+    variar — mitigado por el matcher runtime de IM-1069).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#246` (**MERGED** 2026-07-15 22:39Z).
+    Branch: `task/ic-8-05-history-tracking-rentals-IM-1074`. Merge commit `b703372`.
+  - Files touched (1, spec-only, NO code):
+    * `src/implementations/infrastructure/seeds/specs/ic-8-05-history-tracking-rentals.json` (+226/-35)
+  - NO `.spec.ts` CI-lock existe para este case — la única guardrail estructural
+    es el spec JSON contra el schema `publish-plan-template` (validado en jest
+    por el suite generic del backend, no case-específico).
+
+  Cambio principal (case v2 → v3):
+  - Case + template bumped a v3; feasibility flipped `auto → hybrid` (ahora
+    tiene 1 step MANUAL).
+  - **+2 objects que faltaban en v2**: Display/Storage Location y Resource/Service.
+    v2 solo cubría 3 de los 5 objects del playbook.
+  - **Hardcoded field names → IM-1069 matchers** con shape `{anyOf:[apiName], label:"..."}`.
+    Cada label fallback verified vs AuctiferaDX package field-meta.
+  - **NON-exclusive (additive)**: el spec omite intencionalmente el flag `exclusive`
+    para preservar fields que ya estén tracked pre-run (per playbook: "verify the
+    fields are tracked, if not select them").
+  - **Description restored**: la v2 había dropped Description (rich-text `Html`)
+    asumiendo que no era trackable; live before/after read-back en CamiloDevOrg
+    probó lo contrario — `IsFieldHistoryTracked` false→true→false. v3 lo incluye.
+  - **Standard Name fields → 1 MANUAL step**: metadata replay NO puede setear
+    trackHistory sobre standard Name; se parkea 1 handoff que cubre las 4 Name
+    checkboxes (Rental Event, Payment, Display/Location, Resource/Service —
+    Rental Resource NO tiene Name en el playbook).
+  - **Label-traps confirmados** (mitigados por matcher runtime): 5 labels tienen
+    apiName no-canónico porque las variantes bare son formula/DEPRECATED:
+    * Paid Amount → `Paid_Amount_2__c` (bare `Paid_Amount__c` = formula "(DEPRECATED)")
+    * Subtotal Amount → `Subtotal_Amount3__c`
+    * Tax Amount → `Tax_Amount3__c`
+    * Amount Received → `Paid_Value__c`
+    * Quantity → `Number_of_Parts__c`
+
+  Evidencia dev (per PR body #246):
+  - `tsc --noEmit`: clean. jest (t3-metadata + metadata-mutation + publish-plan-template): 292 passed.
+  - eslint: N/A (solo JSON spec cambió).
+  - **Live end-to-end en CamiloDevOrg**: 5 AUTOMATED COMPLETED, MANUAL attested → run COMPLETED.
+    Independent Tooling API read-back: 42/42 fields `IsFieldHistoryTracked=true`, Description
+    flipped false→true, pre-existing Status/Paid_Amount preserved.
+  - **Live end-to-end en im696-tucson (Tucson Botanical)**: 5 AUTOMATED COMPLETED, parked
+    at MANUAL. Read-back: 8/8, 9/9, 11/11, 6/6, 8/8 tracked.
+  - **Seeded v3 a MigrationApp-dev** (append-only).
+
+  QA cross-check con el catálogo SF (per `[[reference-implementation-cases-catalog]]`):
+  - CSV Order 8.05 lista 5 objects con estos field counts non-Name: 8 + 9 + 11 + 6 + 8 = 42.
+  - Spec v3 declara EXACTAMENTE 42 fields en los 5 sobjects correspondientes.
+  - CSV declara que Rental Resource NO tiene Name; spec MANUAL cubre solo las 4
+    Name checkboxes restantes. Matches exactly.
+
+  Riesgos abiertos:
+  - **Target-org portability**: dev verified en CamiloDevOrg + im696-tucson; QA
+    verificará live en illinois-trainings (Rentals confirmed instalado via `sf
+    sobject describe`). Si hay drift entre orgs por versión managed package
+    diferente, el matcher runtime debería absorberlo — pero eso ES lo que QA
+    valida.
+  - **Adversarial regression**: si dev alguna vez remueve el matcher `{anyOf}`
+    para usar apiNames bare, los label-traps romperían silenciosamente (el bare
+    `Paid_Amount__c` es formula → replay lo ignora sin error visible).
+  - **Additive behavior**: si alguien flipea `exclusive: true` en spec, borraría
+    tracking existente en customer orgs — verificar que no está seteado.
+  - **Rental Resource sin manual step**: si el playbook Auctifera alguna vez
+    agrega un Name field a Rental Resource, el spec debe agregar handoff.
+  - PR ya MERGED al momento de QA — baseline vs post-fix se hace entre merge-base
+    y merge commit `b703372`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch de `ic-8-05-history-tracking-rentals.json` en merge-commit `b703372` + merge-base."
+  - "sf CLI autenticado con org alias `illinois-trainings` (Auctifera Rentals package confirmed installed via `sf sobject describe -s Auctifera__Rental_Event__c`)."
+  - "Migration App session activa (Cognito) para API-driven IE run (Path A per `[[reference-migrationapp-ie-run-automation]]`)."
+  - "Cognito user en group `admin` o `csm-team` para autorizar el POST /implementations/plan-runs."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC2+AC3+AC4 · Static spec fidelity + CSV playbook alignment + label-trap resolution"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-3
+      - ac-4
+      - happy-path
+      - spec-contract
+      - csv-fidelity
+      - label-traps
+      - im-1074
+      - im-1069
+      - im-735
+    given:
+      - "el JSON spec `ic-8-05-history-tracking-rentals.json` fetch-eado del merge-commit `b703372` con `gh api contents?ref=b703372`"
+      - "el CSV export del objeto `Implementation_Case__c` de Auctifera SF (Order 8.05) accesible como referencia autoritativa del playbook"
+      - "`sf sobject describe` sobre illinois-trainings disponible para verificar apiNames del managed package"
+    when:
+      - "se parsea el spec y se extraen los 6 steps: 5 AUTOMATED T3 con inputPayload `{op, object, enableObjectHistory, fields[]}` + 1 MANUAL"
+      - "se enumera cada field con su matcher `{anyOf:[apiName], label}`"
+      - "se compara la lista de labels por object contra el playbook del CSV IC 8.05"
+      - "se ejecuta `sf sobject describe -s <object> --target-org illinois-trainings` por cada uno de los 5 objects y se resuelve label→apiName vs los 5 label-traps documentados"
+    then:
+      - "case.version = 3 y template.version = 3 (lockstep)"
+      - "case.feasibility = 'hybrid' (auto→hybrid por MANUAL step introducido)"
+      - "case.defaultOrder = 805 (matches Order__c CSV × 100)"
+      - "5 AUTOMATED steps con toolName = T3, sobjects: Rental_Event__c, Rental_Resources__c, Rental_Payments__c, Display_Storage_Location__c, Resources__c"
+      - "field counts por object matchean CSV: 8 + 9 + 11 + 6 + 8 = 42 fields totales"
+      - "todos los 42 fields tienen matcher `{anyOf:[apiName], label:'...'}` (IM-1069 pattern, ningún bare API name)"
+      - "los 5 label-traps resuelven correctamente via `sf sobject describe`: Paid_Amount_2__c NO es formula, Subtotal_Amount3__c NO es formula, Tax_Amount3__c NO es formula, Paid_Value__c NO es formula, Number_of_Parts__c es el label 'Quantity' en AuctiferaDX"
+      - "Description en Rental Event está presente con apiName `Description__c` (rich-text field, per PR reversal claim)"
+      - "flag `exclusive` NO está seteado en ninguno de los 5 AUTOMATED steps (additive behavior preservado)"
+      - "MANUAL step cubre las 4 Name checkboxes (Rental Event, Payment, Display/Location, Resource/Service) — Rental Resource ausente correctamente"
+
+  - title: "AC1+AC2+AC5+AC6 · Live end-to-end en illinois-trainings vía API-driven IE run (Path A) + POST-verify Tooling API"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-5
+      - ac-6
+      - live-execution
+      - api-driven
+      - post-verify
+      - im-1074
+    given:
+      - "illinois-trainings tiene Auctifera Rentals installed (verificado en preconditions)"
+      - "PRE-baseline capturado via Tooling API `SELECT DeveloperName, IsFieldHistoryTracked, TableEnumOrId FROM EntityDefinition WHERE QualifiedApiName IN (<5 objects>)` — se registra qué fields YA están tracked"
+      - "master template en dev tiene ic-8-05 v3 seeded (verificado por dev PR body)"
+    when:
+      - "POST /implementations/plan-runs con `{clientId, orgId=illinois-trainings, caseIds:['ic-8-05-history-tracking-rentals']}` → 202 planRunId"
+      - "poll GET /runs/<id> hasta que 5 AUTOMATED steps queden `done` y step 6 (MANUAL) quede `blocked-human`"
+      - "POST /handoff sobre step 6 (attesting-without-executing, mismo pattern de TR-115/116/117 en test workspace)"
+      - "run alcanza `total=6 done=6 failed=0 blocked=0`"
+      - "POST-verify: Tooling API query `SELECT QualifiedApiName, IsFieldHistoryTracked FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName IN (<5 objects>) AND QualifiedApiName IN (<42 apiNames>)`"
+    then:
+      - "los 5 AUTOMATED steps completan sin errors visibles en el run detail"
+      - "los 42 fields listados en el spec quedan con `IsFieldHistoryTracked = true` en illinois-trainings"
+      - "en particular: `Description__c` en Rental Event queda tracked (proof independiente de que el rich-text ES trackable via metadata replay)"
+      - "los 5 label-traps `Paid_Amount_2__c`, `Subtotal_Amount3__c`, `Tax_Amount3__c`, `Paid_Value__c`, `Number_of_Parts__c` quedan tracked (proof de que el matcher runtime resolvió correctamente en illinois-trainings)"
+      - "cualquier field que estaba pre-tracked en PRE-baseline sigue tracked POST (additive behavior preservado — no reset por el spec)"
+      - "el object-level `Track Field History` está enabled en los 5 sobjects (verificable via `SELECT EnableHistory FROM EntityDefinition`)"
+
+  - title: "AC5 · Standard Name handoff — attesting-without-executing en test workspace (guardrail)"
+    tags:
+      - ac-5
+      - manual-handoff
+      - attestation-guardrail
+      - im-1074
+    given:
+      - "el step 6 (MANUAL) declara: 'Tick the standard Name checkbox on the Rental Event, Rental Payment, Display/Storage Location and Resource/Service history-tracking screens — the metadata replay cannot set it.'"
+      - "el pattern `attesting-without-executing` está establecido para test workspaces per TR-115/116/117 v2 (en customer orgs la attestation SIEMPRE la hace el operator que ejecutó el trabajo manual real)"
+      - "illinois-trainings es un test workspace (client: 'Test IM cases Org Tucson')"
+    when:
+      - "el POST /handoff se hace con `body: {}` sobre step 6 después de que los 5 AUTOMATED completen"
+      - "se documenta explícitamente en el TR notes que el trabajo manual UI NO fue ejecutado — solo la attestation se hizo para cerrar el run"
+    then:
+      - "run status pasa a `COMPLETED` con todos los steps `done`"
+      - "la Name-checkbox real de los 4 objects sigue SIN tickearse en illinois-trainings (verificable via Setup UI o Tooling API `EnableHistory` sigue false para el Name field específico)"
+      - "el TR marca este scenario como `passed` en el mecanismo del handoff API, pero explícitamente NO afirma que el trabajo manual UI se hizo (statically-verified only, per playbook: metadata replay no puede automatizar Name)"
+      - "si algún day-2 IE ejecuta el manual real en un customer org, el mismo endpoint /handoff cierra el step sin cambios de código"
+
+  - title: "AC3 adversarial · Label-trap regression proof — bare apiNames son formula/DEPRECATED (no auto-trackable)"
+    tags:
+      - ac-3
+      - adversarial
+      - regression-proof
+      - label-traps
+      - negative
+      - im-1074
+    given:
+      - "el PR body declara que `Paid_Amount__c` (bare) es 'formula labelled Paid Amount (DEPRECATED)' — no trackable"
+      - "el mismo patrón para `Subtotal_Amount__c` (formula), `Tax_Amount__c` (formula) — las variantes bare son twins DEPRECATED"
+      - "los matchers `{anyOf}` fueron introducidos por IM-1069 exactamente para este caso: si un run entra a un org donde el label 'Paid Amount' apunta al field bare formula, resolver al `_2` variant que SÍ es trackable"
+    when:
+      - "se ejecuta `sf sobject describe -s Auctifera__Rental_Event__c --target-org illinois-trainings --json | jq '.result.fields[] | select(.label==\"Paid Amount\" or .name | test(\"^Auctifera__Paid_Amount\"))'`"
+      - "se identifica cuál field tiene `calculated=true` (formula) vs cuál es real storage"
+      - "se documenta el mismo check para Subtotal, Tax_Amount, Amount Received, Quantity"
+    then:
+      - "`Auctifera__Paid_Amount__c` reporta `calculated=true` (formula) y su label es 'Paid Amount (DEPRECATED)' o similar"
+      - "`Auctifera__Paid_Amount_2__c` reporta `calculated=false` y es el field storage real"
+      - "el spec v3 apunta al `_2` variant correctamente vía matcher `anyOf:['Auctifera__Paid_Amount_2__c']` con label fallback 'Paid Amount'"
+      - "un dev que un día 'simplifique' removiendo el matcher runtime y volviendo a bare API names introduciría un silent bug — este scenario documenta el trap para future maintainers"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-23T21:52:15Z"
+  version: 1
+  estimatedDuration: 90
+  tags:
+    - im-1074
+    - im-735
+    - im-1069
+    - im-1111
+    - implementations-automation
+    - ic-8-05
+    - history-tracking
+    - rentals
+    - auctifera-managed-package
+    - label-traps
+    - t3-history-tracking-op
+    - migration-app-backend
+    - post-june-delivery
+    - medium-confidence
