@@ -1,0 +1,38 @@
+Regression plan — IM-1079 / PR #251 (IC 3.22 POS batches — operator input)
+============================================================================
+
+Change surface (from `gh pr view 251 --json files`):
+  - 1 JSON spec: ic-3-22-pos-batches.json (+18/-4)
+  - 1 spec.ts: ic-3-22-pos-batches.spec.ts (+89/-0, NEW)
+  Zero Apex, zero code migration surface — a JSON case spec seed + a CI contract lock.
+
+Technical + security regression items
+
+| Item                                                    | Type | Risk    | Check method                                     | Verdict |
+|---------------------------------------------------------|------|---------|--------------------------------------------------|---------|
+| batchScope input schema present + correct               | Tech | High    | Static JSON declarative check                    | PASS |
+| Apex uses {{batchScope}} template placeholder           | Tech | High    | Static regex on inputPayload.apex               | PASS |
+| Apex uses Decimal.round() safety coercion               | Tech | Medium  | Static regex                                     | PASS |
+| Case + template versions in lockstep                    | Tech | Medium  | spec.ts assertion                                | PASS |
+| Step ordering + kinds (AUTOMATED, MANUAL)               | Tech | High    | spec.ts assertion                                | PASS |
+| Global class launch (no dynamic binding)                | Tech | High    | Static regex                                     | PASS |
+| Query-back verification structure preserved             | Tech | Medium  | Static regex on Apex                             | PASS |
+| Cashier Drawer Control kind = MANUAL                     | Tech | High    | JSON declarative                                 | PASS |
+| jest ic-3-22-pos-batches.spec.ts                         | Tech | High    | npx jest --runInBand                             | PASS 5/5 |
+| Full jest suite (170 pass dev-attested)                  | Tech | Medium  | dev-attested (not re-run — spec.ts is enough)   | attested |
+| CI enqueue on illinois-trainings — batchScope=500       | Tech | High    | PRE/POST AsyncApexJob query-back                 | DEFERRED to IE run |
+| CI enqueue on illinois-trainings — batchScope=200       | Tech | High    | PRE/POST AsyncApexJob query-back                 | DEFERRED to IE run |
+| Hardcoded 18-char SF Ids                                | Sec  | Medium  | grep on HEAD JSON                                | PASS (0 found) |
+| Org-specific URLs / customer domains                    | Sec  | Medium  | grep for https://, .trainings.                    | PASS (0 found) |
+| Secrets in Apex / spec                                  | Sec  | High    | grep secret patterns                              | PASS (0 found) |
+| SOQL injection surface                                  | Sec  | High    | HEAD Apex uses only :bind vars (:jobId)          | PASS |
+| Vulnerable dep introduced                               | Sec  | High    | git diff package.json / lock                     | PASS (no dep changes) |
+
+Notes:
+  - PR #251 is MERGED — baseline is merge-commit vs merge-base (BASE 5272434f, HEAD 8d66dba6).
+  - AC2/AC3 (batchScope override + default enqueue on illinois-trainings) DEFERRED to IE
+    run — PRE-baseline captured (0 jobs LAST_N_DAYS:7).
+  - MigrationApp-dev seed PENDING-CREDS per ticket; not blocking QA (spec + org side
+    validated independently).
+  - Full jest suite (170 pass) not re-run locally — spec.ts CI-lock (5 pass) is the
+    contract test that matters for this fix.

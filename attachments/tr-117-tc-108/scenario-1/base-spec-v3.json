@@ -1,0 +1,40 @@
+{
+    "case": {
+        "caseId": "ic-3-22-pos-batches",
+        "version": 3,
+        "name": "Drawer Control Batch & POS Purchase Payment Propagation Batch",
+        "description": "Runs the point-of-sale Cashier Drawer Control and Purchase Payment Propagation batches to reconcile drawer and payment data.",
+        "category": "CORE_SETUP",
+        "defaultOrder": 322,
+        "feasibility": "hybrid",
+        "active": true
+    },
+    "steps": [
+        {
+            "stepId": "run-pos-purchase-payment-propagation-batch",
+            "order": 1,
+            "name": "Run the POS Purchase Payment Propagation batch",
+            "description": "Enqueues Auctifera.POSPurchasePaymentPropagationBatch via Database.executeBatch, captures the returned AsyncApexJob Id, and query-back-verifies the job was ACCEPTED (Status in Holding/Queued/Preparing/Processing/Completed). Throws (step FAILED) only if the enqueue itself throws (e.g. class not global/visible from anonymous Apex) or no AsyncApexJob row exists for the returned Id. SCOPE is a PM-editable constant. This batch exists ONLY in the Auctifera namespace (no vnfp equivalent) and its no-arg constructor IS global (confirmed by a live run on org im696-tucson — the job reached Completed). Verifies ENQUEUE success, not batch COMPLETION (the batch runs async).",
+            "kind": "AUTOMATED",
+            "toolName": "T6",
+            "inputPayload": {
+                "apex": "// Case 3.22 step 1 — Run the POS Purchase Payment Propagation batch.\n// Enqueues a Veevart POS batch and verifies the AsyncApexJob was accepted.\n// Class name + namespace confirmed against org im696-tucson (Tooling API):\n//   Auctifera.POSPurchasePaymentPropagationBatch (Auctifera-only; no vnfp copy).\n//   Live run confirmed its no-arg constructor is global (job reached Completed).\n// This proves ENQUEUE only — batch execution is async (no completion wait).\nclass VerifyException extends Exception {}\n\n// PM-editable: batch chunk size passed to Database.executeBatch.\nfinal Integer BATCH_SCOPE = 200;\n\n// Enqueue the batch. A non-global / non-visible class fails to COMPILE here,\n// which the runner surfaces as result.success=false (step FAILED).\nId jobId = Database.executeBatch(new Auctifera.POSPurchasePaymentPropagationBatch(), BATCH_SCOPE);\nSystem.debug(LoggingLevel.INFO, '[3.22] POSPurchasePaymentPropagationBatch enqueued jobId=' + jobId);\n\n// VERIFY enqueue success — the AsyncApexJob row must exist and be in an\n// accepted state. Throw so a failed enqueue reports the step FAILED.\nList<AsyncApexJob> jobs = [\n    SELECT Id, Status, ApexClass.Name\n    FROM AsyncApexJob\n    WHERE Id = :jobId\n    LIMIT 1\n];\nif (jobs.isEmpty()) {\n    throw new VerifyException('[3.22] verify failed: no AsyncApexJob for POSPurchasePaymentPropagationBatch jobId=' + jobId);\n}\nSet<String> ACCEPTED = new Set<String>{ 'Holding', 'Queued', 'Preparing', 'Processing', 'Completed' };\nif (!ACCEPTED.contains(jobs[0].Status)) {\n    throw new VerifyException('[3.22] verify failed: POSPurchasePaymentPropagationBatch job in unexpected state ' + jobs[0].Status);\n}\nSystem.debug(LoggingLevel.INFO, '[3.22] verify OK — POSPurchasePaymentPropagationBatch job ' + jobs[0].Id + ' status=' + jobs[0].Status + ' class=' + jobs[0].ApexClass.Name);"
+            }
+        },
+        {
+            "stepId": "run-cashier-drawer-control-batch-manual",
+            "order": 2,
+            "name": "Run the Cashier Drawer Control batch (manual)",
+            "description": "MANUAL: the Cashier Drawer Control batch cannot be triggered from anonymous Apex — its no-arg constructor is non-global in BOTH the Auctifera and vnfp namespaces (live probe on org im696-tucson returned 'Method is not visible: void Auctifera.CashierDrawerControlBatch.<init>()' and the same for vnfp), and the org ships no global schedulable wrapper for it. Run it by hand: 1) App Launcher > search 'Veevart Settings' and open it. 2) Under 'Point of Sale (POS)' open 'Batches'. 3) On the 'Cashier Drawer Control' (a.k.a. Drawer Control) batch click 'Run' (or 'Run & Schedule' to set a recurring schedule). 4) Confirm the batch was accepted (a job appears in Setup > Apex Jobs). Mark this step done after the job is queued.",
+            "kind": "MANUAL"
+        }
+    ],
+    "template": {
+        "templateId": "ic-3-22-pos-batches-tmpl",
+        "version": 1,
+        "name": "IC 3.22: Drawer Control Batch & POS Purchase Payment Propagation Batch",
+        "description": "Single-case template for 3.22 (HYBRID: one AUTOMATED T6 enqueue step for the POS Purchase Payment Propagation batch + one MANUAL handoff for the Cashier Drawer Control batch, whose constructor is non-global). Proves the batch-scheduling (enqueue + AsyncApexJob query-back) pattern for the invocable batch. Dependency wiring lives in the multi-case W4 master template, not here.",
+        "order": 1,
+        "dependsOn": []
+    }
+}

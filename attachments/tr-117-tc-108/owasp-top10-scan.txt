@@ -1,0 +1,27 @@
+OWASP Top 10 (2021) applicability scan — IM-1079 / PR #251
+============================================================
+
+Change surface: 1 JSON case-spec seed + 1 new spec.ts (contract test).
+Runtime: MigrationApp T6 renders the Apex script (substituting `{{batchScope}}`)
+and runs it as anonymous Apex on the target org. All identity/authn happens
+at the SF org boundary (admin-authenticated session).
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | Anonymous Apex runs under an admin-authenticated session; access is enforced by SF org perms. No new permission surface introduced. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No crypto ops. |
+| A03  | Injection                                    | Applicable  | PASS    | The `{{batchScope}}` placeholder is interpolated INTO Apex source at seed-render time, then coerced with `Decimal.valueOf(...).round()` — so a non-numeric value fails at Apex compile / rendering, not at runtime. SOQL uses `:jobId` bind var (no string concat). No user input reaches SOQL directly. |
+| A04  | Insecure Design                              | Applicable  | PASS    | The design change (const → operator input) is documented (JSON spec description + ticket ACs + spec.ts assertions). Range [1, 2000] enforces sanity bounds. The Cashier Drawer Control step is explicitly `MANUAL` to prevent an anon-Apex launch of a non-global constructor. |
+| A05  | Security Misconfiguration                    | N/A         | —       | No config file changes; the JSON is a case spec, not deployment config. |
+| A06  | Vulnerable & Outdated Components             | N/A         | —       | Zero dependency changes (2 files touched, both source code). |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | The new `ic-3-22-pos-batches.spec.ts` CI-locks the case-version, step order/kinds, class reference shape, and the operator-input contract. Any regression breaks 1+ of the 5 assertions. |
+| A09  | Security Logging & Monitoring Failures       | Applicable  | PASS    | The Apex script uses `System.debug(LoggingLevel.INFO, ...)` on success + throws a distinguishable `VerifyException` on failure. The runner surfaces both. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP callouts. |
+
+## Summary
+
+- Applicable: 4 (A03, A04, A08, A09) — all PASS
+- N/A: 6 with justifications
+- 0 High/Critical blockers introduced
+- 0 defects to raise from OWASP

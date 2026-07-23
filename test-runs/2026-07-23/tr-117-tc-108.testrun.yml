@@ -1,0 +1,307 @@
+schemaVersion: "1.0"
+
+id: tr-d1a9cb9f-dd6d-4960-891b-6d07ae7c0543
+key: TR-117
+title: "IM-1079 · TC-108 · IC 3.22 POS Batches — 2 PASS + 2 DEFERRED to IE run (spec.ts 5/5 + static AC4)"
+
+description: |
+  QA execution para IM-1079 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation). QA Sub-task: IM-1109. PR under test:
+  Veevarts/MigrationAppBackend#251 (MERGED 2026-07-16, merge commit 8d66dba6).
+
+  Método QA:
+  1. Fetch JSON spec + spec.ts en merge-commit (8d66dba6) y merge-base (5272434f)
+     vía `gh api contents?ref=<sha>`.
+  2. Clone MigrationAppBackend + `npm ci`.
+  3. AC1: static declaratives sobre el HEAD JSON (batchScope input schema, {{batchScope}}
+     template, Decimal.round safety) + `jest ic-3-22-pos-batches.spec.ts` = 5/5 PASS.
+  4. AC4: static grep para hardcoded IDs (0), class refs org-agnostic (Auctifera.),
+     org-specific patterns (0), Cashier Drawer Control kind = MANUAL confirmado.
+  5. AC2/AC3: PRE-baseline en illinois-trainings (0 jobs LAST_N_DAYS:7) — DEFERRED
+     al IE run del plan.
+  6. Security scan: 0 secrets · 0 SOQL injection surface · 0 hardcoded IDs · 0 dep changes.
+  7. OWASP Top 10: 4 Applicable (A03/A04/A08/A09) todos PASS.
+
+  Evidencia clave:
+  - BASE (v3) tenía `final Integer BATCH_SCOPE = 200;` hardcoded + descripción
+    "PM-editable constant"; sin `requiredInputs` array.
+  - HEAD (v4) declara `batchScope` como required number input (min=1, max=2000,
+    placeholder=200) + Apex usa `{{batchScope}}` template con `Decimal.round()`
+    safety coercion.
+  - spec.ts (5 tests, +89 lines nuevos) CI-lock los 5 aspectos del contrato.
+  - PRE-baseline illinois-trainings: 0 AsyncApexJob rows para
+    Auctifera.POSPurchasePaymentPropagationBatch → clean baseline, cualquier
+    fila POST-IE-run será attributable.
+
+testCaseIds:
+  - a94c427d-ea1f-4934-aca5-a41543e4b748
+
+environment:
+  name: "GitHub · Veevarts/MigrationAppBackend#251 (MERGED) + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/251"
+  buildVersion: 'IC config-plan case (mismo shape que IM-939/IC 9.1 e IM-940/IC 9.2). 2 files touched: ic-3-22-pos-batches.json (+18/-4) y ic-3-22-pos-batches.spec.ts (+89 new). BASE 5272434f (v3 hardcoded const) → HEAD 8d66dba6 (v4 required operator input). Estrategia: static JSON declarative + spec.ts sim + PRE-baseline illinois-trainings + defer AC2/AC3 al IE run.'
+  notes: |
+    - PR #251 MERGED 2026-07-16 05:05Z por veevart_josed (Camilo indica el
+      MigrationApp-dev seed queda pending por AWS SSO expired).
+    - illinois-trainings alias autenticado (Connected). Auctifera package
+      instalado. PRE-baseline query devolvió 0 rows.
+    - Bastion UP; safesql no requerido en este ticket (no hay SQL Server side).
+    - Escenarios AC2/AC3 dependientes del IE ejecutando el plan
+      `ic-3-22-pos-batches` v4 en illinois-trainings dos veces:
+      * una con batchScope=500 (override)
+      * una con batchScope=200 (default)
+
+    ## Solution understood
+
+    IC 3.22 v3 tenía el `BATCH_SCOPE` hardcoded como constant en el Apex del
+    step. El PR #251 lo convierte en un required operator input:
+    - JSON spec: añade `inputPayload.requiredInputs[]` con la declaración de
+      `batchScope` (type=number, required=true, min=1, max=2000, placeholder=200).
+    - Apex: reemplaza `final Integer BATCH_SCOPE = 200;` por
+      `final Integer BATCH_SCOPE = Integer.valueOf(Decimal.valueOf('{{batchScope}}').round());`
+      El `Decimal.round()` maneja input decimal (200.5 → 201) sin
+      TypeException.
+    - Runtime: MigrationApp T6 renderiza el Apex substituyendo `{{batchScope}}`
+      con el valor operator-supplied, y el run parkea en AWAITING_INPUT hasta
+      que el operator entrega el valor.
+    - Step 2 (Cashier Drawer Control): sigue como `kind: MANUAL` porque el
+      constructor no-arg del batch es `public` (no `global`) en ambos
+      namespaces (Auctifera + vnfp) — no ejecutable desde anonymous Apex.
+      La descripción del step da un handoff Lightning UI de 4 pasos.
+
+    ## Inferred technical tests (mapped to ACs)
+
+    | Test                                                    | AC   | Executable here? | Verdict |
+    |---------------------------------------------------------|------|------------------|---------|
+    | Static JSON declarative check (13 assertions)           | AC1  | YES              | PASS 13/13 |
+    | jest ic-3-22-pos-batches.spec.ts                         | AC1  | YES              | PASS 5/5 |
+    | BASE vs HEAD static diff of Apex script                  | AC1  | YES              | PASS (delta confirmado) |
+    | AsyncApexJob query-back scope=500 en illinois-trainings  | AC2  | NO (needs IE run) | DEFERRED |
+    | AsyncApexJob query-back scope=200 en illinois-trainings  | AC3  | NO (needs IE run) | DEFERRED |
+    | Static grep hardcoded 18-char SF Ids                     | AC4  | YES              | PASS (0 found) |
+    | Class refs org-agnostic (Auctifera. namespace)           | AC4  | YES              | PASS |
+    | Cashier Drawer Control kind = MANUAL                     | AC4  | YES              | PASS |
+    | OWASP Top 10 applicability scan                          | -    | YES              | 4 Applicable · 4 PASS · 0 High/Critical |
+
+    ## Objective fit
+
+    - Ticket objective: "confirm default + deliver" el IC 3.22 con batchScope
+      operator-controlled.
+    - Delivered part: HEAD spec v4 tiene `batchScope` como required input, Apex
+      substituye el valor, spec.ts CI-lock el contrato → mechanism delivered ✅
+    - Confirmed part: default = 200 (Salesforce standard batch scope) — el
+      mecanismo lo permite pero **la CONFIRMACIÓN del valor por PM sigue
+      pending** (decision confidence 70). Este TR valida el mecanismo, no la
+      decisión.
+    - Objective met? YES para el mecanismo (AC1/AC4). Los AC2/AC3 quedan
+      DEFERRED hasta que el IE ejecute el plan; el objective completo se
+      cierra cuando el IE lo corra y QA confirme los AsyncApexJob rows.
+
+status: completed
+executor: codex
+executedAt: "2026-07-23T18:22:21Z"
+completedAt: "2026-07-23T18:35:00Z"
+duration: 13
+
+summary:
+  total: 4
+  passed: 2
+  failed: 0
+  blocked: 0
+  notRun: 2
+  skipped: 0
+  passRate: 50
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "AC1 · Spec.ts contract simulation — batchScope como required operator input (AWAITING_INPUT + substitution)"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-23T18:26:00Z"
+    duration: 3
+    actual: |
+      Static declarative check sobre HEAD JSON (v4) vs BASE JSON (v3):
+
+      | Assertion                                              | HEAD | BASE |
+      |--------------------------------------------------------|------|------|
+      | Case version = 4                                       | ✅   | v3   |
+      | Template version = 4 (lockstep con case)               | ✅   | 1    |
+      | Step 1 kind = AUTOMATED, toolName = T6                 | ✅   | ✅    |
+      | Step 1 tiene `requiredInputs` array                     | ✅   | ❌    |
+      | `batchScope` input declared                            | ✅   | ❌    |
+      | Input type = number                                    | ✅   | -    |
+      | Input required = true                                  | ✅   | -    |
+      | Constraints min = 1                                    | ✅   | -    |
+      | Constraints max = 2000                                 | ✅   | -    |
+      | Placeholder = "200"                                    | ✅   | -    |
+      | Apex usa `{{batchScope}}` template placeholder         | ✅   | ❌    |
+      | Apex usa `Decimal.round()` safety coercion             | ✅   | ❌    |
+      | Step 2 kind = MANUAL (Cashier Drawer Control)          | ✅   | ✅    |
+      → HEAD 13/13 PASS · BASE fails 8/13 (todo el trabajo de operator-input es el delta)
+
+      Jest sobre el spec.ts nuevo (5 tests total, +89 líneas):
+      ```
+      PASS src/implementations/infrastructure/seeds/specs/ic-3-22-pos-batches.spec.ts
+        ic-3-22-pos-batches.json
+          ✓ parses against the publish-plan-template CLI schema (v4, hybrid)
+          ✓ keeps case.version and template.version in lockstep
+          ✓ has 2 ordered steps: AUTOMATED T6 enqueue -> MANUAL drawer-control handoff
+          ✓ launches the batch via the real global Auctifera class, verified by AsyncApexJob query-back
+          ✓ exposes the batch chunk size as a REQUIRED number operator input (batchScope, 1-2000)
+        Tests: 5 passed, 5 total  Time: 3.031 s
+      ```
+    notes: |
+      Ticket dice "4 tests" pero el spec.ts en el merge-commit tiene 5. Off-by-one
+      minor entre la fecha del ticket update y el push final del dev. No es defecto.
+    stepResults: []
+    attachments:
+      - name: ac1-spec-contract.md
+        path: attachments/tr-117-tc-108/scenario-1/ac1-spec-contract.md
+        mimeType: text/markdown
+      - name: head-spec-v4.json
+        path: attachments/tr-117-tc-108/scenario-1/head-spec-v4.json
+        mimeType: application/json
+      - name: base-spec-v3.json
+        path: attachments/tr-117-tc-108/scenario-1/base-spec-v3.json
+        mimeType: application/json
+      - name: head-spec.ts
+        path: attachments/tr-117-tc-108/scenario-1/head-spec.ts
+        mimeType: application/typescript
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC2 · Operator override — batchScope=500 enqueue POSPurchasePaymentPropagationBatch en illinois-trainings"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: not-run
+    actual: |
+      DEFERRED to IE run. PRE-baseline capturado sobre illinois-trainings:
+      `sf data query` para Auctifera.POSPurchasePaymentPropagationBatch en
+      LAST_N_DAYS:7 → **0 rows** (clean baseline).
+
+      Cualquier row nueva post-IE-run será attributable al plan.
+    notes: |
+      Pendiente de tu parte / IE handoff:
+      1. Abrir MigrationApp UI en illinois-trainings.
+      2. Trigger plan `ic-3-22-pos-batches` (v4).
+      3. Cuando el run parkee en AWAITING_INPUT para step 1, entrar batchScope=500.
+      4. Notificar a QA cuando termine — yo re-corro la query POST y confirmo:
+         - Nueva AsyncApexJob row para POSPurchasePaymentPropagationBatch
+         - Status en Holding/Queued/Preparing/Processing/Completed
+         - CreatedDate reciente (dentro del último minuto)
+      5. Si el org tiene Auctifera__Log__c o equivalent que capture el scope efectivo,
+         verificar = 500.
+    stepResults: []
+    attachments:
+      - name: ac2-defer-to-ie.md
+        path: attachments/tr-117-tc-108/scenario-2/ac2-defer-to-ie.md
+        mimeType: text/markdown
+      - name: illinois-PRE-baseline.json
+        path: attachments/tr-117-tc-108/scenario-2/illinois-PRE-baseline.json
+        mimeType: application/json
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC3 · Recommended default — batchScope=200 enqueue verified via AsyncApexJob query-back"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: not-run
+    actual: |
+      DEFERRED to IE run. Comparte el PRE-baseline con AC2 (0 rows).
+    notes: |
+      Pendiente de tu parte / IE handoff:
+      1. En illinois-trainings, correr el plan `ic-3-22-pos-batches` v4 en una
+         corrida SEPARADA de AC2.
+      2. Aceptar el default recommended batchScope=200 (o entrar 200 explícito).
+      3. Notificar a QA — re-corro AsyncApexJob query y confirmo la nueva fila
+         distinta de la de AC2 (por CreatedDate).
+
+      Nota sobre BATCH_SCOPE=200: el ticket flaggea que el default está
+      unconfirmed by PM (confidence 70). Este scenario valida el MECANISMO del
+      default, no la decisión del valor final. Si PM confirma un default
+      distinto (ej. 500), el spec v4 puede actualizar el placeholder sin
+      cambio de contrato.
+    stepResults: []
+    attachments:
+      - name: ac3-defer-to-ie.md
+        path: attachments/tr-117-tc-108/scenario-3/ac3-defer-to-ie.md
+        mimeType: text/markdown
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC4 · Org-agnostic launch + Cashier Drawer Control manual handoff"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-23T18:30:00Z"
+    duration: 2
+    actual: |
+      **Static grep evidence sobre HEAD JSON spec (54 lines)**:
+      - 0 hardcoded 18-char SF Ids
+      - Class references (2 únicas): `Auctifera.CashierDrawerControlBatch`,
+        `Auctifera.POSPurchasePaymentPropagationBatch` — ambas con namespace
+        prefix, sin cast dinámico
+      - 0 org-specific patterns (0 https:// URLs, 0 .trainings. domains, 0
+        sandbox references)
+
+      **Batch launch (Apex snippet en HEAD)**:
+      ```
+      Id jobId = Database.executeBatch(
+          new Auctifera.POSPurchasePaymentPropagationBatch(),
+          BATCH_SCOPE
+      );
+      ```
+      Sin reflection, sin type binding dinámico, sin per-org class alias table.
+      Reproducible en cualquier org que tenga el package Auctifera instalado
+      con la global class visible.
+
+      **Cashier Drawer Control manual handoff**:
+      ```
+      { "stepId": "run-cashier-drawer-control-batch-manual",
+        "order": 2, "kind": "MANUAL" }
+      ```
+      La descripción del step declara que el constructor no-arg es non-global
+      en Auctifera y vnfp namespaces (live probe on org im696-tucson devolvió
+      'Method is not visible' para ambos), y da el handoff UI de 4 pasos:
+      App Launcher > Veevart Settings > POS > Batches > Cashier Drawer Control
+      > Run.
+
+      Consistente con [[feedback-execute-auto-flag-manual]] — no fake PASS
+      para el batch que no se puede lanzar automatizado.
+    stepResults: []
+    attachments:
+      - name: ac4-org-agnostic-manual-handoff.md
+        path: attachments/tr-117-tc-108/scenario-4/ac4-org-agnostic-manual-handoff.md
+        mimeType: text/markdown
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-23T18:22:21Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-23T18:35:00Z"
+  version: 1
+
+history:
+  - action: created
+    timestamp: "2026-07-23T18:22:21Z"
+    user: codex
+    to: planned
+    reason: "TR-117 creado para TC-108 (IM-1079 PR #251 MERGED, IC 3.22 operator input)"
+  - action: updated
+    timestamp: "2026-07-23T18:23:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: "Start execution: fetch JSON + spec.ts, npm ci, jest spec.ts, static AC4 grep, PRE-baseline illinois"
+  - action: updated
+    timestamp: "2026-07-23T18:30:00Z"
+    user: codex
+    from: in-progress
+    to: in-progress
+    reason: "AC1 y AC4 PASS (JSON declarative + spec.ts 5/5 + static grep). AC2/AC3 quedan DEFERRED to IE run porque requieren que el operador dispare el plan con batchScope=500 y batchScope=200 respectivamente."
+  - action: completed
+    timestamp: "2026-07-23T18:35:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: "2/4 PASS (AC1 + AC4) + 2 DEFERRED to IE run (AC2 + AC3). 0 defectos raise-eados. Mecanismo delivered; BATCH_SCOPE default confirmation still pending PM (decision confidence 70)."

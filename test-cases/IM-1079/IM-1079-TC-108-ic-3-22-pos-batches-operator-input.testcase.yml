@@ -1,0 +1,173 @@
+schemaVersion: "1.0"
+
+id: "a94c427d-ea1f-4934-aca5-a41543e4b748"
+key: "TC-108"
+title: "IC 3.22 Drawer Control & POS Payment Propagation Batches — operator-input batchScope + org-agnostic launch + manual Drawer handoff"
+description: |
+  Cobertura QA para IM-1079 (Historia, priority Medium, epic IM-735
+  Implementation Cases Automation).
+  QA Sub-task asociada: IM-1109 (creada 2026-07-23).
+
+  Contexto:
+  - IC 3.22 pairs 2 batches: POS Payment Propagation (auto-launched) +
+    Cashier Drawer Control (manual handoff).
+  - Repositorio: `MigrationAppBackend`.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#251` (**MERGED** 2026-07-16 05:05Z).
+    Branch: `task/ic-3-22-pos-batches-IM-1079`. Merge commit `8d66dba6`.
+  - Files touched (2):
+    * `src/implementations/infrastructure/seeds/specs/ic-3-22-pos-batches.json` (+18/-4)
+    * `src/implementations/infrastructure/seeds/specs/ic-3-22-pos-batches.spec.ts` (+89/-0, NEW)
+  - Referencia arquitectónica: mismo shape que IC 9.1 (IM-939) e IC 9.2
+    (IM-940). Spec.ts CI-locks el contrato; JSON spec es el case v4 seed.
+
+  Cambio principal:
+  - `batchScope` deja de ser un constant hardcoded → pasa a ser un
+    **required operator input** (number, range 1-2000, recommended default 200).
+  - El run se PARK en AWAITING_INPUT hasta que el operator supply el valor.
+  - El valor supplied se sustituye en `Database.executeBatch` como chunk size
+    del batch `Auctifera.POSPurchasePaymentPropagationBatch`.
+  - Cashier Drawer Control batch queda como **MANUAL handoff** porque su
+    no-arg constructor es `public` (no `global`) y no se puede lanzar desde
+    anonymous Apex.
+
+  Evidencia dev (per ticket):
+  - jest: **170 passed** across seeds + operator-input suites, incluyendo
+    `ic-3-22-pos-batches.spec.ts` (4 tests). tsc --noEmit clean; eslint clean.
+  - CamiloDevOrg live: 2 corridas AT scope 200 (jobId 707fj00000kzeHwAAI
+    Holding, class POSPurchasePaymentPropagationBatch) y scope override 500
+    (jobId 707fj00000l00LRAAY Holding).
+  - MigrationApp-dev seed: **PENDING-CREDS** (AWS SSO token expired).
+
+  Riesgos abiertos:
+  - **BATCH_SCOPE default = 200 unconfirmed by PM** (confidence 70%). El
+    ticket dice "may close without a code PR" pero YA hay PR mergeado.
+    QA valida el mecanismo (operator input + substitution + org-agnostic
+    launch); el valor default queda flaggeado como decisión abierta.
+  - Open question del ticket: playbook original nombra "Payment Propagation
+    Batch, POS Purchase Canceled Report Batch" pero spec pairea con Cashier
+    Drawer Control. `POSPurchaseCanceledReportBatch` existe y es anon-callable
+    (global no-arg ctor). Puede ser una spec-scope decision separada — QA no
+    valida esa reasignación aquí.
+  - MigrationApp-dev seed pendiente por creds AWS — el spec v4 aún no ha
+    sido seeded al ambiente dev.
+  - Cashier Drawer Control batch NO es ejecutable desde anonymous Apex →
+    manual handoff scenario (see [[feedback-execute-auto-flag-manual]]).
+  - PR ya MERGED al momento de QA — baseline vs post-fix del merge commit
+    vs merge-base.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "sf CLI autenticado con org alias `illinois-trainings` (Auctifera package instalado)."
+  - "Acceso al MigrationApp UI para request al IE que corra el plan `ic-3-22-pos-batches` v4."
+  - "GitHub CLI (`gh`) autenticado — para fetch del spec y spec.ts en el merge commit y merge-base del PR #251."
+  - "Clone local de `MigrationAppBackend` en `main` post-merge + `npm ci` + tooling para correr `jest ic-3-22-pos-batches.spec.ts`."
+  - "Referencia: `attachments/tr-108-tc-100/POST-verify-queries.sh` (IC 9.2 pattern) y `tr-112-tc-92.testrun.yml` (IC 9.1 v4 con spec.ts sim) como plantilla del PRE→IE→POST flow."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Spec.ts contract simulation — batchScope como required operator input (AWAITING_INPUT + substitution)"
+    tags:
+      - ac-1
+      - happy-path
+      - spec-contract
+      - implementation-case
+      - migration-app
+    given:
+      - "checkout local de MigrationAppBackend en el merge-commit del PR #251 (`8d66dba6`)"
+      - "el archivo `ic-3-22-pos-batches.spec.ts` está presente con 4 tests dedicados"
+      - "el archivo `ic-3-22-pos-batches.json` v4 declara `batchScope` como required input tipo number, min=1, max=2000, recommendedDefault=200"
+    when:
+      - "QA corre `npm test -- --runInBand ic-3-22-pos-batches`"
+      - "QA lee el JSON spec y verifica declaratively: (a) input `batchScope` presente, (b) type=number, (c) required=true, (d) min=1 max=2000, (e) recommendedDefault=200"
+      - "QA lee el `stepDefinition.executeBatch.script` y confirma que la string interpola `{batchScope}` (o placeholder equivalente) en la anonymous Apex script"
+    then:
+      - "los 4 tests del spec pasan (dev-attested 170 pass total en jest)"
+      - "el JSON spec declara `batchScope` como required number input con default 200 y rango [1, 2000]"
+      - "la Apex script tiene un placeholder para el valor operator-supplied que se substituye en `Database.executeBatch`"
+      - "el JSON spec v3 (BASE, pre-fix) NO tiene el input `batchScope` (constant hardcoded)"
+
+  - title: "AC2 · Operator override — batchScope=500 enqueue POSPurchasePaymentPropagationBatch en illinois-trainings"
+    tags:
+      - ac-2
+      - regression-evidence
+      - operator-input
+      - implementation-case
+      - illinois-trainings
+    given:
+      - "org `illinois-trainings` autenticado con `sf` CLI + package Auctifera instalado"
+      - "PRE-baseline capturado: `sf data query --target-org illinois-trainings --query \"SELECT Id, ApexClass.Name, ApexClass.NamespacePrefix, Status, CreatedDate FROM AsyncApexJob WHERE ApexClass.Name = 'POSPurchasePaymentPropagationBatch' AND ApexClass.NamespacePrefix = 'Auctifera' AND CreatedDate = LAST_N_DAYS:1\"` guarda el conteo actual"
+      - "**IE runs** el plan `ic-3-22-pos-batches` v4 en illinois-trainings introduciendo `batchScope=500` cuando el run park en AWAITING_INPUT"
+    when:
+      - "QA POST-verify: re-corre el mismo `sf data query` post IE-run"
+      - "QA verifica el CreatedDate del nuevo AsyncApexJob (dentro del último minuto post-IE-run)"
+      - "QA opcionalmente lee el `Auctifera__Log__c` object (o equivalente) para confirmar el valor de scope pasado a Database.executeBatch"
+    then:
+      - "un nuevo `AsyncApexJob` row para class `POSPurchasePaymentPropagationBatch` (namespace `Auctifera`) aparece post-run"
+      - "el Status está en un accepted state: Holding | Queued | Preparing | Processing | Completed"
+      - "el scope efectivo del batch = 500 (verificable via query-back o via logs del run)"
+
+  - title: "AC3 · Recommended default — batchScope=200 enqueue verified via AsyncApexJob query-back"
+    tags:
+      - ac-3
+      - happy-path
+      - operator-input
+      - implementation-case
+      - illinois-trainings
+    given:
+      - "org illinois-trainings autenticado con `sf` CLI"
+      - "PRE-baseline: `sf data query` captura conteo actual de AsyncApexJob rows para POSPurchasePaymentPropagationBatch"
+      - "IE runs el plan `ic-3-22-pos-batches` v4 **usando el default 200** (i.e. no override)"
+    when:
+      - "QA POST-verify con `sf data query` idéntico al PRE"
+      - "QA verifica que el nuevo AsyncApexJob tiene CreatedDate reciente y ApexClass.Name = POSPurchasePaymentPropagationBatch"
+    then:
+      - "un nuevo `AsyncApexJob` row aparece post-run con class `POSPurchasePaymentPropagationBatch`"
+      - "Status en accepted state (Holding/Queued/Preparing/Processing/Completed)"
+      - "el batch fue enqueued con scope 200 (default recommended)"
+
+  - title: "AC4 · Org-agnostic launch + Cashier Drawer Control manual handoff"
+    tags:
+      - ac-4
+      - regression-evidence
+      - org-agnostic
+      - manual-handoff
+      - implementation-case
+    given:
+      - "checkout local de MigrationAppBackend en merge-commit del PR #251"
+      - "la Apex script en el JSON spec NO tiene hardcoded IDs ni referencias org-specific class"
+      - "`Auctifera.POSPurchasePaymentPropagationBatch` es una global class con global no-arg constructor"
+      - "`Auctifera.CashierDrawerControlBatch` (o el nombre exacto del batch) tiene public no-arg constructor (NO global)"
+    when:
+      - "QA graps el JSON spec por hardcoded Ids (18-char SF Ids) y por org-specific patterns (customer domain, fixed URLs)"
+      - "QA lee el script y verifica que la referencia al batch class usa el namespace prefix `Auctifera.` sin cast"
+      - "QA verifica que el spec NO intenta lanzar el Cashier Drawer Control batch desde anonymous Apex — su ejecución queda documentada como manual handoff en el spec description"
+      - "QA opcionalmente verifica con `sf apex run --target-org illinois-trainings --file <check.apex>` que `System.debug(Auctifera.POSPurchasePaymentPropagationBatch.class)` compila sin error (org-agnostic verify)"
+    then:
+      - "0 hardcoded 18-char SF Ids en el JSON spec o script"
+      - "el script usa `Auctifera.POSPurchasePaymentPropagationBatch` (global class con global no-arg ctor)"
+      - "el Cashier Drawer Control batch NO se ejecuta desde anonymous Apex; queda documentado como MANUAL handoff en el spec o en el ticket"
+      - "el batch launch es reproducible en illinois-trainings (Auctifera package instalado sin ajustes org-specific)"
+
+tags:
+  - im-1079
+  - im-735
+  - im-1109
+  - ic-3-22
+  - implementation-case
+  - migration-app
+  - pos-batches
+  - operator-input
+  - salesforce
+  - illinois-trainings
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-23T18:22:21Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-23T18:22:21Z"
+  version: 1
