@@ -1,197 +1,36 @@
 schemaVersion: "1.0"
-
 id: tr-248654f6-4473-4251-b428-8d382df78288
 key: TR-118
-title: "IM-1096 · TC-109 · Master-template pin-list → predicate refactor — 4/4 PASS + 1 handoff (composition contract + regression proof + independent catalog assembly 76=24+33+19)"
-
-description: |
-  QA execution para IM-1096 (Historia, priority Medium, epic IM-735 Implementation
-  Cases Automation). QA Sub-task: IM-1110. PR under test:
-  Veevarts/MigrationAppBackend#266 (MERGED 2026-07-16, merge commit 5c3e1aa9e0cccac61ebce0bcf67383b29793a855).
-
-  Método QA:
-  1. Clone `Veevarts/MigrationAppBackend` en `/tmp/qa/MigrationAppBackend-IM-1096/` +
-     `npm ci --no-audit --no-fund` (clean).
-  2. Checkout merge-commit `5c3e1aa` + `npx jest scripts/master-template-composition.spec.ts --verbose`
-     → 14/14 PASS.
-  3. Independent catalog assembly: python3 script parsea los 77 spec JSONs, filtra
-     `active !== false`, dedupe latest version por caseId, aplica EXCLUDE = { ic-veevart-auth }
-     → 76 caseRefs con breakdown `{ auto: 24, hybrid: 33, manual: 19 }`.
-     `ic-veevart-auth` es hybrid (no manual) — la razón de exclusión está en el
-     comment de EXCLUDE_FROM_MASTER (tracked in `w4-foundations`).
-  4. Pre/post silent-drop-on-flip proof: TypeScript harness `im1090-drop-reproduction.ts`
-     construye un fixture con las 13 pre-fix WORKING_CASE_IDS + `ic-3-03-rename-tabs-and-labels`
-     (dependsOn target) + `ic-veevart-auth` + dos probe cases (`ic-was-manual-now-auto`
-     feasibility auto + `ic-brand-new-auto` feasibility auto). Corre el mismo harness
-     al merge-base (`3f13f082`) y al merge-commit (`5c3e1aa`):
-     - PRE: 14 refs, ambos probe cases DROPPED (silent).
-     - POST: 16 refs, ambos probe cases INCLUDED (predicate).
-  5. Runtime verification de DEPENDS_ON stamping + ordering en el catálogo real
-     (harness `dependson-runtime-check.ts`): 76 refs · dependsOn declarado ≡ actual
-     · dangling: 0 · orders ascending por defaultOrder.
-  6. Fail-loud guards (AC8): los 2 tests con `expect().toThrow(...)` del suite ya
-     los cubren en el jest run del paso 2 (14/14 PASS incluye ambos).
-  7. Handoff: dev/prod re-seed queda PENDING-CREDS (AWS SSO expired) por PR body
-     — orchestrator-owned, QA no ejecuta.
-
-  Evidencia clave:
-  - Merge-commit spec: 14 tests PASS. Merge-base spec: 8 tests PASS. Delta = +6
-    tests nuevos (los 5 del nuevo predicate + 1 renamed) — la bijection
-    `includes EXACTLY every active case minus the exclude set` es la assertion
-    de catalog-completeness que faltaba.
-  - Independent count: 77 catalog cases, 24 auto + 34 hybrid + 19 manual.
-    Post-exclude: 76 refs, 24 auto + 33 hybrid + 19 manual — dev-reported number
-    verified byte-for-byte.
-  - Drop reproduction: PRE-fix devuelve 14 refs (NO incluye `ic-was-manual-now-auto`
-    ni `ic-brand-new-auto` — silent drop confirmado); POST-fix devuelve 16 refs
-    (incluye ambos — predicate probado).
-  - dev-reported "76 caseRefs" es el número correcto. Coverage growth vs pre-fix:
-    con el catálogo actual pre-fix master = 13 pinned + (19 manual − 1 excluded) =
-    31 refs. Post-fix = 76 refs. **+45 refs adicionales (2.45x growth)**.
-
-testCaseIds:
-  - 906947ed-312f-4881-a4d6-56c77ea05c7c
-
+title: >-
+  IM-1096 · TC-109 · Master-template pin-list → predicate refactor — 4/4 PASS + 1 handoff (composition contract +
+  regression proof + independent catalog assembly 76=24+33+19)
+status: in-progress
 environment:
-  name: "GitHub · Veevarts/MigrationAppBackend#266 (MERGED)"
-  url: "https://github.com/Veevarts/MigrationAppBackend/pull/266"
-  buildVersion: 'TypeScript library refactor + jest spec expansion. 5 files touched: 3 composition-only (scripts/master-template-composition.ts, .spec.ts, seed-master-template.ts) + 2 collateral spec-only doc-comment edits (ic-3-25 spec.ts, ic-4-05 spec.ts). MERGE_BASE 3f13f082 (pin-list WORKING_CASE_IDS + FLIPPED_WORKING_CASE_IDS + EXCLUDE_FROM_MANUAL_TIER) → MERGE_COMMIT 5c3e1aa (predicate + EXCLUDE_FROM_MASTER applied to both branches + fail-loud guards). Estrategia: independent catalog assembly + pre/post drop reproduction + runtime dependsOn stamping check + jest full suite (14 tests).'
-  notes: |
-    - PR #266 MERGED 2026-07-16 16:00Z por veevart_josed. Master re-seed dev/prod
-      queda PENDING-CREDS (AWS SSO expired) — orchestrator-owned handoff.
-    - Node 25.4.0, npm 11.7.0 — clean `npm ci` sin warnings ni engine mismatches.
-    - Sandbox Salesforce NO requerido en este ticket — el cambio es puro
-      TypeScript compose logic + jest. safesql tampoco (no hay SQL Server).
-
-    ## Solution understood
-
-    El master template era una CURATED PIN-LIST (`WORKING_CASE_IDS`) + manual tier
-    minus EXCLUDE. La curación era manual — un dev tenía que recordar pinnar cada
-    case nuevo o cada case flippeado manual→auto/hybrid. IM-1090 hizo eso para
-    los 8 cases flippeados esa cycle, pero dejó latente el "silent drop on flip"
-    bug: un case cuyo feasibility se flippee después, sin pin correspondiente,
-    caería del master sin CI alarm.
-
-    IM-1096 reestructura la selección de allowlist a **predicate**:
-
-        selectedIds = { case | feasibility !== 'manual' }
-                    ∪ ( includeManual ? { case | feasibility === 'manual' } : {} )
-                    \ EXCLUDE_FROM_MASTER
-
-    Cambios de comportamiento:
-    - Cualquier case no-manual entra automáticamente. Un case flippeado
-      manual→auto/hybrid ya no depende de un pin manual.
-    - El manual tier sigue in whole cuando `includeManual=true`, minus el mismo
-      EXCLUDE_FROM_MASTER (antes se aplicaba solo al manual tier bajo el nombre
-      `EXCLUDE_FROM_MANUAL_TIER`).
-    - `ic-veevart-auth` (hybrid, tracked en `w4-foundations`) es la ÚNICA
-      exclusión — sin la exclude, el predicate lo pullearía al master.
-    - Guardrails introducidos: (a) fail-loud si un id en EXCLUDE_FROM_MASTER no
-      está en el catálogo (typo detection); (b) fail-loud si un DEPENDS_ON edge
-      tiene target no en el master.
-    - `DEPENDS_ON` stamping (`ic-4-05→ic-4-01`, `ic-8-02→ic-3-03`) y ordering
-      ascending por `defaultOrder` con `caseId` tie-break: sin cambios.
-
-    Los cambios en `ic-3-25` y `ic-4-05` spec.ts son doc-comment only — actualizan
-    los headers para reflejar la nueva predicate policy (no requieren WORKING_CASE_IDS
-    pin). NO alteran feasibility ni defaultOrder de esos IC cases.
-
-    ## Inferred technical tests (mapped to ACs)
-
-    | Test                                                                | ACs        | Executable here? | Verdict |
-    |---------------------------------------------------------------------|------------|------------------|---------|
-    | jest master-template-composition.spec.ts en merge-commit             | AC1-9      | YES              | 14/14 PASS |
-    | jest master-template-composition.spec.ts en merge-base (baseline)    | -          | YES              | 8/8 PASS (fewer tests) |
-    | Independent catalog assembly via python3 (77 → 76)                   | AC1,2,3,9  | YES              | PASS (24+33+19) |
-    | Pre/post silent-drop reproduction (harness TS)                       | AC4, AC5   | YES              | PASS (PRE drops, POST keeps) |
-    | Runtime dependsOn stamping check                                     | AC6, AC7   | YES              | PASS (declared ≡ actual, 0 dangling) |
-    | Fail-loud guards (2 jest tests with toThrow)                         | AC8        | YES              | PASS (both throws matched) |
-    | Live dev/prod re-seed                                                | -          | NO (PENDING-CREDS) | HANDOFF |
-
-    ## Objective fit
-
-    - Ticket objective: consolidar el master template a **ALL non-manual + manual
-      tier − EXCLUDE_FROM_MASTER** vía predicate en lugar de pin-list.
-    - Mechanism delivered: 76 caseRefs = 24 auto + 33 hybrid + 19 manual, ic-veevart-auth
-      única exclusión. Silent-drop-on-flip bug estructuralmente eliminado.
-    - Pre/post evidence: PRE-fix devuelve 14 refs con las probe cases DROPPED,
-      POST-fix devuelve 16 refs con ambas probe cases INCLUDED — bug reproducido
-      y corregido de forma verificable.
-    - Objective met? YES para el contract + composition logic. El master
-      expandido de 76 refs tiene efecto en ambiente vivo solo tras el re-seed,
-      que queda como manual handoff PENDING-CREDS.
-
-status: completed
-executor: codex
-executedAt: "2026-07-23T19:30:00Z"
-completedAt: "2026-07-23T19:39:00Z"
-duration: 9
-
-summary:
-  total: 5
-  passed: 4
-  failed: 0
-  blocked: 0
-  notRun: 1
-  skipped: 0
-  passRate: 80
-
+  name: GitHub · Veevarts/MigrationAppBackend#266 (MERGED)
+  url: https://github.com/Veevarts/MigrationAppBackend/pull/266
+  buildVersion: >-
+    TypeScript library refactor + jest spec expansion. 5 files touched: 3 composition-only
+    (scripts/master-template-composition.ts, .spec.ts, seed-master-template.ts) + 2 collateral spec-only doc-comment
+    edits (ic-3-25 spec.ts, ic-4-05 spec.ts). MERGE_BASE 3f13f082 (pin-list WORKING_CASE_IDS + FLIPPED_WORKING_CASE_IDS
+    + EXCLUDE_FROM_MANUAL_TIER) → MERGE_COMMIT 5c3e1aa (predicate + EXCLUDE_FROM_MASTER applied to both branches +
+    fail-loud guards). Estrategia: independent catalog assembly + pre/post drop reproduction + runtime dependsOn
+    stamping check + jest full suite (14 tests).
+completedAt: null
 results:
-  - scenarioIndex: 1
-    scenarioTitle: "AC1+AC2+AC3+AC9 · Predicate bijection + coverage snapshot 76 = 24 auto + 33 hybrid + 19 manual"
-    testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
+  - testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
     testCaseKey: TC-109
+    scenarioTitle: AC1+AC2+AC3+AC9 · Predicate bijection + coverage snapshot 76 = 24 auto + 33 hybrid + 19 manual
+    scenarioIndex: 1
     status: passed
     executedAt: "2026-07-23T19:31:00Z"
     duration: 2
-    actual: |
-      Jest en merge-commit `5c3e1aa`:
-
-      ```
-      PASS scripts/master-template-composition.spec.ts
-        catalog specs are internally consistent (IM-1096)
-          ✓ every spec has a unique caseId (9 ms)
-          ✓ every spec has a unique defaultOrder (no positioning collisions)
-        master template assembly is catalog-complete (IM-1096)
-          ✓ includes EXACTLY every active case minus the exclude set (1 ms)
-          ✓ includes every non-manual (auto/hybrid) case (2 ms)
-          ✓ includes every non-excluded manual-tier case when includeManual (1 ms)
-          ✓ excludes the auth outlier tracked in w4-foundations
-          ✓ stamps the documented dependsOn edges and none dangle (1 ms)
-          ✓ orders caseRefs ascending by defaultOrder
-        predicate-based selection needs no pin-list (IM-1096 regression)
-          ✓ auto-includes a BRAND-NEW auto/hybrid case with no pin
-          ✓ keeps a case flipped manual→auto included (no silent drop) (1 ms)
-          ✓ drops the manual tier when includeManual is false, keeps auto/hybrid
-          ✓ applies EXCLUDE_FROM_MASTER to BOTH branches
-          ✓ fails loud when an EXCLUDE_FROM_MASTER id is not in the catalog (6 ms)
-          ✓ fails loud on a dangling dependsOn edge
-
-      Tests: 14 passed, 14 total  Time: 2.635 s
-      ```
-
-      **Independent catalog assembly** (python3, no imports de composition.ts):
-
-      ```json
-      {
-        "total_active_cases": 77,
-        "breakdown_pre_exclude": {"manual": 19, "auto": 24, "hybrid": 34},
-        "post_exclude_total": 76,
-        "breakdown_post_exclude": {"manual": 19, "auto": 24, "hybrid": 33},
-        "ic-veevart-auth_in_post_exclude": false,
-        "ic-veevart-auth_feasibility": "hybrid"
-      }
-      ```
-
-      Verifica byte-for-byte los números dev-reported: 76 caseRefs = 24 + 33 + 19,
-      `ic-veevart-auth` (hybrid) es la única exclusión.
+    stepResults: []
     notes: |
       El breakdown pre-exclude (24 auto + 34 hybrid + 19 manual = 77) y
       post-exclude (24 auto + 33 hybrid + 19 manual = 76) match exactamente
       lo declarado en el PR body y en la ac9 scenario. Independencia probada:
       el count se hace desde python3 leyendo directamente los JSON files, sin
       pasar por assembleMasterCaseRefs.
-    stepResults: []
     attachments:
       - name: jest-merge-commit-5c3e1aa.txt
         path: attachments/tr-118-tc-109/scenario-1/jest-merge-commit-5c3e1aa.txt
@@ -205,58 +44,19 @@ results:
       - name: spec-only-collateral-changes.diff
         path: attachments/tr-118-tc-109/scenario-1/spec-only-collateral-changes.diff
         mimeType: text/plain
-
-  - scenarioIndex: 2
-    scenarioTitle: "AC4+AC5 · Predicate regression contra el silent-drop-on-flip bug de IM-1090"
-    testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
+    defects: []
+  - testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
     testCaseKey: TC-109
+    scenarioTitle: AC4+AC5 · Predicate regression contra el silent-drop-on-flip bug de IM-1090
+    scenarioIndex: 2
     status: passed
     executedAt: "2026-07-23T19:33:00Z"
     duration: 2
-    actual: |
-      TypeScript harness `im1090-drop-reproduction.ts` construye un fixture con
-      las 13 pre-fix WORKING_CASE_IDS + `ic-3-03-rename-tabs-and-labels` (dependsOn
-      target de `ic-8-02`) + `ic-veevart-auth` (excluded outlier) + dos probe cases:
-
-      - `ic-was-manual-now-auto` · feasibility `auto` · NOT in pre-fix WORKING_CASE_IDS
-      - `ic-brand-new-auto` · feasibility `auto` · NOT in pre-fix WORKING_CASE_IDS
-
-      **PRE-fix (merge-base `3f13f082`)**:
-      ```json
-      {
-        "totalRefs": 14,
-        "flippedCaseIncluded": false,
-        "brandNewCaseIncluded": false,
-        "authExcluded": true
-      }
-      ```
-      → Ambos probe cases DROPPED silenciosamente. Exit code 1 (drop reproducido).
-
-      **POST-fix (merge-commit `5c3e1aa`)**:
-      ```json
-      {
-        "totalRefs": 16,
-        "flippedCaseIncluded": true,
-        "brandNewCaseIncluded": true,
-        "authExcluded": true
-      }
-      ```
-      → Ambos probe cases INCLUDED. Exit code 0 (predicate probado).
-
-      Delta pre/post: **+2 refs** para exactamente el mismo fixture. El
-      silent-drop-on-flip bug de IM-1090 está structurally eliminated:
-      - `ic-was-manual-now-auto` (case flippeado manual→auto): pre-fix DROP, post-fix KEEP.
-      - `ic-brand-new-auto` (case nuevo, nunca pinneado): pre-fix DROP, post-fix KEEP.
-
-      Adicionalmente, los 2 jest tests del describe `predicate-based selection
-      needs no pin-list (IM-1096 regression)` que corresponden a esto (`auto-includes
-      a BRAND-NEW auto/hybrid case with no pin`, `keeps a case flipped manual→auto
-      included`) ambos PASSED en el merge-commit run (scenario 1).
+    stepResults: []
     notes: |
       El harness es reusable en future refactors: cambia la implementación de
       `assembleMasterCaseRefs`, corre el harness — devuelve exit 0 si la
       predicate policy sigue firme, exit 1 si el drop bug regresó.
-    stepResults: []
     attachments:
       - name: pre-fix-drop-reproduction.json
         path: attachments/tr-118-tc-109/scenario-2/pre-fix-drop-reproduction.json
@@ -264,158 +64,90 @@ results:
       - name: post-fix-drop-reproduction.json
         path: attachments/tr-118-tc-109/scenario-2/post-fix-drop-reproduction.json
         mimeType: application/json
-
-  - scenarioIndex: 3
-    scenarioTitle: "AC6+AC7 · DEPENDS_ON stamping documentado + ordering determinism"
-    testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
+    defects: []
+  - testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
     testCaseKey: TC-109
+    scenarioTitle: AC6+AC7 · DEPENDS_ON stamping documentado + ordering determinism
+    scenarioIndex: 3
     status: passed
     executedAt: "2026-07-23T19:35:00Z"
     duration: 1
-    actual: |
-      TypeScript harness `dependson-runtime-check.ts` carga el catálogo real
-      (77 spec JSONs a `5c3e1aa`), ejecuta `assembleMasterCaseRefs(latestByCase, true)`,
-      y verifica los invariants:
-
-      ```json
-      {
-        "totalRefs": 76,
-        "dependsOnDeclared": {
-          "ic-4-05-transaction-journal-layouts": ["ic-4-01-specific-funds-debit-credit"],
-          "ic-8-02-resources-setup": ["ic-3-03-rename-tabs-and-labels"]
-        },
-        "dependsOnActual": {
-          "ic-4-05-transaction-journal-layouts": ["ic-4-01-specific-funds-debit-credit"],
-          "ic-8-02-resources-setup": ["ic-3-03-rename-tabs-and-labels"]
-        },
-        "stampedMatchesDeclared": true,
-        "danglingTargets": [],
-        "orderingAscending": true,
-        "firstTenOrders": [100, 101, 300, 302, 303, 304, 305, 306, 307, 308],
-        "lastTenOrders": [802, 803, 804, 805, 806, 900, 901, 902, 903, 904]
-      }
-      ```
-
-      Verificaciones:
-      - `dependsOnActual === dependsOnDeclared` exactamente (los 2 edges documentados
-        stamped, ningún edge sobrante).
-      - `danglingTargets: []` (no hay target de dependsOn ausente del assembly).
-      - `orderingAscending: true` (los `order` values de las 76 refs son monotónico
-        creciente por `defaultOrder`).
-      - `firstTenOrders` y `lastTenOrders` muestran orders válidos con secuencias
-        crecientes — sin backtrack.
-
-      Adicionalmente los tests jest `stamps the documented dependsOn edges and
-      none dangle` y `orders caseRefs ascending by defaultOrder` ambos PASSED
-      en el merge-commit run (scenario 1).
+    stepResults: []
     notes: |
       Los 2 dependsOn targets (`ic-4-01-specific-funds-debit-credit` y
       `ic-3-03-rename-tabs-and-labels`) están ambos en el master post-predicate
       (ic-4-01 es auto, ic-3-03 es manual entrando por el manual tier). Bajo
       el pre-fix, ic-3-03 entraba porque era manual; ic-4-01 requería pin en
       WORKING_CASE_IDS. Con el predicate ambos entran automáticamente.
-    stepResults: []
     attachments:
       - name: dependson-runtime-verification.json
         path: attachments/tr-118-tc-109/scenario-3/dependson-runtime-verification.json
         mimeType: application/json
-
-  - scenarioIndex: 4
-    scenarioTitle: "AC8 · Fail-loud guards — missing EXCLUDE id + dangling dependsOn edge"
-    testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
+    defects: []
+  - testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
     testCaseKey: TC-109
+    scenarioTitle: AC8 · Fail-loud guards — missing EXCLUDE id + dangling dependsOn edge
+    scenarioIndex: 4
     status: passed
     executedAt: "2026-07-23T19:36:00Z"
     duration: 1
-    actual: |
-      Los 2 tests del describe `predicate-based selection needs no pin-list
-      (IM-1096 regression)` que cubren los fail-loud guards ambos PASSED en el
-      merge-commit run:
-
-      ```
-      ✓ fails loud when an EXCLUDE_FROM_MASTER id is not in the catalog (6 ms)
-      ✓ fails loud on a dangling dependsOn edge
-      ```
-
-      **Test 1 · Missing EXCLUDE id**: el test remueve `ic-veevart-auth` del
-      fixture (el ÚNICO id en EXCLUDE_FROM_MASTER) y ejecuta el assembly. Espera:
-      ```
-      expect(() => assembleMasterCaseRefs(m, true))
-        .toThrow(/EXCLUDE_FROM_MASTER references case "ic-veevart-auth"/)
-      ```
-      → PASS. El guard protege contra typos silenciosos que dejarían al outlier
-      leaked in al master.
-
-      **Test 2 · Dangling dependsOn**: el test construye un fixture con
-      `ic-4-05-transaction-journal-layouts` presente pero SIN su target
-      `ic-4-01-specific-funds-debit-credit`. Ejecuta el assembly y espera:
-      ```
-      expect(() => assembleMasterCaseRefs(m, true))
-        .toThrow(/dependsOn missing case\(s\).*ic-4-01-specific-funds-debit-credit/)
-      ```
-      → PASS. Mirror del §20 rehydration invariant de PlanTemplate — el guard
-      evita que caseRefs con dependsOn dangling salgan del assembly.
-
-      Ambos guards son NEW en el merge-commit (el pre-fix solo tenía el
-      "required working case" guard, que también throwsa pero con distinto
-      mensaje y por distinta razón — la protección era sobre WORKING_CASE_IDS).
+    stepResults: []
     notes: |
       Confirmado in-code: `assembleMasterCaseRefs` corre los 2 checks al inicio
       (missing EXCLUDE id → throw) y al final (dangling dependsOn → throw). No
       genera caseRefs partial; ambos guards short-circuit antes del return.
-    stepResults: []
     attachments:
       - name: fail-loud-guards-jest-excerpt.txt
         path: attachments/tr-118-tc-109/scenario-4/fail-loud-guards-jest-excerpt.txt
         mimeType: text/plain
-
-  - scenarioIndex: 5
-    scenarioTitle: "Handoff · Master template dev/prod re-seed (PENDING-CREDS, orchestrator-owned)"
-    testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
+    defects: []
+  - testCaseId: 906947ed-312f-4881-a4d6-56c77ea05c7c
     testCaseKey: TC-109
+    scenarioTitle: Handoff · Master template dev/prod re-seed (PENDING-CREDS, orchestrator-owned)
+    scenarioIndex: 5
     status: not-run
     duration: 0
-    actual: |
-      QA NO ejecuta. El PR body declara: **Dev/prod master re-seed is
-      orchestrator-owned + creds-gated (PENDING-CREDS)** — el master expandido
-      de 76 caseRefs solo tiene efecto en ambiente vivo tras el re-seed en dev
-      y luego prod, y ese re-seed requiere AWS SSO creds refrescadas.
-
-      **Pendiente de tu parte / del orchestrator**:
-      1. Refrescar el AWS SSO token del pipeline owner.
-      2. Correr `npm run seed:master-template` contra dev.
-      3. Verificar en DynamoDB dev que `PlanTemplate.master.caseRefs.length === 76`
-         y que el breakdown por feasibility sea `{ auto: 24, hybrid: 33, manual: 19 }`,
-         con `ic-veevart-auth` AUSENTE del assembly.
-      4. Repetir contra prod una vez validado en dev.
-      5. Comentar en IM-1096 con timestamp del re-seed y link al log.
-
-      El contract + composition logic YA está firmed off por QA (scenarios 1-4).
-      Este handoff es puramente operativo, no bloquea el sign-off del ticket.
+    stepResults: []
     notes: |
       Marcado `not-run` con reasoning explícito. Cuando el orchestrator ejecute
       el re-seed, se puede reopen este TR (patrón v2 deep-dive: TR-115/116/117)
       y flippear scenario 5 a `passed` una vez el conteo live confirme 76 refs
       + breakdown 24/33/19. Ver [[feedback-tr-reopen-v2-deep-dive]].
-    stepResults: []
     attachments: []
-
+    defects: []
+summary:
+  total: 5
+  passed: 4
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 1
+  passRate: 80
 history:
   - action: created
     timestamp: "2026-07-23T19:30:00Z"
     user: codex
     to: in-progress
-    reason: "Start execution: clone MigrationAppBackend, npm ci, jest master-template-composition.spec.ts en merge-commit + merge-base, independent python3 catalog assembly, pre/post drop reproduction harness, dependsOn runtime check."
+    reason: >-
+      Start execution: clone MigrationAppBackend, npm ci, jest master-template-composition.spec.ts en merge-commit +
+      merge-base, independent python3 catalog assembly, pre/post drop reproduction harness, dependsOn runtime check.
   - action: completed
     timestamp: "2026-07-23T19:39:00Z"
     user: codex
     from: in-progress
     to: completed
-    reason: "4/4 auto scenarios PASS (composition contract + pre/post drop reproduction + dependsOn runtime + fail-loud guards). Scenario 5 (dev/prod re-seed) queda not-run con handoff explícito PENDING-CREDS al orchestrator. passRate 80% refleja los 4 escenarios técnicos cerrados + 1 handoff pending. El contract del refactor está firmed off; el live effect en dev/prod queda operacionalmente separado."
-
+    reason: >-
+      4/4 auto scenarios PASS (composition contract + pre/post drop reproduction + dependsOn runtime + fail-loud
+      guards). Scenario 5 (dev/prod re-seed) queda not-run con handoff explícito PENDING-CREDS al orchestrator. passRate
+      80% refleja los 4 escenarios técnicos cerrados + 1 handoff pending. El contract del refactor está firmed off; el
+      live effect en dev/prod queda operacionalmente separado.
+  - action: reopened
+    timestamp: "2026-07-23T20:18:09.068Z"
+    user: testmanager
+    from: completed
+    to: in-progress
 metadata:
-  createdBy: "codex"
+  createdBy: codex
   createdAt: "2026-07-23T19:30:00Z"
-  updatedBy: "codex"
-  updatedAt: "2026-07-23T19:39:00Z"
-  version: 1
+  updatedBy: testmanager
+  updatedAt: "2026-07-23T20:18:09.068Z"
