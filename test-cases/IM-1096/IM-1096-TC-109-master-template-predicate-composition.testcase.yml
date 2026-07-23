@@ -1,0 +1,223 @@
+schemaVersion: "1.0"
+
+id: "906947ed-312f-4881-a4d6-56c77ea05c7c"
+key: "TC-109"
+title: "Master-template composition — pin-list → predicate refactor (all non-manual ∪ manual tier) minus EXCLUDE_FROM_MASTER, con fail-loud guards"
+description: |
+  Cobertura QA para IM-1096 (Historia, priority Medium, epic IM-735
+  Implementation Cases Automation).
+  QA Sub-task asociada: IM-1110 (creada 2026-07-23).
+
+  Contexto:
+  - Follow-up de IM-1090 (composition refactor) — surface la decisión sobre
+    si los ~43 non-manual cases del catálogo deben pertenecer al curated
+    WORKING set del master template.
+  - Decisión de PM: **INCLUDE ALL non-manual + manual tier, MINUS
+    EXCLUDE_FROM_MASTER = { ic-veevart-auth }**. Elimina estructuralmente
+    el bug latente "silent-drop-on-flip" que apareció en IM-1090 (un case
+    flipped manual→auto/hybrid dejaba de matchear el manual-predicate y caía
+    del master a menos que alguien recordara pinnarlo).
+  - Repositorio: `Veevarts/MigrationAppBackend`.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#266` (**MERGED** 2026-07-16 16:00Z).
+    Branch: `task/master-template-all-automated-cases-IM-1096`. Merge commit
+    `5c3e1aa9e0cccac61ebce0bcf67383b29793a855`.
+  - Files touched (5, composición-only, NO spec JSON):
+    * `scripts/master-template-composition.ts` (+56/-88, core logic)
+    * `scripts/master-template-composition.spec.ts` (+169/-25, 14 tests)
+    * `scripts/seed-master-template.ts` (+25/-23, doc comments + TEMPLATE_DESCRIPTION)
+    * `src/implementations/infrastructure/seeds/specs/ic-3-25-setup-profiles-and-users.spec.ts` (+4/-2)
+    * `src/implementations/infrastructure/seeds/specs/ic-4-05-transaction-journal-layouts.spec.ts` (+5/-3)
+
+  Cambio principal:
+  - Se elimina la allowlist `WORKING_CASE_IDS` / `FLIPPED_WORKING_CASE_IDS`
+    y se reemplaza por un **predicate**:
+
+    ```
+    selectedIds = { case | feasibility !== 'manual' }
+                ∪ ( includeManual ? { case | feasibility === 'manual' } : {} )
+                \ EXCLUDE_FROM_MASTER
+    ```
+
+  - `EXCLUDE_FROM_MANUAL_TIER` se renombra a `EXCLUDE_FROM_MASTER` y se
+    aplica a AMBAS ramas (auto/hybrid + manual). Contenido: `{ ic-veevart-auth }`.
+  - `assembleMasterCaseRefs` ahora hace **fail-loud** en dos invariantes:
+    (a) un id en `EXCLUDE_FROM_MASTER` que no existe en el catálogo (typo →
+    dejaría al outlier leaked) → throw; (b) un `DEPENDS_ON` edge cuyo target
+    no está en el caseRefs assembly → throw (mirror del §20 rehydration).
+  - `DEPENDS_ON` stamping (ic-4-05→ic-4-01, ic-8-02→ic-3-03) queda sin cambio,
+    con la garantía adicional de que la predicate-based selection admite
+    ambos targets automáticamente (nunca dangle).
+  - `defaultOrder` sort ascendente con `caseId` tie-break queda igual.
+
+  Evidencia dev (per PR body + verified in Test #266):
+  - jest full suite: **201 suites / 2076 tests passed**, incluyendo la
+    composition spec de 14 tests.
+  - `tsc --noEmit`: clean. `eslint` en los 3 archivos touched: clean.
+  - Dry-run harness (reads specs from disk, no DynamoDB write): assembles
+    **76 caseRefs** = `{ auto: 24, hybrid: 33, manual: 19 }`, con
+    `ic-veevart-auth` ausente.
+  - Catálogo: 77 active spec JSON files a nivel merge-commit (verificado
+    por QA via `gh api contents?ref=5c3e1aa`) — 77 − 1 exclusion = 76.
+
+  Riesgos abiertos:
+  - **Dev/prod master re-seed es orchestrator-owned + creds-gated
+    (PENDING-CREDS)**. El master expandido de 76 cases NO tiene efecto en
+    ambientes vivos hasta que las AWS creds refresquen y el seed corra en
+    dev y luego prod. Este QA valida el **contract + composition logic**;
+    el efecto en ambiente vivo queda como manual handoff pending-creds.
+  - PR ya MERGED al momento de QA — baseline vs post-fix se hace entre
+    merge-base (pin-list version) y merge commit `5c3e1aa` (predicate).
+  - El outlier `ic-veevart-auth` es hybrid, no manual — la razón de exclusión
+    es que se tracka en el template separado `w4-foundations`, no que sea
+    manual. La reference debe verificarse in-code (comment de
+    EXCLUDE_FROM_MASTER lo declara explícitamente).
+  - Los cambios en `ic-3-25` y `ic-4-05` spec.ts son test-only edits para
+    ajustar assertions post-refactor; NO tocan el JSON spec ni el runtime
+    behavior de esos IC cases. Verificar que no alteren su feasibility ni
+    su defaultOrder.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — para fetch de `scripts/master-template-composition.ts`, `scripts/master-template-composition.spec.ts`, y los 77 spec JSON files en el merge commit `5c3e1aa` y en el merge-base."
+  - "Clone local de `Veevarts/MigrationAppBackend` en `/tmp/qa/MigrationAppBackend-IM-1096/` en `main` post-merge; `npm ci` sin errores; jest runner disponible."
+  - "Habilidad de checkout entre merge-commit (`5c3e1aa`) y merge-base (parent de `5c3e1aa`) para pre/post comparison."
+  - "AWS SSO NO requerido para este QA — el master re-seed queda como handoff PENDING-CREDS; QA valida composition-only, no live seed."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC2+AC3+AC9 · Predicate-based bijection + coverage snapshot 76 = 24 auto + 33 hybrid + 19 manual"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-3
+      - ac-9
+      - happy-path
+      - predicate
+      - bijection
+      - implementations-automation
+      - im-1096
+      - im-735
+    given:
+      - "checkout de `MigrationAppBackend` en el merge-commit `5c3e1aa` con `npm ci` completado sin warnings"
+      - "el catálogo `src/implementations/infrastructure/seeds/specs/` contiene 77 archivos `.json` active"
+      - "`EXCLUDE_FROM_MASTER = { ic-veevart-auth }` según `scripts/master-template-composition.ts`"
+    when:
+      - "se corre `npm test -- scripts/master-template-composition.spec.ts` en el merge-commit `5c3e1aa`"
+      - "los 14 tests del suite passen"
+      - "se ejecuta un dry-run harness que llama `assembleMasterCaseRefs(latestByCase, true)` sobre el catálogo real y devuelve `caseRefs`"
+    then:
+      - "los caseRefs.length === 76 (bijección exacta: 77 catalog − 1 EXCLUDE)"
+      - "el breakdown por feasibility en caseRefs es exactly `{ auto: 24, hybrid: 33, manual: 19 }` (dev-reported number verified)"
+      - "`ic-veevart-auth` NO aparece en caseRefs (ausente en ambas ramas: auto/hybrid + manual)"
+      - "todo case active en el catálogo con `feasibility != 'manual'` está en caseRefs (excepto el EXCLUDE)"
+      - "todo case active con `feasibility == 'manual'` está en caseRefs cuando `includeManual = true` (excepto el EXCLUDE)"
+      - "el bijection assert `[...includedIds].sort() === [...expected].sort()` del test `includes EXACTLY every active case minus the exclude set` pasa"
+
+  - title: "AC4+AC5 · Predicate regression contra el silent-drop-on-flip bug de IM-1090"
+    tags:
+      - ac-4
+      - ac-5
+      - regression
+      - im-1090
+      - predicate-proof
+      - im-1096
+    given:
+      - "los tests `auto-includes a BRAND-NEW auto/hybrid case with no pin` y `keeps a case flipped manual→auto included` existen en `master-template-composition.spec.ts`"
+      - "ambos tests corren contra un in-memory `fixture()` que NO toca los spec files reales — prueba pura del predicate"
+      - "el suite completo del merge-base (pre-fix) contiene la variante allowlist-based con `WORKING_CASE_IDS`"
+    when:
+      - "en el merge-commit `5c3e1aa`: se corre el spec — el brand-new case `ic-brand-new-hybrid` con `feasibility: 'hybrid'` es agregado al fixture SIN pin en `WORKING_CASE_IDS` (que ya no existe) y sin código adicional"
+      - "un case con `feasibility` flipped de `'manual'` a `'auto'` (mismo caseId, caseVersion++) queda tras la asamblea"
+      - "para el merge-base: se ejecuta el mismo escenario y — con la allowlist antigua — el brand-new case NO estaba en `WORKING_CASE_IDS`, por lo que quedaba fuera del master"
+    then:
+      - "en el merge-commit: `assembleMasterCaseRefs(m, true)` incluye `ic-brand-new-hybrid` sin necesidad de tocar ninguna allowlist"
+      - "en el merge-commit: el case flipped `ic-existing-manual` (con new feasibility `auto`) sigue en el resultado — NO silent drop"
+      - "en el merge-base: la simulación del mismo escenario habría requerido editar `WORKING_CASE_IDS` manualmente (evidencia via diff de `scripts/master-template-composition.ts`)"
+      - "el bug latente de IM-1090 está structurally eliminated: no queda un allowlist que mantener; el predicate admite todo case no excluido"
+
+  - title: "AC6+AC7 · DEPENDS_ON stamping documentado + ordering determinism"
+    tags:
+      - ac-6
+      - ac-7
+      - dependencies
+      - ordering
+      - determinism
+      - im-1096
+    given:
+      - "`DEPENDS_ON` en `master-template-composition.ts` declara: `ic-4-05-transaction-journal-layouts → [ic-4-01-specific-funds-debit-credit]` y `ic-8-02-resources-setup → [ic-3-03-rename-tabs-and-labels]`"
+      - "ambos targets (`ic-4-01`, `ic-3-03`) están en el catálogo activo — verificado con `gh api contents?ref=5c3e1aa`"
+      - "el spec incluye los tests `stamps the documented dependsOn edges and none dangle` y `orders caseRefs ascending by defaultOrder`"
+    when:
+      - "se ejecuta `assembleMasterCaseRefs(latestByCase, true)` sobre el catálogo real"
+      - "se inspecciona el resultado: cada caseRef con `dependsOn` tiene el edge esperado, y cada target de un edge está en el conjunto"
+      - "se extrae `orders = caseRefs.map(r => r.order)` y se compara contra su versión sorted ascending"
+    then:
+      - "`caseRefs.find(r => r.caseId === 'ic-4-05-transaction-journal-layouts').dependsOn` incluye `'ic-4-01-specific-funds-debit-credit'`"
+      - "`caseRefs.find(r => r.caseId === 'ic-8-02-resources-setup').dependsOn` incluye `'ic-3-03-rename-tabs-and-labels'`"
+      - "para todo caseRef `r` con `r.dependsOn`, cada `d ∈ r.dependsOn` cumple `presentIds.has(d) === true` (no dangling)"
+      - "`orders === [...orders].sort((a,b) => a-b)` (ordenación estable ascending por defaultOrder)"
+      - "los caseRefs con el mismo `order` quedan tie-broken por `caseId` (localeCompare)"
+
+  - title: "AC8 · Fail-loud guards — missing EXCLUDE id + dangling dependsOn edge"
+    tags:
+      - ac-8
+      - guards
+      - fail-loud
+      - error-path
+      - negative
+      - im-1096
+    given:
+      - "los tests `fails loud when an EXCLUDE_FROM_MASTER id is not in the catalog` y `fails loud on a dangling dependsOn edge` existen en el spec"
+      - "el primer test remueve `ic-veevart-auth` del fixture — el ÚNICO id en `EXCLUDE_FROM_MASTER` — para simular un typo"
+      - "el segundo test construye un fixture con `ic-4-05` presente pero SIN su target `ic-4-01` — para simular un dependsOn dangling"
+    when:
+      - "se corren ambos tests en el merge-commit `5c3e1aa`"
+      - "se inspeccionan las regex del `expect().toThrow(...)` para confirmar el mensaje de error"
+    then:
+      - "el primer caso lanza `Error(/EXCLUDE_FROM_MASTER references case \"ic-veevart-auth\"/)` — protege contra typos silenciosos que dejarían al outlier leaked in"
+      - "el segundo caso lanza `Error(/dependsOn missing case\\(s\\).*ic-4-01-specific-funds-debit-credit/)` — mirror del §20 dangling-dependency invariant enforced at rehydration"
+      - "no se generan caseRefs partial ni assembly silently truncated — ambos guards short-circuit antes de retornar"
+
+  - title: "Handoff · Master template dev/prod re-seed (PENDING-CREDS, orchestrator-owned)"
+    tags:
+      - handoff
+      - manual
+      - pending-creds
+      - seed
+      - operations
+      - im-1096
+    given:
+      - "el PR body de #266 declara explícitamente: **Dev/prod master re-seed is orchestrator-owned + creds-gated (PENDING-CREDS)**"
+      - "el master template expandido de 76 caseRefs solo tiene efecto en ambiente vivo tras el re-seed"
+      - "AWS SSO token está expired para el owner del pipeline (per PR body y contexto IM-1090/IM-1078 previo)"
+    when:
+      - "las AWS creds refresquen"
+      - "un operator autorizado corra `npm run seed:master-template` contra dev (verificar que el resultado tenga 76 caseRefs)"
+      - "una vez verified en dev, promote a prod con el mismo comando"
+    then:
+      - "QA NO ejecuta este step — queda como manual handoff post-QA sign-off del contract/composition-logic"
+      - "el criterio de completeness live es: `PlanTemplate.master` en DynamoDB dev/prod tenga exactamente 76 caseRefs con el breakdown `{ auto: 24, hybrid: 33, manual: 19 }` y `ic-veevart-auth` ausente"
+      - "Pendiente de tu parte / del orchestrator: correr el seed una vez las creds AWS SSO se refresquen. Este scenario queda `not-run` hasta ese momento"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-23T19:28:09Z"
+  version: 1
+  estimatedDuration: 75
+  tags:
+    - im-1096
+    - im-735
+    - im-1090
+    - im-1110
+    - implementations-automation
+    - master-template
+    - composition
+    - predicate
+    - refactor
+    - pin-list-migration
+    - fail-loud
+    - migration-app-backend
+    - post-june-delivery
