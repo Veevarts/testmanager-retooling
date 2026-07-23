@@ -1,0 +1,39 @@
+Regression plan — IM-1093 / PR #151 (POS sales order donations query optimization)
+====================================================================================
+
+Change surface (from `gh pr diff 151 --name-only`):
+  - 1 SQL file: pos-purchase/sales_order_only_donation.sql (+143 / -49)
+  - 4 TS files: pos-purchase-donation-query.spec.ts (+96/-16),
+                query-chain.integration.spec.ts (+162/-30),
+                query-chain.live.spec.ts (+4/-23),
+                sql-server-query-fixture.ts (+90/-0)
+
+Technical + security regression items
+
+| Item                                                    | Type | Risk    | Check method                                     | Verdict |
+|---------------------------------------------------------|------|---------|--------------------------------------------------|---------|
+| Row grain: 1 per Sales Order (0 dupes on PK)            | Tech | High    | safesql POST on 3 profiles + distinct count      | PASS (0/39,029 dupes) |
+| Pending status preservation (0/6/7 rows kept)           | Tech | High    | safesql POST + count Status='Pending'            | PASS (Tucson 21 / Illinois 63 / Aspen 1) |
+| Item-fallback amount aggregation (no zero totals)       | Tech | High    | safesql POST + count Total=0                     | PASS (0 zero-total rows in 39,029) |
+| Query completes on large backups                        | Tech | High    | safesql POST vs PRE on Tucson                    | PASS (POST=64s, PRE=timeout 120s twice) |
+| Anti-pattern removal: no transaction-first broad scan   | Tech | High    | Static diff HEAD vs PRE + mutation test          | PASS (mutation catches it) |
+| Backward compat with downstream (donation Opp + funds)  | Tech | High    | dev spec: aligned with donation_transaction.sql  | PASS (dev spec asserts it, 3 tests) |
+| test:queries string suite                               | Tech | Medium  | npm run test:queries                             | PASS 294/294 |
+| lint:check                                              | Tech | Low     | npm run lint:check                               | PASS (exit 0) |
+| tsc --noEmit                                            | Tech | Low     | npx tsc -p tsconfig.build.json --noEmit          | PASS (exit 0) |
+| GH PR CI (merge-commit)                                 | Tech | High    | gh pr checks 151                                 | PASS (2m2s) |
+| Mutation "broad scan" → fails 1 test                    | Tech | High    | sed + re-run test:queries                        | PASS (test 5e) |
+| Mutation "status exclusion" → fails 1 test              | Tech | High    | sed + re-run test:queries                        | PASS (test 5f) |
+| Hardcoded secrets / API keys / tokens                   | Sec  | High    | grep on gh pr diff patch                         | PASS (0 findings) |
+| SQL string concat / injection                           | Sec  | High    | grep for SELECT/... with '+' + '$' patterns      | PASS (0 findings) |
+| Raw ${...} unbound in query file                        | Sec  | High    | grep for '${...}' in post-fix SQL                | PASS (0 findings) |
+| Vulnerable dep introduced by this PR                    | Sec  | High    | git diff package.json / package-lock.json        | PASS (no dep changes) |
+| npm audit baseline                                      | Sec  | -       | npm audit --production --json                    | INFO (2 crit / 6 high / 26 mod / 1 low — pre-existing baseline) |
+
+Notes:
+  - PR #151 is MERGED — baseline vs post-fix from merge-commit vs merge-base with main.
+  - Docker suite live re-run BLOCKED locally (testcontainers 60s startup on colima+arm64
+    SQL Server). Dev-attested via CI (Linux runner).
+  - Tenant selection for large-backup probe: Tucson (20,442 rows) is the largest reachable
+    from this workstation; dev also probed Long Island / High Desert / Everson /
+    Everson2ndBatch per PR body (not reachable locally, attested).

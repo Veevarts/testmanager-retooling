@@ -1,0 +1,57 @@
+AC ↔ dev test coverage matrix — IM-1093 / PR #151
+====================================================
+
+Dev-authored / dev-modified test files:
+  A. src/data-migration/infrastructure/destination/sql-server/query-regression/pos-purchase-donation-query.spec.ts
+     (string-matching, +96 -16) · 8 assertions
+  B. src/data-migration/infrastructure/destination/sql-server/query-regression/query-chain.integration.spec.ts
+     (dockerized, +162 -30) · 6 relevant assertions for this fix
+  C. src/data-migration/infrastructure/destination/sql-server/query-regression/query-chain.live.spec.ts
+     (live-server variant, +4 -23) · minor cleanup
+  D. src/data-migration/infrastructure/destination/sql-server/query-regression/sql-server-query-fixture.ts
+     (fixture, +90 -0) · new item-only + dual-path fixtures
+
+AC ↔ test files
+---------------
+AC1 · Cardinality (1 row per Sales Order)
+  A: "resolves donation POS purchases per sales order with a single eligibility evaluation"
+  A: "keeps deterministic one-row-per-sales-order resolution priority"
+  B: "emits a single row when a sales order is reachable through revenue and payment paths"
+  → FULL coverage (3 assertions)
+
+AC2 · No missing/extras/dupes across item, revenue, payment paths
+  A: "preserves the revenue, payment, and donation-item sales-order linkage paths"
+  B: "keeps the donation chain valid when the sales order is linked through SALESORDERPAYMENT"
+  B: "exports donation-item sales orders without an eligible transaction once with item amount"
+  → FULL coverage (3 assertions)
+
+AC3 · Completeness against large validation backup (expected == actual)
+  → NO dev unit test (structural — this is a data-scale assertion, not a code assertion)
+  → QA compensates via safesql live probes on 3 profiles (scenario-1/scenario-3)
+
+AC4 · Anti-pattern removal + regression tests cover lineage/ranking/date-status/anti-pattern
+  A: "avoids the transaction-first patterns that dropped or multiplied sales orders"  ← anti-pattern
+  A: "filters sales orders early without casting date columns in predicates"          ← date
+  A: "keeps pending sales-order statuses exportable for downstream POS lookups"       ← status
+  A: "keeps deterministic one-row-per-sales-order resolution priority"                 ← ranking
+  A: "keeps zero-net donation transactions excluded so POS purchases match donation opportunities"  ← cross-query
+  A: "keeps donation eligibility aligned with donation_transaction.sql exclusions"    ← cross-query
+  B: "exports pending donation sales orders so downstream POS lookups stay valid"     ← status via docker
+  B: "uses DATEADDED for date filtering when TRANSACTIONDATE is null"                 ← date fallback
+  → FULL coverage across all 4 aspects (lineage + ranking + date/status + anti-pattern)
+
+AC5 · CI gates (lint + test:queries + tsc + GH PR CI)
+  Wire-in: `test:queries` runs A (via `--runInBand query-regression`).
+  GH PR CI: "Lint, test, and build" job passed in 2m2s per gh pr checks.
+  → wire-in verified + PR CI green
+
+Coverage verdict
+----------------
+- AC1: FULL (3 assertions from A + B)
+- AC2: FULL (3 assertions from A + B covering item/revenue/payment paths)
+- AC3: NO code coverage (data-level, source-side responsibility)
+       → QA source-side: safesql on 3 reachable profiles (Tucson/Illinois_2/Aspen)
+       → Dev's own probes (per PR body): Long Island / High Desert / Everson / Everson2ndBatch
+         "no donation-linked Sales Orders with status 0/6/7 found in the risk probe"
+- AC4: FULL (8 assertions covering all 4 aspects)
+- AC5: FULL (wire-in + CI green)

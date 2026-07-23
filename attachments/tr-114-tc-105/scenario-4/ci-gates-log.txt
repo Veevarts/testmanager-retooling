@@ -1,0 +1,94 @@
+AC5 · CI gates + mutation testing — QA execution 2026-07-22
+=============================================================
+
+## Test 5a: `npm run test:queries` on merge-commit
+
+Command: npm run test:queries
+Result:
+  Test Suites: 10 skipped, 34 passed, 34 of 44 total
+  Tests:       38 skipped, 294 passed, 332 total
+  Time:        2.205 s
+
+PR body claim: "34 suites passed, 10 skipped" ✅ MATCH.
+
+## Test 5b: `npm run lint:check`
+
+Command: npm run lint:check
+  (eslint src/data-migration/infrastructure/destination/sql-server/query-regression/**/*.ts)
+Result: exit 0, silent (no warnings). ✅
+
+## Test 5c: `npx tsc -p tsconfig.build.json --noEmit`
+
+Command: npx tsc -p tsconfig.build.json --noEmit
+Result: exit 0, silent (clean type-check). ✅
+
+## Test 5d: GitHub PR CI (merge-commit a4170995)
+
+Command: gh pr checks 151 --repo Veevarts/MigrationToolETL
+Result: "Lint, test, and build"  pass  2m2s
+        Job URL: https://github.com/Veevarts/MigrationToolETL/actions/runs/29865706951/job/88753253891
+✅ PASS.
+
+## Test 5e: MUTATION 1 — Remove EligibleTransactionIds join (revert to broad scan)
+
+Mutation applied via sed:
+```
+FROM EligibleTransactionIds eti
+INNER JOIN FINANCIALTRANSACTIONLINEITEM dli
+    ON dli.FINANCIALTRANSACTIONID = eti.FINANCIALTRANSACTIONID
+→ FROM FINANCIALTRANSACTIONLINEITEM dli
+```
+
+SHA of file before:  e3a30e3c8e6604bf847858623f26c05b874dcbfd...
+SHA of file after:   a4dd643705c4a9e446589ba610d28c23bbe5498c...
+(files differ, confirmed)
+
+Re-run `npm run test:queries` with mutation applied:
+```
+Test Suites: 1 failed, 10 skipped, 33 passed, 34 of 44 total
+Tests:       1 failed, 38 skipped, 293 passed, 332 total
+```
+
+**Failed test**: `pos-purchase-donation-query.spec.ts:106` —
+  "avoids the transaction-first patterns that dropped or multiplied sales orders"
+
+Verdict: the string-matching regression test **directly catches** the anti-pattern
+reintroduction. Regression protection is real and correctly wired. ✅
+
+## Test 5f: MUTATION 2 — Re-add STATUSCODE NOT IN (0, 6, 7) exclusion
+
+Mutation applied: reintroduce the status exclusion the fix removed.
+
+Re-run `npm run test:queries`:
+```
+Test Suites: 1 failed, 10 skipped, 33 passed, 34 of 44 total
+Tests:       2 failed, 38 skipped, 292 passed, 332 total
+```
+
+**Failed test**: `pos-purchase-donation-query.spec.ts:114` —
+  "keeps pending sales-order statuses exportable for downstream POS lookups"
+
+Verdict: the pending-status contract is protected. Reintroducing the exclusion
+fails the test that asserts pending statuses stay exportable. ✅
+
+## Test 5g: Docker suite
+
+Docker suite requires the same colima+arm64 SQL Server emulation as IM-865 TR-113;
+testcontainers default 60s startup timeout is too short on colima. Dev's own PR
+body says: "RUN_DOCKER_SQL_QUERY_TESTS=1 ... attempted, but local Testcontainers
+could not find a working container runtime". Not re-verified locally.
+
+CI (Linux runner native amd64) is the attestation source — "Lint, test, and build"
+job at gh pr checks 151 = pass.
+
+## Summary AC5
+
+- 5a `test:queries` = 294/294 pass ✅ (matches PR body)
+- 5b `lint:check`   = exit 0 ✅
+- 5c `tsc --noEmit` = exit 0 ✅
+- 5d GH PR CI       = pass in 2m2s ✅
+- 5e Mutation 1 (broad scan)      → 1 test FAILS (regression lock caught it) ✅
+- 5f Mutation 2 (status excl)     → 1 test FAILS (regression lock caught it) ✅
+- 5g Docker suite live re-run     → BLOCKED locally, dev-attested via CI
+
+All 4 CI gates green + 2 mutation tests confirm regression protection.

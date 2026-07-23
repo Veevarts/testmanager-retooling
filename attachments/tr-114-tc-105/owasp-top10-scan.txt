@@ -1,0 +1,34 @@
+OWASP Top 10 (2021) applicability scan — IM-1093 / PR #151
+============================================================
+
+Change surface: 1 SQL query file (+ 4 test files + 1 fixture). Query runs against
+a read-only SQL Server datasource via safesql / an admin-authenticated DSN. No
+auth, no crypto, no user-input path in the query.
+
+| Cat  | Category                                     | Applicable? | Verdict | Notes |
+|------|----------------------------------------------|-------------|---------|-------|
+| A01  | Broken Access Control                        | N/A         | —       | Query runs under a fixed service account against source SQL Server; no user-controlled access boundary. |
+| A02  | Cryptographic Failures                       | N/A         | —       | No cryptographic operations touched. TLS to source DB via safesql tunnel; unchanged. |
+| A03  | Injection                                    | Applicable  | PASS    | Static SQL with parameterized DECLAREs (@dateFilterFrom/To, @hasDateFilterFrom/To). Zero dynamic string interpolation; 0 `${...}` in the query. Grep on diff returns 0 injection-shaped patterns. |
+| A04  | Insecure Design                              | Applicable  | PASS    | Design change is documented (PR body sequence diagram + inline SQL comments explaining the eligibility short-circuit and item-fallback aggregation). Regression tests explicitly protect against the anti-pattern reintroduction and status-contract regression. Both mutations demonstrated. |
+| A05  | Security Misconfiguration                    | N/A         | —       | No config file changes; test-container SA password (in fixture TS) is randomized per-test and ephemeral. |
+| A06  | Vulnerable & Outdated Components             | Applicable  | PASS    | package.json + package-lock.json not touched. npm audit findings (2 crit / 6 high / 26 mod / 1 low) are pre-existing baseline, NOT introduced by this PR. |
+| A07  | Identification & Authentication Failures     | N/A         | —       | No auth surface touched. |
+| A08  | Software & Data Integrity Failures           | Applicable  | PASS    | 4 new / modified test files (pos-purchase-donation-query.spec.ts, query-chain.integration.spec.ts, query-chain.live.spec.ts, sql-server-query-fixture.ts) lock the SQL contract at 3 levels: string-matching regression, dockerized integration, live-server. Empirically demonstrated via mutation testing (broad-scan + status-exclusion mutations both fail targeted tests). |
+| A09  | Security Logging & Monitoring Failures       | N/A         | —       | No logging changes in the diff. |
+| A10  | Server-Side Request Forgery                  | N/A         | —       | No HTTP calls introduced; query executed against a fixed DSN. |
+
+## Summary
+
+- Applicable: 4 (A03, A04, A06, A08) — all PASS
+- N/A: 6 with justifications
+- 0 High/Critical blockers introduced
+- 0 defects to raise from OWASP
+
+## npm audit baseline note
+
+`npm audit --production --json` on the merge commit:
+  critical: 2 · high: 6 · moderate: 26 · low: 1 · info: 0
+
+Verified pre-existing baseline (package-lock.json untouched by PR #151). Same
+baseline as IM-865 TR-113 sign-off. Not a regression; not a blocker.

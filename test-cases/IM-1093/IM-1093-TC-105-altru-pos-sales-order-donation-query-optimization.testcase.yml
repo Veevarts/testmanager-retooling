@@ -1,0 +1,177 @@
+schemaVersion: "1.0"
+
+id: "4ebc0b6b-bf17-4e21-9aaa-de224b831a1e"
+key: "TC-105"
+title: "Altru migration · POS sales order donations query — completeness (0 missing/extras/dupes) y anti-pattern lock"
+description: |
+  Cobertura QA para IM-1093 (Error, priority Medium, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1105 (creada 2026-07-22).
+
+  Contexto:
+  - Repositorio: `MigrationToolETL`, extractor SQL Server para el query
+    `sales_order_only_donation.sql` que produce CSVs para bulk-upsert
+    en `Auctifera__POS_Purchase__c` (donation-only Sales Orders).
+  - PR bajo prueba: `Veevarts/MigrationToolETL#151` (MERGED) — branch
+    `fix/optimize-pos-donation-query` — título "IM-1093 fix: optimize
+    POS sales order donations query".
+  - Referencia: IM-1091 (POS membership query, PR #144, MERGED) —
+    aplicó el mismo pattern al sibling `sales_order_only_membership.sql`.
+    Long Island fue el probe de validación: 44,734 expected == actual, 0
+    missing, 0 extras, 0 duplicates.
+  - Reporte del bug: el query donation depende de broad OR / OUTER APPLY
+    patterns que degradan performance en backups grandes y pueden causar
+    Sales Orders missing, extras o duplicados.
+
+  ACs del ticket (5, mapeados 1:1 con scenarios abajo excepto AC2+AC3
+  fundidos por overlap semántico — AC2 es la invariante, AC3 el método):
+  1. AC1: 1 fila por eligible donation-only Sales Order.
+  2. AC2: 0 missing / 0 extras / 0 duplicates a lo largo de item, revenue,
+     payment paths.
+  3. AC3: verificar completeness contra un large validation backup:
+     expected == actual (fundido con AC2 como assertion + method).
+  4. AC4: broad OR / OUTER APPLY patterns REMOVIDOS + regression tests
+     cover lineage paths + ranking + date/status filtering + anti-pattern
+     prevention.
+  5. AC5: CI passes lint + query regression tests + build.
+
+  Riesgos abiertos:
+  - PR #151 YA está MERGED — la ejecución en el executor valida contra
+    el estado post-merge (head SHA en `main` de MigrationToolETL). El
+    baseline vs post-fix se toma de la merge-commit vs su merge-base, no
+    de una branch abierta.
+  - El ticket no nombra un tenant específico para el "large validation
+    backup" (a diferencia de IM-1091 que nombró Long Island). QA deberá
+    escoger el tenant más grande alcanzable vía safesql — típicamente
+    Long Island si el profile está configurado, o el más grande de los
+    reachables (Illinois_2 fue el más grande en la corrida de IM-865:
+    263 rows / $18.3M).
+  - El ticket dice "Validation Evidence (to complete)" — la evidencia
+    aún no la puso el dev en el ticket; el executor la genera desde 0.
+  - `Implementation_External_ID__c` en Charge/Opportunity/OppPayment/POS
+    Purchase por tenant queda como precondición pre-load para el equipo
+    de Implementations (mismo patrón que IM-865). Fuera de scope QA
+    source-side (ver [[feedback-no-prod-deploy-scenarios]]).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "safesql runner con los profiles de tenants Altru disponibles (`node ~/tools/safesql/safesql.mjs profiles list`). Requiere bastion VPN activo."
+  - "Acceso vía `gh api contents?ref=<sha>` a `sales_order_only_donation.sql` en el merge-commit del PR #151 y en su merge-base con `main`."
+  - "Clone local de MigrationToolETL en el HEAD post-merge para correr `npm run lint:check` + `npm run test:queries` + `npx tsc -p tsconfig.build.json --noEmit` + `npm run build`."
+  - "Referencia: `sales_order_only_membership.sql` (sibling optimizado en IM-1091) accesible para diff estructural side-by-side — mismo pattern esperado."
+  - "El ticket IM-1091 confirma que el pattern espera CTEs explícitos por lineage path (item / revenue / payment) + ranking window + date/status filters."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Cardinalidad — el query emite exactamente 1 fila por eligible donation-only Sales Order"
+    tags:
+      - ac-1
+      - happy-path
+      - cardinality
+      - altru
+      - pos-purchase
+      - donation
+    given:
+      - "el query HEAD (`gh api contents?ref=<merge-commit>` de `sales_order_only_donation.sql`) es la implementación POST-fix"
+      - "el query BASE (`gh api contents?ref=<merge-base>` del mismo archivo) es la implementación PRE-fix con broad OR / OUTER APPLY"
+      - "safesql tiene alcance a al menos 1 tenant Altru reachable"
+    when:
+      - "QA corre `safesql run <profile> <path-to-HEAD-query>` sobre el tenant más grande alcanzable"
+      - "QA calcula: (a) cardinalidad de la columna key `Implementation_External_ID__c` en el output, (b) unicidad de esa columna"
+    then:
+      - "row count = COUNT DISTINCT `Implementation_External_ID__c` en el output (0 dupes por PK)"
+      - "cada fila representa un Sales Order único (no hay duplicación por join)"
+      - "el mismo query corrido contra BASE emite un total >= HEAD (broad OR / OUTER APPLY suele over-emitir por múltiples paths); si BASE = HEAD la ganancia es sólo de performance sin cambio de output — documentar cuál caso aplica"
+
+  - title: "AC2+AC3 · Completeness — expected == actual, 0 missing / 0 extras / 0 duplicates a lo largo de item, revenue, payment paths"
+    tags:
+      - ac-2
+      - ac-3
+      - regression-evidence
+      - completeness
+      - altru
+      - pos-purchase
+      - donation
+    given:
+      - "el PR #151 aplicó el mismo pattern que IM-1091 (PR #144 sibling): CTEs explícitos por path + ranking + date/status filter"
+      - "una definición independiente del `expected` set de donation-only Sales Orders — calculada vía la unión (UNION) de los 3 lineage paths (item, revenue, payment) con dedup por `POSPurchaseID`"
+      - "safesql alcanza el tenant de validación (Long Island preferido, o el más grande disponible)"
+    when:
+      - "QA construye `expected` corriendo por separado los 3 lineage paths sobre el tenant (item path, revenue path, payment path) y hace UNION + dedup por `POSPurchaseID`"
+      - "QA compara `expected` (independent probe) vs `actual` (output del query HEAD) por `POSPurchaseID`"
+      - "QA calcula: missing = expected − actual, extras = actual − expected, duplicates = actual con COUNT > 1 por `POSPurchaseID`"
+    then:
+      - "|missing| == 0 sobre el tenant de validación"
+      - "|extras| == 0 sobre el tenant de validación"
+      - "|duplicates| == 0 sobre el tenant de validación"
+      - "expected count == actual row count (equality exacta)"
+      - "el breakdown de contribución por lineage path (item / revenue / payment) queda documentado en la evidencia"
+
+  - title: "AC4 · Anti-pattern removal — no broad OR / OUTER APPLY en el query HEAD"
+    tags:
+      - ac-4
+      - regression-protection
+      - anti-pattern
+      - altru
+      - pos-purchase
+    given:
+      - "el query HEAD y BASE están fetched vía `gh api contents?ref=<sha>` (sin cambiar la copia local)"
+      - "el patrón esperado post-fix se conoce por el sibling optimizado `sales_order_only_membership.sql` (IM-1091)"
+    when:
+      - "QA hace un static grep del query HEAD por `OUTER APPLY` (case-insensitive) y por patterns `OR ... = ... OR ... = ...` con >= 3 disyunciones"
+      - "QA lee el query HEAD y verifica que la estructura son CTEs por lineage path + un `SELECT ... FROM CTEs` final con ranking window function"
+      - "QA hace un side-by-side con `sales_order_only_membership.sql` (sibling optimizado) para confirmar mismo pattern estructural"
+      - "QA lista los archivos de tests query-regression en el PR #151 y verifica que cubren: lineage paths (item / revenue / payment), ranking, date/status filtering, y un anti-pattern check (no OR-chain / no OUTER APPLY)"
+    then:
+      - "0 ocurrencias de `OUTER APPLY` en el query HEAD"
+      - "0 chains de `OR = OR = OR = ...` con >= 3 disyunciones en el query HEAD"
+      - "los CTEs por lineage path son explícitos y nombrados (ItemPath / RevenuePath / PaymentPath o equivalente)"
+      - "existe al menos 1 test file en `query-regression/` que cubre este query (spec.ts + potencial integration.spec.ts + fixture)"
+      - "los tests explícitamente cubren: lineage paths (>=1 test por path), ranking (>=1 test), date/status filtering (>=1 test), anti-pattern (>=1 test que falla si OR/OUTER APPLY reaparece)"
+
+  - title: "AC5 · CI gates — lint + query regression + build + tsc pasan en el HEAD del PR"
+    tags:
+      - ac-5
+      - ci-gate
+      - regression-protection
+      - altru
+      - pos-purchase
+    given:
+      - "checkout local del PR #151 en su merge-commit (`gh pr checkout 151` o `git fetch origin main`) + `npm ci` (ya instalado)"
+      - "el ticket IM-1093 declara 4 gates de validación: `npm run lint:check`, `npm test -- --runInBand query-regression`, `npx tsc -p tsconfig.build.json --noEmit`, GitHub PR CI"
+    when:
+      - "QA corre `npm run lint:check` sobre el checkout"
+      - "QA corre `npm run test:queries` (equivalente a `npm test -- --runInBand query-regression`)"
+      - "QA corre `npx tsc -p tsconfig.build.json --noEmit`"
+      - "QA verifica que GitHub PR CI cerró en verde (via `gh pr checks 151` o `gh pr view 151 --json statusCheckRollup`)"
+      - "QA aplica una mutación local en el query HEAD (ej. reintroducir un `OR ...` amplio en una condición WHERE) y re-corre `test:queries` para confirmar que un test regresa a FAIL — evidencia de que el anti-pattern lock funciona"
+    then:
+      - "`npm run lint:check` termina en exit 0 sin warnings introducidos por este PR"
+      - "`npm run test:queries` termina 300+ passed, 0 failed (excluyendo los 2 suites pre-existentes en `main` que ya se documentaron en TR-113)"
+      - "`npx tsc -p tsconfig.build.json --noEmit` termina en exit 0"
+      - "GitHub PR #151 CI status = SUCCESS en el merge-commit"
+      - "la mutación local que reintroduce el anti-pattern rompe al menos 1 test — regression protection confirmed"
+
+tags:
+  - im-1093
+  - im-70
+  - im-1105
+  - im-1091
+  - altru
+  - migration
+  - pos-purchase
+  - donation
+  - sql-query
+  - query-optimization
+  - regression-protection
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-22T12:44:56Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-22T12:44:56Z"
+  version: 1
