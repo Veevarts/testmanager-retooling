@@ -1,0 +1,137 @@
+schemaVersion: '1.0'
+id: 2394cdfc-7375-47d5-9c87-659495b69d14
+key: TC-107
+title: IC 5.23 — Update Campaigns Page Layout (org-agnostic discovered select, hybrid v3)
+description: |
+  Cobertura QA de IM-1078 ([ICA] 5.23 Update Campaigns Page Layout — org-agnostic
+  fix + deliver, medium-confidence, epic IM-735 Batch C). PR under test:
+  Veevarts/MigrationAppBackend#250 (MERGED 2026-07-16, un solo archivo: el seed
+  spec ic-5-23-campaigns-page-layout.json v3).
+
+  El v2 era un spec AUTO de un paso que hardcodeaba el layout versionado
+  ("Campaign-vnfp__Veevart Campaign Layout V3 - Mar 2024") y el record type
+  "Campaign.Default" (ausente en muchos orgs → phantom assignment que rompía el
+  verify). El v3 lo convierte en HYBRID:
+  - el layout sale de un operator SELECT con opciones DESCUBIERTAS en vivo
+    (discovery kind layouts, namespace reconstruido) — sin hardcode;
+  - el T2 assign corre SIN recordType → re-apunta TODAS las asignaciones de
+    layout de Campaign (default + por-record-type si existen) en todos los
+    perfiles descubiertos → org-agnostic por construcción;
+  - el reorden del campo End Date y el Lightning Record Page org-default quedan
+    como pasos MANUALES guiados (sin op Metadata-safe para esos cambios).
+
+  Método QA (validación de la variante API del paso "corrida del IE" del
+  harness): run disparado, alimentado (operator input) y atestado 100% POR API
+  (endpoints plan-runs / inputs / handoff), con polling por GET y verificación
+  independiente del org vía sf CLI Tooling API (Layout / ProfileLayout).
+
+  QA Sub-task asociada: IM-1100.
+type: integration
+priority: medium
+status: active
+preconditions:
+- IC 5.23 spec v3 seedeado en el catálogo de MigrationApp-dev (caseId ic-5-23-campaigns-page-layout, active)
+- Org target con package vnfp instalado y autorizado en el workspace del Migration App
+- Sesión autenticada en migration.dev.rtl.veevartapp.com (token en localStorage para los calls API)
+- sf CLI autenticado con alias del org target (illinois-trainings) para el POST-verify Tooling
+format: gherkin
+scenarios:
+- title: IC 5.23 — Operator selects the Campaign layout from live-discovered options (no hardcoded name)
+  tags:
+  - happy-path
+  - im-1078
+  - ac-1
+  - discovery
+  - api
+  given:
+  - el run llega al paso de asignación de layout
+  when:
+  - el run parquea por input (status AWAITING_INPUT)
+  then:
+  - presenta un único select cuyas opciones se descubren en vivo del org
+  - cada opción es el fullName asignable con namespace reconstruido
+  - ningún fullName versionado está hardcodeado en el spec
+  - el operador elige el Veevart Campaign layout más reciente
+  estimatedDuration: 10
+  automated: true
+- title: IC 5.23 — Layout assigned across all profiles with no Campaign.Default dependency
+  tags:
+  - happy-path
+  - im-1078
+  - ac-2
+  - profiles
+  - t2-assign
+  given:
+  - el operador seleccionó el layout Veevart más reciente
+  when:
+  - el paso AUTO T2 assign corre
+  then:
+  - descubre todos los perfiles del org
+  - re-apunta cada asignación de layout de Campaign al seleccionado SIN pasar recordType
+  - el paso nunca referencia el record type "Campaign.Default"
+  - el read-back de Profile muestra el layout seleccionado en la asignación default
+  - el paso verifica exitosamente
+  estimatedDuration: 15
+  automated: true
+- title: IC 5.23 — Case does not fail on an org where Campaign has no custom record types
+  tags:
+  - edge-case
+  - im-1078
+  - ac-3
+  - resilience
+  given:
+  - un org cuyo objeto Campaign no tiene record types custom (solo el default)
+  when:
+  - el paso AUTO T2 assign corre
+  then:
+  - el paso completa exitosamente
+  - el run no falla por el record type "Campaign.Default" ausente
+  estimatedDuration: 10
+  automated: true
+- title: IC 5.23 — End Date reorder is a structured manual handoff
+  tags:
+  - im-1078
+  - ac-4
+  - manual-handoff
+  given:
+  - el layout quedó asignado como activo
+  when:
+  - el run llega al paso de reorden de End Date
+  then:
+  - parquea como paso MANUAL (blocked-human) con guía estructurada
+  - la guía instruye mover "End Date" directo bajo "Start Date" en la sección Campaign Information del layout asignado
+  - reanudar requiere atestación explícita (handoff)
+  estimatedDuration: 10
+  automated: false
+- title: IC 5.23 — Lightning Record Page org-default is a structured manual handoff
+  tags:
+  - im-1078
+  - ac-5
+  - manual-handoff
+  given:
+  - el paso anterior fue atestado
+  when:
+  - el run llega al paso del Lightning Record Page
+  then:
+  - parquea como paso MANUAL (blocked-human) con guía estructurada
+  - la guía instruye asignar "Veevart Campaign Record Page" como Org Default para desktop y phone
+  - la guía instruye saltar el paso si ese record page no existe en el org
+  estimatedDuration: 10
+  automated: false
+tags:
+- im-1078
+- im-735
+- ic-5-23
+- migration-app
+- implementations-automation
+- campaigns
+- page-layout
+- discovery
+- api-run
+- illinois-trainings
+version: 1
+metadata:
+  createdBy: claude
+  createdAt: '2026-07-23T18:15:00Z'
+  lastModifiedBy: claude
+  lastModifiedAt: '2026-07-23T18:15:00Z'
