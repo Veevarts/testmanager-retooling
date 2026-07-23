@@ -1,0 +1,182 @@
+schemaVersion: '1.0'
+id: 634a5d25-b6ef-4174-856f-dd52688b6348
+key: TC-106
+title: IC 5.01 — Set Account & Opportunity Record Types (org-agnostic BusinessProcess discovery, hybrid v3)
+description: |
+  Cobertura QA de IM-1077 ([ICA] 5.01 Set Account and Opportunity Record Types —
+  org-agnostic fix + deliver, medium-confidence, epic IM-735 Batch C). PR under
+  test: Veevarts/MigrationAppBackend#249 (MERGED 2026-07-16, branch
+  task/ic-5-01-account-opportunity-record-types-IM-1077).
+
+  El v2 hardcodeaba businessProcess "NPSP_Default" (presente en CamiloDevOrg,
+  ausente en Tucson) → version-drift confirmado. El v3 lo reemplaza por una
+  directiva declarativa de discovery:
+    "businessProcess": { "discover": true, "prefer": ["NPSP_Default"] }
+  El T3 recordTypes op resuelve en runtime via Tooling query
+  (EntityDefinitionId = 'Opportunity' AND IsActive = true): (1) primer prefer
+  presente (match exacto qualified gana; nombre pelado prefiere el UNMANAGED
+  sobre el duplicado managed), (2) si no, el único process activo, (3) si no,
+  falla nombrando candidatos. Update-path ambiguo es no-fatal (preserva el
+  process existente); create-path ambiguo es MALFORMED_REQUEST.
+
+  Partes del case (hybrid v3): 3 pasos AUTO (recordTypes con discovery ·
+  recordTypeVisibility en todos los perfiles con Donation default ·
+  standardValueSet Contact Roles con deactivateOthers false) + 2 pasos
+  MANUALES guiados (retiro de RTs duplicados · cleanup Account/Household) +
+  verify final del engine que asserta solo los efectos automáticos.
+
+  Método QA (validación del paso nuevo "corrida automatizada del IE" del
+  harness): run disparado y monitoreado vía Playwright sobre el Migration App
+  dev (workspace Test IM cases Org Tucson → run ad-hoc con solo la card 501
+  v3 seleccionada → org illinois-trainings) + POST-verify independiente por
+  sf CLI read-only.
+
+  QA Sub-task asociada: pendiente de crear.
+type: integration
+priority: medium
+status: active
+preconditions:
+- IC 5.01 spec v3 seedeado en el catálogo de MigrationApp-dev (card 501, badge v3)
+- T3 recordTypes op con BusinessProcess discovery deployado (PR #249 merged)
+- Org target con el package de fundraising Veevart (vnfp) + NPSP instalados
+- Org target autorizado en el workspace del Migration App (Auctifera instalada, Veevart Settings abierto una vez)
+- Sesión autenticada en migration.dev.rtl.veevartapp.com (Google SSO via Cognito)
+- sf CLI autenticado con alias del org target para el POST-verify read-only
+format: gherkin
+scenarios:
+- title: IC 5.01 — Kill the hardcoded NPSP_Default BusinessProcess (the caveat)
+  tags:
+  - happy-path
+  - im-1077
+  - ac-1
+  - automated
+  - business-process-discovery
+  given:
+  - el IC 5.01 spec v3 ya no hardcodea businessProcess "NPSP_Default"
+  - cada ensure de record type de Opportunity declara businessProcess { discover true, prefer ["NPSP_Default"] }
+  when:
+  - el step recordTypes corre
+  then:
+  - el op Tooling-querya los BusinessProcess activos del objeto (EntityDefinitionId = 'Opportunity' AND IsActive = true)
+  - resuelve el preferred process cuando está presente, si no el único activo
+  - falla con error claro nombrando los candidatos cuando la elección es ambigua en create
+  - ningún nombre de process org-specific queda horneado en el spec
+  estimatedDuration: 15
+  automated: true
+- title: IC 5.01 — Dynamic resolution disambiguates duplicate names deterministically
+  tags:
+  - edge-case
+  - im-1077
+  - ac-2
+  - managed-vs-unmanaged
+  given:
+  - el org expone un "NPSP_Default" unmanaged Y un "vnfp__NPSP_Default" managed
+  when:
+  - el op resuelve prefer "NPSP_Default"
+  then:
+  - selecciona el "NPSP_Default" unmanaged (exacto/unmanaged gana sobre el duplicado managed)
+  - un prefer namespaced "vnfp__NPSP_Default" fija el managed
+  estimatedDuration: 10
+  automated: true
+- title: IC 5.01 — Ensure the six Veevart Opportunity record types are active
+  tags:
+  - happy-path
+  - im-1077
+  - ac-3
+  - automated
+  - record-types
+  given:
+  - el step recordTypes corre contra el org target
+  when:
+  - el engine reporta el step Done
+  then:
+  - Donation, Membership, Grant, In-Kind Gift, Major Gift y Matching Gift existen y están activos
+  - el step verifica cada uno por metadata read-back
+  estimatedDuration: 10
+  automated: true
+- title: IC 5.01 — Assign the record types across every profile with Donation as default
+  tags:
+  - happy-path
+  - im-1077
+  - ac-4
+  - automated
+  - profiles
+  given:
+  - el step recordTypeVisibility corre sin lista explícita de perfiles
+  when:
+  - el engine reporta el step Done
+  then:
+  - cada perfil descubierto recibe los seis record types visibles
+  - Donation queda como default de Opportunity
+  - las asignaciones existentes se preservan (merge aditivo, single default enforced)
+  - el hack de la Enhanced Profile UI / Google-sheet URL no es necesario
+  estimatedDuration: 15
+  automated: true
+- title: IC 5.01 — Ensure Opportunity Contact Role picklist values are active (Part 2)
+  tags:
+  - happy-path
+  - im-1077
+  - ac-5
+  - automated
+  - standard-value-set
+  given:
+  - el step standardValueSet corre sobre el ContactRole value set con deactivateOthers false
+  when:
+  - el engine reporta el step Done
+  then:
+  - los valores standard y NPSP de Opportunity Contact Role están activos
+  - cualquier valor listado desactivado se reactiva
+  - los roles custom y el default existente quedan intactos
+  estimatedDuration: 10
+  automated: true
+- title: IC 5.01 — Guided manual cutover for the destructive / UI-only work
+  tags:
+  - im-1077
+  - ac-6
+  - manual-handoff
+  - hybrid
+  given:
+  - los 3 pasos automáticos terminaron Done
+  when:
+  - el run llega a los pasos manuales
+  then:
+  - el retiro de los RTs Donation/Membership duplicados aparece como paso manual estructurado (guía de 8 pasos en el dashboard)
+  - el cleanup de Account/Household record types aparece como paso manual estructurado
+  - cada paso manual requiere atestación explícita ("Mark step as done" registra usuario + timestamp) para reanudar el run
+  - el verify automático final asserta SOLO los efectos automáticos (record types activos + contact roles activos)
+  estimatedDuration: 15
+  automated: false
+- title: IC 5.01 — Live verification on target org (three steps success + verified)
+  tags:
+  - im-1077
+  - ac-7
+  - live-verification
+  - delivery
+  given:
+  - los steps recordTypes, recordTypeVisibility y standardValueSet corren contra un org real
+  when:
+  - el run completa
+  then:
+  - cada step reporta success y verified true
+  - el businessProcess del RT Donation lee de vuelta "NPSP_Default"
+  estimatedDuration: 20
+  automated: true
+tags:
+- im-1077
+- im-735
+- ic-5-01
+- migration-app
+- implementations-automation
+- record-types
+- business-process-discovery
+- npsp
+- vnfp
+- playwright
+- ie-run-automation
+- illinois-trainings
+version: 1
+metadata:
+  createdBy: claude
+  createdAt: '2026-07-23T16:05:00Z'
+  lastModifiedBy: claude
+  lastModifiedAt: '2026-07-23T16:05:00Z'
