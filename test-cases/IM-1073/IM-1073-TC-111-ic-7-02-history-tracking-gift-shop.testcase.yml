@@ -1,0 +1,224 @@
+schemaVersion: "1.0"
+
+id: "31bf5b8c-dab8-4396-a36d-77ee88a5d5f7"
+key: "TC-111"
+title: "IC 7.02 Set History Tracking for Gift Shop — NEW validationRule T3 op + 2 objects · 23 fields con IM-1069 matchers · double label-trap Total/Paid_Value · 1 handoff MANUAL"
+description: |
+  Cobertura QA para IM-1073 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1112 (creada 2026-07-23).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch A (history-tracking family). Hermano de
+    IM-1074 (IC 8.05 Rentals) pero con un elemento NUEVO: el `validationRule` T3 op.
+  - IC 7.02 = "Set History Tracking for Gift Shop" (Order__c 7.02 en el catálogo
+    Auctifera SF).
+  - **Tier: Medium** (caveat: cross-version managed field/object API names — mitigado
+    por matcher runtime de IM-1069).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#245` (**MERGED** 2026-07-15 21:47Z).
+    Branch: `task/ic-7-02-history-tracking-gift-shop-IM-1073`. Merge commit `bb9a7e38`.
+  - Files touched (7, +631/-32 — NO es spec-only, es un CODE PR):
+    * `metadata-mutation-spec.ts` (+61) — schema del nuevo validationRule op
+    * `metadata-mutation-spec.spec.ts` (+1)
+    * `t3-metadata.adapter.ts` (+150) — implementación del validationRule op
+    * `t3-metadata.adapter.spec.ts` (+230) — 8 tests del adapter
+    * `t3-metadata.handler.ts` (+22) — lambda handler wiring
+    * `t3-metadata.handler.spec.ts` (+24)
+    * `ic-7-02-history-tracking-gift-shop.json` (+143/-32) — spec v2
+
+  Cambio principal (2 partes):
+
+  **PARTE A — NUEVO T3 op `validationRule` (reusable, zero per-IC code)**:
+  - Activate/deactivate validation rules por `fullName` via synchronous CRUD Metadata
+    API: read → flip `active` → full-component write (normaliza jsforce xsi:nil /
+    typed-scalar) → read-back verify. Mismo shape que workflowRule/recordTypes op.
+  - `anyOf` candidate fullNames drift-tolerant (managed rules namespace el rule
+    developer name → prueba bare Y namespaced).
+  - **deactivate + absent = idempotent success no-op** (absence ya satisface
+    "be inactive"). **activate + absent = applied=false** (nunca crea rule).
+  - Subscribers PUEDEN toggle MANAGED validation rules — proven live por dev en CamiloDevOrg.
+
+  **PARTE B — ic-7-02 spec v2 (feasibility auto → hybrid)**:
+  - 4 steps: (1) validationRule deactivate Restrict_Misc_Gift_Card, (2) historyTracking
+    Client Purchases 9 fields, (3) historyTracking Shop Item 14 fields, (4) MANUAL
+    tick 2 Name fields.
+  - Todos los 23 fields con matcher `{anyOf:[apiName], label}` (IM-1069 pattern).
+  - **NON-exclusive (additive)**: flag `exclusive` ausente → preserva tracking pre-existente.
+  - Cierra la open-question IM-935: `Shopify_Product_Id__c` resuelto como required matcher.
+
+  Object/field resolution (verified live en 2 orgs por dev):
+  - **Client Purchases** = `Auctifera__ClientPurchase__c` — 9 fields:
+    Amount Received=`Paid_Value__c` (NO `Paid_Value1__c` label "Paid Value"),
+    Total=`Total2__c` (el live non-deprecated; hay 2 fields con label "(Deprecated) Total").
+  - **Shop Item** = `Auctifera__CatalogItem__c` — 14 fields incl `Shopify_Product_Id__c`.
+
+  Evidencia dev (per PR body #245):
+  - Gates: jest (touched + seed suites), tsc --noEmit, eslint — all green.
+  - CamiloDevOrg + im696-tucson: all automated steps COMPLETED, parks at MANUAL Name-field step.
+  - Independent read-back en 2 orgs: enableHistory=true; 9/9 Client Purchase + 14/14
+    Shop Item trackHistory=true; Restrict_Misc_Gift_Card absent (no-op).
+  - validationRule op write-branch proven live en CamiloDevOrg: managed VR deactivated
+    (Active=false) then reactivated (Active=true), org left unchanged.
+  - ic-7-02 v2 seeded a MigrationApp-dev. Backend redeploy required.
+
+  QA cross-check con el catálogo SF (per `[[reference-implementation-cases-catalog]]`):
+  - CSV Order 7.02 lista el pre-step EXACTO: "Before do this... Set up → object manager
+    → 'Shop item' → Validation rules → deactivate: Restrict_Misc_Gift_Card". El spec
+    step 1 (validationRule) es fiel al playbook.
+  - CSV Client Purchases: 10 fields (incl Name) → 9 non-Name = MATCHES spec (9).
+  - CSV Shop Item: 15 fields (incl Name) → 14 non-Name = MATCHES spec (14).
+  - CSV declara ambos Name fields como manual tick → spec MANUAL step los cubre.
+
+  Riesgos abiertos:
+  - **Restrict_Misc_Gift_Card no existe** en el package actual ni en test orgs. El
+    pre-step no-op safely self-heals en cualquier client org que tenga tal rule.
+    Open-question del ticket: PM confirma el rule/name intended si un client org
+    específico motivó el pre-step.
+  - **Target-org portability**: dev verified CamiloDevOrg + im696-tucson; QA agrega
+    illinois-trainings (Gift Shop confirmed installed).
+  - **Double label-trap**: hay DOS fields con label "(Deprecated) Total" (`Total__c`
+    + `Total_Amount__c`) más el storage `Total2__c`. Si el matcher se rompe, podría
+    resolver al deprecated. QA verifica live.
+  - **Additive**: si alguien flipea `exclusive: true`, borra tracking existente.
+  - PR ya MERGED — baseline vs post-fix entre merge-base `140e00d4` y merge commit `bb9a7e38`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch del spec + código en merge-commit `bb9a7e38` y merge-base `140e00d4`."
+  - "Clone local de `MigrationAppBackend` en `/tmp/qa/MigrationAppBackend-IM-1073/` con `npm ci` limpio + jest runner (PR es code, no spec-only)."
+  - "sf CLI autenticado con org alias `illinois-trainings` (Auctifera Gift Shop confirmed installed via `sf sobject describe -s Auctifera__ClientPurchase__c` + `Auctifera__CatalogItem__c`)."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`, user en group `admin` o `csm-team`) para API-driven IE run (Path A)."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL`."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC2+AC3+AC4 · Static spec fidelity + CSV playbook alignment + double label-trap resolution (Total/Paid_Value)"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-3
+      - ac-4
+      - happy-path
+      - spec-contract
+      - csv-fidelity
+      - label-traps
+      - im-1073
+      - im-1069
+      - im-935
+      - im-735
+    given:
+      - "el JSON spec `ic-7-02-history-tracking-gift-shop.json` fetch-eado del merge-commit `bb9a7e38`"
+      - "el CSV export de `Implementation_Case__c` (Order 7.02) como referencia autoritativa del playbook"
+      - "`sf sobject describe` sobre illinois-trainings para los 2 objects del Gift Shop"
+    when:
+      - "se parsean los 4 steps (1 validationRule + 2 historyTracking + 1 MANUAL)"
+      - "se enumeran los 9 + 14 = 23 fields con sus matchers `{anyOf:[apiName], label}`"
+      - "se compara la lista de labels por object contra el CSV Order 7.02"
+      - "se ejecuta `sf sobject describe -s Auctifera__ClientPurchase__c` y `-s Auctifera__CatalogItem__c` para resolver los label-traps"
+    then:
+      - "case.version = 2 y template.version = 2 (lockstep)"
+      - "case.feasibility = 'hybrid' (auto→hybrid por MANUAL + validationRule)"
+      - "case.defaultOrder = 702 (Order__c CSV × 100)"
+      - "step 2 (Client Purchases) tiene 9 fields, step 3 (Shop Item) tiene 14 fields"
+      - "field counts matchean CSV: Client Purchases 9 non-Name + Shop Item 14 non-Name = 23"
+      - "todos los 23 fields tienen matcher `{anyOf:[apiName], label}` (0 bare API names)"
+      - "double label-trap resuelto: `Auctifera__Total2__c` (label 'Total', calc=false) es el spec target; `Auctifera__Total__c` y `Auctifera__Total_Amount__c` son ambos '(Deprecated) Total' calc=true (formula)"
+      - "`Auctifera__Paid_Value__c` (label 'Amount Received', calc=false) es el spec target; `Auctifera__Paid_Value1__c` (label 'Paid Value', calc=true) es el trap"
+      - "`Auctifera__Shopify_Product_Id__c` presente en Shop Item como required matcher (cierra IM-935 open-question)"
+      - "flag `exclusive` AUSENTE en ambos historyTracking steps (additive)"
+
+  - title: "AC5 · NUEVO validationRule T3 op — jest code contract (11 tests) + genuinely-new proof + live no-op branch"
+    tags:
+      - ac-5
+      - validation-rule-op
+      - new-capability
+      - jest
+      - code-contract
+      - im-1073
+    given:
+      - "el PR #245 agrega un T3 op `validationRule` reusable (adapter + handler + schema spec)"
+      - "clone local de MigrationAppBackend en merge-commit `bb9a7e38` con `npm ci` limpio"
+      - "illinois-trainings tiene 7 validation rules en CatalogItem, ninguna llamada Restrict_Misc_Gift_Card"
+    when:
+      - "se corre `jest metadata-mutation-spec.spec.ts t3-metadata.adapter.spec.ts t3-metadata.handler.spec.ts` en merge-commit"
+      - "se aíslan los tests del validationRule op con `jest -t validationRule`"
+      - "se compara `grep -c validationRule t3-metadata.adapter.ts` entre merge-base `140e00d4` y merge-commit `bb9a7e38`"
+      - "se ejecuta el step 1 (validationRule deactivate Restrict_Misc_Gift_Card) live via API run en illinois-trainings"
+    then:
+      - "las 3 suites tocadas por el PR pasan (266 tests total)"
+      - "los 11 tests dedicados del validationRule op pasan: deactivate+readback, no-op-absent, anyOf resolution, activate-absent=applied-false, persist-false detection, xsi:nil normalization, SaveResult error handling, 3 malformed-input rejections"
+      - "merge-base tiene 0 refs de validationRule en el adapter, merge-commit tiene 10 → el op es genuinamente nuevo (no no-op)"
+      - "el step 1 live en illinois-trainings reporta success (no-op branch) porque Restrict_Misc_Gift_Card está absent — el step NO falla bajo fail-fast (deactivate+absent=idempotent success)"
+      - "ninguna de las 7 validation rules existentes en CatalogItem se modifica por el run (no-op no toca rules no-target)"
+
+  - title: "AC2+AC3+AC7 · Live end-to-end via API-driven IE run + Tooling API POST-verify (23 fields additive, 2 objects)"
+    tags:
+      - ac-2
+      - ac-3
+      - ac-7
+      - live-execution
+      - api-driven
+      - post-verify
+      - im-1073
+    given:
+      - "illinois-trainings tiene Auctifera Gift Shop installed (ClientPurchase + CatalogItem verificados)"
+      - "PRE-baseline Tooling API: `SELECT IsFieldHistoryTracked FROM FieldDefinition` sobre los 23 fields — se registra qué está tracked pre-run"
+      - "ic-7-02 v2 seeded en dev (verificado por dev PR body + preflight GET /cases)"
+    when:
+      - "POST /implementations/plan-runs con `caseIds:['ic-7-02-history-tracking-gift-shop']` → 202 planRunId"
+      - "poll hasta que los 3 AUTOMATED steps (validationRule + 2 historyTracking) queden `done` y step 4 (MANUAL) quede `blocked-human`"
+      - "POST /handoff sobre step 4 (attesting-without-executing, pattern TR-115/116/117/119)"
+      - "run alcanza `total=4 done=4 failed=0`"
+      - "POST-verify Tooling API sobre los 23 fields de los 2 objects"
+    then:
+      - "los 3 AUTOMATED steps completan sin errors visibles"
+      - "los 9 Client Purchase fields quedan `IsFieldHistoryTracked=true`"
+      - "los 14 Shop Item fields quedan `IsFieldHistoryTracked=true`"
+      - "en particular `Total2__c`, `Paid_Value__c` (Client Purchases) y `Shopify_Product_Id__c` (Shop Item) quedan tracked — proof de que el matcher runtime resolvió correctamente los label-traps en illinois-trainings"
+      - "cualquier field pre-tracked en PRE-baseline sigue tracked POST (additive behavior preservado)"
+      - "object-level history enabled en ambos objects"
+
+  - title: "AC6 · Standard Name handoff (2 Name fields) — attesting-without-executing en test workspace (guardrail)"
+    tags:
+      - ac-6
+      - manual-handoff
+      - attestation-guardrail
+      - im-1073
+    given:
+      - "el step 4 (MANUAL) declara: 'Tick the standard Name checkbox on the Client Purchases and Shop Item history-tracking screens — the metadata replay cannot set it.'"
+      - "el pattern `attesting-without-executing` está establecido para test workspaces (TR-115/116/117/119) — en customer orgs la attestation SIEMPRE la hace el operator que ejecutó el trabajo real"
+      - "illinois-trainings es test workspace (client 'Test IM cases Org Tucson')"
+    when:
+      - "el POST /handoff se hace con `body:{}` sobre step 4 después de que los 3 AUTOMATED completen"
+      - "se documenta en el TR notes que el trabajo manual UI NO fue ejecutado (Client Purchase Name + Shop Item Name checkboxes)"
+    then:
+      - "run status pasa a `COMPLETED` con todos los steps `done`"
+      - "las 2 Name-checkboxes reales (Client Purchase Name + Shop Item Name) siguen SIN tickearse en illinois-trainings"
+      - "el TR marca este scenario `passed` en el mecanismo del handoff API, pero explícitamente NO afirma que el trabajo UI Name se hizo (statically-verified only, per playbook: metadata replay no puede automatizar standard Name)"
+      - "en customer org el mismo endpoint /handoff cierra el step una vez el IE haga el trabajo real"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-23T23:48:57Z"
+  version: 1
+  estimatedDuration: 95
+  tags:
+    - im-1073
+    - im-735
+    - im-1069
+    - im-935
+    - im-1112
+    - implementations-automation
+    - ic-7-02
+    - history-tracking
+    - gift-shop
+    - validation-rule-op
+    - auctifera-managed-package
+    - label-traps
+    - t3-metadata
+    - migration-app-backend
+    - post-june-delivery
+    - medium-confidence
