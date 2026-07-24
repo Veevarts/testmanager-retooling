@@ -180,6 +180,11 @@ results:
       **No double-count**: el static gate-contract spec (scenario 5) prueba que
       fund_assignment_donations.sql EXCLUYE exactamente las líneas que esta rama INCLUYE (gate
       HasMembershipTransaction byte-idéntico) → las 11 no se emiten dos veces.
+
+      **Corroboración con la query REAL del dev pre/post en aspen** (además del aggregate):
+      - fund_assignment_memberships.sql: PRE 10,212 → POST 10,223 = **+11** (exacto).
+      - fund_assignment_donations.sql: PRE 3,929 → POST 3,929 = 0 (las 11 no se duplican).
+      - donation_transaction.sql: PRE 3,925 → POST 3,925 = 0 (dev-signed 3,925 confirmado).
     notes: |
       MOAD (322/$48,120) y High Desert (6,940/$1.55M) NO se re-derivaron independientemente:
       no hay perfil safesql para esos orgs en el host QA. El dev los validó pre-merge; el match
@@ -203,19 +208,44 @@ results:
     status: not-run
     duration: 0
     actual: |
-      NO EJECUTABLE en el host QA:
-      - No existe perfil safesql `high-desert` (los orphans están concentrados en ese org
-        según el dev; aspen/illinois/tucson tienen 0 orphans).
-      - Docker daemon abajo → el orphan shape (10 emiten / 3 netean / 3 POS) solo vive en el
-        fixture dockerizado `donation-split-receipting-query-fixture.ts`, que no puede correr.
+      La cardinalidad ESPECÍFICA de High Desert (13 Opps / $34,426 · 10 emiten / 3 netean / 3
+      POS) NO se pudo reproducir: no hay perfil safesql `high-desert` y TODOS los orgs
+      alcanzables tienen 0 huérfanos → el dato huérfano no existe en aspen/illinois/tucson.
 
-      El static gate-contract spec (scenario 5) SÍ prueba la lógica del gate estrechado
-      ("keeps orphaned-membership donation splits in the donation fund assignment export") a
-      nivel de contrato, pero NO la cardinalidad live de High Desert (13 Opps / $34,426).
+      Lo que QA SÍ ejecutó en los orgs disponibles (a pedido del usuario, para no varar):
+
+      **1. Cohort huérfano medido independientemente** (donation split cuya membership line NO
+      tiene MT activo):
+      - aspen: 11 donation-on-membership splits, 11 MT-backed, **0 huérfanos**
+      - illinois: 0 total · tucson: 0 total
+      → confirma que los huérfanos son exclusivos de High Desert (dev claim corroborado).
+
+      **2. Gate-narrowing regression-safe — query REAL del dev pre/post en aspen**:
+      - `donation_transaction.sql`: PRE 3,925 → POST 3,925 (delta 0). El gate estrechado es un
+        NO-OP donde no hay huérfanos; coincide exacto con el 3,925 firmado por el dev. Cero regresión.
+      - `fund_assignment_donations.sql`: PRE 3,929 → POST 3,929 (delta 0). Las 11 líneas
+        split-receipting NO se emiten aquí (excluidas pre y post) → sin double-count.
+      - `fund_assignment_memberships.sql`: PRE 10,212 → POST 10,223 (**+11**). La rama nueva
+        agrega EXACTAMENTE 11 FA (= dev-signed 11 = S2 aggregate).
+
+      → El MECANISMO de recuperación queda probado regression-safe + aditivamente correcto; la
+      inclusión de huérfanos está aseverada por el static gate spec (scenario 5, 13/13). Solo la
+      CARDINALIDAD live de High Desert queda diferida (sin perfil / Docker).
     notes: |
-      Pendiente: correr con perfil high-desert (o levantar Docker + RUN_DOCKER_SQL_QUERY_TESTS=1
-      para el fixture de High Desert). Ver "Pendiente de tu parte".
+      Se mantiene not-run porque la aserción headline del escenario (los 13 huérfanos de High
+      Desert recuperan como 10/3/3) NO fue observada — no se finge PASS. Pendiente: perfil
+      high-desert (o Docker + RUN_DOCKER_SQL_QUERY_TESTS=1 para el fixture de High Desert).
     stepResults: []
+    attachments:
+      - name: orphan-aggregate-independent.sql
+        path: attachments/tr-123-tc-113/scenario-3/orphan-aggregate-independent.sql
+        mimeType: text/plain
+      - name: aspen-orphan-aggregate-out.json
+        path: attachments/tr-123-tc-113/scenario-3/aspen-orphan-aggregate-out.json
+        mimeType: application/json
+      - name: orphan-cohort-and-gate-safety.txt
+        path: attachments/tr-123-tc-113/scenario-3/orphan-cohort-and-gate-safety.txt
+        mimeType: text/plain
 
   - scenarioIndex: 4
     scenarioTitle: "Perfiles no afectados (Everson, Illinois, Kidstream, Long Island, Tucson) no ganan ni pierden filas — regression safety"
