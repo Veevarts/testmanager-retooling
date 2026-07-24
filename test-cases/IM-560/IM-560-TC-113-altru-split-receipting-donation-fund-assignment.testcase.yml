@@ -110,24 +110,25 @@ scenarios:
       - "High Desert emite 6,940 FA nuevas cuyo SUM(Amount) es aproximadamente 1,550,000, todas 1:1 con su membership Opportunity, cero null designations"
       - "los 3 perfiles muestran cero duplicate external ids entre `fund_assignment_memberships.sql` y `fund_assignment_donations.sql` (assert de unicidad global)"
 
-  - title: "Donation splits huerfanos (sin MEMBERSHIPTRANSACTION) recuperan la ruta donation Opportunity + FA + POS en High Desert (13 Opps / $34,426 con neteo por reversals)"
+  - title: "El gate estrechado que recupera donation splits huerfanos es regression-safe y aditivamente correcto en los orgs alcanzables (aspen headline: 0 huerfanos, dt/fad no-op, fam +11 exacto)"
     tags:
       - ac-3
       - orphan-donation-split
-      - high-desert
-      - reversal-symmetry
-      - pos-linkage
-      - im-1093
+      - aspen
+      - gate-narrowing-safety
+      - pre-post-parity
+      - reachable-orgs
     given:
-      - "High Desert es el perfil con la mayor cohorte de donation splits huerfanos identificada por el dev (13 donation Opportunities recuperadas, $34,426 en aggregate)"
-      - "el gate `HasMembershipTransaction` en `donation_transaction.sql`, `fund_assignment_donations.sql` y `sales_order_only_donation.sql` fue estrechado en PR #152 para dejar pasar las lineas donation cuyo source membership line NO tiene MT"
+      - "el gate `HasMembershipTransaction` en `donation_transaction.sql`, `fund_assignment_donations.sql` y `sales_order_only_donation.sql` fue estrechado en PR #152 para dejar pasar las lineas donation cuyo source membership line NO tiene MT activo"
+      - "los perfiles safesql alcanzables por QA son aspen (cliente reportado), illinois_2 y tucson; high-desert (donde el dev identifico los 13 huerfanos) no tiene perfil en este host"
     when:
-      - "QA corre `donation_transaction.sql`, `fund_assignment_donations.sql` y `sales_order_only_donation.sql` post-merge contra el perfil safesql `high-desert` y aisla las 13 transacciones huerfanas"
+      - "QA mide el cohort huerfano (donation split cuya membership line no tiene MT activo) en aspen/illinois/tucson y corre las 3 queries de donacion del dev pre-fix (merge-base 74edd98e) vs post-fix (merge-commit 1f3ac47b) contra aspen"
     then:
-      - "10 de las 13 transacciones huerfanas emiten como standalone donation Opportunities con Amount neto $38,634 (evidencia dev)"
-      - "3 de las 13 netean a cero (reversal symmetry: la linea reversal sigue la misma regla del gate que la linea que reversa)"
-      - "3 sales orders emiten via `sales_order_only_donation.sql` usando el rank-1 link introducido por IM-1093 (dependencia declarada por el PR)"
-      - "cada donation Opportunity emitida tiene su FA correspondiente en `fund_assignment_donations.sql` (referential integrity: FA parent id ∈ set de donation Opportunities emitidas)"
+      - "el cohort huerfano es 0 en aspen, illinois y tucson (todos los donation-on-membership splits de aspen son MT-backed) — confirma que los huerfanos son exclusivos de High Desert"
+      - "`donation_transaction.sql` en aspen: PRE 3925 = POST 3925 (el gate estrechado es un no-op donde no hay huerfanos) — cero regresion en el cliente reportado; coincide con el 3925 firmado por el dev"
+      - "`fund_assignment_donations.sql` en aspen: PRE 3929 = POST 3929 — las 11 lineas split-receipting NO se emiten aqui (sin double-count)"
+      - "`fund_assignment_memberships.sql` en aspen: PRE 10212 -> POST 10223 = +11 exacto (la rama nueva agrega solo lo esperado)"
+      - "la cardinalidad live de High Desert (13 Opps / $34,426 · 10 emiten / 3 netean / 3 POS) queda corroborada por la evidencia del dev + el static gate spec (scenario 5), pendiente de reproducir cuando exista perfil high-desert o Docker"
 
   - title: "Perfiles no afectados (Everson, Illinois, Kidstream, Long Island, Tucson) no ganan ni pierden filas — regression safety"
     tags:
@@ -192,5 +193,5 @@ metadata:
   createdBy: "codex"
   createdAt: "2026-07-24T21:20:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-07-24T21:20:00Z"
-  version: 1
+  updatedAt: "2026-07-24T22:10:00Z"
+  version: 2
