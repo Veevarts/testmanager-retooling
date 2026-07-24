@@ -1,0 +1,284 @@
+schemaVersion: "1.0"
+
+id: "5d19f74f-1b8c-444f-ae3d-7fe8bd92c7d1"
+key: "TC-112"
+title: "IC 6.01 Override Group/Reservation & Museum Offer field labels — NEW customObjectTranslation T3 op (first metadata-DEPLOY op) · 4 objects · 10 field-label overrides · deploy-not-CRUD + FieldDefinition verify · tolerate-absent + dynamic resolution"
+description: |
+  Cobertura QA para IM-1095 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1113 (creada 2026-07-24).
+
+  Contexto:
+  - Post-June IM-735 continuation, metadata-gap upgrade candidate (follow-up del spike
+    IM-1086: "feasible-but-deferred"). Hermano de IM-1073/IM-1074 pero introduce un op
+    ARQUITECTÓNICAMENTE NUEVO.
+  - IC 6.01 = "Override Group & reservation fields and Museum Offer Fields" (Order__c 6.01
+    en el catálogo Auctifera SF).
+  - **Tier: Medium** (caveat: cross-version managed field API names — mitigado por matcher
+    runtime dynamic-resolution, y por el precondition Translation Workbench/en_US active).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#264` (**MERGED** 2026-07-16 15:30Z).
+    Branch: `task/ic-6-01-override-field-labels-customobjtranslation-IM-1095`.
+    Merge commit `3f13f082`, merge-base `ed3da574`.
+  - Files touched (10, +1383/-31 — NO es spec-only, es un CODE PR):
+    * `metadata-mutation-spec.ts` (+82) — schema del nuevo customObjectTranslation op
+    * `metadata-mutation-spec.spec.ts` (+1) — op en la lista cerrada METADATA_MUTATION_OPS
+    * `t3-metadata.adapter.ts` (+329) — implementación deploy-based del op
+    * `t3-metadata.adapter.spec.ts` (+400) — 14 tests del adapter
+    * `t3-metadata.handler.ts` (+58) — lambda handler validation branch
+    * `t3-metadata.handler.spec.ts` (+50) — 1 happy + 7 malformed param cases
+    * `ic-6-01-override-field-labels.json` (+125/-41) — spec v1 manual → v2 auto
+    * `ic-6-01-override-field-labels.spec.ts` (NEW, +125) — 4 lockstep/surface tests
+    * `package.json` + `package-lock.json` — jszip movido dev→prod dependency
+
+  Cambio principal (2 partes):
+
+  **PARTE A — NUEVO T3 op `customObjectTranslation` (reusable, zero per-IC code, PRIMER op deploy-based)**:
+  - Override de managed FIELD LABELS via Translation Workbench (metadata type
+    `CustomObjectTranslation`). Hermano del `translations` op (custom-LABEL overrides)
+    pero el WRITE MECHANISM difiere radicalmente.
+  - **HALLAZGO CLAVE (live-proven CamiloDevOrg):** el CRUD synchronous
+    `metadata.update('CustomObjectTranslation', …)` es un **SILENT NO-OP** para managed
+    field-label overrides — retorna success=true pero el label efectivo NUNCA cambia.
+    Solo un **async metadata DEPLOY** (package zip con `objectTranslations/<obj>-<lang>.objectTranslation`,
+    polled a completion dentro del mismo adapter call) aplica el override. Es el PRIMER
+    T3 op que usa metadata deploy en vez del CRUD single-shot (todos los otros ops).
+  - **VERIFY via `FieldDefinition` re-query** (el label efectivo que ve el user), NO via
+    `metadata.read` (que nunca surface default-language field overrides — siempre lee vacío).
+  - **Non-destructive at sub-element level** (proven live): deploya SOLO los
+    `<fields><name/><label/></fields>` resueltos; los otros field overrides + `layouts[]`
+    translations del objeto sobreviven (blast-radius contract).
+  - **Dynamic field resolution** (`{anyOf:[apiName], label}` fallback pattern IM-1069):
+    resuelve el API name real contra el live object (stable API name primero, current
+    label como fallback). `optional:true` → tolerated skip (playbook "skip if not found"),
+    NO failure.
+  - **Strict fail:** matcher non-optional que no resuelve → success=false, deploy NO se
+    llama. **Precondition:** Translation Workbench enabled + language active; si no, el
+    deploy no aplica nada y el FieldDefinition verify reporta applied=false con hint
+    (nunca un false pass). Deploy que falla / que no verifica = success=false, nunca throw
+    para la lógica de negocio (throws solo transport/malformed).
+  - Deploy/poll bounded: maxPolls=40 × 2000ms = 80s window, ~33% bajo el Lambda timeout
+    de 120s. jszip movido a prod dependency.
+
+  **PARTE B — ic-6-01 spec v2 (feasibility manual → auto)**:
+  - 1 step AUTOMATED T3 customObjectTranslation (era 1 step MANUAL guide).
+  - 4 objects, 10 field-label overrides:
+    * `Auctifera__Group_Reservation__c` (Ticketing): Account → "Household/Organization"
+    * `Auctifera__Museum_Offer_Item__c` (Ticket Item, 6): Group_Reservation(opt) → "Item",
+      Museum_Offer → "Ticket Offer", Museum_Offering_Price → "Ticket Offer Price (after taxes)",
+      Museum_Offering_Subtotal → "Ticket Offer Price (before taxes)", Related_Exposition →
+      "Related Exhibition/Event", Related_Exposition_Id → "Related Exhibition/Event ID"
+    * `Auctifera__Museum_Offer__c` (Ticket Offer): Exposition → "Exhibition/Event"
+    * `Auctifera__POS_Purchase__c` (2): Client → "Client (Contact)", Client2 →
+      "Client (Household/Organization)"
+  - Solo el Group_Reservation lookup en Museum_Offer_Item es `optional:true` (skip si absent).
+
+  Evidencia dev (per PR body #264):
+  - Live-proven CamiloDevOrg: deploy aplica el override, FieldDefinition verify confirma;
+    CRUD update demostrado silent no-op; non-destructive (unrelated field override + layout
+    translations sobreviven).
+  - ic-6-01 v2 seeded a MigrationApp-dev.
+
+  QA cross-check con el catálogo SF (per `[[reference-implementation-cases-catalog]]`):
+  - CSV Order 6.01 (`Implementation_Case__c` a185w00000trMOzAAM) lista el playbook manual
+    EXACTO (Setup → Translation Workbench → Override, filter Package=Auctifera Language=English
+    Component=Custom Field, por object). Los 10 field-label overrides del spec v2 matchean
+    el CSV byte-for-byte (Ticketing/Account, Ticket Item ×6, Ticket Offer/Exhibition,
+    POS Purchase ×2).
+
+  PRE-baseline QA (illinois-trainings, read-only FieldDefinition.Label):
+  - **9/10 fields YA están en el label target** (illinois es un trainings org con los museum
+    labels ya aplicados). El único que difiere: `Museum_Offer_Item.Auctifera__Group_Reservation__c`
+    label actual "Ticket" → target "Item". Un live run demuestra idempotency en 9 + 1 flip real.
+  - Los 9 ya-en-target prueban que Translation Workbench + en_US están active en illinois
+    (el precondition se cumple).
+
+  Riesgos abiertos:
+  - **Doc drift menor**: el op background dice "5 target objects" pero la entrega son 4
+    objects (Group_Reservation, Museum_Offer_Item, Museum_Offer, POS_Purchase). No es defecto
+    — la delivery table del AC feature-2 enumera exactamente estos 4. Solo phrasing.
+  - **POS Client2 fallback-label word-order**: el matcher current-label fallback es
+    "Client (Organization/Household)" mientras el override target es "Client (Household/Organization)"
+    (orden distinto). Bajo riesgo: `anyOf:[Auctifera__Client2__c]` resuelve directo (Client2
+    existe en illinois), el fallback nunca dispara.
+  - **Mutación visible**: correr el op en illinois cambia 1 label (Ticket→Item) org-wide;
+    es el valor spec-correct del museo, reversible re-deployando el default. Se surface al gate.
+  - **CamiloDevOrg no disponible para QA**: el live-proof del dev fue en CamiloDevOrg; QA
+    agrega illinois-trainings (Auctifera Ticketing/POS confirmado installed via FieldDefinition).
+  - **Precondition destructivo no se prueba live**: no se desactiva Translation Workbench en
+    illinois; el branch "language not active → success=false + hint" queda unit-verified (jest).
+  - PR ya MERGED — baseline vs post-fix entre merge-base `ed3da574` y merge commit `3f13f082`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch del spec + código en merge-commit `3f13f082` y merge-base `ed3da574` (no-clone: `gh api contents?ref=<sha>`)."
+  - "sf CLI autenticado con org alias `illinois-trainings` (Auctifera managed package con Ticketing/Ticket Item/Ticket Offer/POS Purchase objects confirmado via FieldDefinition query de los 10 fields target)."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`, user en group `admin` o `csm-team`) para API-driven IE run (Path A)."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+  - "Translation Workbench enabled con en_US como active translation language en el target org (verificado indirectamente: 9/10 labels ya overridden en illinois PRE-baseline)."
+
+format: gherkin
+scenarios:
+  - title: "AC-opS1+AC-e2e · Static contract: NEW op es deploy-based (not CRUD) + seed v2 fidelity + CSV playbook byte-match + genuinely-new proof"
+    tags:
+      - ac-op-s1
+      - ac-e2e-s1
+      - happy-path
+      - spec-contract
+      - csv-fidelity
+      - new-capability
+      - deploy-not-crud
+      - im-1095
+      - im-735
+    given:
+      - "el JSON spec `ic-6-01-override-field-labels.json` fetch-eado del merge-commit `3f13f082`"
+      - "el código del adapter/handler/model fetch-eado del merge-commit `3f13f082` y merge-base `ed3da574`"
+      - "el CSV export de `Implementation_Case__c` (Order 6.01, a185w00000trMOzAAM) como referencia autoritativa del playbook"
+    when:
+      - "se parsea el union `MetadataMutationSpec`, la lista cerrada `METADATA_MUTATION_OPS`, y el guard `isCustomObjectTranslationSpec`"
+      - "se inspecciona `applyCustomObjectTranslation` en el adapter: usa `conn.metadata.deploy` (package zip via jszip) + `checkDeployStatus` poll, NO `conn.metadata.update`"
+      - "se parsea el seed v2 (case + template) y se enumeran los 10 field-label overrides por object"
+      - "se comparan los 10 overrides contra la AC delivery table y contra el CSV Order 6.01"
+      - "se hace `grep -c customObjectTranslation` en `t3-metadata.adapter.ts` entre merge-base y merge-commit"
+    then:
+      - "`customObjectTranslation` está en `METADATA_MUTATION_OPS` + en el union `MetadataMutationSpec` + tiene guard `isCustomObjectTranslationSpec`"
+      - "el adapter deploya (metadata DEPLOY) y NUNCA hace CRUD update — el jest test lo asegura (`expect(update).not.toHaveBeenCalled()`)"
+      - "case.version = 2 y template.version = 2 (lockstep), case.feasibility = 'auto', case.defaultOrder = 601 (Order__c CSV × 100)"
+      - "el step 1 es kind=AUTOMATED, toolName=T3, op=customObjectTranslation, language=en_US"
+      - "los 4 objects son exactamente Group_Reservation, Museum_Offer_Item (6), Museum_Offer, POS_Purchase (2) = 10 field overrides"
+      - "los 10 overrides matchean la AC delivery table Y el CSV Order 6.01 byte-for-byte (labels + object mapping)"
+      - "solo `Museum_Offer_Item.Group_Reservation` es `optional:true`; el resto son required matchers"
+      - "genuinely-new: merge-base tiene 0 refs de customObjectTranslation en el adapter, merge-commit tiene 37 → op genuinamente nuevo (no no-op); seed pasa de manual/v1 a auto/v2"
+
+  - title: "AC-opS1 · NUEVO customObjectTranslation op — jest code contract (27 tests dedicados) + primer metadata-DEPLOY T3 op (deploy/poll/FieldDefinition-verify)"
+    tags:
+      - ac-op-s1
+      - new-capability
+      - jest
+      - code-contract
+      - metadata-deploy
+      - im-1095
+    given:
+      - "el PR #264 agrega un T3 op `customObjectTranslation` reusable (model schema + adapter + handler + seed)"
+      - "el código en merge-commit `3f13f082` (no-clone inspection del test inventory via `gh api`)"
+    when:
+      - "se enumeran los tests dedicados del op en las 4 suites tocadas por el PR"
+      - "se inspecciona la mecánica del deploy: `buildObjectTranslationXml` + `buildTranslationPackageXml` + `zip.generateAsync` + `metadata.deploy({singlePackage,rollbackOnError})` + poll bounded `checkDeployStatus`"
+      - "se inspecciona la verify: `queryFieldLabelByName` (FieldDefinition.Label) en vez de `metadata.read`"
+    then:
+      - "27 tests dedicados al op: 14 adapter (deploy+verify default en_US, label-fallback, multi-object one-package, blast-radius, idempotent, tolerate-optional, strict-fail, no-op deployApplies=false → TW hint, deploy-fails, never-completes bounded-poll, deploy()-throws, checkDeployStatus-rejects, invalid-language, empty-objects) + 8 handler (1 happy + 7 malformed) + 4 seed (parse v2/auto, version lockstep, single AUTOMATED T3 step, 4-object override map) + 1 op-list"
+      - "el adapter test asserta que `deploy` se llama 1× y `update` NUNCA (deploy-not-CRUD, el core del op)"
+      - "el poll está bounded: maxPolls=40 × 2000ms = 80s window, documentado ~33% bajo el Lambda timeout de 120s; el test never-completes asserta ≥40 checkDeployStatus calls y success=false (nunca hang, nunca false pass)"
+      - "la verify usa FieldDefinition re-query (label efectivo), no metadata.read (que lee vacío en default-lang overrides)"
+
+  - title: "AC-e2e · Live end-to-end via API-driven IE run + FieldDefinition.Label POST-verify (10 overrides, 4 objects, idempotency×9 + flip×1)"
+    tags:
+      - ac-e2e-s1
+      - live-execution
+      - api-driven
+      - post-verify
+      - idempotent
+      - im-1095
+    given:
+      - "illinois-trainings tiene los 4 Auctifera objects con los 10 target fields (verificados via FieldDefinition query)"
+      - "PRE-baseline Tooling API: `SELECT QualifiedApiName, Label FROM FieldDefinition` sobre los 10 fields — 9/10 ya en target, `Museum_Offer_Item.Group_Reservation` = 'Ticket' (target 'Item')"
+      - "ic-6-01 v2 seeded en dev (verificado por preflight GET /implementations/cases)"
+    when:
+      - "POST /implementations/plan-runs con `caseIds:['ic-6-01-override-field-labels']` → 202 planRunId"
+      - "poll hasta que el step 1 AUTOMATED (customObjectTranslation deploy) quede `done` y el run alcance `completed`"
+      - "POST-verify Tooling API sobre los 10 fields de los 4 objects (re-query FieldDefinition.Label)"
+    then:
+      - "el step AUTOMATED completa `done` sin failures (el async metadata deploy corre server-side y verifica)"
+      - "los 10 fields quedan en su label target POST-run (Account=Household/Organization, Museum_Offer_Item ×6, Exposition=Exhibition/Event, Client=Client (Contact), Client2=Client (Household/Organization))"
+      - "`Museum_Offer_Item.Group_Reservation` flippea 'Ticket' → 'Item' (el único cambio real observable — proof del deploy-driven override live)"
+      - "los otros 9 fields ya-en-target quedan idempotentemente re-verificados (re-deploy del mismo label → success, no error)"
+      - "el run demuestra el deploy/poll/verify roundtrip live para el PRIMER op deploy-based (no solo mocked jest)"
+
+  - title: "AC-opS2 · Non-destructive merge (blast radius): solo los fields nombrados se deployan; otros overrides + layout translations sobreviven"
+    tags:
+      - ac-op-s2
+      - blast-radius
+      - non-destructive
+      - im-1095
+    given:
+      - "el `.objectTranslation` deployado carga SOLO los `<fields><name/><label/></fields>` resueltos (nunca layouts/caseValues/otros fields)"
+      - "illinois PRE-baseline: `Group_Reservation.Status` = 'Status' (un field NO nombrado por el spec)"
+    when:
+      - "el jest test 'deploys ONLY the named field' asserta que el XML contiene Account pero NO Status, y que el label de Status queda intacto"
+      - "el live run deploya el spec de 4 objects y se re-query FieldDefinition sobre fields NO-target de los mismos objects"
+    then:
+      - "el XML deployado para Group_Reservation contiene `<name>Auctifera__Account__c</name>` y NO menciona `Auctifera__Status__c`"
+      - "POST-run, `Group_Reservation.Status` sigue = 'Status' (label no-target intacto)"
+      - "ningún field de los 4 objects fuera de los 10 target cambia de label (blast-radius contract honrado live)"
+      - "los 9 overrides ya-existentes que no son el flip sobreviven (additive/merge, no replace)"
+
+  - title: "AC-opS3 · Dynamic managed-field resolution (anyOf → label fallback) + tolerate-absent optional skip (org/version-agnostic)"
+    tags:
+      - ac-op-s3
+      - field-resolution
+      - tolerate-absent
+      - im-1069-pattern
+      - jest
+      - im-1095
+    given:
+      - "cada field ref se resuelve DINÁMICAMENTE contra el live object (managed API names driftean cross-version)"
+      - "el matcher soporta `{anyOf:[apiName]}` (stable API name) con `label`/`pattern` fallback, y `optional:true` para tolerar ausencia"
+      - "en illinois el `Museum_Offer_Item.Group_Reservation` lookup EXISTE (resuelve directo, no se skippea)"
+    when:
+      - "el jest test 'resolves by LABEL fallback' asserta que un anyOf que falla cae al label match y deploya el field correcto"
+      - "el jest test 'TOLERATES an optional field the org lacks' asserta que un optional-absent es `skipped:true` (no failure) y el resto se deploya"
+      - "el live run en illinois resuelve los 10 fields por anyOf (todos presentes)"
+    then:
+      - "resolución por label fallback funciona: anyOf miss → label match → field correcto en el XML"
+      - "optional-absent = tolerated skip (`skipped:true` en operations), success=true, el resto de fields se deploya"
+      - "el op es org/version-agnostic: 0 managed field API names hardcodeados en la lógica del op (solo en el seed declarativo, resueltos runtime)"
+      - "live: los 10 fields de illinois resuelven por anyOf directo (el optional Group_Reservation existe → se aplica, no se skippea)"
+
+  - title: "AC-opS4+AC-opS6 · Failure modes unit-verified (never a false pass): strict-fail required-unresolved + precondition Translation-Workbench/language-not-active"
+    tags:
+      - ac-op-s4
+      - ac-op-s6
+      - failure-modes
+      - jest
+      - unit-verified
+      - precondition
+      - im-1095
+    given:
+      - "el op debe FALLAR (success=false) sin deployar cuando un matcher non-optional no resuelve"
+      - "el op debe reportar success=false con hint (nunca false pass) cuando el deploy no aplica el override (Translation Workbench off / language no active)"
+      - "estos branches destructivos NO se prueban live (no se rompe el precondition en illinois)"
+    when:
+      - "el jest test 'FAILS an unresolved NON-optional matcher (strict)' corre: matcher required que no resuelve"
+      - "el jest test 'reports success=false with a Translation-Workbench hint' corre con `deployApplies:false` (deploy succeeds pero override no aplica)"
+      - "el jest test 'reports success=false with the deploy error' corre con deploy que falla ('language not active')"
+    then:
+      - "strict-fail: success=false, `operations[0].applied=false`, `deploy` NO se llama (nada se deploya para un required irresoluble)"
+      - "precondition-off: success=false, `applied=false`, el detail matchea /Translation Workbench/i y /en_US/ (hint accionable, nunca un false pass)"
+      - "deploy-fails: success=false, detail incluye el problem del componentFailure ('language not active')"
+      - "estos son unit-verified only; el precondition de illinois se cumple (9/10 labels ya overridden ⇒ TW + en_US active), así que el live run NO ejercita el branch de fallo"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T02:13:41Z"
+  version: 1
+  estimatedDuration: 90
+  tags:
+    - im-1095
+    - im-735
+    - im-1069
+    - im-1086
+    - im-1113
+    - implementations-automation
+    - ic-6-01
+    - field-label-override
+    - translation-workbench
+    - custom-object-translation
+    - metadata-deploy
+    - new-capability
+    - auctifera-managed-package
+    - t3-metadata
+    - migration-app-backend
+    - post-june-delivery
+    - medium-confidence
