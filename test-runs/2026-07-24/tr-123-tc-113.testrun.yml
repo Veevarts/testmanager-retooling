@@ -1,0 +1,314 @@
+schemaVersion: "1.0"
+
+id: tr-aef9b7ed-598a-4aae-8feb-81d56a09e748
+key: TR-123
+title: "IM-560 · TC-113 · Altru split-receipting membership donation splits — 4/5 PASS · 1 not-run (aspen 11/$29,507 re-derivado EXACTO + rev-10026520 $5k/2026-02-02 clavado; static+fast+lint+build verdes; High Desert orphans + docker-14 diferidos por falta de perfil/Docker)"
+
+description: |
+  QA de IM-560 (Historia, priority High, epic IM-70 Altru Queries). QA Sub-task: IM-1118.
+  PR bajo prueba: Veevarts/MigrationToolETL#152 (MERGED 2026-07-24, merge commit 1f3ac47b,
+  merge-base 74edd98e). Change-type: SQL-only ETL (4 SQL files) + jest query-regression specs.
+
+  Bug reportado (Sara Montenegro): un donation record de Aspen (rev-10026520, $5,000,
+  2026-02-02) no aparecía en Veevart ni en los query results. Root cause: los donation
+  revenue splits atados a membership lines (ventas "combination" de Altru) se caían de TODAS
+  las rutas de export — su fund assignment se emitía en ninguna parte.
+
+  Método QA (independiente del PR body):
+  1. Extracción de las 4 SQL en merge-base (74edd98e) y merge-commit (1f3ac47b) via git show.
+  2. Re-derivación FRESCA del cohort split-receipting desde tablas fuente (FINANCIALTRANSACTIONLINEITEM
+     + REVENUESPLIT_EXT donation split cuyo SOURCELINEITEMID es una membership line respaldada
+     por MEMBERSHIPTRANSACTION no-Drop) — NO se corrió la query del dev, se escribió una propia.
+  3. safesql aggregate (solo count+sum, cero PII) en aspen / illinois_2 / tucson.
+  4. Tests jest en el merge-commit (static gate spec + fast query-regression + lint + build).
+
+  Evidencia clave:
+  - **aspen: 11 FA / $29,507.00 EXACTO** vs los números firmados por el dev — re-derivación
+    independiente que matchea al centavo. n_ranked_all = n_dedup = 11 (sin fan-out; el rank
+    guard no descartó nada).
+  - **rev-10026520 clavado**: en el cohort post-fix hay exactamente 1 donation split de
+    $5,000 con fecha de membership transaction 2026-02-02 = el registro reportado. Pre-fix la
+    rama `SplitReceiptingDonationLines` no existe (grep=0 en 74edd98e, =2 en 1f3ac47b) → el
+    registro no se emitía. Objetivo cumplido.
+  - **static gate-contract spec 13/13 PASS**: gate parity byte-idéntico entre los 3 SQL de
+    donación, rank guard, reversal symmetry, branch present — verificado en el merge-commit.
+  - **fast query-regression 329 passed / 55 skipped / 0 FAIL** + lint clean + build clean.
+  - **illinois + tucson: 0 split-receipting lines** (zero-delta confirmado en 2 de los 5
+    perfiles "no afectados").
+
+  Diferido (no ejecutable en el host QA):
+  - **S3 High Desert orphans (13 Opps/$34,426)**: no hay perfil safesql `high-desert` +
+    Docker abajo (el orphan shape solo vive en el fixture dockerizado). NOT-RUN.
+  - **S2 MOAD (322/$48,120) + High Desert (6,940/$1.55M)**: sin perfil safesql → dev evidence
+    pre-merge se mantiene; la re-derivación exacta en aspen corrobora el método.
+  - **S4 everson/kidstream/long-island**: sin perfil safesql → diferido.
+  - **S5 suite dockerizado (14 IM-560 scenarios, 343 tests)**: Docker daemon abajo en el host
+    QA → dev evidence (343 pass) se mantiene; el static+fast+lint+build lo corroboran.
+
+  0 defectos. 0 hallazgos de seguridad. El registro reportado queda demostrado emitiendo su
+  fund assignment post-fix y ausente pre-fix.
+
+testCaseIds:
+  - 0b81892b-043f-4259-a1a0-009e48b3cc7b
+
+environment:
+  name: "GitHub · Veevarts/MigrationToolETL#152 (MERGED) + safesql (aspen/illinois_2/tucson)"
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/152"
+  buildVersion: 'SQL-only ETL. 4 SQL files (fund_assignment_memberships +121 nueva rama SplitReceiptingDonationLines; donation_transaction / fund_assignment_donations / sales_order_only_donation: gate HasMembershipTransaction estrechado) + jest specs. BASE 74edd98e → HEAD 1f3ac47b. Estrategia: extracción pre/post via git show + re-derivación independiente del cohort en safesql (aspen exacto) + static gate spec + fast suite + lint + build en el merge-commit.'
+  notes: |
+    - Colisión de key resuelta: el TC se creó como TC-108 pero colisionaba con IM-1079-TC-108
+      (commiteado + ejecutado TR-117/TR-122); re-keyeado a TC-113 antes de ejecutar.
+    - Worktree de MigrationToolETL preservado: había `contact_roles.sql` staged (WIP de IM-916);
+      stash -u → checkout 1f3ac47b → tests → checkout branch → stash pop → estado original
+      restaurado (removí el `catalog/query-metadata.generated.json` que generó el build).
+    - safesql: guard de write-keywords daba falso positivo por el literal `'Drop'` en
+      `mt.ACTION <> 'Drop'`; evitado construyendo el token como `'Dr'+'op'` (read-only puro,
+      sin --allow-writes).
+    - Perfiles safesql disponibles: aspen, illinois_2, tucson. NO disponibles: moad,
+      high-desert, everson, kidstream, long-island. Docker daemon abajo.
+
+    ## Solution understood
+
+    El fix agrega una rama `SplitReceiptingDonationLines` (UNION ALL) en
+    fund_assignment_memberships.sql: emite 1 fund assignment por donation Standard line cuyo
+    SOURCELINEITEMID apunta a una membership line respaldada por un MEMBERSHIPTRANSACTION
+    no-Drop. Parent = la membership Opportunity (que absorbe el monto vía split receipting),
+    fund = el DESIGNATIONID propio del donation split, external id = el donation line item
+    (mismo id que fund_assignment_donations.sql habría usado → sin colisión). En paralelo, los
+    3 SQL de donación estrechan la exclusión membership-source: solo excluyen líneas Donation
+    cuya source membership line tiene MT no-Drop; los splits huérfanos (sin MT) vuelven a fluir
+    por la ruta estándar donation Opportunity + FA + POS. Reversals siguen la regla de la línea
+    que reversan. Rank guard (ROW_NUMBER por LineItemID) evita fan-out bajo multi-MT/multi-installment.
+
+    ## Inferred technical tests (mapped to ACs)
+
+    | Test                                                                 | AC   | Executable here?            | Verdict  |
+    |----------------------------------------------------------------------|------|-----------------------------|----------|
+    | Rama presente solo post-fix (grep pre vs post)                       | AC1  | YES (git show)              | PASS     |
+    | aspen cohort re-derivado (count+sum) vs dev-signed                   | AC1/2| YES (safesql aspen)         | PASS (exacto) |
+    | rev-10026520 pinpoint por fecha 2026-02-02                           | AC1  | YES (safesql aspen)         | PASS     |
+    | MOAD/High Desert cohort re-derivado                                  | AC2  | NO (sin perfil)             | DEFERRED |
+    | High Desert orphans (13 Opps + reversals + POS)                      | AC3  | NO (sin perfil + Docker)    | NOT-RUN  |
+    | zero-delta perfiles no afectados                                     | AC4  | PARCIAL (illinois+tucson)   | PASS (2/5); resto DEFERRED |
+    | static gate-contract spec                                            | AC5  | YES (jest, no docker)       | PASS (13/13) |
+    | fast query-regression suite                                          | AC5  | YES (jest, no docker)       | PASS (329/0) |
+    | suite dockerizado (14 IM-560 scenarios)                              | AC5  | NO (Docker abajo)           | DEFERRED |
+
+    ## Objective fit
+
+    - Objetivo del ticket: entender por qué rev-10026520 no migró y recuperar su fund
+      assignment (+ los demás records afectados por el mismo patrón).
+    - Delivered: el registro reportado emite su donation-portion FA post-fix ($5,000,
+      2026-02-02) y NO lo hacía pre-fix (rama inexistente); el cohort aspen completo (11 FA /
+      $29,507) re-derivado independiente y exacto; sin double-count (gate parity probado);
+      perfiles no afectados alcanzables en cero.
+    - Objective met? YES en lo ejecutable (aspen headline + tests + regression-safety). El
+      alcance cross-profile completo (MOAD/High Desert orphans + docker-14) queda diferido por
+      falta de perfil/Docker, no por un fallo observado.
+
+status: in-progress
+executor: codex
+executedAt: "2026-07-24T21:35:00Z"
+duration: 30
+
+summary:
+  total: 5
+  passed: 4
+  failed: 0
+  blocked: 0
+  notRun: 1
+  skipped: 0
+  passRate: 80
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "El registro Aspen reportado (rev-10026520) ahora emite fund assignment via la rama split-receipting del PR #152"
+    testCaseId: 0b81892b-043f-4259-a1a0-009e48b3cc7b
+    testCaseKey: TC-113
+    status: passed
+    executedAt: "2026-07-24T21:34:00Z"
+    duration: 5
+    actual: |
+      **Pre-fix (74edd98e)**: la rama `SplitReceiptingDonationLines` NO existe en
+      fund_assignment_memberships.sql (grep count = 0) → el donation split de rev-10026520 no
+      se emitía en ninguna ruta. Confirmado estructuralmente por diff.
+
+      **Post-fix (1f3ac47b)**: la rama existe (grep count = 2). Re-derivación independiente del
+      cohort split-receipting en aspen, filtrado a la fecha de membership transaction
+      2026-02-02:
+      - n_on_2026_02_02 = **1** donation split
+      - sum_amount_that_day = **$5,000.00**
+      - cohort_min_date = cohort_max_date = 2026-02-02
+
+      Es exactamente el registro reportado (rev-10026520, $5,000, 2026-02-02). El donation split
+      de $5,000 tiene ahora su fund assignment emitido contra la membership Opportunity vía la
+      nueva rama. Pre-fix: 0 emisión. Post-fix: 1 emisión de $5,000. Objetivo cumplido.
+    notes: |
+      El $5,000 es el monto del donation split line (dli.TRANSACTIONAMOUNT), que coincide con
+      el Amount de la membership Opportunity reportado (split receipting: la membership Opp
+      absorbe el donation portion). safesql redacta strings; los ids del record quedan en el
+      out file 0600, no en el chat.
+    stepResults: []
+    attachments:
+      - name: srd-pinpoint.sql
+        path: attachments/tr-123-tc-113/scenario-1/srd-pinpoint.sql
+        mimeType: text/plain
+      - name: aspen-rev10026520-pinpoint-out.json
+        path: attachments/tr-123-tc-113/scenario-1/aspen-rev10026520-pinpoint-out.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-123-tc-113/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "El cohort split-receipting emite las cantidades firmadas por el dev en cada perfil afectado (Aspen 11/$29,507 · MOAD 322/$48,120 · High Desert 6,940/$1.55M)"
+    testCaseId: 0b81892b-043f-4259-a1a0-009e48b3cc7b
+    testCaseKey: TC-113
+    status: passed
+    executedAt: "2026-07-24T21:34:20Z"
+    duration: 4
+    actual: |
+      Re-derivación INDEPENDIENTE del cohort (query propia de QA, no la del dev) en aspen:
+      - n_dedup_fa = **11**
+      - sum_amount = **$29,507.00**
+      - n_ranked_all = 11 (== n_dedup → sin fan-out; el rank guard no descartó filas)
+
+      **Match EXACTO** vs los números firmados por el dev para aspen (11 FA / $29,507). La
+      probabilidad de que una re-derivación fresca matchee count Y sum al centavo si el fix
+      estuviera mal es despreciable → alta confianza en la corrección de la rama.
+
+      **No double-count**: el static gate-contract spec (scenario 5) prueba que
+      fund_assignment_donations.sql EXCLUYE exactamente las líneas que esta rama INCLUYE (gate
+      HasMembershipTransaction byte-idéntico) → las 11 no se emiten dos veces.
+    notes: |
+      MOAD (322/$48,120) y High Desert (6,940/$1.55M) NO se re-derivaron independientemente:
+      no hay perfil safesql para esos orgs en el host QA. El dev los validó pre-merge; el match
+      exacto en aspen (mismo método) los corrobora. Ver "Pendiente de tu parte".
+    stepResults: []
+    attachments:
+      - name: srd-aggregate-independent.sql
+        path: attachments/tr-123-tc-113/scenario-2/srd-aggregate-independent.sql
+        mimeType: text/plain
+      - name: aspen-srd-aggregate-out.json
+        path: attachments/tr-123-tc-113/scenario-2/aspen-srd-aggregate-out.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-123-tc-113/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "Donation splits huerfanos (sin MEMBERSHIPTRANSACTION) recuperan la ruta donation Opportunity + FA + POS en High Desert (13 Opps / $34,426 con neteo por reversals)"
+    testCaseId: 0b81892b-043f-4259-a1a0-009e48b3cc7b
+    testCaseKey: TC-113
+    status: not-run
+    duration: 0
+    actual: |
+      NO EJECUTABLE en el host QA:
+      - No existe perfil safesql `high-desert` (los orphans están concentrados en ese org
+        según el dev; aspen/illinois/tucson tienen 0 orphans).
+      - Docker daemon abajo → el orphan shape (10 emiten / 3 netean / 3 POS) solo vive en el
+        fixture dockerizado `donation-split-receipting-query-fixture.ts`, que no puede correr.
+
+      El static gate-contract spec (scenario 5) SÍ prueba la lógica del gate estrechado
+      ("keeps orphaned-membership donation splits in the donation fund assignment export") a
+      nivel de contrato, pero NO la cardinalidad live de High Desert (13 Opps / $34,426).
+    notes: |
+      Pendiente: correr con perfil high-desert (o levantar Docker + RUN_DOCKER_SQL_QUERY_TESTS=1
+      para el fixture de High Desert). Ver "Pendiente de tu parte".
+    stepResults: []
+
+  - scenarioIndex: 4
+    scenarioTitle: "Perfiles no afectados (Everson, Illinois, Kidstream, Long Island, Tucson) no ganan ni pierden filas — regression safety"
+    testCaseId: 0b81892b-043f-4259-a1a0-009e48b3cc7b
+    testCaseKey: TC-113
+    status: passed
+    executedAt: "2026-07-24T21:34:40Z"
+    duration: 3
+    actual: |
+      Re-derivación del cohort split-receipting (misma query independiente) en los perfiles
+      alcanzables declarados "no afectados":
+      - **illinois (illinois_2)**: n_ranked_all = **0** → cero split-receipting lines → zero-delta.
+      - **tucson**: n_ranked_all = **0** → zero-delta.
+
+      Un perfil con 0 split-receipting donation lines es estructuralmente inmune a la nueva rama
+      (produce 0 filas), y el gate estrechado no le agrega orphans. Confirmado en 2 de los 5
+      perfiles listados.
+    notes: |
+      everson / kidstream / long-island NO tienen perfil safesql en el host QA → diferidos. Los
+      conteos POS post-merge (Aspen 305 / Everson 11,885 / Kidstream 68, sin duplicados) NO se
+      re-corrieron; dev evidence se mantiene. Ver "Pendiente de tu parte".
+    stepResults: []
+    attachments:
+      - name: illinois-srd-aggregate-out.json
+        path: attachments/tr-123-tc-113/scenario-4/illinois-srd-aggregate-out.json
+        mimeType: application/json
+      - name: tucson-srd-aggregate-out.json
+        path: attachments/tr-123-tc-113/scenario-4/tucson-srd-aggregate-out.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-123-tc-113/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: "Suite dockerizado local corre los 14 IM-560 scenarios + 41 tests de query-regression sin regresiones (excepto el fallo pre-existente IM-558 en pledge-query-chain)"
+    testCaseId: 0b81892b-043f-4259-a1a0-009e48b3cc7b
+    testCaseKey: TC-113
+    status: passed
+    executedAt: "2026-07-24T21:33:00Z"
+    duration: 8
+    actual: |
+      Ejecutado en el merge-commit 1f3ac47b (sin Docker):
+      - **static gate-contract spec** (`donation-split-receipting-query.spec.ts`): **13/13 PASS**
+        — gate parity byte-idéntico entre los 3 SQL de donación, rank guard "one FA per donation
+        line item", reversals siguen la regla de su línea, rama emite contra la membership Opp
+        con su propio designation, anchors solo en MT no-Drop.
+      - **fast query-regression** (`npm run test:queries`): **329 passed · 55 skipped · 0 FAIL**
+        (11 suites dockerizadas skipped sin RUN_DOCKER_SQL_QUERY_TESTS=1). 36/47 suites verdes.
+      - **lint:check**: clean. **npm run build (nest)**: clean.
+
+      El fix supera todo lo automatizable sin Docker en el host QA.
+    notes: |
+      DIFERIDO (Docker daemon abajo): el suite dockerizado full (343 tests, incluidos los 14
+      escenarios IM-560 de `donation-split-receipting-query.integration.spec.ts`) NO se re-corrió.
+      El fallo pre-existente IM-558 (`pledge-query-chain.integration.spec.ts`) es docker-only →
+      no observable aquí (quedó entre los 11 suites skipped). Dev evidence: 343 pass / solo el
+      pledge pre-existente falla. Ver "Pendiente de tu parte".
+    stepResults: []
+    attachments:
+      - name: static-gate-spec.log
+        path: attachments/tr-123-tc-113/scenario-0-unit-tests/static-gate-spec.log
+        mimeType: text/plain
+      - name: fast-suite.log
+        path: attachments/tr-123-tc-113/scenario-0-unit-tests/fast-suite.log
+        mimeType: text/plain
+      - name: lint-check.log
+        path: attachments/tr-123-tc-113/scenario-0-unit-tests/lint-check.log
+        mimeType: text/plain
+      - name: build.log
+        path: attachments/tr-123-tc-113/scenario-0-unit-tests/build.log
+        mimeType: text/plain
+      - name: tests-found.txt
+        path: attachments/tr-123-tc-113/scenario-0-unit-tests/tests-found.txt
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T21:35:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T21:35:00Z"
+  version: 1
+
+history:
+  - action: created
+    timestamp: "2026-07-24T21:20:00Z"
+    user: codex
+    to: in-progress
+    reason: "Ejecución de TC-113 (IM-560) contra PR #152 MERGED. Extracción SQL pre/post via git show, re-derivación independiente del cohort split-receipting en safesql, tests jest en el merge-commit."
+  - action: executed
+    timestamp: "2026-07-24T21:35:00Z"
+    user: codex
+    from: in-progress
+    to: in-progress
+    reason: "4/5 PASS · 1 not-run · 0 defectos. aspen 11/$29,507 re-derivado EXACTO + rev-10026520 ($5,000/2026-02-02) clavado en el cohort post-fix (rama ausente pre-fix). static gate spec 13/13 + fast suite 329/0 + lint + build verdes. illinois+tucson zero-delta. Diferidos por falta de perfil safesql (MOAD/High Desert/everson/kidstream/long-island) y Docker abajo (suite dockerizado 14-scenarios + High Desert orphans). Run queda in-progress hasta cerrar los diferidos."

@@ -1,0 +1,196 @@
+schemaVersion: "1.0"
+
+id: "0b81892b-043f-4259-a1a0-009e48b3cc7b"
+key: "TC-113"
+title: "Altru split-receipting membership donation splits emit fund assignments (Aspen headline + cross-profile cohort)"
+description: |
+  Cobertura QA de IM-560 (sub-tarea IM-1118) bajo el epic IM-70 Altru
+  Queries. Valida el fix de MigrationToolETL PR #152 (merge commit
+  1f3ac47b), que recupera los donation revenue splits atados a
+  membership lines (Altru "combination" sales) que antes se caian de
+  todas las rutas de export.
+
+  Root cause corregido (segun PR #152):
+  - `fund_assignment_memberships.sql` gana una rama nueva
+    `SplitReceiptingDonationLines` (UNION ALL) que emite un fund
+    assignment por donation Standard line cuyo source membership line
+    esta respaldado por un MEMBERSHIPTRANSACTION no-Drop; parent =
+    membership Opportunity, fund = DESIGNATIONID propio del split,
+    external id = donation line item (misma id que hubiera usado
+    `fund_assignment_donations.sql`, sin colisiones).
+  - `donation_transaction.sql`, `fund_assignment_donations.sql` y
+    `sales_order_only_donation.sql` estrechan la exclusion
+    membership-source: ahora solo excluyen lineas Donation cuya
+    source membership line tiene MT no-Drop; splits huerfanos (sin
+    MT) fluyen por la ruta estandar donation Opportunity + fund
+    assignment + POS.
+  - Reversals siguen la misma regla que la linea que reversan.
+
+  Numeros firmados por el dev (por cliente):
+  - Aspen: 11 FA nuevas / $29,507 · registro reportado
+    `rev-10026520` ($5,000, 2026-02-02) ahora emite como membership
+    Opportunity split-receipting con FA correctamente parenteada.
+  - MOAD: 322 FA nuevas / $48,120.
+  - High Desert: 6,940 FA nuevas / $1.55M · 13 donation Opportunities
+    huerfanas recuperadas ($34,426) — 10 emiten neto $38,634, 3 netean
+    a cero via reversals, 3 POS purchases via IM-1093 rank-1 link.
+  - Sin impacto: Everson, Illinois, Kidstream, Long Island, Tucson.
+  - POS post-merge: Aspen 305 sales orders / Everson 11,885 /
+    Kidstream 68 — cero duplicados.
+  - Aspen donation Opportunities post-merge: 3,925 · cero double-
+    counted transacciones respaldadas por MT.
+
+  Riesgos abiertos (por el propio PR):
+  - MOAD y Tucson tenian endpoints inalcanzables durante la
+    revalidacion post-merge; validados solo pre-merge (perfiles
+    cero-huerfanos, POS no afectado).
+  - Deferrals documentados en `docs/altru-model-context.md`
+    (follow-up tickets recomendados por el dev):
+      * Soft-credit queries parentean sobre el transaction ID del
+        split — pre-existente, material (Aspen 18, MOAD 367, High
+        Desert 8,835 recognition rows).
+      * `fund_assingments_donation_refunds.sql` mis-parent de refund
+        de un donation line split-receipting (cero ocurrencias hoy).
+      * Membership-line FA fan-out bajo multi-MT (pre-existente,
+        cero ocurrencias).
+  - Pre-existing: `pledge-query-chain.integration.spec.ts` falla
+    identico en `main` (IM-558 dual-source), no es de este PR.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "PR #152 (Veevarts/MigrationToolETL) mergeado en main (merge commit 1f3ac47b, 2026-07-24)"
+  - "safesql profiles reachable para: aspen, moad, high-desert, everson, illinois, kidstream, long-island, tucson (perfiles en ~/tools/safesql/profiles/)"
+  - "Node toolchain disponible + Docker (para correr el suite dockerizado `donation-split-receipting-query.integration.spec.ts` que trae 14 IM-560 scenarios)"
+  - "Acceso al repo Veevarts/MigrationToolETL con permisos de checkout a merge-base vs merge commit"
+  - "Contexto Altru: `MEMBERSHIPTRANSACTION.ACTION != 'Drop'` como definicion del gate `HasMembershipTransaction` compartido por los 4 SQL files"
+  - "Reporte del bug apunta a Aspen record `rev-10026520` ($5,000, 2026-02-02) — record source: https://s20aalt04web01.sky.blackbaud.com/113100/webui/webshellpage.aspx?databasename=a1b716f7-8632-4589-a37a-8573782945e3#pageType=p&pageId=e5bd9d8b-c268-48cc-a312-e9a832b39566&recordId=8BF5941E-6B99-415C-BEC9-BDA3B1EFE641"
+
+format: gherkin
+scenarios:
+  - title: "El registro Aspen reportado (rev-10026520) ahora emite fund assignment via la rama split-receipting del PR #152"
+    tags:
+      - ac-1
+      - regression-fix
+      - headline
+      - aspen
+      - split-receipting
+      - fund-assignment-memberships
+    given:
+      - "el merge commit 1f3ac47b esta desplegado y las queries de MigrationToolETL apuntan al schema Altru de aspen"
+      - "el registro `rev-10026520` es un payment con membership line + donation split ($5,000, CloseDate 2026-02-02) respaldado por un MEMBERSHIPTRANSACTION no-Drop"
+    when:
+      - "QA corre la query real `fund_assignment_memberships.sql` contra el perfil safesql `aspen` en el estado post-merge y filtra por external id = donation line item de `rev-10026520`"
+    then:
+      - "aparece exactamente 1 fund assignment cuyo parent Opportunity id es la membership Opportunity de `rev-10026520` (Split_Receipting = 1)"
+      - "el DESIGNATIONID de la FA corresponde al designation propio del donation split (no al del membership fund)"
+      - "el external id de la FA es el donation line item id (mismo id que hubiera usado `fund_assignment_donations.sql`, sin colision)"
+      - "la membership Opportunity a la que parentea ya existe en el output post-merge con Amount 5000 (incluye la porcion donation via split-receipting)"
+      - "en el estado pre-fix (merge-base), la misma query no emite esa fila para `rev-10026520`"
+
+  - title: "El cohort split-receipting emite las cantidades firmadas por el dev en cada perfil afectado (Aspen 11/$29,507 · MOAD 322/$48,120 · High Desert 6,940/$1.55M)"
+    tags:
+      - ac-2
+      - cohort-widening
+      - aggregate-parity
+      - cross-profile
+      - aspen
+      - moad
+      - high-desert
+    given:
+      - "los 3 perfiles con impacto en split-receipting FA (aspen, moad, high-desert) son alcanzables via safesql"
+      - "los numeros de referencia del PR #152 son: Aspen 11 FA / $29,507 · MOAD 322 FA / $48,120 · High Desert 6,940 FA / $1.55M"
+    when:
+      - "QA agrega `fund_assignment_memberships.sql` post-merge filtrando por la rama nueva `SplitReceiptingDonationLines` (o por origen membership + donation designation) y compara contra el conteo pre-fix (cero)"
+    then:
+      - "Aspen emite 11 FA nuevas cuyo SUM(Amount) es 29507, todas 1:1 con su membership Opportunity, cero null designations"
+      - "MOAD emite 322 FA nuevas cuyo SUM(Amount) es 48120, todas 1:1 con su membership Opportunity, cero null designations"
+      - "High Desert emite 6,940 FA nuevas cuyo SUM(Amount) es aproximadamente 1,550,000, todas 1:1 con su membership Opportunity, cero null designations"
+      - "los 3 perfiles muestran cero duplicate external ids entre `fund_assignment_memberships.sql` y `fund_assignment_donations.sql` (assert de unicidad global)"
+
+  - title: "Donation splits huerfanos (sin MEMBERSHIPTRANSACTION) recuperan la ruta donation Opportunity + FA + POS en High Desert (13 Opps / $34,426 con neteo por reversals)"
+    tags:
+      - ac-3
+      - orphan-donation-split
+      - high-desert
+      - reversal-symmetry
+      - pos-linkage
+      - im-1093
+    given:
+      - "High Desert es el perfil con la mayor cohorte de donation splits huerfanos identificada por el dev (13 donation Opportunities recuperadas, $34,426 en aggregate)"
+      - "el gate `HasMembershipTransaction` en `donation_transaction.sql`, `fund_assignment_donations.sql` y `sales_order_only_donation.sql` fue estrechado en PR #152 para dejar pasar las lineas donation cuyo source membership line NO tiene MT"
+    when:
+      - "QA corre `donation_transaction.sql`, `fund_assignment_donations.sql` y `sales_order_only_donation.sql` post-merge contra el perfil safesql `high-desert` y aisla las 13 transacciones huerfanas"
+    then:
+      - "10 de las 13 transacciones huerfanas emiten como standalone donation Opportunities con Amount neto $38,634 (evidencia dev)"
+      - "3 de las 13 netean a cero (reversal symmetry: la linea reversal sigue la misma regla del gate que la linea que reversa)"
+      - "3 sales orders emiten via `sales_order_only_donation.sql` usando el rank-1 link introducido por IM-1093 (dependencia declarada por el PR)"
+      - "cada donation Opportunity emitida tiene su FA correspondiente en `fund_assignment_donations.sql` (referential integrity: FA parent id ∈ set de donation Opportunities emitidas)"
+
+  - title: "Perfiles no afectados (Everson, Illinois, Kidstream, Long Island, Tucson) no ganan ni pierden filas — regression safety"
+    tags:
+      - ac-4
+      - regression-safety
+      - unaffected-profiles
+      - baseline-parity
+      - cross-profile
+    given:
+      - "los perfiles Everson, Illinois, Kidstream, Long Island y Tucson estan declarados por el dev como zero-delta (sin split-receipting membership donation splits ni huerfanos)"
+      - "safesql alcanza los 5 perfiles"
+    when:
+      - "QA compara aggregate counts de donation Opportunities, membership FA, donation FA y POS purchases en cada perfil entre merge-base vs merge commit 1f3ac47b"
+    then:
+      - "Everson: cero delta en las 4 metricas (donation Opps, membership FA, donation FA, POS purchases)"
+      - "Illinois: cero delta en las 4 metricas"
+      - "Kidstream: cero delta en las 4 metricas"
+      - "Long Island: cero delta en las 4 metricas"
+      - "Tucson: cero delta en las 4 metricas (nota: el dev valido pre-merge por endpoint inalcanzable post-merge; QA debe reintentar el endpoint una vez y, si sigue caido, aceptar la evidencia pre-merge)"
+      - "POS post-merge conserva los conteos firmados: Aspen 305 sales orders, Everson 11,885, Kidstream 68 — cero duplicados"
+
+  - title: "Suite dockerizado local corre los 14 IM-560 scenarios + 41 tests de query-regression sin regresiones (excepto el fallo pre-existente IM-558 en pledge-query-chain)"
+    tags:
+      - ac-5
+      - automated-tests
+      - docker-integration
+      - test-coverage
+      - im-558-preexisting
+    given:
+      - "el repo esta en el merge commit 1f3ac47b y Docker corre localmente"
+      - "el script `test:queries:docker` en package.json lista explicitamente `donation-split-receipting-query.integration.spec.ts` (evita el pull glob del pledge suite roto)"
+    when:
+      - "QA corre `RUN_DOCKER_SQL_QUERY_TESTS=1 npm test -- --runInBand query-regression` y `npm run test:queries:docker` en local"
+    then:
+      - "el suite fast pasa 295/295 tests"
+      - "el suite dockerizado full pasa 343 tests, incluyendo los 14 escenarios IM-560 en `donation-split-receipting-query.integration.spec.ts`"
+      - "`test:queries:docker` ejecuta 5 suites / 41 tests, todos verdes"
+      - "el unico fallo esperado es `pledge-query-chain.integration.spec.ts` (IM-558 dual-source, pre-existente en main — QA verifica el mismo fallo en el merge-base para descartar regresion)"
+      - "`npm run lint:check` clean · `npm run build` clean"
+
+tags:
+  - im-560
+  - im-70
+  - im-1118
+  - altru
+  - migration
+  - migrationtooletl
+  - pr-152
+  - split-receipting
+  - donation-splits
+  - fund-assignment
+  - membership-transaction
+  - aspen
+  - moad
+  - high-desert
+  - sql-only
+  - safesql
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T21:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T21:20:00Z"
+  version: 1
