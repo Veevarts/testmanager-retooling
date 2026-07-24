@@ -1,0 +1,290 @@
+schemaVersion: "1.0"
+
+id: tr-ad8f9943-d417-49cf-9a09-fd635f81cf7a
+key: TR-122
+title: "IM-1079 · TC-108 · IC 3.22 v6 fully-auto POS batches — 4/4 PASS (BATCH_SCOPE risk RESUELTO por remoción; live run ec9c6f1d demostró ambas ramas: CanceledReport fresh enqueue+self-schedule 0→1 + PaymentProp idempotent no-op)"
+
+description: |
+  QA re-validation para IM-1079 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation). QA Sub-task: IM-1109. Cambio del dev POSTERIOR a TR-117:
+  Veevarts/MigrationAppBackend#289 (MERGED 2026-07-23 21:40Z, merge commit e097d63c,
+  merge-base 8d66dba6). Promovido a stable por #291.
+
+  Contexto: el usuario pidió re-validar el pendiente de IM-1079 (el open-risk
+  BATCH_SCOPE=200) porque el dev hizo un cambio. El cambio (v4→v6) es un rework completo
+  que RESUELVE los 3 open-risks que QA dejó en TR-117.
+
+  Método QA:
+  1. Fetch JSON spec + spec.ts en merge-commit (e097d63c, v6) y merge-base (8d66dba6, v4)
+     via `gh api contents?ref=<sha>` (no-clone).
+  2. Static contract v6: 2 AUTOMATED T6 steps, feasibility auto, 0 operator input,
+     scope 2000/default mirroring el package, ambos Auctifera globals anon-callable.
+  3. Supersession diff v4→v6: batchScope operator input REMOVIDO; MANUAL Cashier Drawer
+     Control → AUTOMATED POSPurchaseCanceledReportBatch; idempotency guards NUEVOS.
+  4. spec.ts inventory: 5 (v4) → 7 (v6) tests.
+  5. PRE-baseline illinois-trainings (read-only): PaymentProp CronTrigger WAITING +
+     CanceledReport 0 all-time.
+  6. API-driven IE run (Path A) `ec9c6f1d` (fully-auto, sin operator input).
+  7. POST-verify Tooling/Data API: ambas ramas de idempotencia.
+
+  Evidencia clave:
+  - **El open-risk BATCH_SCOPE=200 (unconfirmed by PM, confidence 70) queda RESUELTO por
+    REMOCIÓN**: v6 elimina el operator input `batchScope` y hardcodea el scope replicando
+    el propio package Auctifera — Payment Propagation `new POSPurchasePaymentPropagationBatch(15), 2000`
+    (el 15=runAgainMinutes, scope 2000 = la Callable run_schedule del package); Canceled
+    Report `new POSPurchaseCanceledReportBatch()` (default scope, el package no pasa scope).
+    Ya no hay número mágico que PM confirme. spec.ts asserta `not.toContain('{{batchScope}}')`
+    + `not.toContain('PropagationBatch(), 200)')` + `requiredInputs.length===0`.
+  - **Cashier Drawer Control MANUAL → RESUELTO**: reemplazado por POSPurchaseCanceledReportBatch
+    (global no-arg ctor, anon-callable) = el batch que el playbook original nombra. feasibility
+    hybrid→auto, 0 MANUAL. spec.ts asserta 0 refs de `CashierDrawerControlBatch`/`Drawer`.
+  - **NUEVO idempotencia + self-scheduling**: cada step reproduce el botón "Run & Schedule"
+    (enqueue once + self-reschedule en finish() bajo JOB_NAME fijo). No-op cuando la
+    CronTrigger recurrente O un live BatchApex job ya existen; solo enqueue en el else branch.
+  - **Live run ec9c6f1d**: state=completed, total=2 done=2 failed=0, ambos steps `done`,
+    fully-auto (nunca parkeó AWAITING_INPUT). El PRE-state ejercitó AMBAS ramas:
+    * CanceledReport (0 all-time PRE): fresh enqueue → 1 job Completed @17:27:17Z + nueva
+      CronTrigger WAITING NextFire 21:27:17Z (+240 min = `scheduleBatch(JOB_NAME,240,100)`).
+    * PaymentPropagation (CronTrigger WAITING PRE): idempotent no-op → 0 jobs nuevos en la
+      ventana del run [17:26-17:31Z]; schedule existente intacto (NextFire 17:39:10Z).
+
+  Riesgos abiertos: ninguno material. Los 3 open-risks de v4 (TR-117) quedan resueltos.
+  Nota cosmética: el comentario del spec.ts dice "Pins the v5 surface" pero los asserts +
+  el JSON son v6 (off-by-one en el comment, no defecto).
+
+testCaseIds:
+  - a94c427d-ea1f-4934-aca5-a41543e4b748
+
+environment:
+  name: "GitHub · Veevarts/MigrationAppBackend#289 (MERGED) + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/289"
+  buildVersion: 'IC config-plan case v4→v6 supersession. 2 files: ic-3-22-pos-batches.json + ic-3-22-pos-batches.spec.ts (5→7 tests). BASE 8d66dba6 (v4 hybrid: batchScope operator input + MANUAL Drawer) → HEAD e097d63c (v6 auto: 2 AUTOMATED T6 Run&Schedule steps, scope 2000/default mirroring package, idempotent no-op guards). Estrategia: static contract + supersession diff + spec.ts inventory + PRE-baseline + API-driven fully-auto IE run + Tooling/Data POST-verify (ambas ramas de idempotencia).'
+  notes: |
+    - Re-validación pedida por el usuario ("valida el cambio del dev aunque esté cerrado,
+      actualiza el test manager"). TC-108 actualizado v4→v6 (metadata.version 2). TR-117
+      queda como registro histórico de la validación v4.
+    - Session Cognito: el token expiró y el silent-SSO refresh NO funcionó esta vez — el
+      app bounceó a un challenge de Google que requiere re-auth del usuario. El usuario
+      completó el sign-in y reissued un token fresco (17 min TTL). Ver
+      `[[reference-migrationapp-token-persistence]]` — a veces el "Continue with Google"
+      exige challenge, no siempre es silent.
+    - illinois-trainings alias autenticado (Connected). Ambos POS batch classes presentes.
+
+    ## Solution understood
+
+    v4 (PR #251, validado en TR-117) hacía `batchScope` un required operator input con
+    default 200 TBD por PM (el open-risk). v6 (PR #289) hace un rework:
+    - Elimina el operator input; hardcodea el scope replicando el package Auctifera
+      (Payment Propagation new(15)@2000; Canceled Report new()@default).
+    - Reemplaza el MANUAL Cashier Drawer Control (public non-global ctor, no anon-callable)
+      por el AUTOMATED POSPurchaseCanceledReportBatch (global, anon-callable) = el batch
+      que el playbook nombra → feasibility auto, 0 MANUAL.
+    - Cada step reproduce "Run & Schedule": enqueue once + self-reschedule en finish() bajo
+      JOB_NAME fijo. Idempotencia: no-op si existe CronTrigger recurrente O live BatchApex
+      job; solo enqueue en el else branch. Verify via AsyncApexJob query-back; VerifyException
+      (step FAILED) si no verifica. Clase non-global → compile-fail → step FAILED. Nunca false pass.
+
+    ## Inferred technical tests (mapped to ACs)
+
+    | Test                                                          | AC   | Executable here? | Verdict |
+    |---------------------------------------------------------------|------|------------------|---------|
+    | Static contract v6 (2 auto T6, scope 2000/default, no input)  | AC1  | YES (no-clone)   | PASS    |
+    | Supersession diff v4→v6 (batchScope removed, Drawer→CanceledReport) | AC1 | YES        | PASS    |
+    | spec.ts inventory (7 tests pinning v6)                        | AC1  | YES (no-clone)   | PASS    |
+    | Step1 idempotent no-op (CronTrigger present)                  | AC2  | YES (live)       | PASS    |
+    | Step2 fresh enqueue + self-schedule (0→1)                     | AC3  | YES (live)       | PASS    |
+    | Org-agnostic grep + verify-or-fail + Drawer removed           | AC4  | YES              | PASS    |
+
+    ## Objective fit
+
+    - Ticket objective (revisited): el dev resolvió el BATCH_SCOPE default sin depender de
+      confirmación PM, replicando el package; y automatizó el 2º batch correcto del playbook.
+    - Delivered: v6 fully-auto, scope mirroring package, idempotente, self-scheduling,
+      verificado live end-to-end en illinois-trainings (ambas ramas).
+    - Objective met? YES. Los 3 open-risks de v4 resueltos. 0 defectos. El pendiente cierra.
+
+status: completed
+executor: codex
+executedAt: "2026-07-24T17:20:00Z"
+completedAt: "2026-07-24T17:30:00Z"
+duration: 10
+
+summary:
+  total: 4
+  passed: 4
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "AC1 · Static contract v6 (fully-auto) + genuinely-new supersession v4→v6 + spec.ts 7-test lock"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-24T17:21:00Z"
+    duration: 4
+    actual: |
+      Static contract sobre merge-commit `e097d63c` (v6) vs merge-base `8d66dba6` (v4):
+
+      | Assertion                                                      | v6 (HEAD) | v4 (BASE) |
+      |----------------------------------------------------------------|-----------|-----------|
+      | case.version / template.version (lockstep)                     | 6 / 6 ✅  | 4 / 4     |
+      | feasibility                                                    | auto ✅   | hybrid    |
+      | steps: ambos AUTOMATED T6, 0 MANUAL                             | ✅        | 1 auto + 1 MANUAL |
+      | requiredInputs en ambos steps                                  | 0 ✅      | batchScope |
+      | step 1 Apex: `executeBatch(new POSPurchasePaymentPropagationBatch(15), 2000)` | ✅ | `(), BATCH_SCOPE` |
+      | 0 refs `{{batchScope}}` / `PropagationBatch(), 200)`            | ✅        | tiene {{batchScope}} |
+      | step 2 Apex: `executeBatch(new POSPurchaseCanceledReportBatch())` (default) | ✅ | (era MANUAL Drawer) |
+      | 0 refs `CashierDrawerControlBatch` / `Drawer` en el case        | ✅        | los tenía |
+
+      **Supersession / open-risk resolution**: el operator input `batchScope` (default 200
+      TBD por PM, el open-risk de TR-117) queda ELIMINADO; v6 replica el scope del package
+      Auctifera (2000 para Payment Propagation, default para Canceled Report). El segundo
+      batch pasa de Cashier Drawer Control (MANUAL, non-global ctor) a POSPurchaseCanceledReportBatch
+      (el que el playbook nombra, global anon-callable).
+
+      **spec.ts inventory** (no-clone, 7 tests en merge-commit): parses v6/auto · version
+      lockstep · 2 AUTOMATED T6 steps y NO manual · step1 new(15)@2000 + AsyncApexJob verify
+      + NOT {{batchScope}} + NOT (),200 · step2 CanceledReport default + NOT Drawer · no
+      operator input (requiredInputs 0) · both idempotent (CronTrigger guard + fixed JOB_NAME
+      + LIVE_STATUSES + namespace + else branch). Dev gate green per PR body.
+    notes: |
+      Comentario del spec.ts dice "Pins the v5 surface" pero los asserts checan version 6 y
+      el JSON case/template = 6 — off-by-one cosmético en el comment, no defecto.
+    stepResults: []
+    attachments:
+      - name: pr289.diff-summary
+        path: attachments/tr-122-tc-108/scenario-3/api-call-transcript.md
+        mimeType: text/markdown
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC2 · Step 1 Payment Propagation — idempotent no-op cuando la schedule recurrente / live job ya existe (live)"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-24T17:27:00Z"
+    duration: 1
+    actual: |
+      **PRE-baseline** illinois-trainings: CronTrigger `Veevart - POSPurchasePaymentPropagationBatch`
+      en state **WAITING** (schedule recurrente ya existe; 91 jobs Completed en 2 días, cada ~15 min).
+
+      **Live run** `ec9c6f1d-a9a8-44a4-a37f-cbe25709a727` (17:26:57Z): step 1 completó `done`.
+
+      **POST-verify**: AsyncApexJob rows para POSPurchasePaymentPropagationBatch creados en la
+      ventana del run [17:26:00-17:31:00Z] = **0**. El step NO enqueue-ó — tomó el idempotent
+      no-op branch porque la CronTrigger WAITING ya existía. La schedule existente quedó
+      intacta (NextFireTime 17:39:10Z, cadencia normal de 15 min, no afectada por el run).
+
+      → Idempotencia probada live: re-correr con la schedule presente = no-op success (step
+      `done`, no un enqueue redundante, no un fail).
+    notes: |
+      El batch se auto-reschedula cada 15 min (runAgainMinutes=15). El no-op branch evita
+      duplicar el run inmediato cuando la recurrencia ya está establecida.
+    stepResults: []
+    attachments:
+      - name: pre-crontrigger.txt
+        path: attachments/tr-122-tc-108/scenario-3/pre-crontrigger.txt
+        mimeType: text/plain
+      - name: post-paymentprop-window.txt
+        path: attachments/tr-122-tc-108/scenario-3/post-paymentprop-window.txt
+        mimeType: text/plain
+      - name: api-call-transcript.md
+        path: attachments/tr-122-tc-108/scenario-3/api-call-transcript.md
+        mimeType: text/markdown
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC3 · Step 2 Canceled Report — fresh enqueue + self-schedule cuando no existe (live)"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-24T17:27:30Z"
+    duration: 1
+    actual: |
+      **PRE-baseline** illinois-trainings: POSPurchaseCanceledReportBatch = **0 AsyncApexJob
+      rows all-time** + 0 CronTrigger → primera corrida absoluta en este org.
+
+      **Live run** `ec9c6f1d` (mismo run): step 2 completó `done`.
+
+      **POST-verify**:
+      - AsyncApexJob para POSPurchaseCanceledReportBatch: all-time count **0 → 1**, el nuevo
+        row `Completed` (BatchApex) CreatedDate 2026-07-24T17:27:17Z (20s post-run-start).
+      - CronTrigger `Veevart - POSPurchaseCanceledReportBatch`: ahora **WAITING**, NextFireTime
+        2026-07-24T21:27:17Z = **+240 min** — coincide EXACTAMENTE con el
+        `System.scheduleBatch(JOB_NAME, 240, 100)` que declara el código.
+
+      → El else-branch corrió: enqueue once (corrió ahora, job Completed) + estableció la
+      schedule recurrente (self-reschedule @ 240 min). Verify-by-AsyncApexJob-query-back OK.
+      Es el "Run & Schedule" reproducido programáticamente, org-agnostic.
+    notes: |
+      El scope de este batch es el SF default (el package no pasa scope). El job Completed
+      con 0 errores. La reprogramación a 240 min (vs 15 del PaymentProp) matchea los args
+      distintos de cada batch en el código.
+    stepResults: []
+    attachments:
+      - name: post-canceledreport.txt
+        path: attachments/tr-122-tc-108/scenario-3/post-canceledreport.txt
+        mimeType: text/plain
+      - name: post-crontrigger.txt
+        path: attachments/tr-122-tc-108/scenario-3/post-crontrigger.txt
+        mimeType: text/plain
+      - name: api-call-transcript.md
+        path: attachments/tr-122-tc-108/scenario-3/api-call-transcript.md
+        mimeType: text/markdown
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC4 · Org-agnostic launch + verify-or-fail contract (never false pass); Drawer eliminado del case"
+    testCaseId: a94c427d-ea1f-4934-aca5-a41543e4b748
+    testCaseKey: TC-108
+    status: passed
+    executedAt: "2026-07-24T17:22:00Z"
+    duration: 2
+    actual: |
+      **Static grep sobre el JSON spec v6** (merge-commit e097d63c):
+      - 0 hardcoded 18-char SF Ids en ambos Apex scripts.
+      - 0 org-specific patterns (0 https:// URLs, 0 .trainings domains, 0 sandbox refs).
+      - class refs (2): `Auctifera.POSPurchasePaymentPropagationBatch`,
+        `Auctifera.POSPurchaseCanceledReportBatch` — ambas namespaced, sin cast dinámico.
+
+      **Verify-or-fail contract**: cada step lanza `VerifyException` (→ step FAILED) si el
+      AsyncApexJob no existe o queda en estado inesperado; una clase non-global/non-visible
+      falla el COMPILE → result.success=false (step FAILED). El live run confirmó el happy
+      path (ambos jobs verificados en accepted state). Nunca un false pass.
+
+      **Drawer eliminado**: 0 refs de `CashierDrawerControlBatch` y 0 de `Drawer` en todo el
+      case (el mismatch de v4 quedó removido; spec.ts lo asserta con `JSON.stringify(raw).not.toContain`).
+
+      Reproducible en cualquier org con el package Auctifera — confirmado live en illinois-trainings
+      (ambos batches globals anon-callable, enqueue + verify sin ajustes org-specific).
+    notes: |
+      Ambos batches implementan Callable con global constructor — el diseño anon-Apex-callable
+      es lo que permitió automatizar el 2º step que en v4 era MANUAL.
+    stepResults: []
+    attachments:
+      - name: api-call-transcript.md
+        path: attachments/tr-122-tc-108/scenario-3/api-call-transcript.md
+        mimeType: text/markdown
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T17:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T17:30:00Z"
+  version: 1
+
+history:
+  - action: created
+    timestamp: "2026-07-24T17:20:00Z"
+    user: codex
+    to: in-progress
+    reason: "Re-validación de IM-1079 tras cambio del dev (PR #289 v4→v6 fully-auto). Fetch spec+spec.ts merge-commit e097d63c, static contract v6, supersession diff, PRE-baseline illinois-trainings (PaymentProp CronTrigger WAITING + CanceledReport 0 all-time)."
+  - action: completed
+    timestamp: "2026-07-24T17:30:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: "4/4 PASS. El open-risk BATCH_SCOPE=200 (unconfirmed by PM) queda RESUELTO POR REMOCIÓN: v6 elimina el operator input y replica el scope del package (2000/default). Cashier Drawer Control MANUAL → AUTOMATED POSPurchaseCanceledReportBatch (feasibility auto). Live run ec9c6f1d completed 2/2, demostró ambas ramas de idempotencia: CanceledReport fresh enqueue 0→1 Completed + self-schedule CronTrigger @240min; PaymentProp idempotent no-op (0 jobs nuevos en ventana, schedule intacto). 0 defectos. TC-108 actualizado v4→v6. Pendiente de IM-1079 cerrado."
