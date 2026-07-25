@@ -1,0 +1,172 @@
+schemaVersion: "1.0"
+
+id: "7b24330d-3dab-4919-a832-d0dcdb8c80b8"
+key: "TC-115"
+title: "IC 6.02 Ticketing Page Layouts — org-agnostic discovered-select rewrite (single park, 10 layout assigns, related-list removal, picklist values, manual UI handoffs)"
+description: |
+  Cobertura QA de IM-1075 (sub-tarea IM-1120) bajo el epic IM-735 Implementation
+  Cases Automation. Valida el Implementation Case config-plan 6.02
+  "Update Page Layouts and Update Lightning Record Page (Ticketing)" tras el
+  rewrite org-agnostic del dev en MigrationAppBackend PR #247 (spec v3, MERGED
+  2026-07-15, merge commit 60fb2165).
+
+  Fuente de verdad del playbook: Auctifera SF Implementation_Case__c Order 6.02
+  (Id a185w00000trMOQAA2). El spec automatiza 12 de los pasos y deja 5 como
+  handoff MANUAL (UI-only sin Metadata API subscriber-writable).
+
+  Forma del spec (17 steps, feasibility hybrid):
+  - Step 1 (T2, AUTOMATED): PART A + único punto de recolección de inputs. Declara
+    los 10 `select` de layout (uno por objeto ticketing) para que el run parkee
+    UNA sola vez (lección IM-928). Opciones DESCUBIERTAS live del org (discovery
+    kind 'layouts'), con el fullName namespaced real — org- y version-agnostic,
+    sin fullName hardcoded (resolución del caveat Medium). Su ACTION re-apunta
+    Auctifera__Group_Reservation__c (Ticketing) al layout elegido.
+  - Steps 2-10 (T2): assign del Veevart layout activo para Exhibition/Event,
+    Ticket Offer, Ticket Item, Exhibition Time & Capacity, POS Purchase, Charge,
+    Charge Item, Refund, Refund Item.
+  - Step 11 (T2): remove related lists Museum Offers + Exhibition Times &
+    Capacities del layout Exhibition/Event.
+  - Step 12 (T3): add valores Admission + Education al picklist
+    Auctifera__Inventory_Service__c.Auctifera__Type__c (local value set).
+  - Steps 13-17 (MANUAL): botones del layout, Lightning overrides POS/Ticketing,
+    Lightning Record Pages como Org Default, edición del record page
+    Exhibition/Event, compact layout clone (incluye Media/Attendance tabs +
+    Manage Files + Auctifera Clone/Generate Roster buttons per playbook).
+
+  Ejecución: config-plan IC via Migration App (target-side). Verificación
+  PRE → IE run → POST en un dev/training workspace (illinois-trainings / Tucson /
+  CamiloDevOrg) por AC; los pasos MANUAL quedan como attestation/handoff, nunca
+  ejecutados por el harness.
+
+  Riesgos abiertos:
+  - Tier Medium: los fullName de layout de ticketing varían por versión del
+    package Auctifera. El fix descubre los layouts live; QA debe confirmar que la
+    discovery reconstruye el prefijo namespaced (vnfp__/Auctifera__) que
+    listMetadata elimina.
+  - 5 pasos MANUAL: no auto-ejecutables; se validan como handoff estructurado con
+    guía paso a paso + evidencia de captura del usuario.
+  - Verificado por el dev en CamiloDevOrg + Tucson (two-org proof Medium→High);
+    QA re-verifica independientemente en el org disponible.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "PR #247 (Veevarts/MigrationAppBackend) MERGED en main (merge commit 60fb2165); spec catalog v3 seedeado en MigrationApp-dev"
+  - "Org dev/training con el package Auctifera y los 10 objetos ticketing (illinois-trainings / Tucson / CamiloDevOrg) autenticado via sf CLI + sesión Cognito activa para el IE run"
+  - "Acceso read-only a Profile/Layout/PicklistValue via sf data query (o Tooling/Metadata API) para PRE/POST-verify"
+  - "El org expone uno o más layouts package-versionados por objeto ticketing (para poblar los discovered selects)"
+  - "caseId ic-6-02-ticketing-page-layouts disponible en el catálogo del backend para armar el plan-run"
+
+format: gherkin
+scenarios:
+  - title: "Single park: una tarjeta de input recolecta los 10 layouts de ticketing con opciones descubiertas y sin fullName hardcoded"
+    tags:
+      - ac-1
+      - single-park
+      - im-928
+      - discovered-select
+      - org-agnostic
+      - medium-caveat
+    given:
+      - "los diez objetos ticketing exponen uno o más page layouts package-versionados en el org"
+      - "el step 1 (assign-ticketing-layout, T2) declara los 10 requiredInputs tipo select con discovery kind 'layouts'"
+    when:
+      - "el operador corre IC 6.02 (plan-run del caseId ic-6-02-ticketing-page-layouts)"
+    then:
+      - "el run parkea para input exactamente UNA vez (no interleaving run/park entre assigns)"
+      - "esa tarjeta presenta 10 discovered layout selects, uno por objeto (Ticketing, Exhibition/Event, Ticket Offer, Ticket Item, Exhibition Time & Capacity, POS Purchase, Charge, Charge Item, Refund, Refund Item)"
+      - "cada select carga como opciones los fullName reales namespaced del org (vnfp__/Auctifera__ reconstruido por el discovery adapter)"
+      - "ningún fullName de layout version-específico está hardcoded en el spec (grep del JSON no encuentra fullNames literales)"
+
+  - title: "Assign: cada objeto ticketing queda re-apuntado al Veevart layout elegido por el operador, confirmado por Profile read-back"
+    tags:
+      - ac-2
+      - layout-assignment
+      - profile-readback
+      - ten-objects
+      - happy-path
+    given:
+      - "el operador selecciona el layout '(Object-Veevart-Vx)' más reciente (o el único) para cada uno de los 10 objetos ticketing"
+      - "los steps 1-10 (T2 assign) corren tras resolver el input card"
+    when:
+      - "los steps de assign automatizados ejecutan contra el org"
+    then:
+      - "la asignación de page-layout activa de cada objeto queda re-apuntada al layout elegido across todos los discovered profiles"
+      - "cada asignación se confirma por Profile read-back (PRE ≠ POST donde el layout cambió; POST = layout elegido)"
+      - "los 10 objetos quedan cubiertos (Auctifera__Group_Reservation__c, Inventory_Service__c, Museum_Offer__c, Museum_Offer_Item__c, Exhibition_Time_Capacity__c, POS_Purchase__c, Charge__c, Charge_Item__c, Refund__c, Refunded_Item__c)"
+
+  - title: "Remove: las related lists retiradas de Exhibition/Event se eliminan; un layout que nunca las tuvo verifica como no-op satisfecho"
+    tags:
+      - ac-3
+      - related-list-removal
+      - idempotent-noop
+      - exhibition-event
+    given:
+      - "el layout Exhibition/Event elegido puede cargar las related lists Museum Offers y Exhibition Times & Capacities"
+      - "el step 11 (T2 remove related lists) corre"
+    when:
+      - "el step de related-list automatizado ejecuta"
+    then:
+      - "ambas related lists (Museum Offers, Exhibition Times & Capacities) quedan removidas del layout Exhibition/Event"
+      - "un layout que nunca las cargó verifica como no-op satisfecho (no error, step done)"
+      - "re-correr el step es idempotente (segunda corrida no deja duplicados ni falla)"
+
+  - title: "Picklist: Admission y Education quedan como valores activos del Exhibition/Event Type; re-correr es no-op idempotente"
+    tags:
+      - ac-4
+      - picklist-values
+      - idempotent-noop
+      - inventory-service-type
+    given:
+      - "el picklist Exhibition/Event Type (Auctifera__Inventory_Service__c.Auctifera__Type__c) es un local value set"
+      - "el step 12 (T3) corre"
+    when:
+      - "el step de picklist automatizado ejecuta"
+    then:
+      - "Admission y Education están presentes como valores ACTIVOS del picklist tras el run"
+      - "los valores preexistentes del picklist se preservan (no se borran ni desactivan)"
+      - "re-correr el step es un no-op idempotente (no duplica valores)"
+
+  - title: "Manual handoff: los edits UI-only parkean como MANUAL con guía paso a paso; el record page indica saltar objetos sin record page"
+    tags:
+      - ac-5
+      - manual-handoff
+      - attestation
+      - lightning-record-page
+      - ui-only
+    given:
+      - "los edits de botones del layout, overrides Lightning POS/Ticketing, Lightning Record Page org defaults, edición del record page y el compact-layout clone no tienen Metadata API subscriber-writable"
+      - "el run alcanza los steps 13-17 (MANUAL)"
+    when:
+      - "el run llega a esos pasos"
+    then:
+      - "cada uno parkea como handoff MANUAL con una guía paso a paso (incluye Media/Attendance tabs + Manage Files + botones Auctifera Clone/Generate Roster + compact layout con campos client-specific per playbook)"
+      - "el step de Lightning Record Page instruye SALTAR cualquier objeto que no muestre record page"
+      - "el harness NUNCA ejecuta ni auto-atesta un paso MANUAL — quedan not-run/handoff hasta la confirmación del usuario con evidencia"
+
+tags:
+  - im-1075
+  - im-735
+  - im-1120
+  - implementation-case
+  - ic-6-02
+  - ticketing
+  - page-layouts
+  - lightning-record-page
+  - migration-app
+  - config-plan
+  - hybrid
+  - pr-247
+  - salesforce
+  - org-agnostic
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T22:15:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T22:15:00Z"
+  version: 1
