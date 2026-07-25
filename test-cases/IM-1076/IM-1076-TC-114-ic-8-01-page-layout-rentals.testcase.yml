@@ -1,0 +1,267 @@
+schemaVersion: "1.0"
+
+id: "d7c3f8a1-4e5b-4c9d-9f2e-6a1b3d7f8c9e"
+key: "TC-114"
+title: "IC 8.01 Page Layout Rentals — 4 objects layout assign single-park · 'Store' picklist add idempotent · 1 handoff MANUAL (Rental Path)"
+description: |
+  Cobertura QA para IM-1076 (Historia, priority Medium, epic IM-735
+  Implementation Cases Automation).
+  QA Sub-task asociada: IM-1119 (creada 2026-07-24).
+
+  Contexto:
+  - Post-June IM-735 continuation (Complete Cases Automation plan, Batch B —
+    layout version-drift). IC 8.01 (Order__c 8.01 en el catálogo Auctifera SF)
+    = "Page Layout Rentals".
+  - **Tier: Medium** (caveat: Auctifera rentals layout fullName varía por
+    versión del managed package — mitigado por operator-selected DISCOVERED
+    layout `select` inputs, no hardcoded fullNames).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#248` (**MERGED** 2026-07-16
+    03:47:31Z). Branch: `task/ic-8-01-rentals-page-layout-IM-1076`.
+    Merge base contra `main`, spec-only change (+75/-23).
+  - Files touched (1, spec-only, NO code):
+    * `src/implementations/infrastructure/seeds/specs/ic-8-01-rentals-page-layout.json`
+  - NO `.spec.ts` CI-lock existe para este case — la única guardrail
+    estructural es el spec JSON contra el schema `publish-plan-template`
+    (validado en jest por el suite generic del backend, no case-específico).
+
+  Cambio principal (case v1 → v2):
+  - Case + template bumped a v2; feasibility permanece `hybrid`.
+  - **Hardcoded layout fullNames → operator-selected DISCOVERED `select` inputs**.
+    Cada input tiene `discovery: {kind: 'layouts', object: ...}` que enumera
+    layouts live del org, reconstruyendo el prefix vnfp__/Auctifera__ que
+    listMetadata strips. Zero fullName hardcodeado → org/version-agnostic.
+  - **IM-928 single-park pattern**: Step 1 declara los 4 `requiredInputs`
+    (rentalEventLayout, displayStorageLocationLayout, resourceServiceLayout,
+    rentalResourceLayout). Un step gates solo por sus PROPIOS inputs
+    declarados y los steps corren en orden secuencial — declararlos todos en
+    step 1 fuerza UNA sola input-collection card, no interleaving park/run.
+  - **Nueva PART 2 (T3 picklistValues ADD)**: agrega 'Store' al value set
+    LOCAL restricted de `Auctifera__Display_Storage_Location__c.Auctifera__Type__c`
+    (verified local, not global, en CamiloDevOrg). Idempotente: no-op cuando
+    ya existe, ADD cuando falta.
+  - **PART 3 MANUAL (Rental Path)**: PathAssistant metadata type es solo
+    subscriber-writable via file-based Metadata API deploy() (proven en
+    CamiloDevOrg: `sf project deploy` SUCCEEDS), pero el T3 CRUD-based
+    createMetadata/updateMetadata es refused live con `insufficient access
+    rights on entity: PathAssistant`. Handoff estructurado con 7-action guide.
+
+  Salesforce objects touched (4 rentals objects + 1 field):
+  - `Auctifera__Rental_Event__c` (Rental Event/Group)
+  - `Auctifera__Display_Storage_Location__c`
+  - `Auctifera__Resources__c` (Resource/Service)
+  - `Auctifera__Rental_Resources__c`
+  - Field: `Auctifera__Display_Storage_Location__c.Auctifera__Type__c` (picklist add)
+
+  Evidencia dev (per PR body #248):
+  - `tsc --noEmit`: clean. `jest`: 177 suites / 1877 tests passed.
+  - eslint: clean (touched files).
+  - **Live end-to-end en CamiloDevOrg (`00Dfj00000QJMx7EAH`)**:
+    * 4 layout assigns COMPLETED live (e.g. Rental Event/Group → `VNFP Rental
+      Event Layout - V12 - April 2026`), Profile read-back verified.
+    * Single-park confirmed (los 4 selects presentados juntos).
+    * Picklist step COMPLETED live, `verified=true` ('Store' present on Type
+      value set).
+    * Part 3 investigated: `sf project deploy` de un `Rental_Path` PathAssistant
+      SUCCEEDS pero T3 CRUD path FAILED con `insufficient access rights on
+      entity: PathAssistant` — MANUAL handoff correctamente delivered.
+  - Spec v2 seeded a MigrationApp-dev (append-only).
+
+  QA cross-check con el catálogo SF (per `[[reference-implementation-cases-catalog]]`):
+  - CSV Order 8.01 lista los 4 objects rentals + el Type picklist + el Path.
+  - Spec v2 declara EXACTAMENTE 4 T2 assign steps + 1 T3 picklistValues add
+    + 1 MANUAL. Matches exactly.
+
+  QA target org (illinois-trainings):
+  - Confirmed Auctifera Rentals package installed via `sf sobject describe`
+    en 2026-07-24:
+    * Auctifera__Rental_Event__c: 13 records
+    * Auctifera__Display_Storage_Location__c: 15 records
+    * Auctifera__Resources__c: 12 records
+    * Auctifera__Rental_Resources__c: 26 records
+    * Auctifera__Type__c on Display/Storage Location confirmed via
+      Tooling API.
+
+  Riesgos abiertos:
+  - **Target-org portability**: dev verified sólo en CamiloDevOrg. QA
+    verificará live en illinois-trainings — si hay drift de versión de
+    managed package, los layouts descubiertos live deberían absorberlo pero
+    ESO es lo que QA valida.
+  - **Single-park invariant**: si un mantenimiento futuro re-declara alguno
+    de los 4 selects en un step posterior (2/3/4), el run parkearía dos
+    veces (violando IM-928). El spec estático debe seguir declarando los 4
+    inputs solo en step 1.
+  - **Idempotency del picklist**: el ADD debe ser no-op si 'Store' ya
+    existe. Illinois-trainings puede o no tenerlo — verificar PRE y confirmar
+    que POST es idempotente (no duplicate, no error).
+  - **Path attestation**: en customer orgs, el operator debe crear el Path
+    real via UI. En test workspace, la attestation del handoff API es
+    statically-verified only — el trabajo manual UI NO se hace (mismo
+    guardrail que TC-110 Scenario 3, patrón TR-115/116/117).
+  - **PathAssistant object-level presence**: verificar que illinois-trainings
+    tiene PathAssistant metadata support antes del run (default en toda org
+    SF; solo se declara aquí por trazabilidad).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch de `ic-8-01-rentals-page-layout.json` en merge-commit del PR #248 + merge-base main."
+  - "sf CLI autenticado con org alias `illinois-trainings` (Auctifera Rentals package confirmed installed: 4 objects + Auctifera__Type__c field)."
+  - "Migration App session activa (Cognito) para API-driven IE run (Path A per `[[reference-migrationapp-ie-run-automation]]`). En test workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+  - "Cognito user en group `admin` o `csm-team` para autorizar el POST /implementations/plan-runs."
+  - "Master template en MigrationApp-dev tiene ic-8-01-rentals-page-layout v2 seeded (verified per PR #248 body)."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC2+AC3+AC4 · Static spec fidelity + IM-928 single-park invariant + org-agnostic discovery + catalog alignment"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-3
+      - ac-4
+      - happy-path
+      - spec-contract
+      - single-park
+      - org-agnostic
+      - im-1076
+      - im-928
+      - im-735
+    given:
+      - "el JSON spec `ic-8-01-rentals-page-layout.json` fetch-eado del merge-commit del PR #248 con `gh api contents?ref=<merge-sha>`"
+      - "el CSV export del objeto `Implementation_Case__c` de Auctifera SF (Order 8.01) accesible como referencia autoritativa del playbook"
+      - "`sf sobject describe` sobre illinois-trainings disponible para verificar apiNames del managed package"
+    when:
+      - "se parsea el spec y se extraen los 6 steps: 4 AUTOMATED T2 mode:assign + 1 AUTOMATED T3 picklistValues + 1 MANUAL"
+      - "se enumera el `requiredInputs` de step 1 y se verifican los 4 select inputs (rentalEventLayout, displayStorageLocationLayout, resourceServiceLayout, rentalResourceLayout)"
+      - "se verifica que los steps 2/3/4/5 NO declaran requiredInputs (single-park invariant IM-928)"
+      - "se verifica que cada select tiene `discovery: {kind: 'layouts', object: <Auctifera__*__c>}` — cero fullName hardcodeado"
+    then:
+      - "case.version = 2 y template.version = 2 (lockstep)"
+      - "case.feasibility = 'hybrid' (4 AUTO T2 + 1 AUTO T3 + 1 MANUAL)"
+      - "case.defaultOrder = 801 (matches Order__c CSV × 100)"
+      - "case.category = 'RENTALS'"
+      - "4 T2 assign steps sobre sobjects: Auctifera__Rental_Event__c, Auctifera__Display_Storage_Location__c, Auctifera__Resources__c, Auctifera__Rental_Resources__c"
+      - "1 T3 picklistValues ADD step sobre Auctifera__Display_Storage_Location__c.Auctifera__Type__c con `add: [{fullName:'Store', label:'Store'}]`"
+      - "1 MANUAL step con guide.actions[] de 7 pasos para crear Path 'Rental Path' API name 'Rental_Path' en Rental Event/Group con record type default"
+      - "step 1 tiene 4 requiredInputs con discovery.kind='layouts'; steps 2/3/4/5/6 tienen 0 requiredInputs (single-park)"
+      - "cero fullName hardcodeado en el spec (grep 'VNFP.*Layout' o 'Layout.*V[0-9]' devuelve 0 hits)"
+
+  - title: "AC1+AC2+AC3 · Live end-to-end en illinois-trainings vía API-driven IE run (Path A) + POST-verify Profile read-back"
+    tags:
+      - ac-1
+      - ac-2
+      - ac-3
+      - live-execution
+      - api-driven
+      - post-verify
+      - profile-readback
+      - im-1076
+    given:
+      - "illinois-trainings tiene Auctifera Rentals installed (4 objects verificados en preconditions: 13/15/12/26 records respectivamente)"
+      - "PRE-baseline capturado via Tooling API `SELECT DurableId, ProfileId, EntityDefinitionId, LayoutId FROM ProfileLayout WHERE EntityDefinition.QualifiedApiName IN ('Auctifera__Rental_Event__c','Auctifera__Display_Storage_Location__c','Auctifera__Resources__c','Auctifera__Rental_Resources__c')` — se registra qué layout está actualmente activo por profile+object"
+      - "master template en dev tiene ic-8-01 v2 seeded (verificado por dev PR body)"
+      - "operator anota qué layout es 'most-recent' por object en illinois-trainings antes del run (para verificar contra la selección post-run)"
+    when:
+      - "POST /implementations/plan-runs con `{clientId, orgId=illinois-trainings, caseIds:['ic-8-01-rentals-page-layout']}` → 202 planRunId"
+      - "poll GET /runs/<id> hasta que el step 1 quede `awaiting-input` con los 4 selects poblados"
+      - "operator inspecciona `discoveredValues` del run detail: cada select debe tener ≥ 1 opción, y las opciones deben ser fullNames reales del org (con prefix `vnfp__` o `Auctifera__`, según el managed package instalado)"
+      - "operator selecciona la layout más reciente por object (usando el orden de version marker en el label) y POST /resolve-inputs con los 4 valores"
+      - "poll GET /runs/<id> hasta que 5 AUTOMATED steps queden `done` y step 6 (MANUAL) quede `blocked-human`"
+      - "POST /handoff sobre step 6 (attesting-without-executing, mismo pattern de TR-115/TR-117 en test workspace)"
+      - "run alcanza `total=6 done=6 failed=0 blocked=0`"
+      - "POST-verify: mismo query Tooling API para ProfileLayout — compara el `LayoutId` activo POST contra la selección del operator"
+    then:
+      - "step 1 parkea exactamente UNA vez con los 4 selects presentes (IM-928 confirmed live)"
+      - "los 4 AUTOMATED T2 steps completan sin errors visibles en el run detail"
+      - "step 5 (T3 picklistValues) completa con `verified=true` — 'Store' presente en el value set POST"
+      - "step 6 (MANUAL) parkea `blocked-human` con el guide.actions[] visible; el POST /handoff cierra el step"
+      - "Profile read-back POST: la layout activa para cada uno de los 4 objects, en TODOS los profiles del org, es la seleccionada por el operator en step 1 (NO la que estaba pre-run, a menos que fuera la más reciente y el operator la haya re-seleccionado)"
+      - "en particular Rental Event/Group: la layout activa post-run coincide con el valor `{{rentalEventLayout}}` seleccionado — verificable por comparar `LayoutId` POST con el ID resuelto por listMetadata para el fullName seleccionado"
+
+  - title: "AC3 idempotency proof · Segundo run del case NO duplica 'Store' ni cambia layouts si operator re-selecciona los mismos"
+    tags:
+      - ac-3
+      - idempotency
+      - regression
+      - post-verify
+      - im-1076
+    given:
+      - "el primer run (Scenario 2) completó exitosamente en illinois-trainings, con 'Store' agregado al Type value set y las 4 layouts activas seteadas a la selección del operator"
+      - "PRE del segundo run: 'Store' YA está en el value set (verified via Tooling API); las 4 layouts activas son las del primer run"
+    when:
+      - "se lanza un segundo run del mismo case con las MISMAS selecciones de layout que el primero"
+      - "poll y attest handoff igual que el primer run"
+      - "POST-verify: query Tooling API para 'Store' picklist entries (COUNT) y para ProfileLayout LayoutId (delta)"
+    then:
+      - "step 5 completa `verified=true` sin error (no-op idempotente — 'Store' YA existía; T3 no crea duplicado)"
+      - "COUNT de 'Store' entries en el Type value set es 1 (no 2)"
+      - "los 4 T2 assign steps completan sin cambiar el LayoutId activo (idempotency del Profile write cuando el layout ya estaba active)"
+      - "run global COMPLETED sin duplicados ni residuo — segundo run es no-op observable"
+      - "NOTA: `[[feedback-never-publish-templates-via-api]]` — solo plan-runs, nunca POST /plan-templates via API"
+
+  - title: "MANUAL step attestation-without-executing en test workspace + real work handoff en customer orgs"
+    tags:
+      - manual-handoff
+      - attestation-guardrail
+      - path-assistant
+      - im-1076
+    given:
+      - "el step 6 (MANUAL) declara: 'Create and activate the Rentals status Path (manual)' con guide.actions[] de 7 pasos concretos (Setup → Path Settings → New Path → Rental_Path / Rental Event/Group / Status / default record type → Activate → Finish)"
+      - "el pattern `attesting-without-executing` está establecido para test workspaces per TR-115/116/117 v2 (en customer orgs la attestation SIEMPRE la hace el operator que ejecutó el trabajo manual real)"
+      - "illinois-trainings es un test workspace (client: 'Test IM cases Org Tucson')"
+    when:
+      - "el POST /handoff se hace con `body: {}` sobre step 6 después de que los 5 AUTOMATED completen"
+      - "se documenta explícitamente en el TR notes que el trabajo manual UI NO fue ejecutado — solo la attestation se hizo para cerrar el run"
+    then:
+      - "run status pasa a `COMPLETED` con todos los steps `done`"
+      - "el Path 'Rental Path' NO fue creado en illinois-trainings — verificable via `sf data query --use-tooling-api --query \"SELECT DeveloperName, EntityDefinition.QualifiedApiName FROM PathAssistant WHERE EntityDefinition.QualifiedApiName='Auctifera__Rental_Event__c'\"`"
+      - "el TR marca este scenario como `passed` en el mecanismo del handoff API, pero explícitamente NO afirma que el trabajo manual UI se hizo (statically-verified only, per playbook: T3 CRUD refused live)"
+      - "si algún day-2 IE ejecuta el manual real en un customer org, el mismo endpoint /handoff cierra el step sin cambios de código — el operator crea el Path via UI y luego attestea"
+      - "adversarial regression: si dev alguna vez intenta re-automatizar Part 3 via T3 CRUD sin file-based deploy, el mismo error `insufficient access rights on entity: PathAssistant` re-aparece — este scenario documenta el trap para future maintainers"
+
+  - title: "AC1 adversarial · Cero fullName hardcodeado + discovery reconstruye namespace prefix correcto"
+    tags:
+      - ac-1
+      - adversarial
+      - regression-proof
+      - discovery
+      - namespace
+      - im-1076
+    given:
+      - "el PR body declara: 'discovery adapter reconstructs the vnfp__/Auctifera__ prefix listMetadata strips' — los layouts se descubren live sin hardcoded fullNames"
+      - "cada uno de los 4 selects en step 1 tiene `discovery: {kind: 'layouts', object: <Auctifera__*__c>}`"
+      - "listMetadata strips el namespace prefix en la respuesta cruda de Metadata API — el discovery adapter debe re-agregarlo para producir el fullName correcto asignable"
+    when:
+      - "se ejecuta el step 1 live en illinois-trainings y se inspecciona el response del `awaiting-input`"
+      - "para cada select, se enumeran las opciones `discoveredValues` y se verifica el shape del fullName"
+      - "se identifica si el prefix es `vnfp__` (namespace del managed package instalado en illinois-trainings) o `Auctifera__` (namespace alternativo)"
+    then:
+      - "todas las opciones de `rentalEventLayout` tienen fullName con prefix `vnfp__` o `Auctifera__` (según el managed package instalado en illinois-trainings) — cero fullName sin prefix"
+      - "mismo patrón para los otros 3 selects (displayStorageLocationLayout, resourceServiceLayout, rentalResourceLayout)"
+      - "cuando el operator selecciona una opción y POST /resolve-inputs, el T2 assign en step 2/3/4 usa ese fullName con prefix intacto — la assignación al Profile es exitosa (Profile read-back POST confirma)"
+      - "adversarial: si el discovery adapter alguna vez rompe y devuelve un fullName sin prefix, el T2 assign fallaría con 'metadata not found' — este scenario documenta el contract runtime"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T22:35:00Z"
+  version: 1
+  estimatedDuration: 90
+  tags:
+    - im-1076
+    - im-735
+    - im-1119
+    - im-928
+    - implementations-automation
+    - ic-8-01
+    - page-layout
+    - rentals
+    - auctifera-managed-package
+    - t2-page-layout-assign
+    - t3-picklist-values-add
+    - path-assistant-manual-handoff
+    - single-park
+    - org-agnostic
+    - migration-app-backend
+    - post-june-delivery
+    - medium-confidence

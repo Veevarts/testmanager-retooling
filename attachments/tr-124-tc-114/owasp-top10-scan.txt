@@ -1,0 +1,29 @@
+OWASP Top 10 (2021) applicability scan — PR #248 / IM-1076
+
+Surface: Spec-only JSON change in ic-8-01-rentals-page-layout.json (Migration App
+implementation case seed). 1 file, +75/-23. No code, no test, no lockfile changes.
+Base: 60fb2165; Head: 7b6b15a2
+
+| ID  | Risk                        | Applicable | Check method                                    | Verdict | Evidence / Justification |
+|-----|-----------------------------|------------|-------------------------------------------------|---------|--------------------------|
+| A01 | Broken Access Control       | No         | -                                               | N/A     | Spec JSON change only. No auth surface / route guard / RBAC modified. The plan-run API endpoint's auth (Cognito bearer + `admin`/`csm-team` groups) is unchanged. |
+| A02 | Cryptographic Failures      | No         | -                                               | N/A     | No credential/PII/TLS/hashing surface touched. The spec references no secrets. |
+| A03 | Injection                   | Yes        | Static grep for injection patterns in spec       | PASS    | Spec uses only static fullName strings, discovery declarations, and template placeholders (`{{key}}`). No dynamic SQL/SOQL/SOSL/command interpolation. `{{key}}` substitution is done server-side via a parameterized templating engine (T2 tool), no eval or shell exec. |
+| A04 | Insecure Design             | No         | -                                               | N/A     | Business logic unchanged. IC 8.01 delivers the same 3 parts as before (4 layout assigns + Store picklist + Rental Path handoff); v2 only replaces hardcoded fullNames with operator-selected DISCOVERED selects — a defensive improvement, not a new design. |
+| A05 | Security Misconfiguration   | No         | -                                               | N/A     | No config / env / CORS / headers / error-verbosity surface touched. The discovery adapter (server-side) uses the same auth as the run engine. |
+| A06 | Vulnerable/Outdated Comps   | No         | git diff for package.json / package-lock.json    | N/A     | Zero dependency changes in the PR. |
+| A07 | Auth Failures               | No         | -                                               | N/A     | No login / session / MFA / token surface touched. |
+| A08 | Integrity Failures          | No         | -                                               | N/A     | Spec JSON is validated by the `publish-plan-template` schema (existing check). No CI/CD, deserialization, plugin, or package-signing surface touched. |
+| A09 | Logging Failures            | No         | -                                               | N/A     | Spec has no logging directives. The run engine's telemetry is unchanged. |
+| A10 | SSRF                        | No         | -                                               | N/A     | No outbound HTTP calls introduced by the spec. The T2/T3 tools call only the Salesforce Metadata/Tooling API of the target org (constrained by the org's own auth). |
+
+Summary: 1 Applicable + PASS (A03 Injection). 9 N/A. 0 Applicable + FAIL. 0 blockers.
+
+Additional notes:
+- The operator-selected DISCOVERED select pattern (this PR's key change) is a
+  net-positive security posture: it removes hardcoded fullNames that could
+  become stale/incorrect across org versions, replacing them with live-discovery
+  that always resolves to the metadata actually present in the target org.
+- Attesting-without-executing pattern for MANUAL steps is documented in TR-115/
+  116/117 and honored here: the /handoff API endpoint is functionally identical
+  to the UI "Mark step as done" button, requiring the same admin/csm-team group.
