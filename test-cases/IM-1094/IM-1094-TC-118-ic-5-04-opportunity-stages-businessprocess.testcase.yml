@@ -1,0 +1,205 @@
+schemaVersion: "1.0"
+
+id: "96037a28-fbcd-40f5-b05b-49bdcd6987a3"
+key: "TC-118"
+title: "IC 5.04 Opportunity Stages — NEW T3 businessProcess-authoring op (StandardValueSet stage-ensure + BusinessProcess UPSERT + dynamic RT assign) · manual→auto v2 · CODE PR (jest-contract) + live authoring on illinois"
+description: |
+  Cobertura QA para IM-1094 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1123 (creada 2026-07-24).
+
+  Contexto:
+  - Follow-up del spike de metadata-gap IM-1086. IC 5.04 era MANUAL (no automatable con
+    los ops existentes); este ticket construye un op T3 NUEVO (`businessProcess`) que
+    autora Sales Processes + asegura OpportunityStage picklist values, y reescribe el
+    spec ic-5-04 manual→auto (feasibility auto, v2).
+  - IC 5.04 = "Set up Opportunity Stages" (Order__c 5.04 en el catálogo Auctifera SF).
+  - **Tier: label manual-confidence** (era manual; ahora auto por el op nuevo).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#263` (**MERGED** 2026-07-16 14:16Z).
+    Branch: `task/ic-5-04-opportunity-stages-businessprocess-IM-1094`. Merge commit `ed3da574`
+    (base `82c35b14`, head `a55f3707`).
+  - **CODE PR** (8 files, +1736/-20 — NO spec-only):
+    * `metadata-mutation-spec.ts` (+177) — schema del op businessProcess (StageValueEnsure,
+      BusinessProcessStage, BusinessProcessAssignment, BusinessProcessEnsure, BusinessProcessSpec)
+    * `t3-metadata.adapter.ts` (+647) — implementación del op
+    * `t3-metadata.adapter.spec.ts` (+589) — ~10 tests del op businessProcess
+    * `t3-metadata.handler.ts` (+52) / `.handler.spec.ts` (+82) — lambda wiring
+    * `ic-5-04-opportunity-stages.json` (+84/-18) — spec v2 (manual→auto)
+    * `ic-5-04-opportunity-stages.spec.ts` (+104) — 5 seed spec tests
+
+  El op `businessProcess` (catalog-declarative, zero per-IC code) hace 3 fases:
+  1. **stageValues** (opcional): asegura cada stage referenciado en el OpportunityStage
+     StandardValueSet — agrega los faltantes con los flags forecast/probability/closed/won,
+     re-activa listados inactivos; **add/activate-only** (nunca desactiva ni reescribe stock).
+  2. **processes**: UPSERT de cada BusinessProcess (update-in-place si ya existe por nombre,
+     nunca duplica; idempotente) con sus stages ordenados, marcado active.
+  3. **assignments**: para cada `assignTo` (RT resuelto dinámicamente por developerName/label)
+     y el proceso con `assignToRemaining`, re-apunta `RecordType.businessProcess`; `optional`
+     tolera RT ausente/ambiguo (skip no-op); `assignToRemaining` salta record types managed
+     (namespaced) sin fallar por el CANNOT_MODIFY_MANAGED_OBJECT.
+
+  Spec v2 (Opportunity): 6 stageValues (Prospecting, Letter of Interest Submitted,
+  Application Submitted, Pledged, Closed Won, Closed Lost) + 2 processes:
+  - **NPSP_Default** (active, assignToRemaining=true): Prospecting → Pledged → Closed Won → Closed Lost.
+  - **Grants** (active, assignTo Grant RT optional): Prospecting → Letter of Interest Submitted →
+    Application Submitted → Closed Won → Closed Lost.
+
+  Estrategia de verificación:
+  - **jest code-contract** (evidencia PRIMARIA — es un op nuevo): clone de MigrationAppBackend
+    en merge-commit `ed3da574`, npm ci, correr las 3 suites tocadas + la seed.spec; verificar
+    los ~10 tests del op businessProcess + 5 seed tests. Más genuinely-new proof (grep base vs merge).
+  - **static spec fidelity**: ic-5-04 v2, feasibility auto, stageValues + processes correctos.
+  - **live authoring** via Migration App (Path A) en illinois-trainings: partial por el setup
+    del org (ver riesgos) — stage-value ensure + BusinessProcess authoring observables; RT-assign
+    parcial (illinois tiene 0 Opportunity record types → prueba el path optional tolerate-absent).
+
+  Riesgos abiertos / limitaciones de org:
+  - **illinois-trainings tiene NPSP instalado (44 campos npsp__) pero 0 Opportunity record types
+    y 0 sales processes** — NO es un fundraising org configurado como CamiloDevOrg. Por eso:
+    * stage-value ensure (agrega Letter of Interest Submitted + Application Submitted) → observable.
+    * BusinessProcess authoring (crea NPSP_Default + Grants) → observable.
+    * assignTo Grant RT (optional) → RT ausente → skip no-op → **prueba live del tolerate-absent**.
+    * assignToRemaining a RTs reales + managed-RT-skip → NO ejercitable en illinois (0 RTs) →
+      cubierto por los jest unit tests + la verificación del dev en CamiloDevOrg.
+  - **Footprint invasivo**: correr escribe al OpportunityStage StandardValueSet (picklist estándar
+    org-wide) y crea 2 BusinessProcess en illinois. Se surge en el Start-run gate.
+  - Verificado por el dev en CamiloDevOrg (NPSP + NFP Fundraising); QA no tiene ese alias sf.
+  - PR ya MERGED — comparación base `82c35b14` vs merge-commit `ed3da574`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch del spec + código en merge-commit `ed3da574` y base `82c35b14`."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest runner (es CODE PR, no spec-only)."
+  - "sf CLI autenticado con org alias `illinois-trainings` — Opportunity + NPSP (44 campos npsp__) confirmados; 0 Opportunity record types / 0 sales processes PRE."
+  - "Acceso Tooling API read-only (BusinessProcess, RecordType, StandardValueSet OpportunityStage / Tooling `PicklistValueInfo` o describe) para PRE/POST-verify."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`) para el IE run API-driven (Path A)."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+
+format: gherkin
+scenarios:
+  - title: "AC-static + genuinely-new · Spec v2 fidelity (feasibility auto, 6 stageValues, 2 processes NPSP_Default/Grants) + the businessProcess op is genuinely new (absent at base)"
+    tags:
+      - ac-static
+      - spec-contract
+      - genuinely-new
+      - new-capability
+      - im-1094
+      - im-735
+    given:
+      - "el JSON spec `ic-5-04-opportunity-stages.json` y el código del op fetch-eados del merge-commit `ed3da574`"
+      - "la base `82c35b14` del PR como referencia del estado previo"
+    when:
+      - "se parsea el spec v2 (1 step T3 businessProcess) y sus stageValues + processes"
+      - "se compara `grep -c businessProcess` en `t3-metadata.adapter.ts` entre base `82c35b14` y merge-commit `ed3da574`"
+    then:
+      - "case.version = 2 y template.version = 2 (lockstep); case.defaultOrder = 504; feasibility = 'auto'"
+      - "el step único es AUTOMATED T3 op=businessProcess sobre object=Opportunity"
+      - "stageValues declara los 6 stages con flags forecast/probability/closed/won (incl. las 2 Grants: Letter of Interest Submitted, Application Submitted)"
+      - "processes declara NPSP_Default (assignToRemaining=true, 4 stages) y Grants (assignTo Grant RT optional=true, 5 stages), ambos active"
+      - "la base tiene 0 refs de businessProcess en el adapter y el merge-commit tiene N>0 → el op es genuinamente nuevo (no un rename/no-op)"
+
+  - title: "jest code-contract · the new businessProcess op unit tests + seed spec tests pass on the PR branch (author/ensure, update-in-place idempotent, add/activate-only, dynamic RT assign, optional tolerate-absent, assignToRemaining skips managed)"
+    tags:
+      - jest
+      - code-contract
+      - new-capability
+      - business-process-op
+      - im-1094
+    given:
+      - "clone local de MigrationAppBackend en merge-commit `ed3da574` con `npm ci` limpio"
+      - "las suites tocadas por el PR: t3-metadata.adapter.spec.ts, t3-metadata.handler.spec.ts, metadata-mutation-spec.spec.ts, ic-5-04-opportunity-stages.spec.ts"
+    when:
+      - "se corre jest sobre las 3 suites tocadas + la seed.spec"
+      - "se aíslan los tests del op con `jest -t businessProcess` (y afines: stageValues, assignToRemaining, sales process)"
+    then:
+      - "las suites tocadas por el PR pasan (0 failing)"
+      - "los ~10 tests del op businessProcess pasan: stage-value ensure (add/activate-only, no deactivate stock), BusinessProcess UPSERT (update-in-place, no duplicate), idempotencia, dynamic RT resolution por developerName/label, optional tolerate-absent (skipped no-op), assignToRemaining que salta managed RTs (no CANNOT_MODIFY_MANAGED_OBJECT), read-back verify"
+      - "los 5 seed spec tests de ic-5-04 pasan (estructura del spec, lockstep de versiones, forma de stageValues/processes)"
+      - "tsc --noEmit sin type errors y eslint limpio en los archivos tocados (si el runner está disponible)"
+
+  - title: "Live stage-value ensure · the 2 Grants stages are added to the OpportunityStage StandardValueSet as active; stock stages are preserved (add/activate-only)"
+    tags:
+      - live-execution
+      - api-driven
+      - stage-values
+      - standardvalueset
+      - add-activate-only
+      - im-1094
+    given:
+      - "PRE-baseline: los valores activos del OpportunityStage StandardValueSet en illinois (describe/Tooling)"
+      - "las 2 Grants stages (Letter of Interest Submitted, Application Submitted) pueden faltar o no PRE"
+    when:
+      - "se corre el IE run (Path A) del caseId ic-5-04-opportunity-stages"
+      - "POST: se re-leen los valores del OpportunityStage"
+    then:
+      - "Letter of Interest Submitted y Application Submitted quedan presentes y ACTIVOS en el OpportunityStage POST"
+      - "los stages stock preexistentes (Prospecting, Closed Won, Closed Lost, etc.) se preservan — ninguno desactivado ni reescrito (add/activate-only)"
+      - "si ya existían, el step es no-op idempotente (no duplica valores)"
+
+  - title: "Live BusinessProcess authoring · NPSP_Default and Grants sales processes are created with ordered stages; a second run updates in place (no duplicate)"
+    tags:
+      - live-execution
+      - business-process
+      - upsert
+      - idempotent
+      - im-1094
+    given:
+      - "PRE-baseline: 0 BusinessProcess sobre Opportunity en illinois"
+      - "el step del op corre en illinois"
+    when:
+      - "primer IE run: se autoran los 2 processes"
+      - "segundo IE run (idempotencia): mismo spec"
+    then:
+      - "tras el primer run existen los BusinessProcess NPSP_Default (Prospecting, Pledged, Closed Won, Closed Lost) y Grants (Prospecting, Letter of Interest Submitted, Application Submitted, Closed Won, Closed Lost), ambos active, verificados por read-back"
+      - "el segundo run hace UPSERT (update-in-place): NO crea un segundo NPSP_Default ni un segundo Grants (sin duplicados)"
+      - "los stages de cada proceso quedan en el orden declarado"
+
+  - title: "Record-type assignment · optional assignment tolerates the absent Grant record type live (skip no-op, step succeeds); assignToRemaining + managed-RT-skip covered by unit tests + dev CamiloDevOrg"
+    tags:
+      - record-type-assignment
+      - tolerate-absent
+      - optional
+      - assign-to-remaining
+      - managed-safe
+      - im-1094
+    given:
+      - "illinois-trainings tiene 0 Opportunity record types (el Grant RT está AUSENTE)"
+      - "el proceso Grants declara assignTo Grant RT con optional:true; NPSP_Default declara assignToRemaining:true"
+    when:
+      - "el IE run ejecuta los assignments"
+    then:
+      - "el assignTo del Grant RT (ausente) se resuelve como skipped no-op y el step NO falla — prueba live del tolerate-absent (optional:true)"
+      - "assignToRemaining sobre 0 record types unmanaged es un no-op sin error"
+      - "el re-point real de RecordType.businessProcess a un RT existente, el assignToRemaining a RTs reales, y el skip de managed RTs (sin CANNOT_MODIFY_MANAGED_OBJECT) están cubiertos por los jest unit tests (org mockeado) + la verificación del dev en CamiloDevOrg (org fundraising real) — no reproducibles en illinois por falta de Opportunity record types"
+      - "el step del caso completa (done) pese a que la mayoría de assignments son no-ops en este org"
+
+tags:
+  - im-1094
+  - im-735
+  - im-1123
+  - implementations-automation
+  - ic-5-04
+  - opportunity-stages
+  - business-process
+  - sales-process
+  - standardvalueset
+  - record-type-assignment
+  - npsp
+  - new-capability
+  - t3-metadata
+  - migration-app-backend
+  - code-pr
+  - pr-263
+  - post-june-delivery
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T23:58:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T23:58:00Z"
+  version: 1
