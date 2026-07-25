@@ -1,0 +1,37 @@
+IC 6.03 History Tracking for Ticketing — PRE vs POST (illinois-trainings) · EXCLUSIVE mode
+Run 1: a92bc85f-ed88-41f9-8da9-280751fabba4 | Run 2 (idempotency): 502cad97-dd24-441d-80cb-a02a2804ed76
+==========================================================================================================
+
+Metric                                          | PRE          | POST run1     | POST run2 | AC ref | Verdict
+------------------------------------------------+--------------+---------------+-----------+--------+--------
+Run state                                       | n/a          | completed 5/5 | 5/5 done  | S2/S6  | PASS
+4 AUTOMATED exclusive done, 0 failed            | n/a          | 4 done        | 4 done    | S2     | PASS
+Inventory_Service customs tracked (keep=7)      | 7 (exact)    | 7 (exact)     | 7 (exact) | S2     | PASS
+Museum_Offer_Item customs tracked (keep=17)     | 18 (+1 extra)| 17 (exact)    | 17 exact  | S2     | PASS
+  -> extra Ticket_Item_Subtotal_Canceled__c     | tracked=True | tracked=FALSE | =         | S2     | PASS (untracked)
+Museum_Offer customs tracked (keep=15)          | 15 (exact)   | 15 (exact)    | 15 exact  | S2     | PASS
+Museum_Offer standard Name tracked              | True         | True (kept)   | True      | S5     | PASS (exclusive never untracks Name)
+Group_Reservation customs tracked (keep=7)      | 7 (exact)    | 7 (exact)     | 7 exact   | S2     | PASS
+Object-level Track Field History (4 objects)    | ON           | ON            | ON        | S2     | PASS
+Formula-twin: Total_Amount_2__c (non-formula)   | tracked      | tracked=True  | =         | S3     | PASS
+Formula-twin: Total_Amount__c (FORMULA)         | not tracked  | tracked=FALSE | =         | S3     | PASS (formula never tracked)
+Formula-twin: Total_Visitors_3__c (non-formula) | tracked      | tracked=True  | =         | S3     | PASS
+Formula-twin: Total_Visitors_2__c (FORMULA)     | not tracked  | tracked=FALSE | =         | S3     | PASS
+Formula-twin: Total_Visitors__c (FORMULA)       | not tracked  | tracked=FALSE | =         | S3     | PASS
+Amount Received=Paid_Value__c (non-formula)     | tracked      | tracked=True  | =         | S3     | PASS
+MANUAL 'Ticket offer name' step                 | n/a          | parked+attest | attested  | S5     | PASS
+Idempotency delta run1 -> run2 (all objects)    | n/a          | n/a           | NONE      | S6     | PASS
+
+KEY RESULTS
+- EXCLUSIVE mode proven destructive-correct: the 1 extra tracked field on Museum_Offer_Item
+  (Ticket_Item_Subtotal_Canceled__c) was UNTRACKED (18->17), leaving EXACTLY the 17 keep-list fields.
+  All 4 objects end with exactly their keep-list (7/17/15/7) and no other custom field tracked.
+- FORMULA-TWIN resolution proven: on Group_Reservation only the non-formula twins (Total_Amount_2__c,
+  Total_Visitors_3__c) are tracked; the 3 formula fields (Total_Amount__c, Total_Visitors_2__c,
+  Total_Visitors__c, all IsCalculated=true) are NOT tracked and the exclusive write did not fail.
+- NAME-EXEMPTION proven: exclusive enumerates only CustomFields, so the standard Name on Museum_Offer
+  stayed tracked (True) across both runs — never untracked.
+- IDEMPOTENT: second run left every object's tracked set unchanged (delta NONE), MANUAL re-attested,
+  run completed. No re-untracking, no re-tracking, no duplicates.
+- Two-org proof corroborated: illinois-trainings (3rd org, distinct package version) completes the
+  same v3 spec with matchers resolving per-org, on top of the dev's CamiloDevOrg + im696-tucson.

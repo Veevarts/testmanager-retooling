@@ -1,0 +1,235 @@
+schemaVersion: "1.0"
+
+id: "1b225c1f-c9b1-4236-b434-310460f0d645"
+key: "TC-117"
+title: "IC 6.03 History Tracking for Ticketing — v3 org-agnostic EXCLUSIVE keep-list (4 objects 7/17/15/7) + IM-1069 matchers · formula-twin resolution (Total_Amount_2/Total_Visitors_3) · abort-before-write safety · 1 MANUAL Name handoff (spec-only, hybrid)"
+description: |
+  Cobertura QA para IM-1072 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1122 (creada 2026-07-24).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch A (history-tracking family). Hermano de
+    IM-1070 (IC 3.09 financial) e IM-1073 (IC 7.02 gift shop); consume los matchers
+    runtime de IM-1069 (IC 3.08).
+  - IC 6.03 = "Set History Tracking for Ticketing" (Order__c 6.03 en el catálogo
+    Auctifera SF, Id a185w00000trMP4AAM).
+  - **Tier: Medium** (caveat: cross-version managed field/object API names — mitigado
+    por el matcher runtime de IM-1069, que este PR consume).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#244` (**MERGED** 2026-07-15 21:04Z).
+    Branch: `task/ic-6-03-history-tracking-ticketing-IM-1072`. Merge commit `140e00d4`.
+  - **SPEC-ONLY PR** (1 file, +218/-55): solo `ic-6-03-history-tracking-ticketing.json`
+    (v2 → v3). NO agrega código ni op nuevo — reutiliza el T3 `historyTracking` con los
+    matchers de IM-1069 y su modo `exclusive`.
+
+  Diferencia CLAVE vs IC 3.09 (IM-1070): este caso corre en **modo EXCLUSIVE** (destructivo).
+  Cada objeto termina con EXACTAMENTE su keep-list tracked y NINGÚN otro field — los fields
+  tracked que no estén en la keep-list se DESTRACKEAN. Es la propiedad de mayor riesgo del PR.
+
+  Forma del spec v3 (5 steps, feasibility **hybrid**):
+  - Steps 1-4 (T3 historyTracking, AUTOMATED, `exclusive: true`):
+    * Exhibition/Event = `Auctifera__Inventory_Service__c` — 7 fields
+    * Ticket Item = `Auctifera__Museum_Offer_Item__c` — 17 fields
+    * Ticket Offer = `Auctifera__Museum_Offer__c` — 15 custom fields
+    * Ticketing/Reservation = `Auctifera__Group_Reservation__c` — 7 fields
+  - Step 5 (MANUAL): tickear 'Ticket offer name' (standard Name field de Museum_Offer,
+    sin CustomField record → metadata replay no puede setearlo; exclusive enumera solo
+    CustomFields, así que NUNCA destrackea el Name estándar).
+  - Total: 46 custom fields via matcher, todos org-agnostic (0 API names hardcoded).
+
+  Traps resueltos por los matchers (verificar live):
+  - **Formula-twins (Group_Reservation)**: Total → `Auctifera__Total_Amount_2__c` (NO el
+    formula `Total_Amount__c`); Total Visitors → `Auctifera__Total_Visitors_3__c` (NO el
+    formula `Total_Visitors_2__c`). Trackear un formula field es imposible en SF, así que
+    resolver al twin equivocado rompería el write exclusive completo.
+  - Amount Received=`Paid_Value__c`; Start Date=`Open_Hour__c`; Close Date=`Close_Hour__c`;
+    Exhibition/Event(label)=`Exposition__c`; Ticket=`Group_Reservation__c`; Ticket item
+    subtotal=`Subtotal_amount__c`; Ticket item amount=`Subtotal_before_discount__c`.
+
+  Ejecución: config-plan IC via Migration App (target-side, Path A API-driven). PRE → IE
+  run → POST-verify por AC en illinois-trainings, más idempotency check. El step MANUAL
+  parkea como handoff (attesting-without-executing en el test workspace).
+
+  Riesgos abiertos:
+  - **Exclusive destructivo**: si illinois tiene fields tracked fuera de la keep-list, el
+    run los destrackea. QA captura PRE (set actual) vs POST (exactamente keep-list) y
+    confirma que la reducción es correcta, no un borrado accidental.
+  - **Formula-twins**: si el matcher resuelve al twin formula, el step exclusive falla o
+    trackea el field equivocado. QA verifica por describe (calculated=true en el formula)
+    + read-back (cuál twin quedó tracked).
+  - **Abort-before-write (AC5)**: si un matcher required no resuelve, el op debe abortar
+    ANTES de cualquier untrack (no destructive) y reportar success=false con el matcher
+    fallido — contrato del op de IM-1069 (PR #241/#245), ya testeado; se cita, no se
+    fuerza rompiendo el describe del org.
+  - **Additive vs exclusive**: aquí exclusive SÍ está activo (a diferencia de IC 3.09).
+  - Verificado por el dev en CamiloDevOrg + im696-tucson (two-org proof Medium→High);
+    QA re-verifica independientemente en illinois-trainings (3er org).
+  - PR ya MERGED — comparación v2 (base) vs v3 (merge-commit `140e00d4`).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch del spec `ic-6-03-history-tracking-ticketing.json` en merge-commit `140e00d4` (v3) y el diff v2→v3 del PR #244."
+  - "sf CLI autenticado con org alias `illinois-trainings` — Auctifera ticketing objects confirmados (`Auctifera__Inventory_Service__c`, `Museum_Offer_Item__c`, `Museum_Offer__c`, `Group_Reservation__c`)."
+  - "Acceso Tooling API read-only (`FieldDefinition.IsFieldHistoryTracked`, `.IsCalculated`) + `sf sobject describe` para PRE/POST-verify de exclusive keep-list, formula-twins y object-level history."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`) para el IE run API-driven (Path A)."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+  - "caseId `ic-6-03-history-tracking-ticketing` v3 seedeado en el catálogo del backend (preflight GET /implementations/cases)."
+
+format: gherkin
+scenarios:
+  - title: "AC-static · Spec fidelity: 4 objects all exclusive, counts 7/17/15/7, zero hardcoded field names, feasibility hybrid + 1 MANUAL, formula-twin matchers target non-formula fields"
+    tags:
+      - ac-static
+      - spec-contract
+      - csv-fidelity
+      - exclusive-mode
+      - formula-twins
+      - org-agnostic
+      - im-1072
+      - im-1069
+      - im-735
+    given:
+      - "el JSON spec `ic-6-03-history-tracking-ticketing.json` fetch-eado del merge-commit `140e00d4`"
+      - "el CSV export de `Implementation_Case__c` (Order 6.03) como referencia autoritativa del playbook"
+    when:
+      - "se parsean los 5 steps y se comparan objetos, counts y flags contra el playbook y el diff v2→v3"
+      - "se hace grep del JSON buscando arrays de field names literales fuera de los matchers"
+    then:
+      - "case.version = 3 y template.version = 3 (lockstep); case.defaultOrder = 603; feasibility = 'hybrid'"
+      - "4 steps AUTOMATED T3 historyTracking (todos `exclusive: true`) + 1 step MANUAL (Name)"
+      - "counts por objeto: Inventory_Service 7, Museum_Offer_Item 17, Museum_Offer 15, Group_Reservation 7 (total 46) — matchean el CSV Order 6.03"
+      - "los 46 fields usan matcher `{anyOf,label}` — 0 field names managed literales (grep proof)"
+      - "los formula-twin matchers apuntan a los fields NO-formula: Total → `Auctifera__Total_Amount_2__c`, Total Visitors → `Auctifera__Total_Visitors_3__c` (NO `Total_Amount__c`/`Total_Visitors_2__c`)"
+
+  - title: "Exclusive keep-list enforcement (live) · each object ends with EXACTLY its keep-list tracked and no others; PRE-vs-POST untracks any extras"
+    tags:
+      - exclusive-mode
+      - keep-list
+      - live-execution
+      - api-driven
+      - metadata-readback
+      - destructive-verify
+      - im-1072
+    given:
+      - "PRE-baseline Tooling API: `SELECT QualifiedApiName, IsFieldHistoryTracked FROM FieldDefinition` sobre los 4 objetos — registra el set tracked PRE (incluyendo extras fuera de la keep-list, si los hay)"
+      - "ic-6-03 v3 seedeado en dev (preflight GET /cases)"
+    when:
+      - "POST /implementations/plan-runs con `caseIds:['ic-6-03-history-tracking-ticketing']` → 202 planRunId"
+      - "poll hasta que los 4 steps AUTOMATED queden `done` y el step 5 (MANUAL) quede `blocked-human`"
+      - "POST-verify Tooling API sobre los 4 objetos"
+    then:
+      - "los 4 steps de historyTracking completan sin errors visibles"
+      - "cada objeto queda con EXACTAMENTE su keep-list tracked: Inventory_Service 7, Museum_Offer_Item 17, Museum_Offer 15, Group_Reservation 7"
+      - "NINGÚN field fuera de la keep-list queda tracked (exclusive) — cualquier extra tracked en PRE queda destrackeado en POST"
+      - "object-level 'Track Field History' queda enabled en los 4 objetos"
+      - "el resultado se verifica por metadata read-back (FieldDefinition), NO se asume del write call"
+
+  - title: "Formula-twin resolution (live) · Group_Reservation Total/Total Visitors resolve to the non-formula twins; the formula twins are NOT tracked and don't break the exclusive write"
+    tags:
+      - formula-twins
+      - label-traps
+      - group-reservation
+      - live-execution
+      - im-1072
+      - im-1069
+    given:
+      - "`sf sobject describe`/FieldDefinition sobre Group_Reservation identifica cuál twin es formula (IsCalculated=true)"
+      - "el matcher de Total apunta a `Total_Amount_2__c` y el de Total Visitors a `Total_Visitors_3__c`"
+    when:
+      - "el step 4 (Group_Reservation, exclusive) ejecuta contra illinois-trainings"
+      - "POST-verify: qué twin quedó IsFieldHistoryTracked=true"
+    then:
+      - "`Auctifera__Total_Amount_2__c` (Total, non-formula) queda tracked; el formula `Auctifera__Total_Amount__c` NO queda tracked"
+      - "`Auctifera__Total_Visitors_3__c` (Total Visitors, non-formula) queda tracked; el formula `Auctifera__Total_Visitors_2__c` NO queda tracked"
+      - "el step exclusive completa sin fallar (no intentó trackear un formula field, que SF rechaza)"
+      - "Amount Received resuelve a `Auctifera__Paid_Value__c` y queda tracked"
+
+  - title: "Exclusive abort-before-write safety · a required keep-list matcher that cannot resolve aborts BEFORE any untracking (success=false, failing matcher), no destructive change"
+    tags:
+      - exclusive-mode
+      - abort-before-write
+      - safety
+      - negative-path
+      - im-1072
+      - im-1069
+    given:
+      - "el op historyTracking en modo exclusive primero resuelve TODA la keep-list, luego escribe"
+      - "el contrato de IM-1069 (PR #241/#245) garantiza fail-fast: un matcher required sin resolución aborta antes del write"
+    when:
+      - "se razona sobre el orden resolve-then-write del op (no se fuerza un break del describe del org)"
+    then:
+      - "si un matcher required no resuelve (o resuelve ambiguo), el op aborta ANTES de cualquier untrack — no hay borrado destructivo parcial"
+      - "el step reporta success=false con el matcher fallido (no silent skip)"
+      - "esta garantía es contrato del op de IM-1069, ya cubierto por sus tests; se cita como referencia en vez de romper el org (guardrail read-only)"
+      - "en el run real todos los matchers required resuelven en illinois → los 4 steps completan (evidencia de que la keep-list es resoluble en este org)"
+
+  - title: "MANUAL Name handoff · 'Ticket offer name' (standard Name) parks as MANUAL, is not auto-set by the op, and exclusive never untracks it"
+    tags:
+      - manual-handoff
+      - attestation
+      - standard-name-field
+      - museum-offer
+      - im-1072
+    given:
+      - "el step 5 (MANUAL) declara: tickear 'Ticket offer name' = standard Name field de Museum_Offer (label 'Museum Offer Name'), que no tiene CustomField record"
+      - "el pattern `attesting-without-executing` está establecido para test workspaces (TR-115/116/125); en customer orgs la attestation la hace el operator que ejecutó el trabajo real"
+    when:
+      - "el run alcanza el step 5 tras los 4 AUTOMATED"
+      - "se atesta el handoff por instrucción explícita del QA (test workspace)"
+    then:
+      - "el step 5 parkea como MANUAL (`blocked-human`) — el harness NUNCA lo auto-ejecuta"
+      - "el standard Name field NO es seteado por el op (metadata replay no puede; SF devuelve success=false sin detalle en v2)"
+      - "exclusive enumera solo CustomFields → NUNCA destrackea el Name estándar (el object-level history queda enabled por el step 3)"
+      - "atestado el handoff, el run pasa a completed; el TR documenta explícitamente que el tick UI real del Name NO lo hizo el harness"
+
+  - title: "Idempotency + two-org proof · second run leaves the exact keep-list unchanged (no re-untracking, no errors) + independent third-org corroboration"
+    tags:
+      - idempotency
+      - two-org-proof
+      - regression
+      - im-1072
+    given:
+      - "el caso ya completó una vez en illinois-trainings (keep-list aplicada)"
+      - "el dev probó la misma spec v3 en CamiloDevOrg + im696-tucson (two-org proof en el ticket)"
+    when:
+      - "se dispara un SEGUNDO plan-run del mismo caseId en illinois-trainings"
+      - "se comparan los sets tracked PRE-2ª vs POST-2ª por objeto"
+    then:
+      - "el segundo run completa los 4 AUTOMATED sin errors (+ MANUAL parkea)"
+      - "el set tracked de cada objeto sigue siendo exactamente la keep-list (7/17/15/7) — sin cambios entre 1ª y 2ª corrida"
+      - "no hay re-untracking ni re-tracking (idempotente sobre un org ya en keep-list)"
+      - "illinois-trainings (3er org, package version distinto) completa la misma spec v3 → corrobora el two-org proof del dev"
+
+tags:
+  - im-1072
+  - im-735
+  - im-1069
+  - im-1122
+  - implementations-automation
+  - ic-6-03
+  - history-tracking
+  - ticketing
+  - exclusive-mode
+  - formula-twins
+  - auctifera-managed-package
+  - label-traps
+  - runtime-matcher
+  - t3-metadata
+  - migration-app-backend
+  - spec-only
+  - hybrid
+  - pr-244
+  - post-june-delivery
+  - medium-confidence
+
+estimatedDuration: 100
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T23:55:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-24T23:55:00Z"
+  version: 1
