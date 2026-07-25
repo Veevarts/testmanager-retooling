@@ -1,0 +1,236 @@
+schemaVersion: "1.0"
+
+id: "e141817b-793f-41fc-8570-5693893b9d80"
+key: "TC-116"
+title: "IC 3.09 History Tracking for Financial Objects & POS Purchase Setup — v3 playbook realignment (5 objects) + IM-1069 run-time matchers (fully-auto, spec-only) · picklist ADD idempotent · 46 fields read-back · two-org proof"
+description: |
+  Cobertura QA para IM-1070 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1121 (creada 2026-07-24).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch A (history-tracking family). Hermano de
+    IM-1073 (IC 7.02 Gift Shop) e IM-1069 (IC 3.08, que agregó los matchers runtime).
+  - IC 3.09 = "Set History Tracking for Financial Objects & POS Purchase Setup"
+    (Order__c 3.09 en el catálogo Auctifera SF, Id a185w00000mt8quAAA).
+  - **Tier: Medium** (caveat: cross-version managed field/object API names — mitigado
+    por el matcher runtime de IM-1069, que este PR consume).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#242` (**MERGED** 2026-07-15 19:46Z).
+    Branch: `task/ic-3-09-history-tracking-financial-IM-1070`. Merge commit `81ada09`.
+  - **SPEC-ONLY PR** (1 file, +226/-82): solo
+    `ic-3-09-history-tracking-financial-objects.json` (v2 → v3). NO agrega código ni
+    op nuevo — reutiliza el T3 `historyTracking` con matchers de IM-1069 (PR #241) y
+    el modo ADD del op `picklistValues`. Por eso NO hay jest-code-contract aquí; la
+    verificación estática es fidelidad del spec + alineación al playbook CSV.
+
+  Cambio principal (v2 → v3, tres ejes):
+
+  **EJE 1 — Realineación del object set al playbook (AC1)**:
+  - v2 rastreaba POS Purchase, Charge, **Transaction (`Transaction_2__c`)** y
+    **Transaction Payment (`Transaction_Payments__c`)** — una adivinanza pre-playbook.
+  - v3 los reemplaza por los 5 objetos del playbook: POS Purchase, Charge,
+    **Charge Item (`Charge_Item__c`)**, **Refund (`Refund__c`)** y
+    **Refunded/Canceled Item (`Refunded_Item__c`)**. Los 2 steps Transaction /
+    Transaction Payment quedan ELIMINADOS; se agregan 3 steps nuevos.
+  - `feasibility: "auto"` — 6 steps, todos AUTOMATED/T3, sin manual/handoff.
+
+  **EJE 2 — Cero field names managed hardcoded (AC4)**:
+  - Todos los fields pasan de string literal a matcher `{anyOf:[apiName], label,
+    pattern?, optional?}` (patrón IM-1069). Managed Auctifera field API names driftean
+    entre versiones del package, así que cada field se resuelve AT RUN TIME por
+    candidatos + fallback de UI-label en vez de un nombre fijo.
+  - Label-to-API traps documentados: Client (Contact)=`Client__c`,
+    Client (Household/Organization)=`Client2__c` (con `pattern: "Client2__c$"` porque
+    su LABEL mismo driftea a "Client (Organization/Household)"), Payment Date=`Sold_Date__c`,
+    Payment Id=`External_Id__c`, y el object-name trap Refunded/Canceled Item cuyo API
+    real es `Auctifera__Refunded_Item__c`.
+  - vnfp-namespace fields marcados `optional: true` (Charge: Membership=`vnfp__Opportunity__c`,
+    Donation=`vnfp__Donation__c`; Charge Item: Opportunity Payment=`vnfp__Opportunity_Payment__c`,
+    Opportunity=`vnfp__Opportunity__c`) → un org sin el package NFP Fundraising igual pasa.
+
+  **EJE 3 — POS Purchase Source picklist a ADD real (AC2)**:
+  - v2 corría el step Source en `ensureOnly` (read-only assertion). v3 lo mueve a
+    order 1 (playbook part A primero) y usa el modo ADD del op: los valores faltantes
+    se agregan al LOCAL value set; un field que ya tiene todos los valores skipea la
+    escritura (idempotente). Ambos orgs de verificación del dev ya están satisfechos.
+
+  Conteos del playbook (AC3) — verificados contra el CSV Order 3.09:
+  - POS Purchase: 14 fields · Charge: 14 (2 vnfp opcionales) · Charge Item: 7 (2 vnfp
+    opcionales) · Refund: 7 · Refunded/Canceled Item: 4. Total 46 fields + object-level
+    history en los 5 objetos + 7 valores de picklist.
+
+  Ejecución: config-plan IC via Migration App (target-side, Path A API-driven). PRE →
+  IE run → POST-verify por AC en un dev/training workspace (illinois-trainings), más
+  idempotency check. Fully-auto → el run completa `total=6 done=6 failed=0` sin
+  attestation (no hay steps MANUAL que atestar).
+
+  Evidencia dev (per ticket + PR #242):
+  - Two-org proof: CamiloDevOrg + im696-tucson, spec v3 completa en ambos, matchers
+    resolviendo por org (Medium→High).
+  - Object-set realineado, matchers, y ADD picklist confirmados en el diff.
+
+  Riesgos abiertos:
+  - **Tier Medium**: la portabilidad depende de que los matchers reconstruyan el
+    prefijo namespaced en el org objetivo. QA re-verifica independientemente en
+    illinois-trainings (tercer org, distinto de los 2 del dev).
+  - **vnfp opcional**: si illinois-trainings no tiene NFP Fundraising, Charge y Charge
+    Item deben completar igual (los 4 vnfp fields se saltan sin fallar). QA lo confirma.
+  - **Additive (no exclusive)**: el flag `exclusive` está ausente → tracking
+    pre-existente se preserva. Si alguien lo flipea a true, borraría tracking existente.
+  - **AC4 negative path** (matcher required que resuelve a nada/ambiguo → falla con
+    error preciso, no silent skip) es contrato del op de IM-1069 (PR #241), ya cubierto
+    por sus tests; aquí se cita, no se re-ejecuta forzando un break del org.
+  - PR ya MERGED — la comparación es v2 (base) vs v3 (merge-commit `81ada09`).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch del spec `ic-3-09-history-tracking-financial-objects.json` en merge-commit `81ada09` (v3) y el diff v2→v3 del PR #242."
+  - "sf CLI autenticado con org alias `illinois-trainings` — Auctifera financial objects confirmados (`Auctifera__POS_Purchase__c`, `Charge__c`, `Charge_Item__c`, `Refund__c`, `Refunded_Item__c`)."
+  - "Acceso Tooling API read-only (`FieldDefinition.IsFieldHistoryTracked`) + `sf sobject describe` para PRE/POST-verify de object-level history, field tracking y valores de picklist."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`) para el IE run API-driven (Path A)."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL` (illinois-trainings)."
+  - "caseId `ic-3-09-history-tracking-financial-objects` v3 seedeado en el catálogo del backend (preflight GET /implementations/cases)."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC4-static · Playbook realignment (5 objects, Transaction/Tx Payment dropped) + fully-auto + zero hardcoded managed field names + CSV field-count fidelity"
+    tags:
+      - ac-1
+      - ac-4
+      - spec-contract
+      - csv-fidelity
+      - playbook-realignment
+      - org-agnostic
+      - im-1070
+      - im-1069
+      - im-735
+    given:
+      - "el JSON spec `ic-3-09-history-tracking-financial-objects.json` fetch-eado del merge-commit `81ada09`"
+      - "el diff v2→v3 del PR #242 y el CSV export de `Implementation_Case__c` (Order 3.09) como referencia autoritativa del playbook"
+    when:
+      - "se parsean los steps del spec v3 y se comparan objetos y conteos contra el playbook"
+      - "se hace grep del JSON buscando arrays de field names literales (bare `\"Auctifera__...\"`) fuera de los matchers"
+      - "se comparan los objetos rastreados v2 vs v3"
+    then:
+      - "case.version = 3 y template.version = 3 (lockstep); case.defaultOrder = 309 (Order__c × 100)"
+      - "case.feasibility = 'auto'; los 6 steps son kind=AUTOMATED, toolName=T3 (ningún step MANUAL/handoff) — soporta AC1"
+      - "el object set es EXACTAMENTE los 5 del playbook: POS Purchase, Charge, Charge Item, Refund, Refunded/Canceled Item"
+      - "los steps v2 de Transaction (`Transaction_2__c`) y Transaction Payment (`Transaction_Payments__c`) están AUSENTES en v3"
+      - "los conteos por objeto matchean el CSV Order 3.09: POS Purchase 14, Charge 14, Charge Item 7, Refund 7, Refunded/Canceled Item 4 (total 46)"
+      - "los 46 fields usan matcher `{anyOf:[apiName], label}` — 0 field names managed literales fuera de los matchers (grep proof)"
+      - "los 4 vnfp fields (Charge: Membership/Donation; Charge Item: Opportunity Payment/Opportunity) están marcados `optional: true`"
+      - "el trap de object-name está resuelto: Refunded/Canceled Item → `Auctifera__Refunded_Item__c`"
+
+  - title: "AC2 · POS Purchase Source picklist — real ADD mode (not ensureOnly), 7 channel values present+active, idempotent skip when complete"
+    tags:
+      - ac-2
+      - picklist-values
+      - add-mode
+      - idempotent
+      - pos-purchase-source
+      - im-1070
+    given:
+      - "el step 1 (`ensure-pos-purchase-source-values`, order 1) declara op=picklistValues sobre `Auctifera__POS_Purchase__c.Auctifera__Source__c` con `add:[7 values]`"
+      - "PRE-baseline: `sf sobject describe` del field Source en illinois-trainings registra los valores activos actuales"
+    when:
+      - "se corre el IE run (Path A) y el step 1 ejecuta contra illinois-trainings"
+      - "POST: `sf sobject describe` del field Source lista los picklistValues activos"
+    then:
+      - "el step usa el modo ADD real: `ensureOnly` está AUSENTE y `add` presente (grep del spec confirma el switch v2→v3)"
+      - "los 7 valores de canal están presentes y activos POST-run: POS Mobile, POS Salesforce, Online, Tickets Online, Scanner Mobile, Ticketing Salesforce, Courses Online"
+      - "si el field ya tenía los 7 valores, el step skipea la escritura (idempotente) y reporta success sin mutar el value set"
+      - "Source es un LOCAL value set (no GlobalValueSet), por lo que el op picklistValues lo acepta"
+
+  - title: "AC3 · Field history tracking live — object-level enabled on all 5 objects + 46 playbook fields tracked (metadata read-back), additive not exclusive"
+    tags:
+      - ac-3
+      - history-tracking
+      - live-execution
+      - api-driven
+      - metadata-readback
+      - additive
+      - im-1070
+    given:
+      - "illinois-trainings tiene los 5 financial objects instalados"
+      - "PRE-baseline Tooling API: `SELECT QualifiedApiName, IsFieldHistoryTracked FROM FieldDefinition` sobre los 46 fields — registra qué está tracked pre-run"
+      - "ic-3-09 v3 seedeado en dev (verificado por preflight GET /cases)"
+    when:
+      - "POST /implementations/plan-runs con `caseIds:['ic-3-09-history-tracking-financial-objects']` → 202 planRunId"
+      - "poll hasta que los 6 steps AUTOMATED queden `done` (total=6 done=6 failed=0, sin blocked-human porque es fully-auto)"
+      - "POST-verify Tooling API sobre los 46 fields de los 5 objetos + object-level history"
+    then:
+      - "los 6 steps completan sin errors visibles (run status COMPLETED)"
+      - "object-level 'Track Field History' queda enabled en los 5 objetos"
+      - "los 14 POS Purchase + 14 Charge + 7 Charge Item + 7 Refund + 4 Refunded/Canceled Item quedan `IsFieldHistoryTracked=true` (menos vnfp ausentes, ver AC4)"
+      - "cualquier field pre-tracked en PRE-baseline sigue tracked POST — comportamiento additive preservado (flag `exclusive` ausente)"
+      - "el resultado se verifica por metadata read-back (FieldDefinition), NO se asume del write call"
+
+  - title: "AC4-live · IM-1069 run-time matchers resolve the label/API traps on illinois-trainings; vnfp fields optional (org without NFP Fundraising still completes)"
+    tags:
+      - ac-4
+      - runtime-matcher
+      - label-traps
+      - org-agnostic
+      - vnfp-optional
+      - im-1070
+      - im-1069
+    given:
+      - "los matchers `{anyOf, label, pattern}` se resuelven contra el describe live del org"
+      - "los label-traps del playbook: Client (Contact)=`Client__c`, Client (Household/Organization)=`Client2__c`, Payment Date=`Sold_Date__c`, Payment Id=`External_Id__c`"
+      - "los 4 vnfp fields están marcados `optional: true`"
+    when:
+      - "se corre el IE run en illinois-trainings y se inspecciona el POST-verify de los fields con trap"
+      - "se comprueba si illinois-trainings tiene el namespace vnfp instalado (`sf sobject describe` de los vnfp fields)"
+    then:
+      - "los trap fields quedan tracked por su API real: `Client__c`, `Client2__c`, `Sold_Date__c` (Payment Date), `External_Id__c` (Payment Id)"
+      - "el object Refunded/Canceled Item se resuelve a `Auctifera__Refunded_Item__c` (label ≠ API name) y completa"
+      - "si illinois-trainings NO tiene vnfp, los 4 vnfp fields se saltan sin fallar (Charge y Charge Item completan igual) — prueba de `optional: true`"
+      - "si illinois-trainings SÍ tiene vnfp, los 4 vnfp fields quedan tracked"
+      - "el contrato negative-path (matcher required que resuelve a nada/ambiguo → step falla con error preciso, no silent skip) es garantía del op IM-1069 (PR #241, ya testeado); se cita como referencia, no se fuerza un break del org"
+
+  - title: "AC5 · Idempotency (second run leaves no changes, no errors) + independent third-org corroboration of the dev's CamiloDevOrg + im696-tucson two-org proof"
+    tags:
+      - ac-5
+      - idempotency
+      - two-org-proof
+      - regression
+      - im-1070
+    given:
+      - "el caso ya completó una vez en illinois-trainings (AC2/AC3)"
+      - "el dev probó la misma spec v3 en CamiloDevOrg + im696-tucson (two-org proof en el ticket)"
+    when:
+      - "se dispara un SEGUNDO plan-run del mismo caseId en illinois-trainings"
+      - "se comparan los picklist values y el FieldDefinition read-back PRE-2ª-corrida vs POST-2ª-corrida"
+    then:
+      - "el segundo run completa `total=6 done=6 failed=0` sin errors"
+      - "no se agregan valores duplicados al picklist Source (los 7 ya presentes → skip)"
+      - "el set de fields tracked no cambia entre la 1ª y 2ª corrida (no unintended changes)"
+      - "illinois-trainings (tercer org, package version distinto de CamiloDevOrg/Tucson) completa la misma spec v3 → corrobora independientemente el two-org proof del dev"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-24T23:30:00Z"
+  version: 1
+  estimatedDuration: 90
+  tags:
+    - im-1070
+    - im-735
+    - im-1069
+    - im-1121
+    - implementations-automation
+    - ic-3-09
+    - history-tracking
+    - pos-purchase
+    - financial-objects
+    - auctifera-managed-package
+    - label-traps
+    - runtime-matcher
+    - t3-metadata
+    - migration-app-backend
+    - spec-only
+    - fully-auto
+    - post-june-delivery
+    - medium-confidence

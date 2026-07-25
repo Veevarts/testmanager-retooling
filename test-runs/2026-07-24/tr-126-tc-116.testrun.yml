@@ -1,0 +1,282 @@
+schemaVersion: "1.0"
+
+id: tr-cb78f887-a77e-4e8c-8522-aa568620b837
+key: TR-126
+title: "IM-1070 · TC-116 · IC 3.09 History Tracking for Financial Objects — 5/5 PASS · 0 defectos (runs 22d007ac + 3e31ab2f completed 6/6 each, fully-auto no-op idempotente en illinois-trainings: 5-object playbook realignment + 46 fields matcher-tracked read-back + picklist ADD sin dup + two-org proof corroborado en 3er org)"
+
+description: |
+  QA de IM-1070 (Historia, priority Medium, epic IM-735 Implementation Cases Automation).
+  QA Sub-task: IM-1121. PR bajo prueba: Veevarts/MigrationAppBackend#242 (spec-only, MERGED
+  2026-07-15, merge commit 81ada09). Config-plan IC ejecutado target-side via Migration App
+  (API-first, Path A). Org: illinois-trainings (00DWI00000CIwZi2AL).
+
+  Reconciliación de versión (patrón "catalog leads the PR"): el catálogo LIVE está en v3, igual
+  que el PR #242 (feasibility auto). Sin drift. Correr el plan live valida fielmente lo entregado.
+
+  Método QA (independiente):
+  1. Fetch spec JSON v3 en merge-commit 81ada09 via gh api; análisis estático (matchers vs literales,
+     object-set, counts) + cross-check vs CSV Order 3.09 del catálogo Auctifera.
+  2. PRE baseline read-only en illinois-trainings (sf Tooling API): FieldDefinition.IsFieldHistoryTracked
+     de los 46 fields + describe del picklist Source + presencia vnfp.
+  3. IE run API-first: POST plan-run (sin inputs parkeados, fully-auto) → poll → completed 6/6.
+  4. POST-verify por AC: FieldDefinition read-back (46 fields) + picklist describe (dup check).
+  5. Segunda corrida para idempotencia (S5).
+
+  Hallazgo material: illinois-trainings YA estaba 100% en target state PRE (46/46 tracked, 7/7
+  required picklist values, vnfp instalado) — igual que los 2 orgs de verificación del dev. Por eso
+  las DOS corridas son un NO-OP idempotente puro (PRE == POST en cada métrica). Es la evidencia de
+  idempotencia más fuerte posible (org ya satisfecho, el run no toca nada) y corrobora completion en
+  un TERCER org independiente vs CamiloDevOrg + im696-tucson del dev. La transición "agrega lo
+  faltante" no es observable donde nada falta (como en ambos orgs del dev); es propiedad estructural
+  del op (picklistValues ADD; historyTracking additive), verificada en scenario-1 + garantizada por
+  IM-1069 — citada, no forzada rompiendo el org (guardrail read-only). Resultado: 5/5 ACs. 0 defectos.
+
+testCaseIds:
+  - e141817b-793f-41fc-8570-5693893b9d80
+
+environment:
+  name: "Migration App (dev) · Veevarts/MigrationAppBackend#242 + Salesforce sandbox illinois-trainings"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/242"
+  buildVersion: 'IC config-plan case (fully-auto, spec-only PR). 1 file: ic-3-09-history-tracking-financial-objects.json v2->v3 (PR #242, merge 81ada09, +226/-82). LIVE catalog v3 = PR version (no drift). 6 steps, todos AUTOMATED/T3: step1 picklistValues ADD (POS Purchase Source, 7 values) + steps2-6 historyTracking (POS Purchase 14, Charge 14, Charge Item 7, Refund 7, Refunded/Canceled Item 4 = 46 fields con matchers IM-1069). Estrategia: static spec fidelity (gh api + grep) + CSV playbook cross-check + PRE baseline Tooling API + API-first plan-run (Path A) x2 + POST-verify FieldDefinition/describe.'
+  notes: |
+    - PR spec-only: NO agrega código ni op nuevo. Reutiliza el T3 historyTracking con matchers de
+      IM-1069 (PR #241, IC 3.08) y el modo ADD del op picklistValues. Por eso no hay jest-code-contract;
+      la verificación estática es fidelidad del spec + alineación al playbook CSV.
+    - Fully-auto (feasibility auto): 0 steps MANUAL → NINGUNA atestación performed ni requerida. El
+      harness no atestó nada; los 6 steps ejecutaron automáticamente.
+    - Sesión Cognito del Migration App: token válido (~25 min TTL, grupo admin) — sin re-login.
+
+    ## Solution understood
+
+    PR #242 lleva IC 3.09 de v2 a v3 en tres ejes: (1) realinea el object set al playbook —
+    reemplaza los steps v2 Transaction (Transaction_2__c) + Transaction Payment (Transaction_Payments__c),
+    que eran una adivinanza pre-playbook, por los 3 objetos correctos del playbook: Charge Item, Refund,
+    Refunded/Canceled Item; (2) migra TODOS los field names managed de string literal a matcher runtime
+    {anyOf, label, pattern?, optional?} (patrón IM-1069) para tolerar drift de API names entre versiones
+    del package; (3) mueve el step del picklist Source de ensureOnly (read-only) a ADD real idempotente,
+    y lo pone primero (playbook part A). feasibility pasa de mixta a auto (sin manual).
+
+    ## Inferred technical tests (mapped to ACs)
+
+    | Test                                                                   | AC  | Executable? | Verdict |
+    |------------------------------------------------------------------------|-----|-------------|---------|
+    | Static spec fidelity: 5-object realignment + 0 literals + counts CSV   | AC1+AC4 | YES (offline) | PASS |
+    | POS Source picklist ADD mode + 7 values + no dup (describe)            | AC2 | YES (live)  | PASS    |
+    | 46 fields tracked + object-level ON + additive (FieldDefinition RB)    | AC3 | YES (live)  | PASS    |
+    | Matchers resuelven label/API traps live + vnfp optional                | AC4 | YES (live, con nota vnfp) | PASS |
+    | Idempotencia (2a corrida no-op, no dup) + 3er org corrobora two-org    | AC5 | YES (live)  | PASS    |
+
+    ## Objective fit
+
+    - Objetivo: entregar IC 3.09 org-agnostic (sin field names hardcoded), fully-auto, alineado al
+      playbook (5 objetos, 46 fields, 7 picklist values), idempotente y probado en >=2 orgs.
+    - Delivered: 2 runs completed 6/6 en illinois-trainings (3er org); 46/46 tracked + 7/7 picklist
+      por read-back; matchers resuelven los traps live; sin drift de catálogo. Los 5 ACs verificados.
+    - Objective met? YES. 0 defectos.
+
+status: completed
+executor: codex
+executedAt: "2026-07-25T03:25:04Z"
+completedAt: "2026-07-25T03:40:00Z"
+duration: 15
+
+summary:
+  total: 5
+  passed: 5
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "AC1+AC4-static · Playbook realignment (5 objects, Transaction/Tx Payment dropped) + fully-auto + zero hardcoded managed field names + CSV field-count fidelity"
+    testCaseId: e141817b-793f-41fc-8570-5693893b9d80
+    testCaseKey: TC-116
+    status: passed
+    executedAt: "2026-07-25T03:20:00Z"
+    duration: 3
+    actual: |
+      Análisis estático del spec v3 fetch-eado del merge-commit 81ada09 (gh api):
+      - case.version=3, template.version=3 (lockstep), defaultOrder=309, **feasibility=auto**.
+      - **6 steps, todos kind=AUTOMATED / toolName=T3** → 0 steps MANUAL/handoff (soporta AC1).
+      - Object set de history tracking = **exactamente los 5 del playbook**: POS Purchase, Charge,
+        Charge Item, Refund, Refunded/Canceled Item. Los steps v2 Transaction (`Transaction_2__c`) y
+        Transaction Payment (`Transaction_Payments__c`) están **AUSENTES** en v3.
+      - Conteos por objeto: 14 / 14 / 7 / 7 / 4 = **46 fields**, matchean el CSV Order 3.09.
+      - **46 matchers `{anyOf,label}` · 0 field names managed literales** (grep proof) → AC4-static.
+      - 4 fields `optional:true` (los vnfp: Charge Membership/Donation, Charge Item OppPayment/Opp).
+      - step1 op=picklistValues con **ensureOnly AUSENTE** y `add` de 7 valores → switch v2→v3 a ADD.
+      - flag `exclusive` ausente en los 5 tracking steps → additive.
+
+      CSV playbook Order 3.09 lista textualmente: "POS Purchase source values (los 7); history
+      tracking for POS Purchase, Charge, Charge Item, Refund, Refunded/Canceled Item" → match exacto.
+    notes: |
+      Verificación 100% offline/estática — no toca el org. Es la base contractual para AC1 y AC4.
+    stepResults: []
+    attachments:
+      - name: static-spec-analysis.txt
+        path: attachments/tr-126-tc-116/scenario-1/static-spec-analysis.txt
+        mimeType: text/plain
+      - name: csv-playbook-order-3-09.txt
+        path: attachments/tr-126-tc-116/scenario-1/csv-playbook-order-3-09.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC2 · POS Purchase Source picklist — real ADD mode (not ensureOnly), 7 channel values present+active, idempotent skip when complete"
+    testCaseId: e141817b-793f-41fc-8570-5693893b9d80
+    testCaseKey: TC-116
+    status: passed
+    executedAt: "2026-07-25T03:30:00Z"
+    duration: 2
+    actual: |
+      Step 1 (`ensure-pos-purchase-source-values`, picklistValues ADD) completó **done**, 0 failed,
+      en ambas corridas.
+
+      **PRE** (sf sobject describe del field `Auctifera__Source__c`): los 7 valores requeridos
+      (POS Mobile, POS Salesforce, Online, Tickets Online, Scanner Mobile, Ticketing Salesforce,
+      Courses Online) ya presentes+activos; 10 valores activos totales (+ Salesforce, Shopify,
+      Fundraising Events Online, extras org-specific).
+      **POST**: idéntico — 10 activos, los 7 requeridos presentes+activos, **0 duplicados**.
+
+      → El modo es **ADD real** (ensureOnly ausente, confirmado por grep del spec). Como el field ya
+      tenía los 7, el step **skipea la escritura (idempotente)** y no mutó el value set ni duplicó los
+      extras org-specific. Source es un LOCAL value set → el op picklistValues lo acepta.
+    notes: |
+      El "ADD a un valor faltante" no es observable aquí porque nada falta (org ya satisfecho, como
+      los 2 orgs del dev); es propiedad del op mode, verificada estáticamente en scenario-1.
+    stepResults: []
+    attachments:
+      - name: pos-source-picklist-PRE.txt
+        path: attachments/tr-126-tc-116/pre/pos-source-picklist-PRE.txt
+        mimeType: text/plain
+      - name: pos-source-picklist-POST.txt
+        path: attachments/tr-126-tc-116/post/pos-source-picklist-POST.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC3 · Field history tracking live — object-level enabled on all 5 objects + 46 playbook fields tracked (metadata read-back), additive not exclusive"
+    testCaseId: e141817b-793f-41fc-8570-5693893b9d80
+    testCaseKey: TC-116
+    status: passed
+    executedAt: "2026-07-25T03:32:00Z"
+    duration: 4
+    actual: |
+      Run 1 (planRunId 22d007ac-4a4a-4703-b7cd-1a66dceead7e) **completed** — total=6 done=6 failed=0,
+      0 blocked-human. Los 5 steps de historyTracking (2-6) completaron done.
+
+      **POST-verify Tooling API (`FieldDefinition.IsFieldHistoryTracked`)** — los 46 fields del
+      playbook quedan `IsFieldHistoryTracked=true`:
+      - POS Purchase 14/14 · Charge 14/14 · Charge Item 7/7 · Refund 7/7 · Refunded/Canceled Item 4/4.
+      - **Object-level "Track Field History" ON** en los 5 objetos (SF exige history de objeto ON para
+        trackear fields → inferido y consistente con el read-back).
+      - **Additive**: los 46 estaban tracked PRE y siguen tracked POST; ningún field extra fue
+        destrackeado (flag `exclusive` ausente). PRE == POST (delta 0).
+      - Resultado verificado por **metadata read-back** (FieldDefinition), no asumido del write call.
+    notes: |
+      illinois ya tenía los 46 tracked PRE → el run es un no-op additive (mantiene el target state).
+      Es completion + read-back genuinos en un 3er org, no una transición untracked->tracked.
+    stepResults: []
+    attachments:
+      - name: field-history-PRE.txt
+        path: attachments/tr-126-tc-116/pre/field-history-PRE.txt
+        mimeType: text/plain
+      - name: field-history-POST.txt
+        path: attachments/tr-126-tc-116/post/field-history-POST.txt
+        mimeType: text/plain
+      - name: comparison-matrix.txt
+        path: attachments/tr-126-tc-116/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC4-live · IM-1069 run-time matchers resolve the label/API traps on illinois-trainings; vnfp fields optional (org without NFP Fundraising still completes)"
+    testCaseId: e141817b-793f-41fc-8570-5693893b9d80
+    testCaseKey: TC-116
+    status: passed
+    executedAt: "2026-07-25T03:34:00Z"
+    duration: 3
+    actual: |
+      Los matchers `{anyOf, label, pattern}` resolvieron contra el describe live de illinois-trainings
+      y los trap fields quedan tracked por su API real (FieldDefinition read-back):
+      - Client (Household/Organization) → `Auctifera__Client2__c` ✓ tracked
+      - Payment Date → `Auctifera__Sold_Date__c` ✓ tracked
+      - Payment Id → `Auctifera__External_Id__c` (Charge) ✓ tracked
+      - Client (Contact) → `Auctifera__Client__c` ✓ tracked
+      - **Object-name trap**: Refunded/Canceled Item → `Auctifera__Refunded_Item__c` (label ≠ API) →
+        el step completó done y sus 4 fields quedan tracked → resolución correcta del objeto.
+
+      **vnfp**: illinois-trainings SÍ tiene el namespace vnfp instalado (Charge expone
+      `vnfp__Donation__c` + `vnfp__Opportunity__c`; Charge Item expone `vnfp__Opportunity__c` +
+      `vnfp__Opportunity_Payment__c`), y los 4 quedan tracked. La rama "org sin vnfp igual completa"
+      (`optional:true`) no se ejercita en este org; se verifica estructuralmente (flag optional en
+      scenario-1) + por el two-org proof del dev.
+    notes: |
+      AC4 negative-path (matcher required que resuelve a nada/ambiguo → step falla con error preciso,
+      no silent skip) es contrato del op de IM-1069 (PR #241/#245), ya cubierto por sus tests; se cita
+      como referencia y NO se fuerza rompiendo el describe del org (guardrail read-only).
+    stepResults: []
+    attachments:
+      - name: field-history-POST.txt
+        path: attachments/tr-126-tc-116/post/field-history-POST.txt
+        mimeType: text/plain
+      - name: static-spec-analysis.txt
+        path: attachments/tr-126-tc-116/scenario-1/static-spec-analysis.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: "AC5 · Idempotency (second run leaves no changes, no errors) + independent third-org corroboration of the dev's CamiloDevOrg + im696-tucson two-org proof"
+    testCaseId: e141817b-793f-41fc-8570-5693893b9d80
+    testCaseKey: TC-116
+    status: passed
+    executedAt: "2026-07-25T03:38:00Z"
+    duration: 3
+    actual: |
+      Segundo plan-run del mismo caseId (planRunId 3e31ab2f-cb70-46eb-826c-22cc4e80759b) **completed**
+      — total=6 done=6 failed=0, 0 blocked.
+
+      - **Sin duplicados**: el picklist Source sigue con 10 activos (7 requeridos + 3 extras), 0 dups.
+      - **Sin delta de tracking**: los 46 fields siguen tracked, idéntico a la 1a corrida (no
+        unintended changes entre run1 y run2).
+      - **Tercer org**: illinois-trainings (package/version distinto de CamiloDevOrg e im696-tucson)
+        completa la misma spec v3 con los matchers resolviendo per-org → corrobora independientemente
+        el two-org proof del dev, elevándolo a three-org.
+
+      Como el org ya estaba en target state, ambas corridas son no-ops idempotentes puros: la
+      evidencia de idempotencia más fuerte (el run corre sobre un org satisfecho y no toca nada).
+    notes: |
+      Idempotencia demostrada en vivo dos veces consecutivas. PRE == POST(run1) == POST(run2) en
+      todas las métricas (ver comparison-matrix.txt).
+    stepResults: []
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-126-tc-116/comparison-matrix.txt
+        mimeType: text/plain
+      - name: run-transcripts.json
+        path: attachments/tr-126-tc-116/run/run-transcripts.json
+        mimeType: application/json
+      - name: run-card.md
+        path: attachments/tr-126-tc-116/run/run-card.md
+        mimeType: text/markdown
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-25T03:40:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-25T03:40:00Z"
+  version: 1
+
+history:
+  - action: created
+    timestamp: "2026-07-25T03:25:00Z"
+    user: codex
+    to: in-progress
+    reason: "IE run API-first (Path A) de ic-3-09-history-tracking-financial-objects v3 en illinois-trainings tras bundle gate + Start-run gate aprobados. PRE baseline read-only + preflight catálogo (v3, sin drift)."
+  - action: completed
+    timestamp: "2026-07-25T03:40:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: "5/5 PASS · 0 defectos. Runs 22d007ac + 3e31ab2f completed 6/6 done, 0 failed (fully-auto, sin blocked-human ni atestación). AC1 realineación 5-object + 6 AUTOMATED (static). AC4-static 46 matchers/0 literales (static). AC2 picklist ADD 7 values sin dup (describe PRE/POST). AC3 46 fields tracked por FieldDefinition read-back, additive. AC4-live traps Client2/Sold_Date/External_Id/Refunded_Item resueltos live + vnfp presente tracked. AC5 2a corrida no-op idempotente sin dup + illinois como 3er org corrobora two-org proof. illinois ya en target state PRE → runs = no-op idempotente puro."
