@@ -1,0 +1,209 @@
+schemaVersion: "1.0"
+
+id: "e463384a-3b2a-43f5-b61c-072dc669c2c5"
+key: "TC-121"
+title: "IM-1089 Vendor §11 manual-sweep spike (7 cases) — 4.07 UPGRADE (auto T3 customMetadata POS_Status_Control) + 4.06 HYBRID-with-verify (T6 fails loudly) + 5 stay-manual with documented API-refusal evidence · CODE PR (spec-only, reused ops)"
+description: |
+  Cobertura QA para IM-1089 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1126 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 3 (probe-first manual sweep). Spike sobre 7 casos
+    §11 (vendor/third-party) para probar pre/post steps automatizables y convertir manual→hybrid
+    donde se pueda.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#261` (**MERGED** 2026-07-16 11:32Z).
+    Branch: `task/spike-vendor-integrations-IM-1089`. Merge commit `1314806f` (base `f1703651`).
+    14 files, +430/-83. (Nota: `1314806f` es exactamente la BASE de IM-1090/#262 — #261 mergeó primero.)
+  - **CODE PR spec-only** — NO toca adapters/ops: reutiliza el op T3 `customMetadata` (4.07) y el
+    op T6 verify read-only (4.06); los 7 specs bumpean case+template v1→v2 y suman un `.spec.ts`
+    lockstep por caso. `scripts/seed-master-template.ts` intacto (IM-1090 posee la flip policy).
+
+  Los 7 casos y su desenlace del spike:
+  - **4.07 Rounding Approximation (Canada POS)** → **UPGRADE (manual→auto)**: caso entero = flip de
+    un flag managed CMDT `Auctifera__POS_Setting.Default.POS_Status_Control__c=true` (SubscriberControlled,
+    escribible). Op T3 customMetadata SOQL-descubre el fullName namespaced y escribe solo el field
+    (sin CANNOT_MODIFY_MANAGED_OBJECT, sin duplicado unmanaged), read-back verify, idempotente.
+    Live-proven en CamiloDevOrg (flip→SOQL verify→revert).
+  - **4.06 QuickBooks Integration (ADD ON)** → **HYBRID-WITH-VERIFY**: el portal QuickBooks + Intuit
+    OAuth quedan manual (OAuth per-tenant, sin op); step 2 AUTOMATED T6 read-only verify lee el
+    org-default `Auctifera__Accounting__c` y asegura `Automatic_Journal_Integration_Enabled__c=true`,
+    lanzando VerifyException (falla el caso) con mensaje al operador si está en false. Read live-proven.
+  - **1 DKIM, 3 Zuppio, 3.23 Adyen, 3.26 Email Integration, 8.04 Verify Electronic Payment** →
+    **STAY MANUAL** con evidencia de rechazo de API documentada + guías clarificadas:
+    * 1 DKIM: `DkimKey` no es sObject ni Tooling object (INVALID_TYPE ×2 en CamiloDevOrg), sin Metadata
+      type; creación Setup-UI-only; CNAME/SPF en DNS externo del cliente. Sin write/verify surface.
+    * 3 Zuppio: login credencializado al portal externo Zuppio; paquete no instalado en el probe org
+      (`EntityDefinition LIKE '%uppio%'` = 0 rows). Sin SF write/verify.
+    * 3.23 Adyen: connected apps existen pero el trabajo = OAuth Permitted-Users policy + profile
+      grants (Setup-UI, sin op reusable) + portal Adyen externo. Existence-only verify demasiado débil.
+    * 3.26 Email Integration: add-in per-device + OAuth per-user (client-side, inalcanzable); el toggle
+      org solo es inerte. Sin pre-step/verify que valga.
+    * 8.04 Verify Electronic Payment: el caso ES una prueba de aceptación live (charge+refund real,
+      prohibido en spike); pre-flight gateway-check improbable — org con 0 merchant devices.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR): clone en merge `1314806f`, correr los
+    7 `.spec.ts` lockstep + gates; re-derivar el conteo del dev (jest 102/102 claim).
+  - **spec fidelity independiente**: parsear los 7 specs y verificar por cuenta propia — 4.07 v2/auto
+    single T3 customMetadata (values Auctifera__POS_Status_Control__c=true, record Default); 4.06 v2/hybrid
+    2 steps MANUAL→T6 verify (apex read-only que THROWS VerifyException, sin DML); los 5 v2/manual single
+    MANUAL con guide.actions>0 + refusal evidence en description.
+  - **op-reuse audit** (NO genuinely-new): confirmar que los ops T3 customMetadata y T6 verify ya existían
+    en base `f1703651` (adapters no tocados por el PR) → la novedad es el wiring del spec, no un op nuevo.
+  - **scope boundaries**: seed-master-template.ts sin cambios (IM-1090 owns); no adapter diffs.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven) y re-correr
+    los v2 via la app está bloqueado — los specs v2 NO están seeded a MigrationApp-dev (seed PENDING-CREDS,
+    ExpiredToken). Los ítems live quedan documentados como dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Seed PENDING-CREDS**: `aws sts get-caller-identity` = ExpiredToken; los v2 specs no seeded (append-only)
+    → seed en cred refresh. Bloquea re-correr los upgrades via la app.
+  - **4.07 PM-confirm**: la KA (ka05w0000019slUAAQ) no es fetchable (Knowledge disabled en CamiloDevOrg); el
+    help-text del field es conclusivo pero un confirm de PM de que POS_Status_Control__c ES el caso entero lo cerraría.
+  - **Auctifera managed protected**: los write/read targets (Auctifera__POS_Setting__mdt CMDT, Auctifera__Accounting__c
+    custom setting) son del managed package Auctifera; el spike los probó en CamiloDevOrg. QA re-verifica por
+    código; una verificación metadata-lens live requiere un org con el package Auctifera (no default en trainings).
+  - Reporter/assignee del ticket = el dev (Camilo). QA es re-verificación independiente del PR ya MERGED.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol de specs en merge `1314806f` y base `f1703651` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR: evidencia primaria por código). Reusable: `1314806f` es la base de IM-1090 ya clonado."
+  - "Node + jq/python3 para parsear los 7 specs y verificar la fidelidad del contrato independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven) y los v2 no están seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · 4.07 UPGRADE (manual→auto) — single AUTOMATED T3 customMetadata op sets Auctifera__POS_Setting.Default.POS_Status_Control__c=true, read-back verified, no unmanaged duplicate CMDT, idempotent (SubscriberControlled managed field)"
+    tags:
+      - ac-1
+      - ic-4-07
+      - upgrade
+      - auto
+      - t3-custom-metadata
+      - managed-cmdt
+      - im-1089
+      - im-735
+    given:
+      - "el spec `ic-4-07-rounding-approximation-canada.json` en el merge `1314806f` y el op T3 customMetadata reutilizado del adapter"
+    when:
+      - "se parsea el spec y se coteja el step contra el op customMetadata"
+    then:
+      - "case.version=2, template.version=2 (lockstep), feasibility='auto'"
+      - "hay exactamente 1 step AUTOMATED, toolName=T3, op=customMetadata, type=Auctifera__POS_Setting, record=Default, values={Auctifera__POS_Status_Control__c: true}"
+      - "el op escribe el field named vía el fullName namespaced SOQL-descubierto (sin CANNOT_MODIFY_MANAGED_OBJECT, sin duplicado unmanaged); read-back verify POS_Status_Control__c=true (rules §6); idempotente"
+      - "live: dev-proven en CamiloDevOrg (flip→SOQL verify→revert); re-correr via la app = PENDING-CREDS (v2 no seeded)"
+
+  - title: "AC2+AC3 · 4.06 HYBRID-with-verify — MANUAL QuickBooks/Intuit OAuth step then AUTOMATED T6 read-only verify that reads org-default Auctifera__Accounting__c and asserts Automatic_Journal_Integration_Enabled__c=true, throwing VerifyException (fails loudly) with an operator message when false"
+    tags:
+      - ac-2
+      - ac-3
+      - ic-4-06
+      - hybrid
+      - t6-verify
+      - fail-loudly
+      - custom-setting
+      - im-1089
+    given:
+      - "el spec `ic-4-06-quickbooks-integration.json` en el merge `1314806f`"
+    when:
+      - "se parsea el spec y se lee el apex del step 2 (T6 verify)"
+    then:
+      - "case.version=2, template.version=2 (lockstep), feasibility='hybrid'; 2 steps ordenados: step1 MANUAL (QuickBooks portal + Intuit OAuth), step2 AUTOMATED toolName=T6"
+      - "el apex del verify lee `Auctifera__Accounting__c.getOrgDefaults()` y evalúa `Automatic_Journal_Integration_Enabled__c == true` (AC2)"
+      - "cuando el toggle está en false (o no hay org-default row) lanza `VerifyException` con un mensaje que le dice al operador cómo habilitarlo (App Launcher > Veevart Settings > Accounting) → falla el caso (AC3)"
+      - "el verify es read-only (sin DML/callout en el apex); no verifica el OAuth de Intuit (fuera del alcance SOQL/Apex), solo el prerequisito local. Read live-proven en CamiloDevOrg"
+
+  - title: "AC4 · Five vendor-portal cases STAY MANUAL with a clarified guide — each is a single MANUAL handoff (guide.actions non-empty) whose description documents the live API-refusal evidence found by the spike (1 DKIM, 3 Zuppio, 3.23 Adyen, 3.26 Email, 8.04 Verify Electronic Payment)"
+    tags:
+      - ac-4
+      - stay-manual
+      - refusal-evidence
+      - vendor-portal
+      - ic-1
+      - ic-3-zuppio
+      - ic-3-23
+      - ic-3-26
+      - ic-8-04
+      - im-1089
+    given:
+      - "los 5 specs stay-manual en el merge `1314806f`"
+    when:
+      - "se parsea cada spec y se lee su description + guide"
+    then:
+      - "cada uno: case.version=2, template.version=2 (lockstep), feasibility='manual', exactamente 1 step MANUAL con guide.actions no vacío"
+      - "la description de cada caso documenta la evidencia de rechazo de API del spike: DKIM (DkimKey INVALID_TYPE ×2, sin Metadata type, DNS externo); Zuppio (paquete no instalado, portal externo); Adyen (OAuth policy Setup-UI, existence-only verify débil); Email (add-in per-device + OAuth per-user client-side); 8.04 (charge/refund live prohibido, 0 merchant devices)"
+      - "ninguno introduce un op automatizado; el v2 solo clarifica la guía + agrega la evidencia de rechazo"
+
+  - title: "Gates green + v1→v2 lockstep — jest per-case lockstep suites (7 nuevos) pass, tsc --noEmit clean, eslint clean on touched files; all 7 specs bumped case+template version v1→v2 together"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - im-1089
+    given:
+      - "clone local de MigrationAppBackend en merge `1314806f` con npm ci limpio"
+    when:
+      - "se corren tsc --noEmit, jest (seeds+scripts, incl. los 7 `.spec.ts` nuevos) y eslint sobre los archivos tocados"
+    then:
+      - "tsc --noEmit sin type errors; eslint limpio en los archivos tocados (o hallazgo verificado PRE-existente vía git blame)"
+      - "los 7 `.spec.ts` lockstep pasan; el conteo del dev (jest 102/102) se re-deriva y se reporta lo obtenido"
+      - "los 7 specs bumpearon case.version y template.version de 1→2 en lockstep"
+
+  - title: "Scope boundaries + open items — no new op (T3 customMetadata + T6 verify reused, adapters untouched), seed-master-template.ts untouched (IM-1090 owns flip policy), and the open items (seed PENDING-CREDS, 4.07 PM-confirm) are documented not silently dropped"
+    tags:
+      - scope-fit
+      - no-new-op
+      - reused-ops
+      - open-items
+      - pending-creds
+      - independent-verification
+      - im-1089
+      - im-1090
+    given:
+      - "el diff completo del PR #261 (14 files) y el árbol en base `f1703651`"
+    when:
+      - "se auditan los paths tocados y se confirma la existencia previa de los ops"
+    then:
+      - "el PR NO toca ningún adapter/op (`*.adapter.ts`): 14 files = 7 specs .json + 7 .spec.ts nuevos; los ops T3 customMetadata y T6 verify ya existen en base → NO genuinely-new op"
+      - "`scripts/seed-master-template.ts` NO fue tocado por #261 (la flip policy del master es de IM-1090/#262)"
+      - "los open items quedan documentados: seed MigrationApp-dev PENDING-CREDS (ExpiredToken; v2 no seeded, append-only) y 4.07 PM-confirm de que POS_Status_Control__c es el caso entero (KA no fetchable)"
+
+tags:
+  - im-1089
+  - im-735
+  - im-1126
+  - implementations-automation
+  - manual-confidence
+  - vendor-spike
+  - manual-sweep
+  - ic-1
+  - ic-3-zuppio
+  - ic-3-23
+  - ic-3-26
+  - ic-4-06
+  - ic-4-07
+  - ic-8-04
+  - t3-custom-metadata
+  - t6-verify
+  - reused-ops
+  - migration-app-backend
+  - code-pr
+  - pr-261
+  - pending-creds
+  - post-june-delivery
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
