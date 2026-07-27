@@ -1,0 +1,22 @@
+IM-1081 — IC 3.16 v4 spec-fidelity (independent parse) + op mapping
+==================================================================
+Spec @ 545e2cb0: ic-3-16-org-wide-email, case.version=4, template.version=4 (lockstep asserted), feasibility=hybrid, defaultOrder=316.
+
+STEP-BY-STEP (independent parse of the JSON):
+  step1 MANUAL     "Create & verify the Organization-Wide Email Address (manual)"                          -> AC6
+  step2 AUTOMATED  T3 op=customMetadata type=vnfp__Fundraising_Settings allRecords=true                    -> AC4 (REUSED op)
+        "Set the Emails Sender Address on Fundraising Settings"  (vnfp__Emails_Sender_Address__c on every FS record; sync CRUD commits managed + unmanaged)
+  step3 AUTOMATED  T3 op=workflowAlert  ensure=21 alerts                                                    -> AC1/AC2/AC3 (NEW op)
+        "Set the org-wide email as the From sender on the Veevart / NPSP Email Alerts"  (senderType=OrgWideEmailAddress; + Error Log recipient add)
+  step4 AUTOMATED  T6                                                                                       -> AC5 (REUSED op)
+        "Set the Veevart POS Email Sender custom-setting field"  (Auctifera__Emails_Sender_Address__c on org-default POS_Settings, {{orgWideEmail}})
+=> 1 MANUAL + 3 AUTOMATED (matches the ticket's "1 MANUAL handoff + 3 AUTOMATED steps"). Maps to the 7 Gherkin ACs
+   (AC1/2/3 = step3 workflowAlert behaviors, AC4 = step2, AC5 = step4, AC6 = step1, AC7 = gates).
+
+V3 -> V4 CORRECTION (AC4, verified by spec + PR body): v3 marked the Fundraising Settings sender a handoff, claiming a
+managed/protected CMDT write "silently no-ops". The PR proves that no-op was the ASYNC Apex deploy path; the SYNC CRUD
+Metadata API (T3 customMetadata, allRecords) COMMITS it on both the managed (vnfp__Default) and unmanaged (Default)
+records — proven live on CamiloDevOrg. So v4 flips this step MANUAL -> AUTOMATED using the pre-existing customMetadata op.
+
+SEQUENTIAL ORDERING (AC6): resolve-ready-steps.handler makes the automated steps 2/3/4 become ready only after the manual
+step 1 (OWEA create+verify) is attested — the automation's inherent dependency on a verified OWEA (external mailbox click).

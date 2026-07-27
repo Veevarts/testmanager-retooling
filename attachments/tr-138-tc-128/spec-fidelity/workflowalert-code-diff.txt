@@ -1,0 +1,799 @@
+commit 545e2cb0103201f14ec0eb4a771271ea247a5795
+Author: Camilo  Salguero Marín <36669483+CamiloSalgueroMarin@users.noreply.github.com>
+Date:   Thu Jul 16 01:21:03 2026 -0500
+
+    feat(ic-3-16): automate Email Alert senders + Fundraising CMDT sender (IM-1081) (#253)
+    
+    * feat(ic-3-16): automate Email Alert senders + Fundraising CMDT sender (IM-1081)
+    
+    Rework IC 3.16 (Org-Wide Email Address & Email Notifications) from "1 automated
+    step + handoffs" to 1 MANUAL handoff (OWEA create+verify) + 3 AUTOMATED steps.
+    
+    New reusable T3 op `workflowAlert` (catalog-declarative, zero per-IC code):
+    sets senderType=OrgWideEmailAddress + senderAddress on named Email Alerts and
+    appends recipients, via the synchronous CRUD Metadata API. Proven live on
+    CamiloDevOrg that a MANAGED WorkflowAlert is subscriber-configurable: adding a
+    user recipient to the managed Auctifera Error Log alert commits and reads back;
+    setting the OWEA sender passes managed-protection and reaches Salesforce's
+    "must be a verified Org Wide Email Address" validation. The OWEA is resolved
+    DYNAMICALLY from the OrgWideEmailAddress sObject by the operator-supplied
+    address/displayName (never hardcoded) and required verified, so part 4 depends
+    on the manual OWEA step; absent alerts and blank optional recipients are
+    tolerated.
+    
+    Spec v4 (case+template lockstep):
+    - step 1 MANUAL: create + verify the OWEA (external email round-trip — human).
+    - step 2 T3 customMetadata (allRecords): write the OWEA into the vnfp
+      Fundraising Settings sender field. Corrects the v3 "managed CMDT silently
+      no-ops" finding — that was the ASYNC Apex path; the SYNC CRUD Metadata API
+      commits it (proven live on both managed + unmanaged records).
+    - step 3 T3 workflowAlert: OWEA sender on the 21 runbook Email Alerts + admin
+      recipient on the Error Log alert.
+    - step 4 T6: POS Email Sender custom-setting (org-agnostic, verified live).
+    
+    Also extends resolve-ready-steps token substitution to the workflowAlert
+    sender/recipient fields. Tests: adapter op (sender/recipient/verify/tolerate/
+    idempotent), spec surface, resolver, handler validation, op-set lockstep.
+    
+    * fix(ic-3-16): workflowAlert tolerate-absent, input-gate parity, sender idempotency (IM-1081 review)
+    
+    Addresses PR #253 REQUEST_CHANGES (op-code + gate fixes; spec unchanged, stays v4).
+    
+    F1 (HIGH) — tolerate-absent now actually tolerates. An Email Alert absent across
+    [fullName, ...anyOf] previously pushed applied:false, which finish() counted as a
+    verify failure → the whole step (and case) FAILED on any org missing even one of
+    the 21 runbook alerts. Added a `skipped` flag to MetadataOpOutcome; finish() now
+    treats a skipped outcome as not-counting-against success/verified (nothing
+    configured, nothing failed). Genuine write/verify failures and the
+    unverified-OWEA refusal stay success:false.
+    
+    F2 (MEDIUM) — input-satisfaction gate parity. resolveWorkflowAlertTokens
+    substituted workflowAlert tokens, but requiredInputKeysForStep returned [] for
+    op!==customMetadata, so a workflowAlert-first/only case would run unblocked and
+    substituteTokensInString would THROW (Lambda crash) instead of parking
+    AWAITING_INPUT. Added discoverWorkflowAlertTokens (scans sender.address/
+    displayName + recipients' recipient/resolveUserByName, EXCLUDING optional
+    {{key?}} tokens) and wired it into requiredInputKeysForStep for workflowAlert.
+    
+    F3 (LOW) — sender write is now idempotent. The sender path set willWrite
+    unconditionally when targeted+resolved; a re-run re-issued metadata.update for
+    ~20 alerts. Now it compares before.senderType/senderAddress (normalizeScalar)
+    and only writes on drift, symmetric with the recipient `already` check.
+    
+    Tests: adapter (mixed absent+present => success + skipped; all-absent => success;
+    sender idempotency => no second write), templating (gate returns [orgWideEmail],
+    optional recipient excluded; discoverWorkflowAlertTokens unit). Full jest 1908
+    pass, tsc + eslint clean. Re-verified live by driving the compiled T3 adapter
+    against CamiloDevOrg: nonexistent alert => skipped + step success; second run =>
+    exactly 1 recipient (no duplicate); missing-OWEA sender => clean success:false.
+
+diff --git a/src/implementations/domain/model/tools/metadata-mutation-spec.ts b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+index 0ee00cc4..1628acf1 100644
+--- a/src/implementations/domain/model/tools/metadata-mutation-spec.ts
++++ b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+@@ -572,6 +572,141 @@ export interface WorkflowRuleSpec {
+     readonly set: readonly WorkflowRuleActiveTarget[];
+ }
+ 
++/**
++ * How the `workflowAlert` op resolves the Organization-Wide Email Address (OWEA)
++ * to set as an Email Alert's From sender — DYNAMICALLY against the live org,
++ * NEVER a hardcoded Id/address. The verified OWEA is looked up on the
++ * `OrgWideEmailAddress` sObject (SOQL) so the same catalog JSON works on every
++ * org: the operator supplies the address (or the display name they chose when
++ * creating the OWEA) and the op finds the matching row and uses its canonical
++ * `Address` as `senderAddress`.
++ */
++export interface WorkflowAlertSender {
++    /**
++     * OWEA email address (the verified From address). Matched case-insensitively
++     * against `OrgWideEmailAddress.Address`. At least one of `address` /
++     * `displayName` is required; `address` wins when both match different rows.
++     */
++    readonly address?: string;
++    /**
++     * OWEA display name (the "Museum Name" the operator typed when creating the
++     * address). Matched case-insensitively against `OrgWideEmailAddress.DisplayName`
++     * — used when `address` is absent, or as a fallback when the address matches
++     * no row.
++     */
++    readonly displayName?: string;
++    /**
++     * Require the resolved OWEA to be VERIFIED before it is set as a sender
++     * (default `true`). Salesforce refuses an unverified address as a From
++     * sender, so an unverified (or missing) match is reported as `applied=false`
++     * with a message directing the operator to finish the OWEA verification (the
++     * manual step this automation depends on) — never a throw.
++     */
++    readonly requireVerified?: boolean;
++}
++
++/**
++ * One recipient to ADD to an Email Alert's recipient list (the playbook's
++ * "add the Admin user to Selected Recipients"). A user recipient's value is
++ * org-specific (the admin Username differs per org), so it can be resolved
++ * DYNAMICALLY by the user's display Name instead of hardcoding a Username, or
++ * provided as a literal.
++ */
++export interface WorkflowAlertRecipientRef {
++    /**
++     * Recipient `type` forwarded verbatim to the Metadata API, e.g. `user`,
++     * `email`, `group`, `role`, `roleSubordinates`, `owner`. For `user` provide
++     * a `recipient` (Username) or `resolveUserByName`.
++     */
++    readonly type: string;
++    /**
++     * Literal recipient value: a Username for `type: 'user'`, an email address
++     * for `type: 'email'`, etc. When BOTH `recipient` and `resolveUserByName`
++     * are blank the recipient is SKIPPED (an operator left an optional input
++     * empty), so it never fails the step. Mutually exclusive with
++     * `resolveUserByName` (the latter wins when both are set).
++     */
++    readonly recipient?: string;
++    /**
++     * For `type: 'user'` only — resolve the Username at run time by the User's
++     * display `Name` (case-insensitive; must match exactly one ACTIVE user).
++     * Preferred over a hardcoded `recipient` Username (which is org-specific). An
++     * unresolved / ambiguous name is `applied=false` (never a throw).
++     */
++    readonly resolveUserByName?: string;
++}
++
++/** One Email Alert (`WorkflowAlert`) to configure. */
++export interface WorkflowAlertEnsure {
++    /**
++     * WorkflowAlert metadata fullName, `<Object>.<AlertDeveloperName>`. MANAGED
++     * alerts carry the package namespace on BOTH halves, e.g.
++     * `Auctifera__Log__c.Auctifera__Error_Log_Email_Alert` — pass it EXACTLY as
++     * `ListMetadata` reports it. This is the canonical candidate; add cross-
++     * version / cross-package name-drift alternatives in `anyOf`.
++     */
++    readonly fullName: string;
++    /**
++     * Extra candidate fullNames tried IN ORDER after `fullName`; the FIRST that
++     * exists in the org is the one configured. Absent across every candidate is a
++     * tolerated `applied=false` (the ~20 named alerts vary by installed package
++     * set — an org without a package simply lacks its alerts).
++     */
++    readonly anyOf?: readonly string[];
++    /**
++     * Skip setting the shared `sender` on this alert (default `false` — the
++     * shared sender IS applied). Use for an alert that should only receive
++     * `addRecipients`.
++     */
++    readonly skipSender?: boolean;
++    /**
++     * Recipients to ADD to this alert (idempotent — an already-present recipient
++     * is left as-is; existing recipients are never removed). Optional; omit for a
++     * sender-only entry.
++     */
++    readonly addRecipients?: readonly WorkflowAlertRecipientRef[];
++}
++
++/**
++ * Configure Salesforce **Email Alerts** (`WorkflowAlert`) via the synchronous
++ * CRUD Metadata API: for each alert read the component → set the OWEA From
++ * sender (`senderType='OrgWideEmailAddress'` + `senderAddress`) and/or append
++ * recipients → write the full component back → re-read and assert.
++ *
++ * **Subscribers CAN configure MANAGED Email Alerts this way** (proven live on
++ * CamiloDevOrg under IM-1081: adding a user recipient to the managed
++ * `Auctifera__Log__c.Auctifera__Error_Log_Email_Alert` committed and read back;
++ * setting `senderType=OrgWideEmailAddress` on the same managed alert passed
++ * managed-protection and reached Salesforce's "must be a verified OWEA" field
++ * validation). This is the Email-Alert counterpart to the managed-WorkflowRule
++ * toggle proven under IM-924 — anonymous Apex CANNOT touch a WorkflowAlert
++ * (there is no DML on the metadata sObject), so the Metadata API is the only
++ * programmatic path.
++ *
++ * **OWEA dependency + dynamic resolution.** Setting an OWEA sender REQUIRES the
++ * address to already exist AND be VERIFIED (an out-of-band email round-trip only
++ * a human can complete — the case's manual OWEA step). So this op runs AFTER
++ * that manual step and resolves the OWEA DYNAMICALLY from the live
++ * `OrgWideEmailAddress` sObject by the operator-supplied `address`/`displayName`
++ * — never a hardcoded Id/address. A missing or unverified OWEA is a clean
++ * `applied=false` (directs the operator to finish verification), never a throw.
++ *
++ * Idempotent + drift-tolerant: an alert already carrying the sender / recipient
++ * re-writes the same value and still verifies; an alert absent across every
++ * `anyOf` candidate is a tolerated `applied=false`; a write that doesn't verify
++ * is `success=false`, never a throw (rules §6).
++ */
++export interface WorkflowAlertSpec {
++    readonly op: 'workflowAlert';
++    /** Email Alerts to configure, in order. At least one required. */
++    readonly ensure: readonly WorkflowAlertEnsure[];
++    /**
++     * OWEA From sender applied to every `ensure` entry (unless `skipSender`).
++     * Omit for a recipients-only op. Resolved dynamically against the org.
++     */
++    readonly sender?: WorkflowAlertSender;
++}
++
+ /** A duplicate-detection operation a DuplicateRule may take on insert/update. */
+ export type DuplicateRuleOperation = 'Allow' | 'Alert' | 'Block' | 'Report';
+ 
+@@ -979,6 +1114,7 @@ export type MetadataMutationSpec =
+     | SettingsSpec
+     | OrganizationSettingsSpec
+     | WorkflowRuleSpec
++    | WorkflowAlertSpec
+     | DuplicateRuleSpec
+     | ValidationRuleSpec
+     | AppNavItemsSpec
+@@ -999,6 +1135,7 @@ export const METADATA_MUTATION_OPS = [
+     'settings',
+     'organizationSettings',
+     'workflowRule',
++    'workflowAlert',
+     'duplicateRule',
+     'validationRule',
+     'appNavItems',
+@@ -1073,6 +1210,11 @@ export const isWorkflowRuleSpec = (
+     spec: MetadataMutationSpec,
+ ): spec is WorkflowRuleSpec => spec.op === 'workflowRule';
+ 
++/** Narrow a spec to the workflowAlert variant. */
++export const isWorkflowAlertSpec = (
++    spec: MetadataMutationSpec,
++): spec is WorkflowAlertSpec => spec.op === 'workflowAlert';
++
+ /** Narrow a spec to the duplicateRule variant. */
+ export const isDuplicateRuleSpec = (
+     spec: MetadataMutationSpec,
+diff --git a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+index ccbfc109..8ceb8d58 100644
+--- a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
++++ b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+@@ -29,6 +29,9 @@ import type {
+     SettingsSpec,
+     StandardValueSetSpec,
+     ValidationRuleSpec,
++    WorkflowAlertRecipientRef,
++    WorkflowAlertSender,
++    WorkflowAlertSpec,
+     WorkflowRuleSpec,
+ } from '@/implementations/domain/model/tools/metadata-mutation-spec';
+ import { isBusinessProcessDiscovery } from '@/implementations/domain/model/tools/metadata-mutation-spec';
+@@ -53,6 +56,7 @@ import type {
+     SaveResult,
+     StandardValueSet,
+     ValidationRule,
++    WorkflowAlert,
+     WorkflowRule,
+ } from 'jsforce/lib/api/metadata/schema';
+ 
+@@ -80,6 +84,7 @@ type T3ComponentType =
+     | 'PermissionSet'
+     | `${string}Settings`
+     | 'WorkflowRule'
++    | 'WorkflowAlert'
+     | 'DuplicateRule'
+     | 'ValidationRule'
+     | 'CustomApplication'
+@@ -116,6 +121,27 @@ interface WorkflowRuleView {
+     active?: boolean | string;
+ }
+ 
++/**
++ * Narrow read/write VIEWS of a WorkflowAlert (Email Alert) component (same
++ * `Metadata`-index-signature reason as the WorkflowRule view). The
++ * `workflowAlert` op only sets the OWEA sender (`senderType`/`senderAddress`)
++ * and appends `recipients`; everything else (`template`, `ccEmails`,
++ * `description`, `protected`) round-trips untouched from the read. The jsforce
++ * type is restored with a single cast at the `metadata.update` boundary.
++ */
++interface WorkflowEmailRecipientView {
++    field?: string | null;
++    recipient?: string | null;
++    type?: string | null;
++}
++
++interface WorkflowAlertView {
++    fullName?: string | null;
++    senderType?: string | null;
++    senderAddress?: string | null;
++    recipients?: WorkflowEmailRecipientView[] | WorkflowEmailRecipientView;
++}
++
+ /**
+  * Narrow read/write VIEW of a ValidationRule (see the WorkflowRuleView note):
+  * the `validationRule` op only flips `active` and round-trips the rest of the
+@@ -346,6 +372,8 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 return this.applyOrganizationSettings(orgId, conn, spec);
+             case 'workflowRule':
+                 return this.applyWorkflowRule(orgId, conn, spec);
++            case 'workflowAlert':
++                return this.applyWorkflowAlert(orgId, conn, spec);
+             case 'duplicateRule':
+                 return this.applyDuplicateRule(orgId, conn, spec);
+             case 'validationRule':
+@@ -3401,6 +3429,464 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+         );
+     }
+ 
++    /* ------------------------------ workflowAlert -------------------------- */
++
++    private async applyWorkflowAlert(
++        orgId: string,
++        conn: MetadataConn,
++        spec: WorkflowAlertSpec,
++    ): Promise<MetadataMutationResult> {
++        // See applyWorkflowRule: probe an `as unknown` copy so `Array.isArray`
++        // doesn't narrow the readonly `spec.ensure` to `any[]`.
++        if (
++            !Array.isArray(spec.ensure as unknown) ||
++            spec.ensure.length === 0
++        ) {
++            throw new MetadataDeployError(
++                orgId,
++                'MALFORMED_REQUEST',
++                'T3 workflowAlert has an empty ensure list.',
++            );
++        }
++        spec.ensure.forEach((e) =>
++            this.requireNonBlank(orgId, e.fullName, 'workflowAlert fullName'),
++        );
++        const dataConn = conn as unknown as DataConn;
++        this.logger.log({
++            action: 't3.workflowAlert',
++            orgId,
++            count: spec.ensure.length,
++            withSender: spec.sender !== undefined,
++        });
++
++        // 1. Resolve the OWEA sender ONCE (dynamic; never hardcoded). A missing
++        //    / unverified OWEA is a per-op refusal reused for every
++        //    sender-bearing entry — each such entry reports applied=false with
++        //    this reason (never a throw).
++        const senderResolution = spec.sender
++            ? await this.resolveOrgWideSender(orgId, dataConn, spec.sender)
++            : null;
++
++        const operations: MetadataOpOutcome[] = [];
++        for (const entry of spec.ensure) {
++            // a. Resolve the alert fullName across [fullName, ...anyOf] — the
++            //    first candidate present in the org wins (drift tolerant).
++            const candidates = [entry.fullName, ...(entry.anyOf ?? [])];
++            let fullName: string | null = null;
++            let before: WorkflowAlertView | null = null;
++            for (const cand of candidates) {
++                const read = await this.readOptional<WorkflowAlertView>(
++                    orgId,
++                    conn,
++                    'WorkflowAlert',
++                    cand,
++                );
++                if (read) {
++                    fullName = cand;
++                    before = read;
++                    break;
++                }
++            }
++            if (!before || !fullName) {
++                // Tolerated absence: the ~21 runbook alerts span Auctifera / npsp
++                // / vnfp and not every package is installed on every org. A
++                // missing alert must NOT fail the step (nothing to configure) —
++                // mark it `skipped` so `finish()` ignores it, distinct from a
++                // genuine write/verify failure.
++                operations.push({
++                    op: 'workflowAlert',
++                    subject: entry.fullName,
++                    applied: false,
++                    skipped: true,
++                    detail: `email alert ${candidates.join(' / ')} not present in the org — skipped (tolerated)`,
++                });
++                continue;
++            }
++
++            const next = normalizeForWrite(clone(before)) as WorkflowAlertView;
++            const senderTargeted =
++                spec.sender !== undefined && entry.skipSender !== true;
++            let willWrite = false;
++            let senderErr: string | null = null;
++
++            // b. Sender — set only when the OWEA resolved OK; otherwise record
++            //    the refusal reason and leave the alert's current sender as-is.
++            //    Idempotent: only mark a write when the sender actually DRIFTS,
++            //    so a re-run does not re-issue metadata.update for every alert.
++            if (senderTargeted) {
++                if (senderResolution && 'address' in senderResolution) {
++                    const alreadySet =
++                        normalizeScalar(before.senderType) ===
++                            normalizeScalar('OrgWideEmailAddress') &&
++                        normalizeScalar(before.senderAddress) ===
++                            normalizeScalar(senderResolution.address);
++                    next.senderType = 'OrgWideEmailAddress';
++                    next.senderAddress = senderResolution.address;
++                    if (!alreadySet) willWrite = true;
++                } else {
++                    senderErr =
++                        senderResolution?.detail ?? 'no OWEA sender resolved';
++                }
++            }
++
++            // c. Recipients — resolve each, append the ones not already present.
++            const existing = asArray<WorkflowEmailRecipientView>(
++                next.recipients,
++            );
++            const merged: WorkflowEmailRecipientView[] = [...existing];
++            const recipientPlans: Array<{
++                subject: string;
++                wanted: { type: string; recipient?: string } | null;
++                detail: string | null;
++            }> = [];
++            for (const ref of entry.addRecipients ?? []) {
++                const resolved = await this.resolveWorkflowRecipient(
++                    orgId,
++                    dataConn,
++                    ref,
++                );
++                if (resolved.kind === 'skip') continue;
++                const subject = `${fullName} recipient ${resolved.label}`;
++                if (resolved.kind === 'fail') {
++                    recipientPlans.push({
++                        subject,
++                        wanted: null,
++                        detail: resolved.detail,
++                    });
++                    continue;
++                }
++                const already = merged.some(
++                    (r) =>
++                        (r.type ?? '') === resolved.value.type &&
++                        (r.recipient ?? '') ===
++                            (resolved.value.recipient ?? ''),
++                );
++                if (!already) {
++                    merged.push(resolved.value);
++                    willWrite = true;
++                }
++                recipientPlans.push({
++                    subject,
++                    wanted: resolved.value,
++                    detail: null,
++                });
++            }
++            if ((entry.addRecipients?.length ?? 0) > 0) {
++                next.recipients = merged;
++            }
++
++            // d. Write once (only when something actually changed).
++            if (willWrite) {
++                const save = await this.write(
++                    orgId,
++                    conn,
++                    'WorkflowAlert',
++                    next,
++                    () =>
++                        conn.metadata.update(
++                            'WorkflowAlert',
++                            next as unknown as WorkflowAlert,
++                        ),
++                );
++                if (coerceBoolean(save?.success) !== true) {
++                    const err =
++                        joinErrors(save) ??
++                        'metadata write reported success=false with no error detail.';
++                    if (senderTargeted) {
++                        operations.push({
++                            op: 'workflowAlert',
++                            subject: `${fullName} sender`,
++                            applied: false,
++                            detail: senderErr ?? err,
++                        });
++                    }
++                    for (const rp of recipientPlans) {
++                        operations.push({
++                            op: 'workflowAlert',
++                            subject: rp.subject,
++                            applied: false,
++                            detail: rp.detail ?? err,
++                        });
++                    }
++                    continue;
++                }
++            }
++
++            // e. Read back and verify each aspect.
++            const after = willWrite
++                ? await this.readOptional<WorkflowAlertView>(
++                      orgId,
++                      conn,
++                      'WorkflowAlert',
++                      fullName,
++                  )
++                : before;
++
++            if (senderTargeted) {
++                if (senderResolution && 'address' in senderResolution) {
++                    const okSender =
++                        !!after &&
++                        (after.senderType ?? '') === 'OrgWideEmailAddress' &&
++                        normalizeScalar(after.senderAddress) ===
++                            normalizeScalar(senderResolution.address);
++                    operations.push({
++                        op: 'workflowAlert',
++                        subject: `${fullName} sender`,
++                        applied: okSender,
++                        detail: okSender
++                            ? null
++                            : `sender not set to ${senderResolution.address} after write (senderType=${String(
++                                  after?.senderType,
++                              )}, senderAddress=${String(after?.senderAddress)})`,
++                    });
++                } else {
++                    operations.push({
++                        op: 'workflowAlert',
++                        subject: `${fullName} sender`,
++                        applied: false,
++                        detail: senderErr,
++                    });
++                }
++            }
++
++            const afterRecips = asArray<WorkflowEmailRecipientView>(
++                after?.recipients,
++            );
++            for (const rp of recipientPlans) {
++                if (rp.detail !== null || rp.wanted === null) {
++                    operations.push({
++                        op: 'workflowAlert',
++                        subject: rp.subject,
++                        applied: false,
++                        detail: rp.detail,
++                    });
++                    continue;
++                }
++                const present = afterRecips.some(
++                    (r) =>
++                        (r.type ?? '') === rp.wanted?.type &&
++                        (r.recipient ?? '') === (rp.wanted?.recipient ?? ''),
++                );
++                operations.push({
++                    op: 'workflowAlert',
++                    subject: rp.subject,
++                    applied: present,
++                    detail: present
++                        ? null
++                        : `recipient not present on ${fullName} after write`,
++                });
++            }
++        }
++
++        return finish(
++            spec.ensure.map((e) => e.fullName).join(', '),
++            operations,
++            this.logger,
++            { action: 't3.workflowAlert.done', orgId },
++        );
++    }
++
++    /**
++     * Resolve the OWEA to use as an Email Alert sender against the live org.
++     * Never hardcodes an Id/address: SOQLs `OrgWideEmailAddress` by the
++     * operator-supplied address (preferred) / display name and requires the
++     * match be verified (unless `requireVerified:false`). Returns the canonical
++     * `Address` on success, or a `detail` refusal (used as the applied=false
++     * note on every sender-bearing alert) when missing/unverified.
++     */
++    private async resolveOrgWideSender(
++        orgId: string,
++        dataConn: DataConn,
++        sender: WorkflowAlertSender,
++    ): Promise<{ address: string } | { detail: string }> {
++        const requireVerified = sender.requireVerified !== false;
++        const address =
++            typeof sender.address === 'string' ? sender.address.trim() : '';
++        const displayName =
++            typeof sender.displayName === 'string'
++                ? sender.displayName.trim()
++                : '';
++        if (address === '' && displayName === '') {
++            throw new MetadataDeployError(
++                orgId,
++                'MALFORMED_REQUEST',
++                'T3 workflowAlert sender requires an address or displayName.',
++            );
++        }
++        const clauses: string[] = [];
++        if (address !== '') {
++            clauses.push(`Address = '${escapeSoqlLiteral(address)}'`);
++        }
++        if (displayName !== '') {
++            clauses.push(`DisplayName = '${escapeSoqlLiteral(displayName)}'`);
++        }
++        let rows: Array<Record<string, unknown>>;
++        try {
++            const res = await dataConn.query(
++                `SELECT Id, Address, DisplayName, IsVerified FROM OrgWideEmailAddress WHERE ${clauses.join(
++                    ' OR ',
++                )}`,
++            );
++            rows = res.records ?? [];
++        } catch (cause) {
++            if (SOQL_SPEC_ERROR_CODES.has(jsforceErrorCode(cause) ?? '')) {
++                return {
++                    detail: `OWEA lookup rejected by Salesforce (${jsforceErrorCode(
++                        cause,
++                    )}): ${cause instanceof Error ? cause.message : String(cause)}`,
++                };
++            }
++            throw new MetadataDeployError(
++                orgId,
++                classifyJsforceError(cause),
++                `T3 workflowAlert OWEA lookup failed: ${
++                    cause instanceof Error ? cause.message : String(cause)
++                }`,
++                cause,
++            );
++        }
++        const byAddress =
++            address !== ''
++                ? rows.find(
++                      (r) =>
++                          normalizeScalar(r.Address) ===
++                          normalizeScalar(address),
++                  )
++                : undefined;
++        const byDisplay =
++            displayName !== ''
++                ? rows.find(
++                      (r) =>
++                          normalizeScalar(r.DisplayName) ===
++                          normalizeScalar(displayName),
++                  )
++                : undefined;
++        const chosen = byAddress ?? byDisplay ?? rows[0];
++        if (!chosen) {
++            const by =
++                address !== ''
++                    ? `address ${address}`
++                    : `display name ${displayName}`;
++            return {
++                detail: `no Organization-Wide Email Address found by ${by} — create + verify it first (the manual OWEA step).`,
++            };
++        }
++        const chosenAddress =
++            typeof chosen.Address === 'string' ? chosen.Address.trim() : '';
++        if (chosenAddress === '') {
++            return { detail: 'the resolved OWEA row has no Address.' };
++        }
++        if (requireVerified && coerceBoolean(chosen.IsVerified) !== true) {
++            return {
++                detail: `Organization-Wide Email Address ${chosenAddress} exists but is NOT verified — finish the verification email round-trip (the manual OWEA step) before it can be a sender.`,
++            };
++        }
++        return { address: chosenAddress };
++    }
++
++    /**
++     * Resolve one Email-Alert recipient. A `user` recipient can be resolved
++     * dynamically by the User's display Name (org-agnostic — the Username
++     * differs per org) or given literally; when BOTH are blank the recipient is
++     * SKIPPED (an operator left an optional input empty), so it never fails the
++     * step.
++     */
++    private async resolveWorkflowRecipient(
++        orgId: string,
++        dataConn: DataConn,
++        ref: WorkflowAlertRecipientRef,
++    ): Promise<
++        | {
++              kind: 'ok';
++              value: { type: string; recipient?: string };
++              label: string;
++          }
++        | { kind: 'skip' }
++        | { kind: 'fail'; label: string; detail: string }
++    > {
++        const type = typeof ref.type === 'string' ? ref.type.trim() : '';
++        if (type === '') {
++            throw new MetadataDeployError(
++                orgId,
++                'MALFORMED_REQUEST',
++                'T3 workflowAlert recipient requires a type.',
++            );
++        }
++        const byName =
++            typeof ref.resolveUserByName === 'string'
++                ? ref.resolveUserByName.trim()
++                : '';
++        const literal =
++            typeof ref.recipient === 'string' ? ref.recipient.trim() : '';
++        if (byName !== '') {
++            let rows: Array<Record<string, unknown>>;
++            try {
++                const res = await dataConn.query(
++                    `SELECT Username, Name FROM User WHERE IsActive = true AND Name = '${escapeSoqlLiteral(
++                        byName,
++                    )}'`,
++                );
++                rows = res.records ?? [];
++            } catch (cause) {
++                if (SOQL_SPEC_ERROR_CODES.has(jsforceErrorCode(cause) ?? '')) {
++                    return {
++                        kind: 'fail',
++                        label: `${type}:${byName}`,
++                        detail: `user lookup rejected by Salesforce (${jsforceErrorCode(
++                            cause,
++                        )})`,
++                    };
++                }
++                throw new MetadataDeployError(
++                    orgId,
++                    classifyJsforceError(cause),
++                    `T3 workflowAlert user lookup failed: ${
++                        cause instanceof Error ? cause.message : String(cause)
++                    }`,
++                    cause,
++                );
++            }
++            if (rows.length === 0) {
++                return {
++                    kind: 'fail',
++                    label: `${type}:${byName}`,
++                    detail: `no active user named "${byName}"`,
++                };
++            }
++            if (rows.length > 1) {
++                return {
++                    kind: 'fail',
++                    label: `${type}:${byName}`,
++                    detail: `user name "${byName}" is ambiguous (${rows.length} active matches)`,
++                };
++            }
++            const username =
++                typeof rows[0].Username === 'string'
++                    ? rows[0].Username.trim()
++                    : '';
++            if (username === '') {
++                return {
++                    kind: 'fail',
++                    label: `${type}:${byName}`,
++                    detail: 'the resolved user has no Username',
++                };
++            }
++            return {
++                kind: 'ok',
++                value: { type, recipient: username },
++                label: `${type}:${byName}`,
++            };
++        }
++        if (literal !== '') {
++            return {
++                kind: 'ok',
++                value: { type, recipient: literal },
++                label: `${type}:${literal}`,
++            };
++        }
++        return { kind: 'skip' };
++    }
++
+     /* ----------------------------- validationRule -------------------------- */
+ 
+     private async applyValidationRule(
+@@ -4786,7 +5272,11 @@ const finish = (
+     logger: Logger,
+     logContext: Record<string, unknown>,
+ ): MetadataMutationResult => {
+-    const verified = operations.every((o) => o.applied);
++    // A `skipped` outcome (tolerated absence — e.g. a workflowAlert whose
++    // package is not installed) does NOT count against verify: nothing was
++    // configured, but nothing failed. Only genuine `applied:false` (write /
++    // verify failure, unresolved sender) fails the step.
++    const verified = operations.every((o) => o.applied || o.skipped === true);
+     logger.log({ ...logContext, target, verified });
+     return {
+         success: verified,
+@@ -4796,8 +5286,8 @@ const finish = (
+         operations,
+         errorMessage: verified
+             ? null
+-            : (operations.find((o) => !o.applied)?.detail ??
+-              'Metadata mutation verify failed.'),
++            : (operations.find((o) => !o.applied && o.skipped !== true)
++                  ?.detail ?? 'Metadata mutation verify failed.'),
+     };
+ };
+ 

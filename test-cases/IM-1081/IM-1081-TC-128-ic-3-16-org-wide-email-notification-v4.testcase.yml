@@ -1,0 +1,239 @@
+schemaVersion: "1.0"
+
+id: "c0dd92d1-d9a1-45e9-b18a-ef1580299943"
+key: "TC-128"
+title: "IM-1081 IC 3.16 Org-Wide Email Address & Email Notification (v3→v4, medium-confidence) — validate the upgrade from 1 auto + handoffs to 1 MANUAL + 3 AUTOMATED steps, driven by a GENUINELY-NEW T3 workflowAlert op (senders on ~21 Email Alerts + Error Log recipient) plus reused customMetadata allRecords (Fundraising Settings sender) + T6 (POS) · CODE PR with a genuinely-new op"
+description: |
+  Cobertura QA para IM-1081 (Historia, priority Medium/medium-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1133 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch D (decision & verify). IC 3.16 pasa de _1 automated step + handoffs_
+    a _1 MANUAL handoff + 3 AUTOMATED steps_. Tier Medium (caveat: cross-test en Tucson quedó NORESULT/transport;
+    scope entregado = CamiloDevOrg only, Tucson out of scope).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#253` (**MERGED**).
+    Branch: `task/ic-3-16-org-wide-email-IM-1081`. Merge commit `545e2cb0` (base `adcef7d2` = IM-1080 #252).
+    13 files, +1706/-27.
+  - **CODE PR con 1 op GENUINELY-NEW** (a diferencia de los spikes spec-only): #253 introduce el op T3
+    `workflowAlert` (adapter +493/-3, domain model +142) + infra de soporte (operator-input-templating +50,
+    resolve-ready-steps handler +60 para el orden secuencial manual→automated, metadata-mutation-result +10) +
+    el spec IC 3.16 v3→v4. Este PR es el ORIGEN del op workflowAlert que IM-1086/#258 (IC 5.2) luego reutilizó.
+
+  Op nuevo (T3 workflowAlert): configura Email Alerts (WorkflowAlert) vía sync CRUD Metadata API — read →
+  set OWEA From sender (senderType=OrgWideEmailAddress + senderAddress) y/o append recipients → write → re-read + assert.
+  - OWEA resuelto DINÁMICAMENTE del sObject OrgWideEmailAddress por address/displayName (nunca Id/address hardcodeado);
+    requireVerified default true → un OWEA no verificado/ausente = applied=false con mensaje (nunca throw).
+  - `ensure[{fullName, anyOf?, skipSender?, addRecipients?}]`: anyOf drift-tolerant (primer fullName existente gana);
+    tolerate-absent (un org sin un package simplemente no tiene sus alerts); idempotente; NO toca alerts client-custom.
+  - Recipients: resolveUserByName (por display Name, exactamente 1 user activo) o Username literal; valor opcional en
+    blanco se SKIPea (no falla el step); add idempotente (no remueve existentes).
+
+  IC 3.16 v4 (feasibility hybrid, 4 steps):
+  - Step 1 (MANUAL): crear & verificar el OWEA (round-trip de email externo — solo un humano hace click al link).
+  - Step 2 (AUTOMATED T3 customMetadata, allRecords, op REUSADO): setea vnfp__Emails_Sender_Address__c en TODOS los
+    Fundraising Settings records vía sync CRUD Metadata API; commitea + read-back en managed (vnfp__Default) y unmanaged
+    (Default). Corrige el hallazgo v3 (el no-op era el path async Apex, NO el sync CRUD).
+  - Step 3 (AUTOMATED T3 workflowAlert, op NUEVO): setea el OWEA sender en los ~21 Email Alerts nombrados
+    (Veevart/NPSP) + agrega el admin al Error Log recipient.
+  - Step 4 (AUTOMATED T6, op REUSADO): setea Auctifera__Emails_Sender_Address__c en el org-default
+    Auctifera__POS_Settings__c (upsert + SOQL read-back), org-agnóstico ({{orgWideEmail}} token).
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR genuinely-new op): clone en merge `545e2cb0`, correr
+    el adapter/handler/domain `.spec.ts` (incl. los tests de workflowAlert) + el lockstep de 3.16 + gates;
+    re-derivar el conteo del dev (jest full suite).
+  - **genuinely-new audit**: probar con `git grep -c` que workflowAlert = 0 en base `adcef7d2` y >0 en merge
+    `545e2cb0` (adapter + domain model) → op GENUINELY-NEW; y que customMetadata allRecords / T6 ya existen (reused).
+  - **adapter code review independiente**: leer el diff del handler workflowAlert por cuenta propia — dynamic OWEA
+    resolution, requireVerified→applied=false (no throw), anyOf/tolerate-absent, add-recipient idempotente, read-back.
+  - **spec fidelity independiente**: parsear el spec v4 (4 steps + el ensure de 21 alerts) por cuenta propia.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven; el sender commit
+    full-green no se puede demostrar sin verificar un OWEA real vía mailbox externo — dependencia manual inherente) y
+    el v4 NO está seeded a MigrationApp-dev (seed PENDING-CREDS, AWS SSO expirado). Live = dev-proven/PENDING-CREDS,
+    no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Tucson NORESULT (transport)**: el cross-test en Tucson quedó inconcluso; scope entregado = CamiloDevOrg only.
+    Documentado; no bloquea el delivery (el op es org-agnóstico).
+  - **OWEA verified es dependencia manual inherente**: el sender commit full-green requiere un OWEA verificado (click en
+    mailbox externo) — por eso step 1 queda MANUAL y el probe muestra applied=false controlado hasta verificar.
+  - **Seed PENDING-CREDS**: v4 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código (el op nuevo tiene unit tests directos en el adapter spec).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `545e2cb0` y base `adcef7d2` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR genuinely-new op: evidencia primaria por código, incl. adapter unit tests)."
+  - "Node + jq/python3 para parsear el spec v4 y leer el diff del adapter/domain model/handler independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven; sender full-green depende de un OWEA verificado, manual) y el v4 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Big win — set the org-wide email as sender on the ~21 managed Email Alerts — step 3 (NEW T3 workflowAlert) sets senderType=OrgWideEmailAddress + senderAddress on the ~21 named Veevart/NPSP alerts, resolves the OWEA dynamically from the OrgWideEmailAddress object (never hardcoded), verifies each by read-back, tolerates an absent alert, and does NOT touch client-custom alerts"
+    tags:
+      - ac-1
+      - upgrade
+      - genuinely-new-op
+      - workflow-alert
+      - dynamic-resolution
+      - tolerate-absent
+      - read-back-verify
+      - im-1081
+      - im-735
+    given:
+      - "el spec `ic-3-16-org-wide-email.json` v4 en merge `545e2cb0` y el nuevo handler applyWorkflowAlert"
+    when:
+      - "se parsea el step 3 (ensure=21 alerts) + se lee el código del op nuevo"
+    then:
+      - "step 3 es AUTOMATED, toolName=T3, op=workflowAlert; setea senderType=OrgWideEmailAddress + senderAddress=<address resuelto> en los ~21 alerts nombrados del runbook"
+      - "el OWEA se resuelve dinámicamente del sObject OrgWideEmailAddress por address/displayName (nunca Id/address hardcodeado); cada alert se verifica por metadata read-back"
+      - "un alert ausente (package no instalado) se tolera vía anyOf/tolerate-absent (applied=false, no falla); solo se tocan los alerts exactos del runbook (client-custom NO se tocan)"
+
+  - title: "AC2 · WorkflowAlert sender writability probe (managed component) — setting the OWEA sender via the synchronous CRUD Metadata API passes managed-package protection and reaches Salesforce's field validation; it succeeds only once the referenced OWEA is verified, and an unverified/missing address yields a clean applied=false (finish verification first), never a crash"
+    tags:
+      - ac-2
+      - probe-finding
+      - workflow-alert
+      - managed-writability
+      - require-verified
+      - refusal-evidence
+      - im-1081
+    given:
+      - "el probe live documentado (CamiloDevOrg) y la lógica requireVerified en el handler"
+    when:
+      - "se revisa la lógica del sender write y su gate de verificación"
+    then:
+      - "el write del sender en el managed Auctifera Error Log alert pasa la managed-protection y llega a la validación de negocio de SF ('must specify a verified Org Wide Email Address')"
+      - "tiene éxito solo cuando el OWEA referenciado está verificado; requireVerified default true"
+      - "un OWEA no verificado/ausente devuelve applied=false con mensaje (terminar la verificación primero), NUNCA un throw/crash"
+
+  - title: "AC3 · Error Log recipient — add the admin user — step 3 adds the admin user (resolveUserByName or literal Username) to the Error Log Email Alert's recipients and reads it back; a blank optional input simply skips the recipient (does not fail the step); the add is idempotent and never removes existing recipients"
+    tags:
+      - ac-3
+      - workflow-alert
+      - add-recipient
+      - resolve-user-by-name
+      - optional-skip
+      - idempotency
+      - im-1081
+    given:
+      - "el addRecipients del step 3 y la lógica WorkflowAlertRecipientRef"
+    when:
+      - "se lee la resolución de recipient y su manejo de blank/idempotencia"
+    then:
+      - "agrega el admin user (resolveUserByName por display Name = exactamente 1 user activo, o Username literal) a los recipients del Error Log alert y lo lee de vuelta"
+      - "un input opcional en blanco SKIPea el recipient (no falla el step); un nombre no resuelto/ambiguo = applied=false (no throw)"
+      - "el add es idempotente (recipient ya presente se deja as-is; los existentes nunca se remueven) — dev-proven live: commit + read-back"
+
+  - title: "AC4 · Fundraising Settings sender (managed CMDT) is now AUTOMATED — step 2 (reused T3 customMetadata, allRecords) writes vnfp__Emails_Sender_Address__c on every Fundraising Settings record via the synchronous CRUD Metadata API; the value COMMITS and reads back on managed (vnfp__Default) and unmanaged (Default) records, correcting the v3 finding (which was the async Apex deploy path, not sync CRUD)"
+    tags:
+      - ac-4
+      - reused-op
+      - custom-metadata
+      - all-records
+      - managed-cmdt
+      - v3-correction
+      - im-1081
+    given:
+      - "el step 2 (T3 customMetadata, allRecords) del spec v4"
+    when:
+      - "se parsea el step 2 y su op"
+    then:
+      - "step 2 es AUTOMATED, toolName=T3, op=customMetadata, type=vnfp__Fundraising_Settings, allRecords=true → escribe vnfp__Emails_Sender_Address__c en TODOS los records"
+      - "el valor COMMITEA y read-back en managed (vnfp__Default) y unmanaged (Default) — dev-proven live en CamiloDevOrg"
+      - "corrige el hallazgo v3 (el no-op era el path async Apex deploy, no el sync CRUD Metadata API); op REUSADO (customMetadata allRecords ya existe en base adcef7d2)"
+
+  - title: "AC5 · POS Email Sender is org-agnostic and works live — step 4 (reused T6) sets Auctifera__Emails_Sender_Address__c on the org-default Auctifera__POS_Settings__c to the operator-provided verified org-wide email (upsert) and verifies by SOQL read-back; the address is the operator input ({{orgWideEmail}} token), never hardcoded"
+    tags:
+      - ac-5
+      - reused-op
+      - t6-custom-setting
+      - pos-settings
+      - operator-input-token
+      - im-1081
+    given:
+      - "el step 4 (T6) del spec v4 y el operator-input-templating ({{orgWideEmail}})"
+    when:
+      - "se parsea el step 4 y su token de operator input"
+    then:
+      - "step 4 es AUTOMATED T6: setea Auctifera__Emails_Sender_Address__c en el org-default Auctifera__POS_Settings__c al org-wide email verificado (upsert)"
+      - "verifica por SOQL read-back; la address es el operator input ({{orgWideEmail}} token resuelto por operator-input-templating), nunca hardcodeada"
+      - "org-agnóstico + working live en CamiloDevOrg (T6 kept desde v3, op REUSADO)"
+
+  - title: "AC6 · Create + verify the OWEA stays MANUAL (sequential) — step 1 is a MANUAL handoff with a one-line description and a structured guide, and the later automated steps (2/3/4) run only after this handoff is attested (sequential by order via resolve-ready-steps)"
+    tags:
+      - ac-6
+      - manual
+      - manual-handoff
+      - sequential-ordering
+      - resolve-ready-steps
+      - im-1081
+    given:
+      - "el step 1 (MANUAL) del spec v4 y el handler resolve-ready-steps"
+    when:
+      - "se parsea el step 1 + se revisa el orden secuencial"
+    then:
+      - "step 1 es MANUAL: crear & verificar el OWEA (one-line description + guide estructurada); requiere un round-trip de email externo (solo un humano hace click al link de verificación)"
+      - "los steps automatizados 2/3/4 corren SOLO después de que el handoff del step 1 es attestado (secuencial by order — resolve-ready-steps handler)"
+      - "queda MANUAL por la dependencia inherente (verificar un OWEA no es automatizable)"
+
+  - title: "Engineering gates + genuinely-new op audit + spec/version lockstep — jest (full) / tsc --noEmit / eslint on touched files pass; the T3 workflowAlert op is proven GENUINELY-NEW (git grep 0 in base adcef7d2 → >0 in merge 545e2cb0, adapter + domain model) while customMetadata allRecords + T6 are reused; case.version and template.version are equal (v4), asserted by a test"
+    tags:
+      - ac-7
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - genuinely-new-op
+      - reused-ops
+      - version-lockstep
+      - adapter-code-review
+      - scope-fit
+      - im-1081
+    given:
+      - "clone local de MigrationAppBackend en merge `545e2cb0` con npm ci limpio; base `adcef7d2`"
+    when:
+      - "se corren tsc --noEmit, los adapter/handler/domain `.spec.ts` + el lockstep de 3.16 + eslint; y se audita el diff de #253"
+    then:
+      - "case.version=4 y template.version=4 (lockstep, asertado por el test); feasibility hybrid; 4 steps (1 manual + 3 auto)"
+      - "los adapter/handler `.spec.ts` pasan incluyendo los tests de workflowAlert (sender/recipient/anyOf/tolerate-absent/requireVerified); tsc --noEmit sin type errors; eslint limpio en los tocados; conteo del dev (jest full) re-derivado"
+      - "genuinely-new: `git grep -c workflowAlert` = 0 en base `adcef7d2` y >0 en merge `545e2cb0` (adapter 19 + model 5) → op GENUINELY-NEW; customMetadata allRecords (11 en base) + T6 pre-existen (reused); scope-fit: 13 files (op-code + infra + spec/test) sin creep"
+
+tags:
+  - im-1081
+  - im-735
+  - im-1133
+  - implementations-automation
+  - medium-confidence
+  - ic-3-16
+  - org-wide-email
+  - workflow-alert
+  - custom-metadata
+  - all-records
+  - t6-custom-setting
+  - pos-settings
+  - genuinely-new-op
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - operator-input-templating
+  - sequential-ordering
+  - migration-app-backend
+  - code-pr
+  - pr-253
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1

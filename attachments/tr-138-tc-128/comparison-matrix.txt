@@ -1,0 +1,42 @@
+IM-1081 IC 3.16 Org-Wide Email Address & Email Notification (v3->v4) — evidence matrix (MigrationAppBackend#253, merge 545e2cb0)
+Change-type: CODE PR with a GENUINELY-NEW T3 op (workflowAlert) + reused (customMetadata allRecords, T6) + supporting infra. IC 3.16 v3->v4 (1 MANUAL + 3 AUTOMATED). Tier medium-confidence.
+Primary evidence = jest (op-code + 3.16 lockstep + full) + tsc + eslint + independent adapter code review + genuinely-new audit + spec-fidelity.
+Clone: MigrationAppBackend @ 545e2cb0 (base adcef7d2 = IM-1080 #252). Deps valid. NO live IE run (live CamiloDevOrg-only dev-proven; sender full-green needs a verified OWEA = manual; Tucson NORESULT/transport out-of-scope; v4 not seeded — seed PENDING-CREDS).
+=================================================================================================================================
+Check                                                              | Method                          | Result                                          | Scn | Verdict
+-------------------------------------------------------------------+---------------------------------+-------------------------------------------------+-----+--------
+AC1 step3 workflowAlert (NEW) OWEA sender on ~21 named alerts       | spec parse + adapter read + unit| v2? no -> senderType=OrgWideEmailAddress + senderAddress | S1 | PASS
+  -> OWEA resolved dynamically (address/displayName), no hardcode   | read adapter + unit test        | 'resolved dynamically' + 'by display name' green | S1  | PASS
+  -> read-back verify per alert; tolerate-absent; client-custom untouched | read adapter + unit tests  | 'TOLERATES an absent alert' + 'all absent => succeeds' | S1 | PASS
+AC2 workflowAlert sender writability probe (managed component)     | probe evidence + adapter read   | passes managed-protection, reaches SF validation | S2  | PASS
+  -> unverified/missing OWEA => clean applied=false, never crash    | read adapter + unit tests       | 'refuses (applied=false, no throw) when NOT verified' green | S2 | PASS
+AC3 step3 Error Log recipient add admin (resolveUserByName/Username)| spec parse + adapter read + unit| 'adds a user recipient resolved by display Name' green | S3 | PASS
+  -> blank optional => skip (no fail); idempotent; no removals      | read adapter + unit tests       | 'SKIPS a blank recipient' + 'idempotent...no duplicate' green | S3 | PASS
+AC4 step2 Fundraising sender AUTOMATED (reused customMetadata allRecords) | spec parse                 | v4 step2 T3 customMetadata vnfp__Fundraising_Settings allRecords | S4 | PASS
+  -> sync CRUD commits managed(vnfp__Default)+unmanaged(Default); corrects v3 | spec + PR body + dev live | v3 no-op was async Apex path, not sync CRUD      | S4  | PASS (reused op)
+AC5 step4 POS Email Sender T6 (reused) org-agnostic {{orgWideEmail}}| spec parse                      | v4 step4 T6 Auctifera__Emails_Sender_Address__c on org-default POS_Settings | S5 | PASS
+AC6 step1 OWEA create+verify stays MANUAL (sequential)             | spec parse + handler read       | step1 kind=MANUAL; resolve-ready-steps gates 2/3/4 | S6 | PASS
+case+template version lockstep = v4                                | jest lockstep                   | case.version===4 asserted                        | S7  | PASS
+genuinely-new: workflowAlert base 0 -> merge 19(adapter)+5(model)   | git grep -c                     | base adcef7d2=0 ; merge 545e2cb0=19/5            | S7  | PASS
+reused: customMetadata allRecords (11 base) + T6 pre-exist          | git grep base adcef7d2          | allRecords 11 at base ; POS in 2 files           | S7  | PASS (reused)
+scope-fit: 13 files (op-code + infra + spec/test), no creep         | git diff --name-only base..merge| exactly the 13 expected files                    | S7  | PASS
+gates: tsc --noEmit clean                                          | npx tsc --noEmit                | exit 0, 0 diagnostics                            | S7  | PASS
+gates: jest op-code (adapter+2 handlers+model+templating)          | npx jest <op-code specs>        | 5 suites, 383 tests, exit 0                      | S7  | PASS
+gates: jest full (src+scripts)                                     | npx jest                        | 1907 pass / 1908 (1 skipped), 0 fail; 180 suites | S7  | PASS
+gates: eslint clean on 11 touched .ts                             | npx eslint <touched>            | exit 0, 0 problems                               | S7  | PASS
+
+RESULT: 7/7 scenarios PASS · 0 defects.
+
+DEV-CLAIM RECONCILIATION (independent verification):
+- AC7 "jest full + tsc + eslint pass; v4 lockstep asserted by a test". Reproduced: full 1907/1908 (1 skipped), 0 fail; tsc 0
+  diagnostics; eslint 0 problems; the 3.16 lockstep asserts case.version===4. Full count is lower than later PRs because
+  #253 is EARLIER in the chain (fewer specs). Reported what I obtained.
+- The NEW workflowAlert op's adapter handler + domain model were read BY HAND (dynamic OWEA resolution, requireVerified =>
+  applied=false-not-throw, anyOf/tolerate-absent, idempotent recipient-add-without-removal) AND its 14 unit tests observed
+  green. NOT trusted from the PR body. GENUINELY-NEW proven by git grep (base 0 -> merge 19/5).
+
+LIVE (deferred): all 4 steps' automatable parts were dev-proven on CamiloDevOrg (Fundraising CMDT commit on managed+unmanaged;
+recipient add commit+read-back; managed-alert sender passes protection and reaches SF's verified-OWEA validation; POS T6). A
+FULLY-GREEN sender commit cannot be demonstrated on CamiloDevOrg because verifying an OWEA needs an external mailbox click —
+that is exactly the inherent manual dependency (step 1). Tucson cross-test = NORESULT (transport), out-of-scope. v4 not seeded
+(seed PENDING-CREDS). Documented dev-proven/PENDING-CREDS, NOT claimed PASS/FAIL on the live path. Manual step: step 1 (OWEA create+verify).

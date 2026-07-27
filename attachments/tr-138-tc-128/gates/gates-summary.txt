@@ -1,0 +1,47 @@
+IM-1081 / TR-138 — gate transcript summary (MigrationAppBackend @ 545e2cb0, base adcef7d2 = IM-1080 #252)
+========================================================================================================
+Environment: node v25.4.0. Deps reused from the 82c35b14 clone; package.json/lock UNCHANGED 545e2cb0..5f1fdd1d (verified).
+
+tsc --noEmit ....................... exit 0, 0 diagnostics                    [tsc-noemit.log — empty]
+eslint (11 touched .ts/.spec.ts) ... exit 0, 0 problems                       [eslint-touched.log — empty]
+jest op-code (adapter+2 handlers+model+operator-templating) 5 suites, 383 tests, exit 0  [jest-op-code.log]
+  the NEW workflowAlert op, direct unit tests (verbose) [jest-workflowalert-verbose.log]:
+   sender:
+     ✓ sets the OWEA sender on managed alerts (resolved dynamically) and verifies by read-back
+     ✓ resolves the OWEA by display name when no address is given
+     ✓ refuses (applied=false, no throw) when the OWEA exists but is NOT verified           (AC2)
+     ✓ refuses (applied=false) when no OWEA row matches the operator-supplied address       (AC2)
+     ✓ TOLERATES an absent alert (skipped, does NOT fail the step) while configuring a present one  (AC1)
+     ✓ is idempotent on the sender: a second run issues NO update
+     ✓ all alerts absent => the step still succeeds
+   recipients:
+     ✓ adds a user recipient resolved dynamically by display Name and verifies presence      (AC3)
+     ✓ adds a literal recipient and commits it (sender-less op)
+     ✓ SKIPS a blank recipient (operator left the optional input empty) — no write, no failure  (AC3)
+     ✓ fails the recipient (applied=false) when the named user is not found
+     ✓ is idempotent: an alert already carrying the recipient re-verifies without a duplicate  (AC3)
+   anyOf drift-tolerance:
+     ✓ resolves the first EXISTING candidate from anyOf and toggles it                       (AC1)
+     ✓ anyOf resolves the FIRST candidate present on the object
+jest ic-3-16 lockstep .............. 1 suite, 9 tests, exit 0 (asserts case.version===4)      [jest-ic-3-16.log]
+jest FULL (src + scripts) .......... 179 pass / 180 suites (1 skipped); 1907 pass / 1908 (1 skipped), 0 fail  [jest-full.log]
+
+DEV-CLAIM RECONCILIATION: AC7 = "jest (full suite), tsc --noEmit, eslint on touched files all pass; case.version==template.version (v4) asserted by a test". Reproduced: full 1907/1908 (1 skipped), 0 fail; tsc 0 diag; eslint 0; the lockstep asserts v4. (The full count is lower than later PRs because #253 is EARLIER in the chain — fewer specs existed.) Reported what I obtained.
+
+GENUINELY-NEW op audit (spec-fidelity/genuinely-new-audit.txt): 13 files = op-code (adapter+model+2 handlers + specs)
++ supporting infra (operator-input-templating, resolve-ready-steps, metadata-mutation-result) + the IC 3.16 spec v3->v4.
+git grep -c workflowAlert: 0 at base adcef7d2 -> 19(adapter)+5(model) at merge 545e2cb0 => GENUINELY-NEW (this PR is the
+ORIGIN; IM-1086/#258 IC 5.2 later reused it). customMetadata allRecords (11 at base) + T6 pre-exist => reused.
+
+Adapter code review (read the workflowAlert handler + domain model by hand — workflowalert-code-diff.txt):
+  - sync CRUD Metadata API read → set OWEA sender (senderType='OrgWideEmailAddress' + senderAddress) and/or append
+    recipients → write full component back → re-read + assert.
+  - OWEA resolved dynamically from the OrgWideEmailAddress sObject by address/displayName (case-insensitive; address wins);
+    NEVER a hardcoded Id/address. requireVerified (default true): unverified/missing => applied=false with a message
+    (finish verification first) — never a throw. (Matches the live probe: managed protection passes, SF field validation
+    "must be a verified OWEA" is the gate.)
+  - ensure[]: anyOf tried in order, first existing wins; absent across all candidates = tolerated applied=false; skipSender;
+    addRecipients idempotent (already-present left as-is, existing NEVER removed). Client-custom alerts not in the list are untouched.
+  - recipients: resolveUserByName (exactly one ACTIVE user, case-insensitive) or literal Username; blank optional => SKIP;
+    unresolved/ambiguous => applied=false (no throw).
+  NO DEFECTS.
