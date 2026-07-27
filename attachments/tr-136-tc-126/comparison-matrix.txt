@@ -1,0 +1,48 @@
+IM-1087 Manual-sweep spike (8 UI/cosmetic ICs) — evidence matrix (MigrationAppBackend#259, merge 5f1fdd1d)
+Change-type: CODE PR spec-only (reused T3 `settings` op, NOT genuinely-new). IC 3.25 v1->v2 manual->hybrid + 7 stay-manual findings. Tier manual-confidence.
+Primary evidence = jest (seeds suite + 3.25 lockstep) + tsc + eslint + independent spec-fidelity + op-reuse audit + manual-sweep soundness review.
+Clone: MigrationAppBackend @ 5f1fdd1d (base a2ee3cbf). Deps valid. NO live IE run (live CamiloDevOrg-only dev-proven; v2 not seeded — seed PENDING-CREDS, AWS SSO expired).
+========================================================================================================================
+Check                                                            | Method                          | Result                                          | Scn | Verdict
+-----------------------------------------------------------------+---------------------------------+-------------------------------------------------+-----+--------
+AC1 step1 T3 settings enableNewProfileUI=false + read-back        | independent spec parse + lockstep | AUTOMATED T3 op=settings UserManagementSettings  | S1  | PASS
+  -> idempotent when already disabled                            | spec + dev live                 | dev-proven: already false on CamiloDevOrg        | S1  | PASS
+AC2 step2 T3 settings enableAdminLoginAsAnyUser=true + read-back  | independent spec parse + lockstep | AUTOMATED T3 op=settings SecuritySettings         | S2  | PASS
+  -> no other security/session setting modified                  | spec parse (values 1 key)       | values contains ONLY enableAdminLoginAsAnyUser    | S2  | PASS
+  -> writability proven (org left false)                         | dev live evidence               | SecuritySettings deploy round-trips; org left false| S2 | PASS
+AC3 steps 3+4 MANUAL (user creation + 5 permset assignments)     | independent spec parse          | step3+step4 kind=MANUAL, structured guides       | S3  | PASS
+7 UI/cosmetic cases correctly stay MANUAL (rationale sound)       | catalog + metadata review       | all 7 name a concrete blocker (ContentAsset/wizard/| S4 | PASS
+                                                                 |                                 | namespace-variable/unsupported tooling)          |     |
+case+template version lockstep = v2                              | jest lockstep + spec parse      | case.version===2 && template.version===2         | S5  | PASS
+4 ordered steps (2 T3 settings + 2 manual)                       | jest lockstep                   | asserted green                                   | S5  | PASS
+op-reuse: no adapter/op changed (2 files = spec + spec.ts)        | git diff base..merge            | only seeds/specs                                 | S5  | PASS
+  -> T3 settings op + settings types pre-exist in base           | git grep base a2ee3cbf          | UserManagementSettings(4)/SecuritySettings(5)     | S5  | PASS (reused, not new)
+master-inclusion: 3.25 hybrid IS in the master on current main    | seed-master-template policy     | predicate-based (IM-1090/#262); EXCLUDE=ic-veevart-auth | S5 | PASS (w/ observation)
+gates: tsc --noEmit clean                                        | npx tsc --noEmit                | exit 0, 0 diagnostics                            | S5  | PASS
+gates: jest ic-3-25 lockstep                                     | npx jest <3.25 spec>           | 6 tests, exit 0                                  | S5  | PASS
+gates: jest seeds suite (dev 19/189)                             | npx jest seeds/                 | 19 suites / 189 tests, exit 0 (exact match)      | S5  | PASS
+gates: full jest (src+scripts)                                   | npx jest                        | 1977 pass / 1978 (1 skipped), 0 fail             | S5  | PASS
+gates: eslint clean on touched .spec.ts                          | npx eslint <touched>            | exit 0, 0 problems                               | S5  | PASS
+
+RESULT: 5/5 scenarios PASS · 0 defects · 1 documented observation (master-inclusion / PR-body discrepancy).
+
+DEV-CLAIM RECONCILIATION (independent verification):
+- PR body "jest seeds suite 19/19 (189 tests)". Reproduced EXACTLY on the seeds/ PARENT dir (18 specs in seeds/specs/ +
+  1 CLI spec one level up = 19 suites / 189 tests). Full src+scripts = 1977/1978 (1 skipped), 0 fail. Reported what I obtained.
+- The 4 steps were re-parsed independently AND the op-reuse was proven by git diff (#259 changed NO adapter) + git grep
+  (T3 settings + settings types pre-exist in base). NOT a genuinely-new op. NOT trusted from the PR body.
+
+MASTER-INCLUSION OBSERVATION (surfaced to dev/PM — not an AC failure):
+- The PR body claims "pin ic-3-25 into WORKING_CASE_IDS (matches 4.05/8.02 precedent)". That pin is NOT in #259's diff
+  (#259 never touches seed-master-template.ts; WORKING_CASE_IDS @ 5f1fdd1d has 4.05 + 8.02 but NOT 3.25). At #259 in
+  isolation the freshly-hybrid 3.25 would be SILENTLY DROPPED from the master (feasibility='hybrid' is not picked up by the
+  manual-tier predicate, and it is not pinned). IM-1090/#262 (master-template policy rewrite -> predicate-based, QA'd in
+  TR-130) later admits every auto/hybrid case automatically, so on CURRENT MAIN 3.25 is correctly in the master. The 3.25
+  ACs are unaffected; the observation is a PR-body inaccuracy + a cross-PR dependency (actual inclusion owed to IM-1090, not #259).
+
+VERSION-CHAIN NOTE (not a defect):
+- #259 = 3.25 v2. IM-1087a/#270 (merge 6c0614dd) = 3.25 v3 (hardened manual permset-assignment guide). Evaluated at #259/v2.
+
+LIVE (deferred): the 2 toggles + writability were dev-proven on CamiloDevOrg (SecuritySettings round-trips; org left false;
+enableNewProfileUI already false). Re-running via the app is blocked — v2 not seeded (seed PENDING-CREDS). Documented
+dev-proven/PENDING-CREDS, NOT claimed PASS/FAIL on the live path. Steps 3/4 = MANUAL handoff.

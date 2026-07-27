@@ -1,0 +1,210 @@
+schemaVersion: "1.0"
+
+id: "3f897c40-7e9d-4153-8807-3b6b540ee92b"
+key: "TC-126"
+title: "IM-1087 Manual-sweep spike (8 UI/cosmetic ICs) — validate the ONE upgrade (IC 3.25 Setup Profiles & Users v1→v2 manual→hybrid: 2 AUTOMATED T3 settings toggles + 2 MANUAL handoffs, reused op) and confirm the 7 stay-manual decisions are sound · CODE PR spec-only (reused T3 settings op, NOT genuinely-new)"
+description: |
+  Cobertura QA para IM-1087 (Historia, priority Medium/manual-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1131 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 3 — probe-first manual sweep sobre 8 ICs UI/cosmetic buscando un
+    slice de automatización parcial. Resultado del spike: **1 UPGRADE (3.25 → hybrid), 7 quedan manual**
+    con evidencia live. Como se esperaba para el tier UI/cosmetic, la mayoría son file-upload / wizard /
+    client-content bound sin un slice de metadata org-agnóstico. **NO hay op nuevo** — el upgrade reutiliza
+    el op T3 `settings` existente.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#259` (**MERGED** 2026-07-16 10:28Z).
+    Branch: `task/spike-ui-cosmetic-IM-1087`. Merge commit `5f1fdd1d` (base `a2ee3cbf`). 2 files, +158/-15.
+  - **CODE PR spec-only** — NO toca adapters/ops: reutiliza el op T3 `settings`. El diff son 2 files:
+    `ic-3-25-setup-profiles-and-users.json` (v1→v2, feasibility manual→hybrid) + el nuevo lockstep
+    `ic-3-25-setup-profiles-and-users.spec.ts`.
+  - **Version chain (no defecto):** existe un follow-up IM-1087a (`#270`, merge `6c0614dd`) que bumpea 3.25
+    v2→v3 endureciendo el guide manual del permset-assignment (2 files, mismo par spec+spec.ts). Este QA evalúa
+    el v2 en `#259`; el v3 es un follow-up documentado, no un defecto (mismo patrón que IC 5.07 v2/v3 en TR-134).
+
+  IC 3.25 v2 (feasibility hybrid, 4 steps) — el UPGRADE:
+  - Step 1 (AUTOMATED T3 settings): UserManagementSettings.enableNewProfileUI=false (Enhanced Profile UI OFF),
+    verify read-back, idempotente.
+  - Step 2 (AUTOMATED T3 settings): SecuritySettings.enableAdminLoginAsAnyUser=true (Login Access Policies →
+    Administrators Can Log in as Any User), verify read-back, sin tocar ninguna otra security/session setting.
+  - Step 3 (MANUAL): crear los users del cliente con licencia + First/Last name obligatorios.
+  - Step 4 (MANUAL): asignar los 5 permission sets de Veevart a cada user.
+  (Writability probada live en CamiloDevOrg: un deploy de SecuritySettings round-trippea
+  enableAdminLoginAsAnyUser — la org quedó en `false`, no se debilitó seguridad; enableNewProfileUI ya en false.)
+
+  Los 7 que quedan MANUAL (decisiones del spike a re-verificar):
+  - 3.19 Branding & Theme: BrandingSet/LightningExperienceTheme deployables, pero cada ThemeItem es
+    client-specific (logo/banner/avatar = ContentAsset uploads + hex del cliente) → sin slice org-agnóstico.
+  - 3.11 Create All Documents: managed "Run Scripts" Apex wizard (sin entry point callable); User-object FLS/layout
+    no API-automatable; contenido Canadian tax legal.
+  - 3.15 Custom Apps Setting & Branding: CustomApplication.brand.headerColor deployable pero el color es per-app
+    del cliente; logos+favicon = ContentAsset uploads; app-clone-from-demo es wizard.
+  - 3.32 End of Day Dashboard: install de managed package (04tQH000001Apbl válido); Tooling PackageInstallRequest
+    documentado como future path; heavyweight/org-mutating, sin op.
+  - 5.24 Tax Letter Set-up: los paragraph field API-names son namespace/org-variable (playbook vnfp__…; el verify
+    org tiene Document Builder Auctifera__ y esos fields ausentes); list-view button sin op; signature/CRA labels content.
+  - 5.25 Digital Membership Cards (ADD ON): add-on que requiere sign-off del cliente (no debe auto-correr); slice
+    delgado; card actions/logo/email UI/file-bound.
+  - 8.06 Sandbox Creation: heavyweight/async, out-of-scope de correr; Tooling SandboxInfo documentado pero
+    unsupported en la DE verify org; post-create steps in-sandbox/wizard-bound.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR spec-only): clone en merge `5f1fdd1d`, correr el
+    seeds suite (dev: 19/19, 189 tests, incl. el nuevo lockstep de 3.25) + gates; re-derivar el conteo del dev.
+  - **spec fidelity independiente**: parsear los 4 steps de 3.25 v2 (2 T3 settings con sus values + 2 manual) por
+    cuenta propia, no solo el lockstep.
+  - **op-reuse audit** (NO genuinely-new): confirmar que #259 NO toca adapters (2 files = spec + spec.ts); el op
+    T3 `settings` y las keys (enableNewProfileUI/enableAdminLoginAsAnyUser/UserManagementSettings/SecuritySettings)
+    ya existen en base `a2ee3cbf`.
+  - **master-inclusion**: el PR body dice "pin ic-3-25 en WORKING_CASE_IDS" — ese mecanismo fue SUPERADO por la
+    política predicate-based de IM-1090/IM-1096 (todos los auto/hybrid siempre incluidos; EXCLUDE_FROM_MASTER =
+    solo ic-veevart-auth). El 3.25 hybrid entra al master por el predicado, no por un pin → el claim del body es
+    stale pero el outcome es correcto (no defecto).
+  - **7 stay-manual findings**: re-verificar que cada rationale es defendible (ContentAsset/wizard/namespace-variable/
+    unsupported-tooling). Los probes live (Tooling/CamiloDevOrg) fueron dev-only; QA valida plausibilidad + catálogo.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven) y el v2 NO está seeded
+    a MigrationApp-dev (seed PENDING-CREDS, AWS SSO expirado). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Seed PENDING-CREDS**: v2 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - **manual-confidence tier**: 7/8 cases quedan manual por diseño (UI/file/content bound). El valor QA aquí es
+    validar el 1 upgrade correctamente Y que los 7 manual-stay no dejaron automatización viable sobre la mesa.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `5f1fdd1d` y base `a2ee3cbf` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR spec-only: evidencia primaria por código)."
+  - "Node + jq/python3 para parsear el spec 3.25 v2 y auditar el diff/op-reuse + el mecanismo predicate-based del master seed."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven) y el v2 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Disable the Enhanced Profile User Interface automatically — step 1 (T3 settings) sets UserManagementSettings.enableNewProfileUI=false, verifies by reading it back as false, and is idempotent when already disabled"
+    tags:
+      - ac-1
+      - happy-path
+      - t3-settings
+      - user-management-settings
+      - idempotency
+      - im-1087
+      - im-735
+    given:
+      - "el spec `ic-3-25-setup-profiles-and-users.json` v2 en merge `5f1fdd1d`"
+    when:
+      - "se parsea el step 1 y su op"
+    then:
+      - "step 1 es AUTOMATED, toolName=T3, op=settings sobre UserManagementSettings con values {enableNewProfileUI:false}"
+      - "el op verifica leyendo el setting de vuelta como false; es idempotente (no-op cuando ya está disabled)"
+      - "dev-proven live en CamiloDevOrg: enableNewProfileUI ya estaba en false (lee false, coherente con IC 3.05)"
+
+  - title: "AC2 · Enable 'Administrators Can Log in as Any User' automatically — step 2 (T3 settings) sets SecuritySettings.enableAdminLoginAsAnyUser=true, verifies by reading it back as true, and modifies no other security or session setting"
+    tags:
+      - ac-2
+      - happy-path
+      - t3-settings
+      - security-settings
+      - login-access-policy
+      - writability
+      - im-1087
+    given:
+      - "el step 2 (T3 settings) del spec v2"
+    when:
+      - "se parsea el step 2 y su op"
+    then:
+      - "step 2 es AUTOMATED, toolName=T3, op=settings sobre SecuritySettings con values {enableAdminLoginAsAnyUser:true}"
+      - "el op verifica leyendo el setting de vuelta como true; ninguna otra security/session setting se modifica (values contiene solo esa key)"
+      - "writability probada live en CamiloDevOrg: un deploy de SecuritySettings round-trippea enableAdminLoginAsAnyUser — el probe dejó la org en false (no debilitó seguridad)"
+
+  - title: "AC3 · Client-specific work remains a guided handoff — steps 3 and 4 stay MANUAL: create the client's users (license + mandatory First/Last name) and assign the five Veevart permission sets, because they depend on client data and specific users"
+    tags:
+      - ac-3
+      - manual
+      - manual-handoff
+      - user-creation
+      - permission-sets
+      - im-1087
+    given:
+      - "los steps 3 y 4 (MANUAL) del spec v2"
+    when:
+      - "se parsean los steps 3 y 4"
+    then:
+      - "step 3 es MANUAL: crear los users del cliente con licencia e instance access + First/Last name obligatorios"
+      - "step 4 es MANUAL: asignar los 5 permission sets de Veevart a cada user"
+      - "quedan MANUAL por depender de client data y users específicos (no hay slice org-agnóstico) — decisión correcta para el HYBRID"
+
+  - title: "The 7 UI/cosmetic cases correctly stay MANUAL — the spike's per-case decision is sound: each remaining case is file-upload / wizard / client-content bound or blocked by unsupported tooling, with no org-agnostic automatable slice worth an op"
+    tags:
+      - manual-sweep
+      - stay-manual
+      - spike-findings
+      - refusal-evidence
+      - manual-confidence
+      - im-1087
+    given:
+      - "la matriz de hallazgos del spike (7 stay-manual) en el ticket/PR y el catálogo de Implementation Cases"
+    when:
+      - "se revisa el rationale de cada uno de los 7 cases contra el catálogo y el conocimiento de metadata"
+    then:
+      - "3.19 Branding & Theme, 3.15 Custom Apps: los tipos (BrandingSet/LightningExperienceTheme, CustomApplication.brand) son deployables pero los valores (logo/banner/avatar/favicon = ContentAsset uploads, hex/color per-cliente) NO son org-agnósticos → manual correcto"
+      - "3.11 Create All Documents (managed Run-Scripts wizard sin entry point + User-object FLS/layout no API), 5.24 Tax Letter (paragraph fields namespace/org-variable, ausentes en el verify org), 5.25 Digital Cards (add-on con sign-off, slice delgado): sin automatización viable → manual correcto"
+      - "3.32 End of Day Dashboard (managed-pkg install 04tQH000001Apbl válido, PackageInstallRequest future path) y 8.06 Sandbox Creation (Tooling SandboxInfo unsupported en la DE org, heavyweight/async): documentados como future automation paths, out-of-scope de correr → manual correcto (ninguno dejó automatización org-agnóstica sobre la mesa)"
+
+  - title: "Spec v2 lockstep + gates + op-reuse + master inclusion — case+template bumped to v2 in lockstep, jest/tsc/eslint pass, no adapter/op changed (T3 settings reused, NOT genuinely-new), and the hybrid case reaches the master via the predicate-based selection (the PR-body WORKING_CASE_IDS pin is a superseded mechanism)"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - reused-ops
+      - master-inclusion
+      - scope-fit
+      - im-1087
+      - im-1090
+      - im-1096
+    given:
+      - "clone local de MigrationAppBackend en merge `5f1fdd1d` con npm ci limpio; base `a2ee3cbf`"
+    when:
+      - "se corren tsc --noEmit, el seeds suite (incl. el `.spec.ts` de 3.25) y eslint; y se audita el diff de #259 + el master seed"
+    then:
+      - "case.version=2 y template.version=2 (lockstep, asertado por el test); feasibility hybrid; 4 steps (2 T3 settings + 2 manual)"
+      - "el seeds suite pasa (dev: 19/19 suites, 189 tests, incl. el nuevo test de 3.25); tsc --noEmit sin type errors; eslint limpio en los tocados; conteo del dev re-derivado"
+      - "op-reuse: #259 NO toca adapters (2 files = spec .json + .spec.ts); el op T3 settings y las keys ya existen en base `a2ee3cbf` → NO genuinely-new"
+      - "master-inclusion: el claim del body 'pin en WORKING_CASE_IDS' fue superado por el predicate policy de IM-1090/IM-1096 (todos los auto/hybrid siempre; EXCLUDE_FROM_MASTER = solo ic-veevart-auth) → el 3.25 hybrid entra por el predicado, no por un pin (claim stale, outcome correcto); version chain v2→v3 (#270 IM-1087a) documentado, no defecto"
+
+tags:
+  - im-1087
+  - im-735
+  - im-1131
+  - implementations-automation
+  - manual-confidence
+  - ic-3-25
+  - setup-profiles-users
+  - t3-settings
+  - user-management-settings
+  - security-settings
+  - manual-sweep
+  - stay-manual
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-259
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 85
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
