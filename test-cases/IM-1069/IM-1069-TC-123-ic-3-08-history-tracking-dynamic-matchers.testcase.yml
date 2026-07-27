@@ -1,0 +1,237 @@
+schemaVersion: "1.0"
+
+id: "14ebafd2-f315-49fe-9726-c375ca9a31b6"
+key: "TC-123"
+title: "IM-1069 IC 3.08 Set History Tracking on Accounts & Contacts — org-agnostic fix: NEW T3 historyTracking run-time matchers (anyOf/label/pattern/optional) + exclusive + read-back-as-verdict, NEW recordTypePicklistDefaults op (Charge), case hybrid→auto · CODE PR (family carrier)"
+description: |
+  Cobertura QA para IM-1069 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1128 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch A (history-tracking family). Este es el caso FUNDACIONAL
+    de la familia (3.08) y CARGA el cambio del op; los hermanos (3.09, 5.06, 6.03, 7.02, 8.05) son
+    consumidores spec-only. Ya QA'é 3.09 (IM-1070/TR-126), 5.06 (IM-1071/TR-129), 6.03 (IM-1072/TR-127).
+  - **Tier: Medium** (caveat: cross-version managed history-field API name hardcodeado rompió la corrida
+    cross-version — el bug que este PR arregla de raíz).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#241` (**MERGED** 2026-07-15 19:08Z).
+    Branch: `task/ic-3-08-history-tracking-dynamic-IM-1069`. Merge commit `9cb4cf51` (base `08cde759`).
+    7 files, +1950/-89.
+  - **CODE PR** (dos ops genuinely-new + spec v2). Toca el adapter/handler/schema del T3 + el spec:
+    * `metadata-mutation-spec.ts` (+125/-8) + `.spec.ts` (+13) — schema de MetadataFieldRef (matcher) + nuevo op
+    * `t3-metadata.adapter.ts` (+845/-47) + `.spec.ts` (+782/-6) — implementación de matchers/exclusive/read-back + recordTypePicklistDefaults
+    * `t3-metadata.handler.ts` (+48/-6) + `.spec.ts` (+43) — wiring del handler
+    * `ic-3-08-history-tracking-accounts-contacts.json` (+94/-22) — spec v2
+
+  Cambios del op (catalog-declarative, zero per-IC code):
+  1. **historyTracking run-time matchers (MetadataFieldRef)**: `fields`/`disableFields` pueden ser
+     matchers `{anyOf, label, pattern, optional}` resueltos contra el org LIVE tras el read del objeto.
+     anyOf=candidatos ordenados (Contact `Auctifera__Current_Membership_Program1__c` vs Account `..._Program__c`);
+     label=match por UI-label (FieldDefinition SOQL, Data API); pattern=regex único; optional=tolera ausencia
+     per-version (vnfp sin NFP Fundraising) como nota; misses required/ambiguos fallan STRICT.
+  2. **historyTracking exclusive:true**: destrackea todo otro field tracked (el "uncheck all defaults" del
+     playbook, inherentemente org-specific). Requiere keep-list no vacío. Límite: el toggle standard 'Record
+     Type' no tiene CustomField en el metadata read → queda UI-only.
+  3. **read-back verify ES el veredicto** (no el write report): el replay del whole-CustomObject reporta
+     failure (Account.Tier de Data.com rechaza round-trip) mientras el tracking SÍ commitea; el read-back decide.
+  4. **NEW op recordTypePicklistDefaults** (Part B, antes MANUAL): resuelve el record type por label/devName
+     en run time (Charge devName `Auctifera__Reservation`, label "Charge"); expectSole=true asserta que es el
+     ÚNICO RT (extras fallan STRICT con el Setup path — no se borran por API); limpia los defaults per-RT
+     ("—None—") vía RecordType metadata read→merge→write→read-back; picklist sin asignación pasa vacuously.
+  5. **Handler boundary validation** acepta matcher objects + valida la shape del op nuevo.
+
+  Spec v2 (feasibility **auto**, hybrid→auto; el step manual v1 "Verify Default List in Charge" desaparece):
+  - Step 1 (T3 historyTracking, exclusive) Account: 7 fields como matchers (anyOf+label), vnfp optional.
+  - Step 2 (T3 historyTracking, exclusive) Contact: 8 fields como matchers (Program1 first → unsuffixed → label).
+  - Step 3 (T3 recordTypePicklistDefaults, NEW, AUTOMATED) Charge: expectSole + clear defaults en 5 picklists.
+
+  Estrategia de verificación:
+  - **jest code-contract (PRIMARIO)**: clone en merge `9cb4cf51`, npm ci, correr las suites del t3-metadata
+    adapter (+782) + handler + schema; aislar los tests de matchers (anyOf/label/pattern/optional), exclusive,
+    read-back-as-verdict, y el op nuevo recordTypePicklistDefaults (expectSole, clear defaults, vacuous pass).
+  - **genuinely-new proof**: base `08cde759` vs merge `9cb4cf51` — recordTypePicklistDefaults + MetadataFieldRef/
+    anyOf ausentes en base.
+  - **static spec fidelity**: ic-3-08 v2 auto, 3 steps, matchers + exclusive + op nuevo.
+  - **live corroboration**: este op YA se ejercitó live en illinois-trainings a través de los consumidores que
+    QA'é (5.06 Part A matchers npe01/vnfp = TR-129; 6.03 exclusive = TR-127). Two-org dev proof (CamiloDevOrg +
+    Tucson). Re-correr IC 3.08 live via la app es opcional (upgrade en el gate) si el caso 3.08 está seeded.
+
+  Riesgos abiertos:
+  - **exclusive destructivo**: destrackea todo fuera del keep-list en Account y Contact.
+  - **Record Type UI-only límite**: el toggle standard 'Record Type' no se destrackea por metadata (documentado).
+  - **Account.Tier write-error**: el write reporta failure por Data.com Tier; el read-back es el veredicto (nuance
+    verificado por jest).
+  - Verificado por el dev en CamiloDevOrg + Tucson (two-org). QA re-verifica por código + corroboración de consumidores.
+  - PR ya MERGED — base `08cde759` vs merge `9cb4cf51`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `9cb4cf51` y base `08cde759` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR: dos ops genuinely-new)."
+  - "Node + jq/python3 para parsear el spec v2 y verificar el contrato independientemente."
+  - "Corroboración live: los TR-127/TR-129 (consumidores del mismo op en illinois-trainings) ya en el repo."
+  - "OPCIONAL (si se aprueba live en el gate): Migration App session Cognito + IC 3.08 seeded para correr en illinois."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · historyTracking run-time field matchers (no hardcoded API names) — anyOf candidates / UI-label / name pattern resolve each field against the live org after the object read; genuinely-new MetadataFieldRef machinery"
+    tags:
+      - ac-1
+      - dynamic-matchers
+      - metadata-field-ref
+      - any-of
+      - genuinely-new
+      - new-capability
+      - im-1069
+      - im-735
+    given:
+      - "el adapter t3-metadata en merge `9cb4cf51` y la base `08cde759` como referencia"
+    when:
+      - "se corren los tests de resolución de matchers y se compara la presencia de MetadataFieldRef/anyOf base vs merge"
+    then:
+      - "un field puede declararse como matcher {anyOf, label, pattern, optional} y se resuelve contra el describe del org live (primer candidato presente gana; label por FieldDefinition SOQL; pattern por regex único)"
+      - "un match ambiguo o un required ausente falla STRICT con detalle accionable"
+      - "la base NO tiene la maquinaria de matchers (MetadataFieldRef/anyOf) y el merge SÍ → genuinamente nuevo"
+      - "el caso nunca falla porque un API name de field estaba hardcodeado para otra versión de package (AC1)"
+
+  - title: "AC2+AC3 · Account tracks exactly the 7 playbook fields and Contact exactly the 8, via matchers — Contact Current Membership Program tries Auctifera__Current_Membership_Program1__c first (the cross-version hardcode that broke v1) then unsuffixed then label"
+    tags:
+      - ac-2
+      - ac-3
+      - keep-list
+      - account
+      - contact
+      - program1-suffix
+      - spec-contract
+      - im-1069
+    given:
+      - "el spec `ic-3-08-history-tracking-accounts-contacts.json` v2 en merge `9cb4cf51`"
+    when:
+      - "se parsean los steps 1 (Account) y 2 (Contact) y sus matchers"
+    then:
+      - "Account (step 1) trackea exactamente: Current Membership Program, Tech Current Membership, Membership Expiration Date, Membership Start Date, Membership End Date, Phone, Household Phone (AC2)"
+      - "Contact (step 2) trackea exactamente: Current Membership Program, Tech Current Membership, Membership Start Date, Membership End Date, Phone, Home Phone, Email, Personal Email (AC3)"
+      - "el matcher de Contact Current Membership Program prueba Auctifera__Current_Membership_Program1__c PRIMERO, luego el unsuffixed, luego el UI-label (el hardcode cross-version que rompió el run v1)"
+
+  - title: "AC4 · exclusive:true untracks every field outside the playbook keep-list on both Account and Contact, without the defaults list ever being hardcoded (requires a non-empty keep-list)"
+    tags:
+      - ac-4
+      - exclusive-mode
+      - untrack-defaults
+      - jest
+      - im-1069
+    given:
+      - "los steps 1 y 2 con exclusive:true y el adapter que implementa el modo exclusive"
+    when:
+      - "se corren los tests del modo exclusive del historyTracking"
+    then:
+      - "todo field tracked fuera del keep-list queda destrackeado en Account y Contact (ej. Client Status / Amount Bought / Client with Purchase History en Contact)"
+      - "la lista de defaults NO se hardcodea — el exclusive enumera lo que el org trackea live y destrackea lo que no está en el keep-list"
+      - "exclusive requiere un keep-list no vacío; el toggle standard 'Record Type' queda UI-only (no expuesto por metadata) — límite documentado"
+
+  - title: "AC5 · missing optional field is tolerated — a vnfp matcher marked optional (Tech Current Membership on an org without NFP Fundraising) is skipped with an explanatory note and the case still completes"
+    tags:
+      - ac-5
+      - optional-matcher
+      - tolerate-absent
+      - jest
+      - im-1069
+    given:
+      - "un matcher con optional:true para un field que no existe en el org (vnfp sin NFP Fundraising package)"
+    when:
+      - "se corre el test de resolución con el field ausente"
+    then:
+      - "el field ausente se salta con una nota informativa (no falla)"
+      - "el caso completa igual; un required ausente (no optional) SÍ fallaría STRICT (contraste cubierto por jest)"
+
+  - title: "AC6+AC7 · NEW recordTypePicklistDefaults op — resolves the Charge record type by label at run time, asserts it is the SOLE record type (extras fail STRICT with names + Setup path), and clears the picklist defaults to —None— on Status/Card Brand/Currency/Merchant Type/Type (a picklist with no value assignment passes vacuously)"
+    tags:
+      - ac-6
+      - ac-7
+      - record-type-picklist-defaults
+      - new-capability
+      - expect-sole
+      - charge
+      - genuinely-new
+      - im-1069
+    given:
+      - "el step 3 (T3 recordTypePicklistDefaults, expectSole:true) y el adapter que lo implementa; la base sin este op"
+    when:
+      - "se corren los tests del op nuevo y se compara base vs merge"
+    then:
+      - "resuelve el record type Charge por label en run time (devName Auctifera__Reservation, label 'Charge' — no por internal name)"
+      - "expectSole:true asserta que Charge es el ÚNICO record type del objeto; si hay extras, falla STRICT nombrándolos + el Setup path exacto para borrarlos (UI-only) → un re-run tras cleanup queda verde (AC6)"
+      - "limpia los defaults per-RT a '—None—' en Status, Card Brand, Currency, Merchant Type y Type; un picklist sin value assignment al RT pasa vacuously (Tucson-proven para Auctifera__Type__c) (AC7)"
+      - "el op recordTypePicklistDefaults NO existe en la base y SÍ en el merge → genuinamente nuevo"
+
+  - title: "AC8+AC9 · read-back verify is the verdict + safe to re-run + fully automated — the write error (Account.Tier round-trip) does not short-circuit; the read-back decides; a second run changes nothing; and the case is end-to-end automatic (the v1 manual 'Verify Default List in Charge' step is gone, feasibility hybrid→auto)"
+    tags:
+      - ac-8
+      - ac-9
+      - read-back-verdict
+      - idempotency
+      - fully-auto
+      - hybrid-to-auto
+      - im-1069
+    given:
+      - "el adapter con read-back-as-verdict y el spec v2 (3 steps AUTOMATED)"
+    when:
+      - "se corren los tests de read-back/idempotencia y se lee el spec v2"
+    then:
+      - "el write result (failure por Account.Tier de Data.com) NO corta el flujo; el read-back verify decide el veredicto, y el write error enriquece los detalles o queda como nota informativa cuando todo verificó (AC8 base)"
+      - "un segundo run completa sin cambiar nada (tracking ya en target, defaults ya en —None—) → idempotente (AC8)"
+      - "case.version=2, template.version=2 (lockstep), feasibility='auto'; los 3 steps son AUTOMATED; el step manual v1 'Verify Default List in Charge' ya no existe → fully automated (AC9)"
+
+  - title: "Gates green + genuinely-new proof + scope — jest adapter/handler/schema suites pass, tsc --noEmit clean, eslint clean on touched files; the two new ops are absent in base; live-corroborated by the family consumers (5.06/6.03 matchers ran live on illinois)"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - genuinely-new
+      - live-corroboration
+      - im-1069
+    given:
+      - "clone local de MigrationAppBackend en merge `9cb4cf51` con npm ci limpio"
+    when:
+      - "se corren tsc --noEmit, las suites jest del t3-metadata (adapter +782 / handler / schema) y eslint sobre los archivos tocados"
+    then:
+      - "tsc --noEmit sin type errors; eslint limpio en los archivos tocados (o hallazgo verificado PRE-existente vía git blame)"
+      - "las suites jest del adapter/handler/schema pasan; el conteo del dev se re-deriva y se reporta lo obtenido"
+      - "genuinely-new: recordTypePicklistDefaults y la maquinaria de matchers (MetadataFieldRef/anyOf) están ausentes en la base `08cde759`"
+      - "corroboración live: los matchers npe01/vnfp y el exclusive de este op ya corrieron live en illinois-trainings vía los consumidores 5.06 (TR-129) y 6.03 (TR-127); dev two-org proof CamiloDevOrg+Tucson"
+
+tags:
+  - im-1069
+  - im-735
+  - im-1128
+  - implementations-automation
+  - medium-confidence
+  - ic-3-08
+  - history-tracking
+  - dynamic-matchers
+  - metadata-field-ref
+  - exclusive-mode
+  - record-type-picklist-defaults
+  - new-capability
+  - accounts
+  - contacts
+  - charge
+  - t3-metadata
+  - family-carrier
+  - migration-app-backend
+  - code-pr
+  - pr-241
+  - post-june-delivery
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
