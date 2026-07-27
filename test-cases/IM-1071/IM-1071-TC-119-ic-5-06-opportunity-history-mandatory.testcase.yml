@@ -1,0 +1,206 @@
+schemaVersion: "1.0"
+
+id: "59d86a88-ad98-4d60-9756-7f185bc1702c"
+key: "TC-119"
+title: "IC 5.06 Opportunity History Tracking & Mandatory fields — Part A exclusive history (6 fields, npe01/vnfp matchers) + NEW T2 setFieldBehavior op (dates→Required on discovered layout) + Record Type MANUAL · CODE PR (jest-contract) + live on illinois"
+description: |
+  Cobertura QA para IM-1071 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1124 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch A (history-tracking family). Combina lo de IC 6.03
+    (history exclusive + MANUAL) con un op T2 NUEVO estilo IC 5.04.
+  - IC 5.06 = "Opportunity: History tracking (A) & Mandatory fields (B)" (Order__c 5.06,
+    catálogo Auctifera SF Id a18f200000mscbbAAA).
+  - **Tier: Medium** (caveat: cross-version managed membership-field API names — mitigado por
+    el matcher runtime de IM-1069).
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#243` (**MERGED** 2026-07-15 20:31Z).
+    Branch: `task/ic-5-06-opportunity-history-mandatory-IM-1071`. Merge commit `5aa676aa`
+    (base `81ada09`).
+  - **CODE PR** (5 files, +378/-59): agrega el op T2 NUEVO `setFieldBehavior` al page-layout
+    adapter + reescribe el spec:
+    * `layout-mutation-spec.ts` (+23) — schema del op setFieldBehavior
+    * `metadata-deploy-result.ts` (+5)
+    * `t2-page-layout.adapter.ts` (+83) — implementación del op
+    * `t2-page-layout.adapter.spec.ts` (+194/-42) — tests del op
+    * `ic-5-06-opportunity-history-mandatory.json` (+73/-12) — spec v3
+
+  Spec v3 (feasibility hybrid, 3 steps, defaultOrder 506):
+  - **Step 1 (T3 historyTracking, exclusive)** sobre Opportunity — 6 fields:
+    StageName, Amount, CloseDate (standard, literales); Membership Program →
+    `vnfp__Membership_Program__c` (matcher, **optional**); Membership Start Date →
+    `npe01__Membership_Start_Date__c`; Membership End Date → `npe01__Membership_End_Date__c`
+    (matchers). Exclusive: destrackea todo lo demás excepto RecordTypeId (que el op no puede tocar).
+  - **Step 2 (MANUAL)**: tickear 'Record Type' en Set History Tracking — RecordTypeId no es
+    listable como tracked field vía metadata replay (SF lo rechaza) → handoff MANUAL.
+  - **Step 3 (T2 setFieldBehavior, op NUEVO)**: layout `{{membershipLayout}}` (operator select
+    input, discovery kind 'layouts' sobre Opportunity) → set `npe01__Membership_Start_Date__c` y
+    `npe01__Membership_End_Date__c` a **Required** en el layout elegido. El op NUNCA agrega un
+    field faltante: si el layout no muestra el field, reporta not-applied con razón.
+
+  Estrategia de verificación:
+  - **jest code-contract** (evidencia PRIMARIA del op nuevo): clone en merge `5aa676aa`, npm ci,
+    correr la suite del t2-page-layout adapter; verificar los tests de setFieldBehavior (set
+    Required, never-adds-missing/not-applied, read-back verify) + gates. Más genuinely-new proof
+    (base=0 setFieldBehavior refs → merge=9).
+  - **static spec fidelity**: ic-5-06 v3, hybrid, 3 steps, matchers + input + MANUAL.
+  - **live end-to-end** via Migration App (Path A) en illinois-trainings: Part A exclusive (6
+    fields, matcher resolution npe01/vnfp, RecordTypeId untouched) + Record Type MANUAL atestado
+    + Part B (select Membership layout → dates Required → layout read-back).
+
+  Estado del org (illinois-trainings, sondeado):
+  - vnfp__Membership_Program__c presente; Membership Start/End Date son **npe01__** (NPSP), NO vnfp.
+  - 13 Opportunity layouts incl. 'Opportunity-Veevart Membership Layout - V3 - May 2023' y
+    'Opportunity-Membership Layout' → el select de Part B tiene opciones.
+  - PRE tracked Part A: 7 fields = los 6 del keep-list + RecordTypeId → Part A exclusive ≈ no-op
+    (ya en target; prueba matcher resolution + read-back). RecordTypeId ya tracked (será el MANUAL).
+
+  Riesgos abiertos:
+  - **Exclusive destructivo**: Part A destrackea fields fuera del keep-list; en illinois no hay
+    extras → no-op, pero verifica matcher resolution + que RecordTypeId no lo toca el op.
+  - **Part B footprint**: setFieldBehavior escribe el layout Membership (2 fields → Required).
+  - **never-adds-missing (AC5)**: la rama not-applied (field ausente del layout) se cubre por jest;
+    live se elige un layout que SÍ muestra los dates para probar el positive path.
+  - Verificado por el dev en CamiloDevOrg + im696-tucson (two-org proof); QA re-verifica en illinois.
+  - PR ya MERGED — base `81ada09` vs merge-commit `5aa676aa`.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — fetch de spec + código en merge `5aa676aa` y base `81ada09`."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest (es CODE PR: op setFieldBehavior nuevo)."
+  - "sf CLI autenticado con org alias `illinois-trainings` — Opportunity + membership fields (npe01__Membership_Start/End_Date__c, vnfp__Membership_Program__c) + Membership layout confirmados."
+  - "Acceso Tooling API read-only (FieldDefinition) + Metadata API retrieve del Layout Opportunity Membership para PRE/POST-verify."
+  - "Migration App session Cognito activa (`localStorage['migrationapp.access_token']`) para el IE run API-driven (Path A) — resolver el input membershipLayout + atestar el MANUAL Record Type."
+  - "Test IM cases Org Tucson workspace: `clientId=cdff34f1-9774-41b0-a6a3-124bc03d11cb`, `orgId=00DWI00000CIwZi2AL`."
+
+format: gherkin
+scenarios:
+  - title: "AC-static + genuinely-new · Spec v3 fidelity (hybrid: Part A exclusive 6 fields with matchers, Record Type MANUAL, Part B setFieldBehavior + layout select) + the setFieldBehavior op is genuinely new"
+    tags:
+      - ac-static
+      - spec-contract
+      - genuinely-new
+      - new-capability
+      - exclusive-mode
+      - im-1071
+      - im-1069
+      - im-735
+    given:
+      - "el spec `ic-5-06-opportunity-history-mandatory.json` y el código del op fetch-eados del merge `5aa676aa`; la base `81ada09` como referencia"
+    when:
+      - "se parsean los 3 steps y sus payloads; se compara `grep -c setFieldBehavior` en `t2-page-layout.adapter.ts` entre base y merge"
+    then:
+      - "case.version = 3, template.version = 3 (lockstep); defaultOrder = 506; feasibility = 'hybrid'"
+      - "step 1 (T3 historyTracking, exclusive:true) declara 6 fields: StageName/Amount/CloseDate literales + Membership Program (vnfp, optional) + Start/End Date (npe01) por matcher"
+      - "step 2 es MANUAL (Record Type); step 3 (T2 setFieldBehavior) declara operations Start/End Date → Required con requiredInputs membershipLayout (select, discovery layouts)"
+      - "la base tiene 0 refs de setFieldBehavior en el adapter y el merge tiene 9 → el op es genuinamente nuevo"
+
+  - title: "jest code-contract · the new setFieldBehavior T2 op unit tests pass on the PR branch (set Required verified by read-back, never-adds-missing = not-applied with reason)"
+    tags:
+      - jest
+      - code-contract
+      - new-capability
+      - set-field-behavior-op
+      - im-1071
+    given:
+      - "clone local de MigrationAppBackend en merge `5aa676aa` con `npm ci` limpio"
+      - "la suite tocada: t2-page-layout.adapter.spec.ts (+ layout-mutation-spec, metadata-deploy-result)"
+    when:
+      - "se corre jest sobre la(s) suite(s) tocada(s) y se aíslan los tests del op con `jest -t setFieldBehavior` (y afines: behavior, Required, not applied)"
+    then:
+      - "la(s) suite(s) tocada(s) pasan (0 failing)"
+      - "los tests del op setFieldBehavior pasan: set a field's behavior to Required + read-back verify; never adds a missing field (op not-applied con razón clara); manejo de errores del deploy"
+      - "tsc --noEmit sin type errors y eslint limpio en los archivos tocados (si el runner está disponible)"
+
+  - title: "Part A exclusive (live) · exactly the 6 keep-list fields stay tracked with matchers resolving npe01/vnfp; RecordTypeId is untouched by the op; Membership Program optional"
+    tags:
+      - part-a
+      - history-tracking
+      - exclusive-mode
+      - runtime-matcher
+      - live-execution
+      - im-1071
+      - im-1069
+    given:
+      - "PRE-baseline: FieldDefinition IsFieldHistoryTracked sobre Opportunity en illinois (incluye RecordTypeId)"
+      - "los matchers resuelven Membership Program=vnfp__Membership_Program__c (optional), Start/End Date=npe01__Membership_Start/End_Date__c"
+    when:
+      - "el step 1 (exclusive) ejecuta contra illinois y se re-lee el set tracked POST"
+    then:
+      - "object-level Track Field History queda enabled; exactamente los 6 keep-list fields quedan tracked (StageName, Amount, CloseDate, vnfp__Membership_Program__c, npe01__Membership_Start_Date__c, npe01__Membership_End_Date__c)"
+      - "cualquier field custom fuera del keep-list queda destrackeado (exclusive); en illinois no había extras → no-op, keep-list preservada"
+      - "RecordTypeId NO es tocado por el op (el exclusive enumera solo lo automatizable; RecordTypeId se maneja en el MANUAL)"
+      - "el matcher de Membership Program (vnfp) resuelve donde el vnfp existe; es optional (tolerado donde no)"
+
+  - title: "Part B setFieldBehavior (live) · select the Membership layout, flip Membership Start/End Date from Edit to Required, verified by layout read-back; never-adds-missing covered by jest"
+    tags:
+      - part-b
+      - set-field-behavior
+      - layout-required
+      - operator-input
+      - live-execution
+      - im-1071
+    given:
+      - "el step 3 parkea para input membershipLayout (select con opciones descubiertas de los Opportunity layouts)"
+      - "se elige un layout Membership que SÍ muestra Membership Start/End Date (p.ej. 'Veevart Membership Layout - V3 - May 2023')"
+    when:
+      - "se resuelve el input con ese layout y el step setFieldBehavior ejecuta"
+    then:
+      - "npe01__Membership_Start_Date__c y npe01__Membership_End_Date__c quedan en behavior=Required en el layout elegido (PRE Edit → POST Required)"
+      - "el cambio se verifica por Metadata API read-back del Layout"
+      - "el op NUNCA agrega un field faltante: la rama not-applied (layout sin el field) está cubierta por los jest unit tests; live se prueba el positive path con un layout que muestra los dates"
+
+  - title: "Record Type MANUAL handoff + idempotency + two-org proof · Record Type parks as MANUAL and is attested; a second run is idempotent; illinois corroborates the dev's two-org proof"
+    tags:
+      - manual-handoff
+      - attestation
+      - record-type
+      - idempotency
+      - two-org-proof
+      - im-1071
+    given:
+      - "el step 2 (MANUAL) declara tickear 'Record Type' en la Set History Tracking page (no automatizable)"
+      - "el pattern attesting-without-executing aplica en el test workspace (TR-125/127)"
+    when:
+      - "el run alcanza el step 2 → parkea blocked-human → se atesta por instrucción explícita del QA"
+      - "se dispara un segundo plan-run (idempotencia)"
+    then:
+      - "el step 2 parkea como MANUAL — el harness NUNCA lo auto-ejecuta ni auto-atesta sin instrucción; atestado, el run continúa"
+      - "el segundo run completa: Part A sin cambios (keep-list estable), Part B re-aplica Required idempotente (sin duplicar), MANUAL re-atestado"
+      - "illinois-trainings (3er org, package version distinto) completa la misma spec v3 → corrobora el two-org proof del dev (CamiloDevOrg + im696-tucson)"
+
+tags:
+  - im-1071
+  - im-735
+  - im-1069
+  - im-1124
+  - implementations-automation
+  - ic-5-06
+  - opportunity
+  - history-tracking
+  - exclusive-mode
+  - set-field-behavior
+  - mandatory-fields
+  - layout-required
+  - npsp
+  - vnfp
+  - new-capability
+  - t2-page-layout
+  - migration-app-backend
+  - code-pr
+  - hybrid
+  - pr-243
+  - post-june-delivery
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
