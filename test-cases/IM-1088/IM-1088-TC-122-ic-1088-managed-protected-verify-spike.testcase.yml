@@ -1,0 +1,201 @@
+schemaVersion: "1.0"
+
+id: "9dbc4bee-d5e9-46ba-bd26-6d4c5f378c2b"
+key: "TC-122"
+title: "IM-1088 Managed-protected manual-sweep spike (3 cases) — 3.1 Connected Apps / 3.13 Create Online Apps / veevart-auth all flip manual→hybrid via a T6 read-back verify (blind handoff → verified); protection is REAL on the write side · CODE PR (spec-only, reused T6 op)"
+description: |
+  Cobertura QA para IM-1088 (Historia, priority Medium, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1127 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 3 (probe-first manual sweep). Spike sobre 3 casos
+    managed-protected para confirmar que la protección es real (probe read/write vía Metadata/
+    Tooling/Data API) y convertir cualquier READ probeable en un verify automatizado.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#260` (**MERGED** 2026-07-16 10:56Z).
+    Branch: `task/spike-managed-protected-IM-1088`. Merge commit `f1703651` (base `5f1fdd1d`).
+    6 files, +288/-34. (Chain: #260 merge `f1703651` = BASE de IM-1089/#261; #260→#261→#262.)
+  - **CODE PR spec-only** — NO toca adapters/ops: reutiliza el op T6 verify (anon Apex read-only,
+    catalog-declarative). Los 3 specs bumpean case+template v1→v2, feasibility manual→hybrid, y suman
+    un `.spec.ts` lockstep/surface por caso. `scripts/seed-master-template.ts` intacto (IM-1090 owns).
+
+  Desenlace del spike — la protección managed es **REAL** en el write side de los 3 casos (ninguna
+  Metadata/Tooling/Data API puede hacer la configuración), pero cada caso **produce estado legible por
+  API**, así que cada uno flippea **manual → hybrid** agregando un step T6 read-back verify (handoff
+  ciego → handoff verificado) + guía mejorada. Probado live en CamiloDevOrg (00Dfj00000QJMx7EAH):
+  - **3.1 Connected Apps security** → HYBRID-WITH-VERIFY. Write: `ConnectedApplication.
+    OptionsAllowAdminApprovedUsersOnly` describe `updateable=false` (objeto `updateable=false`);
+    Tooling PATCH → HTTP 400. Verify T6: lee `ConnectedApplication` + `SetupEntityAccess`; asserta que
+    ambas apps Veevart están admin-pre-authorized Y con profile/permset asignado. Detección probada live
+    (el pass-path no es showable — el flag no es API-writable, que ES el finding).
+  - **3.13 Create Online Apps** → HYBRID-WITH-VERIFY. Write: wizard managed (subdomain + Connect-with-SF
+    OAuth + provisioning) es un flow Aura/LWC sin write surface Metadata/Tooling/Data. Verify T6: lee
+    `Auctifera__Online_Apps_Settings__c` org-default; asserta subdomain poblado Y los 4 flags de seguridad
+    mandatorios. Detección Y pass ambos probados live (org revertido).
+  - **veevart-auth Authenticate Online Apps** → HYBRID-WITH-VERIFY. Write: OAuth grant interactivo contra el
+    managed `Veevart Online Apps` connected app; ninguna API autoriza OAuth por el usuario. Verify T6: lee
+    `OauthToken` para el connected app; asserta ≥1 token autorizado (el grant tomó). Pass probado live (2 tokens).
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR): clone en merge `f1703651`, correr los 3
+    `.spec.ts` + gates; re-derivar el conteo del dev (jest 204/204).
+  - **spec fidelity independiente**: parsear los 3 specs y verificar por cuenta propia — cada uno v2/hybrid,
+    2 steps ordenados MANUAL→AUTOMATED T6; y leer el apex de cada verify para confirmar que lee los objetos
+    correctos, asserta las condiciones de cada AC, y THROWS VerifyException con mensaje de remediación.
+  - **op-reuse audit** (NO genuinely-new): confirmar que #260 NO toca adapters (6 files = 3 specs + 3 .spec.ts);
+    el op T6 verify es anon Apex catalog-declarative → la novedad es el wiring del spec, no un op nuevo.
+  - **scope boundaries**: seed-master-template.ts sin cambios (IM-1090 owns); managed-protection REAL en write
+    (updateable=false / Tooling 400) documentada como refusal evidence.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven) y los v2 NO están
+    seeded a MigrationApp-dev (seed PENDING-CREDS, AWS SSO expirado). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Seed PENDING-CREDS**: AWS SSO token expirado; los v2 no seeded (append-only) → seed en cred refresh.
+    Bloquea re-correr los hybrids via la app.
+  - **3.1 pass-path no showable**: el flag OptionsAllowAdminApprovedUsersOnly no es API-writable (ESE es el
+    finding); solo la detección (fail-path) es demostrable por API — el pass depende de un pre-auth manual real.
+  - **veevart-auth anchor**: `Auctifera__Veevart_Apps_Credential__c` org-default está vacío en el probe org →
+    no es anchor confiable; por eso el verify usa OauthToken en su lugar.
+  - **Auctifera/managed protected**: los read targets son del managed package; el spike los probó en CamiloDevOrg.
+    QA re-verifica por código (contrato del apex + op reuse), sin metadata-lens live (org fuera de alcance).
+  - Reporter/assignee del ticket = el dev (Camilo). QA es re-verificación independiente del PR ya MERGED.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol de specs en merge `f1703651` y base `5f1fdd1d` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR: evidencia primaria por código). `f1703651` es alcanzable en el clone de IM-1089/1090."
+  - "Node + jq/python3 para parsear los 3 specs y leer el apex de cada T6 verify independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven) y los v2 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · 3.1 Connected Apps security — hybrid with a T6 verify that reads ConnectedApplication.OptionsAllowAdminApprovedUsersOnly for BOTH managed apps + SetupEntityAccess, fails naming any app not admin-pre-authorized or without a profile assigned, passes only when both are admin-pre-authorized with a profile"
+    tags:
+      - ac-1
+      - ic-3-1
+      - hybrid
+      - t6-verify
+      - connected-apps
+      - managed-protected
+      - im-1088
+      - im-735
+    given:
+      - "el spec `ic-3-1-connected-apps-security.json` en el merge `f1703651`"
+    when:
+      - "se parsea el spec y se lee el apex del step 2 (T6 verify)"
+    then:
+      - "case.version=2, template.version=2 (lockstep), feasibility='hybrid'; 2 steps ordenados: step1 MANUAL pre-authorize, step2 AUTOMATED toolName=T6"
+      - "el apex lee `ConnectedApplication.OptionsAllowAdminApprovedUsersOnly` para ambas apps managed (Payment + Files) y `SetupEntityAccess` para la asignación profile/permset"
+      - "lanza VerifyException nombrando cualquier app que NO esté admin-pre-authorized o sin profile asignado; pasa solo cuando ambas están admin-pre-authorized con profile"
+      - "write-side protection REAL: OptionsAllowAdminApprovedUsersOnly describe updateable=false (objeto updateable=false), Tooling PATCH → HTTP 400 (refusal evidence). Detección dev-proven live; pass-path no showable por API (ESE es el finding)"
+
+  - title: "AC2 · 3.13 Create Online Apps — hybrid with a T6 verify that reads the Auctifera__Online_Apps_Settings__c org-default, fails if the subdomain is blank or any of the four mandatory security flags is wrong, passes only when subdomain populated + all four flags correct"
+    tags:
+      - ac-2
+      - ic-3-13
+      - hybrid
+      - t6-verify
+      - online-apps
+      - security-flags
+      - im-1088
+    given:
+      - "el spec `ic-3-13-create-online-apps.json` en el merge `f1703651`"
+    when:
+      - "se parsea el spec y se lee el apex del step 2 (T6 verify)"
+    then:
+      - "case.version=2, template.version=2 (lockstep), feasibility='hybrid'; 2 steps ordenados: step1 MANUAL wizard, step2 AUTOMATED toolName=T6"
+      - "el apex lee `Auctifera__Online_Apps_Settings__c.getOrgDefaults()`; falla si el subdomain primario está en blanco"
+      - "falla si alguno de los 4 flags mandatorios no se cumple: Hide Personal Info=TRUE, Disable Autologin=FALSE, Allow Contact Name Updates=FALSE, Censor User Information=TRUE"
+      - "pasa solo cuando el subdomain está poblado Y los 4 flags están correctos. Detección Y pass dev-proven live (org revertido)"
+
+  - title: "AC3 · veevart-auth Authenticate Online Apps — hybrid with a T6 verify that counts OauthToken rows for the 'Veevart Online Apps' connected app, fails with a remediation message when no authorized token exists, passes only when at least one authorized token exists"
+    tags:
+      - ac-3
+      - ic-veevart-auth
+      - hybrid
+      - t6-verify
+      - oauth-token
+      - im-1088
+    given:
+      - "el spec `ic-veevart-auth.json` en el merge `f1703651`"
+    when:
+      - "se parsea el spec y se lee el apex del step 2 (T6 verify)"
+    then:
+      - "case.version=2, template.version=2 (lockstep), feasibility='hybrid'; 2 steps ordenados: step1 MANUAL OAuth handshake, step2 AUTOMATED toolName=T6"
+      - "el apex cuenta filas `OauthToken` para el connected app 'Veevart Online Apps'"
+      - "falla con un mensaje de remediación cuando no existe token autorizado; pasa solo cuando existe ≥1 token autorizado"
+      - "el anchor Auctifera__Veevart_Apps_Credential__c está vacío en el probe org → se usa OauthToken en su lugar. Pass dev-proven live (2 tokens)"
+
+  - title: "Gates green + v1→v2 lockstep — jest per-case lockstep/surface suites (3 nuevos) pass, tsc --noEmit clean, eslint clean on touched files; all 3 specs bumped case+template version v1→v2 together with feasibility manual→hybrid"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - im-1088
+    given:
+      - "clone local de MigrationAppBackend en merge `f1703651` con npm ci limpio"
+    when:
+      - "se corren tsc --noEmit, jest (seeds+scripts, incl. los 3 `.spec.ts` nuevos) y eslint sobre los archivos tocados"
+    then:
+      - "tsc --noEmit sin type errors; eslint limpio en los archivos tocados (o hallazgo verificado PRE-existente vía git blame)"
+      - "los 3 `.spec.ts` lockstep pasan; el conteo del dev (jest 204/204) se re-deriva y se reporta lo obtenido"
+      - "los 3 specs bumpearon case.version y template.version de 1→2 en lockstep, con feasibility manual→hybrid"
+
+  - title: "Scope boundaries + managed-protection reality + open items — no new op (T6 anon Apex reused, adapters untouched), seed-master-template.ts untouched (IM-1090 owns), managed-protection confirmed REAL on the write side (documented refusal evidence), and the open items (seed PENDING-CREDS, 3.1 pass-path unshowable) are documented not silently dropped"
+    tags:
+      - scope-fit
+      - no-new-op
+      - reused-ops
+      - managed-protection
+      - open-items
+      - pending-creds
+      - independent-verification
+      - im-1088
+      - im-1090
+    given:
+      - "el diff completo del PR #260 (6 files) y el árbol en base `5f1fdd1d`"
+    when:
+      - "se auditan los paths tocados y se confirma que el op T6 es anon Apex catalog-declarative"
+    then:
+      - "el PR NO toca ningún adapter/op: 6 files = 3 specs .json + 3 .spec.ts nuevos → NO genuinely-new op (el T6 verify es anon Apex del catálogo)"
+      - "`scripts/seed-master-template.ts` NO fue tocado por #260 (la flip policy del master es de IM-1090/#262)"
+      - "la protección managed queda confirmada REAL en el write side (updateable=false / Tooling 400 / wizard sin API surface) como refusal evidence documentada"
+      - "los open items quedan documentados: seed MigrationApp-dev PENDING-CREDS y el pass-path no-showable de 3.1 (flag no API-writable)"
+
+tags:
+  - im-1088
+  - im-735
+  - im-1127
+  - implementations-automation
+  - manual-confidence
+  - managed-protected
+  - vendor-spike
+  - manual-sweep
+  - ic-3-1
+  - ic-3-13
+  - ic-veevart-auth
+  - t6-verify
+  - read-back-verify
+  - reused-ops
+  - connected-apps
+  - online-apps
+  - oauth-token
+  - migration-app-backend
+  - code-pr
+  - pr-260
+  - pending-creds
+  - post-june-delivery
+
+estimatedDuration: 70
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
