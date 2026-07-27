@@ -1,0 +1,216 @@
+schemaVersion: "1.0"
+
+id: "93a25fac-77e2-4100-8524-faab0de4d363"
+key: "TC-124"
+title: "IM-1085 IC 5.07 NPSP Customizable Rollups — probe CMDT automation (Low): automate the verifiable parts (T3 standardValueSet + T6 enable/error-recipient + T3 customMetadata recordPattern) + guided MANUAL CRLP-UI build with T6 SOQL read-back; probe proves CRLP CMDT creatable-but-not-op-verifiable · CODE PR (spec-only, reused ops)"
+description: |
+  Cobertura QA para IM-1085 (Historia, priority Medium/low-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1129 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 2 (Low tier). Gap: la config de CRLP filter-group/rollup (npsp
+    custom-metadata) la construye el IE en la UI; el read-back automatizado no puede verificarla bajo auto-handoff.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#257` (**MERGED** 2026-07-16 08:46Z).
+    Branch: `task/ic-5-07-npsp-customizable-rollups-IM-1085`. Merge commit `5e6675e3` (base `c671b71f`).
+    2 files, +230/-19.
+  - **CODE PR spec-only** — NO toca adapters/ops: reutiliza T3 standardValueSet, T6 (anon apex), y T3
+    customMetadata con `recordPattern` (namespace discovery de IM-933). El spec bumpea case+template v1→v2
+    y suma un `.spec.ts` (162 líneas). (Nota: IC 5.07 fue tocado luego por IM-1090/#262 v2→v3 con el nit
+    npsp__Is_Deleted__c=false; este PR es el ORIGEN v2, evaluado en su merge `5e6675e3`.)
+
+  Hallazgo clave del probe (low-confidence): un probe live en CamiloDevOrg CREÓ un Filter Group + Filter
+  Rule + Rollup vía Metadata API (el codepath del op T3 customMetadata) — los writes COMMITEAN (los CRLP
+  records son subscriber-owned, NamespacePrefix null). PERO el SOQL read-back devuelve los fields de
+  relación de metadata como Ids/DurableIds (Filter_Group__c → record Id, RecordTypeId → Object.RecordType,
+  custom objects/fields → EntityDefinition/FieldDefinition DurableIds) — un write declarativo de string
+  estático NO puede self-verify esas referencias. Por eso la CONSTRUCCIÓN de filter-groups/rollups queda
+  como guided handoff MANUAL con un read-back SOQL automatizado; todo lo que un write declarativo puede
+  construir Y verificar queda automatizado.
+
+  Spec v2 (feasibility hybrid, 5 steps):
+  - Step 1 (T3 standardValueSet): agrega "Member" a OpportunityContactRole.Role (ContactRole
+    StandardValueSet) sin desactivar valores existentes; idempotente (no-op si ya activo).
+  - Step 2 (T6 anon apex): enable npsp__Customizable_Rollups_Enabled__c + npsp__Error_Notifications_On__c +
+    npsp__Error_Notifications_To__c = admin resuelto dinámicamente por Name ("Admin Veevart …" con fallback
+    al primer System Administrator activo), sin User Id hardcodeado; override de operator
+    ({{errorNotificationRecipient}}) gana; verify que throws si el end-state no se cumple.
+  - Step 3 (T3 customMetadata, recordPattern "MembershipEndDate"): desactiva (npsp__Active__c=false) los 2
+    rollups Membership End Date (Contact + Household/Organization); tolerate-absent si el org no los tiene.
+  - Step 4 (MANUAL, CRLP UI): construye el fix RecordType=Membership en "Memberships: Won" + los 2 membership
+    Filter Groups (4 rules c/u) + los 2 Membership Join Date rollups.
+  - Step 5 (T6 read-only SOQL): read-back que verifica el end-state completo del handoff, throwing UN mensaje
+    con todos los gaps si algo falta (filtrando tombstones NPSP soft-deleted).
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR spec-only): clone en merge `5e6675e3`, correr
+    el `.spec.ts` + gates; re-derivar el conteo del dev (jest 8/8).
+  - **spec fidelity independiente**: parsear los 5 steps + el apex del step 2 y del step 5 (objetos, dynamic
+    admin resolution, override, verify/throw; step 5 read-back conditions) — por cuenta propia, no solo el lockstep.
+  - **op-reuse audit** (NO genuinely-new): confirmar que #257 NO toca adapters (2 files = spec + spec.ts);
+    standardValueSet/customMetadata(recordPattern)/T6 ya existen en base `c671b71f`.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven: steps 1/2/3 +
+    probe) y el v2 NO está seeded a MigrationApp-dev (seed PENDING-CREDS, AWS SSO expirado). Live =
+    dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Low-confidence gap**: la construcción CRLP queda MANUAL porque un write declarativo no puede self-verify
+    las referencias de metadata (Ids/DurableIds). Documentado como evidencia del probe.
+  - **Seed PENDING-CREDS**: v2 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - **Overlap con IM-1090**: IM-1090 luego agregó npsp__Is_Deleted__c=false al step-5 read-back (v2→v3). Este
+    QA evalúa el v2 en `5e6675e3` (sin ese filtro en los group-lookups); el v3 ya lo QA'é en TR-130.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `5e6675e3` y base `c671b71f` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR spec-only: evidencia primaria por código)."
+  - "Node + jq/python3 para parsear el spec v2 y leer el apex de los steps 2 y 5 independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven) y el v2 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Part 1 add the Member OpportunityContactRole value — step 1 (T3 standardValueSet) adds \"Member\" to the ContactRole StandardValueSet, preserves every pre-existing Role value (no deactivations), and is a no-op on re-run"
+    tags:
+      - ac-1
+      - part-1
+      - standard-value-set
+      - idempotency
+      - im-1085
+      - im-735
+    given:
+      - "el spec `ic-5-07-npsp-customizable-rollups.json` v2 en merge `5e6675e3`"
+    when:
+      - "se parsea el step 1 y su op"
+    then:
+      - "step 1 es AUTOMATED, toolName=T3, op=standardValueSet sobre OpportunityContactRole.Role (ContactRole StandardValueSet)"
+      - "agrega 'Member' si no está presente sin desactivar ningún valor preexistente"
+      - "es idempotente: no-op cuando 'Member' ya está activo (dev-proven live en CamiloDevOrg: 'Member' agregado, existentes preservados)"
+
+  - title: "AC2+AC3 · Parts 2+4 enable Customizable Rollups + set the error-notification recipient dynamically — step 2 (T6) sets Customizable_Rollups_Enabled + Error_Notifications_On true and Error_Notifications_To to the run-time-resolved \"Admin Veevart …\" user (SysAdmin fallback, no hardcoded User Id, throws if not met); an operator override wins"
+    tags:
+      - ac-2
+      - ac-3
+      - part-2
+      - part-4
+      - t6-custom-setting
+      - dynamic-recipient
+      - operator-override
+      - im-1085
+    given:
+      - "el step 2 (T6 anon apex) del spec v2"
+    when:
+      - "se lee el apex del step 2"
+    then:
+      - "setea npsp__Customizable_Rollups_Enabled__c=true en el org-default Customizable Rollup Settings"
+      - "setea npsp__Error_Notifications_On__c=true y npsp__Error_Notifications_To__c al user activo 'Admin Veevart …' resuelto por Name en run time (fallback al primer System Administrator activo), sin User Id hardcodeado"
+      - "un override de operator ({{errorNotificationRecipient}}: User Id / Chatter group Id / 'All Sys Admins') gana sobre el auto-resuelto"
+      - "el apex hace verify post-condición y throws (FAILED) si el end-state no se cumple (dev-proven live: recipient 'Admin Veevart for Test Museum 005fj00000GP7WXAA1')"
+
+  - title: "AC4 · Part 3b deactivate the Membership End Date rollups — step 3 (T3 customMetadata, recordPattern \"MembershipEndDate\") sets npsp__Active__c=false on the Contact + Household/Organization End Date rollups, matches only those two, and tolerate-absent no-ops on an org/version lacking them"
+    tags:
+      - ac-4
+      - part-3b
+      - custom-metadata
+      - record-pattern
+      - tolerate-absent
+      - im-1085
+    given:
+      - "el step 3 (T3 customMetadata, recordPattern) del spec v2"
+    when:
+      - "se parsea el step 3 y su recordPattern"
+    then:
+      - "step 3 es AUTOMATED, toolName=T3, op=customMetadata, recordPattern='MembershipEndDate' sobre npsp__Rollup__mdt"
+      - "ambos rollups Membership End Date (Contact + Household/Organization) quedan con npsp__Active__c=false; el pattern matchea SOLO esos dos"
+      - "un org/version sin esos rollups es un tolerate-absent no-op limpio (dev-proven: pattern matcheó exactamente Contact + Account End Date)"
+
+  - title: "AC5 · Probe proves CRLP CMDT records are creatable but not op-verifiable — a Filter Group/Rule/Rollup created via the Metadata API commits and is SOQL-readable, but the read-back returns reference/entity fields as Ids/DurableIds (not the written API-name strings), so the declarative customMetadata op cannot self-verify a filter-rule or rollup construction"
+    tags:
+      - ac-5
+      - probe-finding
+      - cmdt-not-verifiable
+      - low-confidence
+      - refusal-evidence
+      - im-1085
+    given:
+      - "la evidencia del probe live en CamiloDevOrg documentada en el ticket/PR"
+    when:
+      - "se revisa la lógica del hallazgo y su reflejo en el spec (construcción MANUAL)"
+    then:
+      - "el create de Filter Group + Filter Rule + Rollup vía Metadata API SUCCEEDS y los records son readable por SOQL (subscriber-owned, NamespacePrefix null)"
+      - "el SOQL read-back devuelve los fields de referencia/entity como Ids o DurableIds, no los strings de API-name escritos (Filter_Group__c→Id, RecordTypeId→Object.RecordType, custom obj/field→DurableIds)"
+      - "por eso el op customMetadata declarativo NO puede self-verify una construcción de filter-rule/rollup → la construcción queda como guided handoff MANUAL (decisión correcta para un caso Low)"
+
+  - title: "AC6 · Guided handoff builds the filter groups and rollups with automated read-back verify (Parts 3a+5) — step 4 is a MANUAL CRLP-UI handoff; step 5 (T6 read-only SOQL) passes only when the full end-state holds and otherwise throws one message listing every gap"
+    tags:
+      - ac-6
+      - part-3a
+      - part-5
+      - manual-handoff
+      - read-back-verify
+      - crlp
+      - im-1085
+    given:
+      - "los steps 4 (MANUAL) y 5 (T6 read-only SOQL read-back) del spec v2"
+    when:
+      - "se lee el apex del step 5 y su lógica de acumulación de gaps"
+    then:
+      - "step 4 es MANUAL: build del fix RecordType=Membership en 'Memberships: Won' + 2 membership Filter Groups (4 rules c/u) + 2 Membership Join Date rollups en la CRLP UI"
+      - "step 5 (T6 read-only) pasa SOLO cuando: 'Memberships: Won' tiene una rule con Value 'Membership'; existen 'Membership for Contact Hard Credit' y 'Membership for Contact Soft Credit' con exactamente 4 rules c/u; ambos Join Date rollups Active con Operation=First; ambos Membership End Date rollups inactive"
+      - "si algo falta, step 5 throws UN mensaje listando todos los gaps (FAILED); read-only, sin DML"
+
+  - title: "Spec v2 lockstep + gates + op-reuse — case+template bumped to v2 in lockstep, jest/tsc/eslint pass on the touched files, and no adapter/op is changed (standardValueSet + customMetadata recordPattern + T6 reused, NOT genuinely-new)"
+    tags:
+      - ac-7
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - reused-ops
+      - scope-fit
+      - im-1085
+      - im-933
+    given:
+      - "clone local de MigrationAppBackend en merge `5e6675e3` con npm ci limpio; base `c671b71f`"
+    when:
+      - "se corren tsc --noEmit, el `.spec.ts` de 5.07 y eslint; y se audita el diff de #257"
+    then:
+      - "case.version=2 y template.version=2 (lockstep, asertado por el test)"
+      - "el `.spec.ts` de 5.07 pasa; tsc --noEmit sin type errors; eslint limpio en los archivos tocados (o hallazgo PRE-existente vía git blame); conteo del dev (8/8) re-derivado"
+      - "op-reuse: #257 NO toca adapters (2 files = spec .json + .spec.ts); standardValueSet, customMetadata (recordPattern) y T6 ya existen en base `c671b71f` → NO genuinely-new"
+
+tags:
+  - im-1085
+  - im-735
+  - im-1129
+  - implementations-automation
+  - low-confidence
+  - ic-5-07
+  - npsp
+  - customizable-rollups
+  - crlp
+  - standard-value-set
+  - custom-metadata
+  - record-pattern
+  - t6-verify
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-257
+  - pending-creds
+  - post-june-delivery
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1

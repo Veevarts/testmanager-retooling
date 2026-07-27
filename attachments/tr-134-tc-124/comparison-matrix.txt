@@ -1,0 +1,57 @@
+IM-1085 IC 5.07 NPSP Customizable Rollups — evidence matrix (MigrationAppBackend#257, merge 5e6675e3)
+Change-type: CODE PR spec-only (reused ops: T3 standardValueSet + T6 anon-apex + T3 customMetadata recordPattern). HYBRID case (4 auto + 1 manual). Tier Low.
+Primary evidence = jest + tsc + eslint + independent spec-fidelity + apex read + op-reuse audit.
+Clone: MigrationAppBackend @ 5e6675e3 (base c671b71f). Deps valid (package.json unchanged). NO live IE run (live CamiloDevOrg-only dev-proven steps 1/2/3 + probe; v2 not seeded — seed PENDING-CREDS, AWS SSO expired).
+==========================================================================================================
+
+Check                                                          | Method                               | Result                                    | Scn | Verdict
+---------------------------------------------------------------+--------------------------------------+-------------------------------------------+-----+--------
+step 1 AUTOMATED T3 standardValueSet (Member OppContactRole)    | independent spec parse               | step1 kind=AUTOMATED tool=T3 op=standardVS | S1  | PASS
+  -> idempotent, preserves existing values                     | spec desc + dev live                 | no-op when present; dev-proven CamiloDevOrg| S1  | PASS
+step 2 T6: enable CRLP + Error_Notifications_On true            | read apex                            | Customizable_Rollups_Enabled + Notif_On    | S2  | PASS
+step 2: recipient resolved by Name 'Admin Veevart' (SysAdmin fb)| read apex                            | Name LIKE 'Admin Veevart%'; SysAdmin fallbk| S2  | PASS
+  -> no hardcoded User Id                                       | regex 005... over apex               | none found (dynamic)                       | S2  | PASS
+  -> throws (FAILED) if end-state not met                       | read apex                            | throw new VerifyException present          | S2  | PASS
+  -> operator override wins (errorNotificationRecipient)        | spec parse (operatorInputs[0])       | declared at steps[1].operatorInputs[0]; token in apex | S2 | PASS
+step 3 AUTOMATED T3 customMetadata recordPattern 'MembershipEndDate'| independent spec parse            | op=customMetadata recordPattern set        | S3  | PASS
+  -> both End Date rollups Active=false, matches only 2         | spec desc + dev live                 | pattern matched Contact+Account End Date   | S3  | PASS
+  -> tolerate-absent no-op                                      | spec desc                            | clean no-op when rollups absent            | S3  | PASS
+AC5 probe: CRLP CMDT creatable but not op-verifiable            | ticket/PR evidence + spec design     | writes commit; SOQL read-back returns      | S4  | PASS
+                                                               |                                      | Ids/DurableIds -> construction stays MANUAL|     |
+step 4 MANUAL CRLP-UI handoff                                   | independent spec parse               | step4 kind=MANUAL                          | S5  | PASS
+step 5 T6 read-only SOQL read-back verify                       | read apex                            | reads Filter_Group/Rule/Rollup __mdt        | S5  | PASS
+  -> passes only on full end-state, else one gap message        | read apex                            | RULES_PER_GROUP + Operation 'First' +      | S5  | PASS
+                                                               |                                      | String.join(gaps) + throw VerifyException  |     |
+  -> read-only (no DML)                                        | read apex                            | no insert/update/upsert/delete             | S5  | PASS
+case+template version lockstep                                  | independent spec parse               | case.v=2 == template.v=2                    | S6  | PASS
+gates: tsc --noEmit clean                                       | npx tsc --noEmit                     | exit 0, 0 diagnostics                      | S6  | PASS
+gates: jest ic-5-07 lockstep suite                              | npx jest <5.07 spec.ts>             | 1 suite, 9 tests, exit 0                    | S6  | PASS
+gates: full jest (src+scripts)                                  | npx jest                             | 1934 pass / 1935 (1 skipped), 0 fail        | S6  | PASS
+gates: eslint clean on touched .spec.ts                         | npx eslint <touched>                 | exit 0, 0 problems                          | S6  | PASS
+op-reuse: no adapter/op changed (2 files = spec + spec.ts)      | git diff base..merge                 | only seeds/specs                           | S6  | PASS
+  -> recordPattern + standardValueSet pre-exist in base         | git grep base c671b71f               | recordPattern=27, standardValueSet=41       | S6  | PASS (reused, not new)
+
+RESULT: 6/6 scenarios PASS · 0 defects.
+
+DEV-CLAIM RECONCILIATION (independent verification):
+- PR body: "jest 8/8 on the new spec test". Reproduced: the ic-5-07 lockstep suite = 9 tests (green). Off by 1 (likely a
+  test added after the PR body was written); substantively confirmed. Full src+scripts = 1934/1935 (1 skipped). Reported
+  what I obtained, not the dev's number.
+- Every step contract was re-parsed independently AND the apex of steps 2 (dynamic recipient + override + verify) and 5
+  (read-back conditions) was read by hand — NOT trusted from the PR body nor the lockstep test. All match.
+- op-reuse proven by git diff (#257 changed NO adapter/op) + git grep (recordPattern + standardValueSet pre-exist in base).
+  This is NOT a genuinely-new op PR — it wires reused ops into the 5.07 spec.
+
+VERSION-CHAIN NOTE (not a defect):
+- This is IC 5.07 ORIGIN v2 (#257, merge 5e6675e3). IM-1090/#262 later bumped it v2->v3 adding npsp__Is_Deleted__c=false
+  to the two step-5 Filter_Group group-lookups (already QA'd in TR-130). At v2 the apex has Is_Deleted on 5 queries
+  (rollup/rule) but not yet the 2 group-lookups — consistent with the IM-1090 diff (5 -> 7). Evaluated at the correct #257 ref.
+
+LIVE (deferred): steps 1/2/3 + the CRLP probe were dev-proven on CamiloDevOrg. Re-running via the app is blocked — the
+v2 spec is NOT seeded to MigrationApp-dev (seed PENDING-CREDS). Per the ticket, documented as dev-proven/PENDING-CREDS,
+NOT claimed PASS/FAIL on the live path.
+
+OBSERVATIONS (documented, not defects):
+- Low-tier by design: the CRLP filter-group/rollup CONSTRUCTION stays a MANUAL handoff because a declarative static-string
+  write cannot self-verify the metadata-relationship references (SOQL read-back returns Ids/DurableIds, not the written
+  API-name strings) — the probe finding (AC5). Everything a declarative write can build AND verify is automated.
