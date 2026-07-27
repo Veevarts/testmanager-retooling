@@ -1,0 +1,251 @@
+schemaVersion: "1.0"
+
+id: "0d4fc692-aac2-49fd-928e-51b62ad04c17"
+key: "TC-127"
+title: "IM-1086 Metadata-gap spike (12 ICs) — validate the 5 UPGRADES (IC 1 CDN · 5.2 internal notification · 3.29 help menu · 6.04 default location · 6.05 POS email) driven by 2 GENUINELY-NEW T3 ops (customHelpMenuSection + translations) plus reused settings/workflowAlert, and confirm the 7 stay-manual decisions are sound · CODE PR with genuinely-new ops"
+description: |
+  Cobertura QA para IM-1086 (Historia, priority Medium/manual-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1132 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 3 — probe-first manual sweep sobre 12 ICs metadata-gap (la categoría
+    con más chance de upgrade). Resultado del spike: **5 UPGRADED (auto/hybrid), 7 quedan manual** con evidencia live.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#258` (**MERGED** 2026-07-16).
+    Branch: `task/spike-metadata-gap-IM-1086`. Merge commit `a2ee3cbf` (base `5e6675e3` = IC 5.07/IM-1085 #257).
+    16 files, +1369/-84.
+  - **CODE PR con 2 ops GENUINELY-NEW** (a diferencia de los spikes spec-only): #258 TOCA adapter + domain model +
+    lambda handler para agregar 2 ops T3 reusables nuevos:
+    * `customHelpMenuSection` — upsert de una Lightning Help Menu section (masterLabel + items[{label,url,sortOrder}]),
+      idempotente por fullName, read-back verify.
+    * `translations` — upsert de custom-label overrides en_US (merge/upsert por name; SET-ONLY, no se pueden limpiar),
+      NO read-merge (metadata.update('Translations') deja los demás labels intactos), read-back verify filtrado a los names.
+    Files op: `t3-metadata.adapter.ts` (+272), `metadata-mutation-spec.ts` (+101), `t3-metadata.handler.ts` (+53), y sus
+    3 spec.ts. Más los 5 spec .json + .spec.ts de los upgrades.
+
+  Los 5 UPGRADES (cada uno v2, case+template lockstep):
+  - IC 1 Session Settings (CDN) — AUTO, step T3 `settings` sobre LightningExperienceSettings.enableAuraCDNPref=true
+    (op REUSADO). read→update→verify, idempotente.
+  - IC 5.2 Internal Notification — HYBRID, step1 T3 `workflowAlert` (op REUSADO): setea OWEA sender + AGREGA operator
+    recipient en Opportunity.vnfp__Internal_Donation_Membership_Notification (preserva recipients existentes); step2
+    MANUAL: quitar 'Account owner' (la Metadata API puede ADD pero no REMOVE recipients).
+  - IC 3.29 Help Menu — AUTO, step T3 `customHelpMenuSection` (op NUEVO): 'Veevart Resources' con 3 links fijos
+    (Support, Documentation, Videos & Tutorials), idempotente por fullName.
+  - IC 6.04 Default Location — AUTO, step T3 `translations` (op NUEVO): override en_US de Auctifera__Default_Location =
+    {{museumAddress}}. upsert por label name, read-back.
+  - IC 6.05 POS Email — HYBRID, step1 T3 `translations` (op NUEVO reusado): 5 labels Auctifera POS/ticketing con
+    {{museumName}} + Exchange subject fijo; step2 MANUAL: setear Default Workflow User (no hay setting escribible).
+
+  Los 7 que quedan MANUAL (decisiones del spike a re-verificar):
+  - 5.05 Default Ack Status: managed picklist record-type default silently dropped — tras un RecordType deploy exitoso
+    que setea el default de npsp__Acknowledgment_Status__c, una Donation Opp nueva inserta null (ground-truth vía anon
+    Apex insert→requery→delete). El default de un Type standard SÍ persiste; el managed no. Refusal evidence fuerte.
+  - 3.31 Queueable Delay: ApexSettings metadata type NO tiene field de enqueue-delay (retrieve completo) — sin API surface.
+  - 3.18 Home Page Dashboards: per-app FlexiPage home pages + App-Default assignment + Dashboard components (dep de
+    Reports-Package). Precedente FlexiPage (6.02/3.12).
+  - 3.27 Museum Days Off: agrega MuseumDaysOff component al Company Info FlexiPage + days-off data. Precedente FlexiPage.
+  - 5.19 Ack Letters: customización de CONTENT por cliente + signature image upload/URL. Inherentemente manual.
+  - 5.04 Opportunity Stages (deferred): necesita un op NUEVO businessProcess/salesProcess + record-type assignment —
+    fuera de scope de este spike (follow-up).
+  - 6.01 Override Field Labels (deferred): Translation Workbench en_US feasible pero necesita un op CustomObjectTranslation
+    distinto + resolución de field-API-names managed en 5 objetos (follow-up).
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR genuinely-new ops): clone en merge `a2ee3cbf`, correr los
+    adapter/handler/domain `.spec.ts` (incl. los tests de los 2 ops nuevos) + los 5 lockstep + gates; re-derivar el
+    conteo del dev (jest 1970 / 188 suites).
+  - **genuinely-new audit**: probar con `git grep -c` que customHelpMenuSection y translations = 0 en base `5e6675e3`
+    y >0 en merge `a2ee3cbf` (adapter + domain model) → 2 ops GENUINELY-NEW; y que settings/workflowAlert ya existen (reused).
+  - **adapter code review independiente**: leer el diff de `t3-metadata.adapter.ts` (los 2 nuevos handlers) por cuenta
+    propia — upsert/create-vs-update, merge-no-read-merge de translations (set-only), read-back verify, success=false no throw.
+  - **spec fidelity independiente**: parsear los 5 specs v2 (steps + ops) por cuenta propia, no solo los lockstep.
+  - **7 stay-manual findings**: re-verificar que cada rationale es defendible (esp. 5.05 con su ground-truth de managed
+    picklist default drop, 3.31 sin API surface, 5.04/6.01 deferred con op nuevo requerido).
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven, test data revertida) y los v2
+    NO están seeded a MigrationApp-dev (seed PENDING-CREDS, AWS SSO expirado). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Open question del ticket**: si los 6 cases flippeados deben agregarse a WORKING_CASE_IDS del master seed (3.16/3.05
+    previos NO lo están). NOTA QA: IM-1090/#262 luego hizo la selección del master PREDICATE-BASED (todos los auto/hybrid
+    siempre; EXCLUDE_FROM_MASTER = solo ic-veevart-auth) → en main actual los upgrades entran por el predicado sin pin
+    (mismo hallazgo que en IM-1087/TR-136). Resuelto por IM-1090; no requiere pin.
+  - **Deferred 5.04/6.01**: worth follow-up tickets (businessProcess op + customObjectTranslation op).
+  - **Seed PENDING-CREDS**: los 5 v2 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código (los 2 ops nuevos tienen unit tests directos en el adapter spec).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `a2ee3cbf` y base `5e6675e3` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR genuinely-new ops: evidencia primaria por código, incl. adapter unit tests)."
+  - "Node + jq/python3 para parsear los 5 specs v2 y leer el diff del adapter/domain model/handler independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven, data revertida) y los v2 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "IC 1 · Enable the Lightning Component CDN (Session Settings) — step (T3 settings, reused op) sets LightningExperienceSettings.enableAuraCDNPref=true, verifies by reading it back as true, and is idempotent on re-run"
+    tags:
+      - ac-ic-1
+      - upgrade
+      - happy-path
+      - t3-settings
+      - reused-op
+      - im-1086
+      - im-735
+    given:
+      - "el spec `ic-1-session-settings-cdn.json` v2 en merge `a2ee3cbf`"
+    when:
+      - "se parsea el step 1 y su op"
+    then:
+      - "IC 1 es v2 feasibility=auto; step 1 AUTOMATED, toolName=T3, op=settings sobre LightningExperienceSettings con enableAuraCDNPref=true"
+      - "el op (REUSADO) hace read→update→verify leyendo el setting de vuelta como true; idempotente en re-run"
+      - "dev-proven live en CamiloDevOrg (data revertida)"
+
+  - title: "IC 5.2 · Configure the internal donation/membership notification — step 1 (T3 workflowAlert, reused op) sets the OWEA From sender and ADDS the operator recipient on the managed alert (preserving existing recipients); step 2 stays MANUAL to remove 'Account owner' (the Metadata API can add but not remove recipients)"
+    tags:
+      - ac-ic-5-2
+      - upgrade
+      - hybrid
+      - t3-workflow-alert
+      - reused-op
+      - manual-handoff
+      - im-1086
+    given:
+      - "el spec `ic-5-2-...json` v2 (hybrid) y su step 1 (T3 workflowAlert) + step 2 (MANUAL)"
+    when:
+      - "se parsean los 2 steps y su op"
+    then:
+      - "IC 5.2 es v2 feasibility=hybrid; step 1 AUTOMATED T3 op=workflowAlert (REUSADO) sobre Opportunity.vnfp__Internal_Donation_Membership_Notification: setea OWEA sender + AGREGA el operator recipient, preservando los recipients existentes"
+      - "step 2 es MANUAL: quitar 'Account owner' de los recipients (la Metadata API puede ADD pero no REMOVE recipients)"
+      - "dev-proven live: reversible round-trip en CamiloDevOrg"
+
+  - title: "IC 3.29 · Customize the Lightning Help Menu — step (NEW T3 customHelpMenuSection op) upserts a 'Veevart Resources' section with 3 fixed Veevart links (Support, Documentation, Videos & Tutorials), maps each item to {masterLabel,linkUrl,sortOrder}, is idempotent by fullName, and read-back verifies masterLabel + each item landed"
+    tags:
+      - ac-ic-3-29
+      - upgrade
+      - genuinely-new-op
+      - custom-help-menu-section
+      - idempotency
+      - read-back-verify
+      - im-1086
+    given:
+      - "el spec `ic-3-29-help-menu.json` v2 y el nuevo handler applyCustomHelpMenuSection en `t3-metadata.adapter.ts`"
+    when:
+      - "se parsea el step + se lee el código del op nuevo"
+    then:
+      - "IC 3.29 es v2 feasibility=auto; step 1 AUTOMATED T3 op=customHelpMenuSection: 'Veevart Resources' con 3 links fijos"
+      - "el op valida inputs, mapea items[i]→{masterLabel:item.label, linkUrl:item.url, sortOrder:item.sortOrder ?? i+1}, y UPSERT (before? update : create) idempotente por fullName"
+      - "read-back verify: masterLabel==esperado, count de items ok, y cada item encontrado por masterLabel + normalizeUrl(linkUrl); un write que no pega es success=false (no throw)"
+
+  - title: "IC 6.04 · Set the Default Location custom-label override — step (NEW T3 translations op) upserts the en_US override of Auctifera__Default_Location = {{museumAddress}} via metadata.update('Translations') keyed by label name, without a destructive read-merge, and read-back verifies the value"
+    tags:
+      - ac-ic-6-04
+      - upgrade
+      - genuinely-new-op
+      - translations
+      - custom-label-override
+      - read-back-verify
+      - im-1086
+    given:
+      - "el spec `ic-6-04-default-location.json` v2 y el nuevo handler applyTranslations"
+    when:
+      - "se parsea el step + se lee el código del op nuevo"
+    then:
+      - "IC 6.04 es v2 feasibility=auto; step 1 AUTOMATED T3 op=translations: override en_US de Auctifera__Default_Location = {{museumAddress}} (language default en_US)"
+      - "el op hace metadata.update('Translations',{fullName:language, customLabels:[{name,label}]}) — MERGE/UPSERT por name, deja los demás labels intactos (NO read-merge; live-proven: un override no relacionado sobrevive)"
+      - "set-only (label:'' ignorado, no delete); read-back verify filtrado al name; success=false (no throw) con detail útil si el language no es active translation language"
+
+  - title: "IC 6.05 · Set the POS/ticketing email labels + Default Workflow User — step 1 (NEW T3 translations op, reused) upserts 5 managed POS/ticketing labels with {{museumName}} and a fixed Exchange subject; step 2 stays MANUAL to set the Default Workflow User (no writable metadata setting)"
+    tags:
+      - ac-ic-6-05
+      - upgrade
+      - hybrid
+      - genuinely-new-op
+      - translations
+      - manual-handoff
+      - im-1086
+    given:
+      - "el spec `ic-6-05-pos-email-labels.json` v2 (hybrid) y su step 1 (T3 translations) + step 2 (MANUAL)"
+    when:
+      - "se parsean los 2 steps y su op"
+    then:
+      - "IC 6.05 es v2 feasibility=hybrid; step 1 AUTOMATED T3 op=translations sobre 5 labels Auctifera POS/ticketing: POS_Email_Subject, POS_Email_Refund_Subject, Email_Ticketing_Confirmation_Subject, Company_Name reflejan {{museumName}}; POS_Email_Exchange_Subject en su valor fijo"
+      - "reutiliza el mismo op translations (upsert por name, set-only, read-back)"
+      - "step 2 es MANUAL: setear el Default Workflow User (no hay setting de metadata escribible)"
+
+  - title: "The 7 metadata-gap cases correctly stay MANUAL — each remaining case has a defensible refusal: no API surface, a proven managed silent-drop, a FlexiPage/content dependency, or a deferred new-op requirement"
+    tags:
+      - stay-manual
+      - spike-findings
+      - refusal-evidence
+      - ground-truth
+      - deferred
+      - im-1086
+    given:
+      - "la matriz de hallazgos del spike (7 stay-manual) en el ticket/PR y el catálogo de Implementation Cases"
+    when:
+      - "se revisa el rationale de cada uno de los 7 cases"
+    then:
+      - "5.05 Default Ack Status: ground-truth fuerte — tras un RecordType deploy exitoso, una Donation Opp nueva inserta null en el managed npsp__Acknowledgment_Status__c default (anon Apex insert→requery→delete); el default de un Type standard SÍ persiste, el managed no → refusal evidence sólida"
+      - "3.31 Queueable Delay (ApexSettings sin field de enqueue-delay, retrieve completo), 3.18/3.27 (FlexiPage + component/data), 5.19 (content + signature image por cliente): sin API surface org-agnóstico → manual correcto"
+      - "5.04 Opportunity Stages y 6.01 Override Field Labels: DEFERRED — requieren ops nuevos (businessProcess/salesProcess y CustomObjectTranslation) fuera de scope del spike → follow-up tickets correctos, no gaps"
+
+  - title: "Engineering gates + genuinely-new op audit + spec/version lockstep — tsc/jest/eslint pass; the 2 NEW ops (customHelpMenuSection + translations) are proven GENUINELY-NEW (git grep 0 in base 5e6675e3 → >0 in merge a2ee3cbf, adapter + domain model) while settings/workflowAlert are reused; the 5 upgraded case+template pairs are v2 in lockstep"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - genuinely-new-op
+      - reused-ops
+      - version-lockstep
+      - adapter-code-review
+      - scope-fit
+      - im-1086
+    given:
+      - "clone local de MigrationAppBackend en merge `a2ee3cbf` con npm ci limpio; base `5e6675e3`"
+    when:
+      - "se corren tsc --noEmit, los adapter/handler/domain `.spec.ts` + los 5 lockstep + eslint; y se audita el diff de #258"
+    then:
+      - "los 5 cases son case.version=2 y template.version=2 (lockstep, asertado por cada test); IC 1/3.29/6.04 auto, IC 5.2/6.05 hybrid"
+      - "los adapter/handler `.spec.ts` pasan incluyendo los tests de customHelpMenuSection (upsert/idempotent/read-back) y translations (merge-preserve-others/set-only/read-back); tsc --noEmit sin type errors; eslint limpio en los tocados; conteo del dev (jest 1970 / 188 suites) re-derivado"
+      - "genuinely-new: `git grep -c` customHelpMenuSection y translations = 0 en base `5e6675e3` y >0 en merge `a2ee3cbf` (adapter + domain model) → 2 ops GENUINELY-NEW; settings/workflowAlert pre-existen (reused); scope-fit: 16 files (6 op-code + 10 spec/test), sin creep"
+
+tags:
+  - im-1086
+  - im-735
+  - im-1132
+  - implementations-automation
+  - manual-confidence
+  - metadata-gap-spike
+  - ic-1
+  - ic-5-2
+  - ic-3-29
+  - ic-6-04
+  - ic-6-05
+  - custom-help-menu-section
+  - translations
+  - t3-settings
+  - t3-workflow-alert
+  - genuinely-new-op
+  - reused-ops
+  - stay-manual
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-258
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1

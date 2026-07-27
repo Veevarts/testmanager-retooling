@@ -1,0 +1,514 @@
+commit a2ee3cbff8570338f77aa899a9205a137cb8513f
+Author: Camilo  Salguero Marín <36669483+CamiloSalgueroMarin@users.noreply.github.com>
+Date:   Thu Jul 16 05:03:06 2026 -0500
+
+    IM-1086: Metadata-gap spike — 5 manual ICs automated (2 new T3 ops), 7 stay manual with evidence (#258)
+    
+    * IM-1086: automate IC 1 (Session Settings CDN) + IC 5.2 (internal notification) via existing ops
+    
+    - IC 1 Session Settings -> auto (v2): T3 settings op sets
+      LightningExperienceSettings.enableAuraCDNPref=true (Enable CDN for Lightning
+      Component framework). Live-verified read->update->verify on CamiloDevOrg.
+    - IC 5.2 Internal Donation/Membership Notification -> hybrid (v2): T3 workflowAlert
+      op sets the OWEA sender + adds an operator-named internal recipient on
+      Opportunity.vnfp__Internal_Donation_Membership_Notification; manual cleanup step
+      removes 'Account owner' (Metadata API adds but cannot remove recipients).
+      Live-verified reversible add-recipient round-trip on the managed alert.
+    - Both reuse existing merged ops, zero new op code. Lockstep + surface spec tests added.
+    
+    * IM-1086: add customHelpMenuSection + translations T3 ops; automate IC 3.29, 6.04, 6.05
+    
+    New declarative T3 ops (zero per-IC code, with adapter + handler validation + tests):
+    - customHelpMenuSection: upserts a Lightning Help Menu section (masterLabel + items[{label,url,sortOrder}]). Live-verified create->read-back->delete on CamiloDevOrg.
+    - translations: upserts en_US custom-label overrides (merge/upsert by name; set-only, cannot clear via API). Live-verified round-trip on CamiloDevOrg.
+    
+    Case upgrades:
+    - IC 3.29 Help Menu -> auto (v2): customHelpMenuSection with 3 fixed Veevart links.
+    - IC 6.04 Default Location -> auto (v2): translations override of Auctifera__Default_Location = {{museumAddress}}.
+    - IC 6.05 POS Email -> hybrid (v2): translations override of 5 Auctifera POS/ticketing labels with {{museumName}}; Default Workflow User stays manual (no writable metadata setting).
+    
+    All 444 ops/handler/seed-spec tests + tsc green.
+    
+    * test(implementations): pin customHelpMenuSection + translations in closed op-set IM-1086
+    
+    * fix(t3-translations): prove non-destructive per-label merge + surface Translation Workbench precondition IM-1086
+    
+    HIGH (blast radius): the translations op relies on Translations.update being a
+    per-label MERGE (not a full-component replace that would wipe unrelated
+    overrides). PROVEN LIVE on CamiloDevOrg: seeded an unrelated non-empty override
+    (Auctifera__Accept), wrote ONLY Auctifera__Default_Location, and the unrelated
+    override survived intact -> per-label merge confirmed. Locked in tests:
+    - adapter-spec fake now MERGES Translations customLabels by name (models real SF)
+      instead of full-replace, so preserve-others is exercised faithfully.
+    - new test seeds an unrelated override, writes only the target labels, asserts
+      the unrelated override SURVIVES and the op's update payload is scoped to only
+      the spec's labels (never re-sends the whole component).
+    - code comment cites the live proof.
+    
+    LOW: applyTranslations now surfaces a clear 'enable Translation Workbench / add
+    <language> as an active translation language' hint when a label is absent after
+    the write (was an opaque expected/undefined mismatch); write-failure message
+    enriched likewise; precondition added to the 6.04/6.05 template descriptions.
+    
+    Full suite 1972 green, tsc + eslint clean. Specs stay at v2 (doc-only change).
+
+diff --git a/src/implementations/domain/model/tools/metadata-mutation-spec.ts b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+index d14c53e9..512ceb5c 100644
+--- a/src/implementations/domain/model/tools/metadata-mutation-spec.ts
++++ b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+@@ -1140,6 +1140,92 @@ export interface FieldSetSpec {
+     readonly removeFields?: readonly string[];
+ }
+ 
++/** One link shown under a Help Menu section. */
++export interface CustomHelpMenuItemSpec {
++    /** Shown text of the link. */
++    readonly label: string;
++    /** External link URL the item opens. */
++    readonly url: string;
++    /**
++     * 1-based display position. Defaults to the item's index in `items`
++     * (1, 2, 3…). Salesforce REQUIRES a `sortOrder` on every item, so the
++     * adapter fills the default when omitted.
++     */
++    readonly sortOrder?: number;
++}
++
++/**
++ * Deploy a Lightning **Help Menu** custom section (`CustomHelpMenuSection`) via
++ * the synchronous CRUD Metadata API: read the section by `fullName` (may be
++ * absent) → build `{ fullName, masterLabel, customHelpMenuItems }` → UPSERT
++ * (create when absent, update when present) → read-back verify the `masterLabel`
++ * and the section's items landed.
++ *
++ * **Why a dedicated op (vs T6 Apex):** the Help Menu is a metadata component,
++ * NOT data — anonymous Apex cannot create or edit a `CustomHelpMenuSection`.
++ * The synchronous CRUD Metadata API writes then re-reads in one shot, matching
++ * the per-step verification convention.
++ *
++ * **Metadata shape (verified via describeValueType + a real-org deploy):** the
++ * component type is `CustomHelpMenuSection` with `fullName`, `masterLabel`, and
++ * a repeated child `customHelpMenuItems` whose element type
++ * `CustomHelpMenuItem` carries `masterLabel` (the ITEM label — note the field is
++ * NOT called `label`), `linkUrl` (the URL), and a REQUIRED int `sortOrder`. So
++ * the adapter maps each `items[i]` → `{ masterLabel: item.label, linkUrl:
++ * item.url, sortOrder: item.sortOrder ?? (i + 1) }`.
++ *
++ * Verified by read-back; a write that didn't take is `success=false`, never a
++ * throw (rules §6).
++ */
++export interface CustomHelpMenuSectionSpec {
++    readonly op: 'customHelpMenuSection';
++    /** Metadata fullName of the section (e.g. `Veevart_Resources`). */
++    readonly fullName: string;
++    /** Section header label. */
++    readonly masterLabel: string;
++    /** Ordered links shown under the section. At least one required. */
++    readonly items: readonly CustomHelpMenuItemSpec[];
++}
++
++/** One custom-label translation override to UPSERT. */
++export interface TranslationCustomLabelSpec {
++    /** Custom label API name, e.g. `Auctifera__Default_Location`. */
++    readonly name: string;
++    /** The override text (already token-substituted upstream). */
++    readonly label: string;
++}
++
++/**
++ * UPSERT custom-label **translation overrides** for one platform language via
++ * the synchronous CRUD Metadata API: `metadata.update('Translations', {
++ * fullName: language, customLabels: [{ name, label }, …] })`.
++ *
++ * **Why no read-merge (the key CRUD semantics, tested live):**
++ * `metadata.update('Translations', …)` is a MERGE/UPSERT keyed by each label's
++ * `name` — it sets ONLY the named labels and leaves every OTHER custom label
++ * untouched. So this op does NOT read+merge the (thousands of) existing labels
++ * before writing; it just calls update with the target labels. (Reading the
++ * full `Translations` component returns EVERY custom label — very large — so the
++ * op reads it back only to VERIFY, then filters to the target `name`s and
++ * asserts each `label` matches; it never logs the whole component.)
++ *
++ * **Set-only (document this):** overrides are UPSERT-only via the API — an
++ * override cannot be CLEARED to blank (`label: ''` is ignored, and there is no
++ * delete), so the op is a set-only idempotent operation, which fits the use
++ * case (installing the museum's label overrides). Re-applying the same labels
++ * re-writes the same values and still verifies.
++ *
++ * Verified by read-back (filtered to the target names); a write that didn't
++ * take is `success=false`, never a throw (rules §6).
++ */
++export interface TranslationsSpec {
++    readonly op: 'translations';
++    /** Platform language of the override; defaults to `en_US`. */
++    readonly language?: string;
++    /** Custom-label overrides to UPSERT (idempotent set). At least one required. */
++    readonly customLabels: readonly TranslationCustomLabelSpec[];
++}
++
+ /**
+  * The T3 `inputPayload` contract — a discriminated union on `op`.
+  * New metadata op = new variant here (+ an adapter `case`), not a new tool.
+@@ -1162,7 +1248,9 @@ export type MetadataMutationSpec =
+     | AppNavItemsSpec
+     | StandardValueSetSpec
+     | FieldSetSpec
+-    | CustomSettingSpec;
++    | CustomSettingSpec
++    | CustomHelpMenuSectionSpec
++    | TranslationsSpec;
+ 
+ /** The closed set of T3 ops, in declaration order. */
+ export const METADATA_MUTATION_OPS = [
+@@ -1184,6 +1272,8 @@ export const METADATA_MUTATION_OPS = [
+     'standardValueSet',
+     'fieldSet',
+     'customSetting',
++    'customHelpMenuSection',
++    'translations',
+ ] as const;
+ 
+ export type MetadataMutationOpName = (typeof METADATA_MUTATION_OPS)[number];
+@@ -1287,6 +1377,16 @@ export const isCustomSettingSpec = (
+     spec: MetadataMutationSpec,
+ ): spec is CustomSettingSpec => spec.op === 'customSetting';
+ 
++/** Narrow a spec to the customHelpMenuSection variant. */
++export const isCustomHelpMenuSectionSpec = (
++    spec: MetadataMutationSpec,
++): spec is CustomHelpMenuSectionSpec => spec.op === 'customHelpMenuSection';
++
++/** Narrow a spec to the translations variant. */
++export const isTranslationsSpec = (
++    spec: MetadataMutationSpec,
++): spec is TranslationsSpec => spec.op === 'translations';
++
+ /**
+  * Boundary guard for UNKNOWN payloads — what the LOCAL EXECUTOR uses to
+  * shape-check catalog JSON before routing a T3 step (the T3 handler runs
+diff --git a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+index 208945fe..4dea0c17 100644
+--- a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
++++ b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+@@ -12,6 +12,7 @@ import type {
+     AppNavItemsSpec,
+     ClonePermissionSetSpec,
+     CustomFieldSpec,
++    CustomHelpMenuSectionSpec,
+     BusinessProcessDiscovery,
+     CustomMetadataSpec,
+     CustomSettingSpec,
+@@ -28,6 +29,7 @@ import type {
+     RemoteSiteSpec,
+     SettingsSpec,
+     StandardValueSetSpec,
++    TranslationsSpec,
+     ValidationRuleSpec,
+     WorkflowAlertRecipientRef,
+     WorkflowAlertSender,
+@@ -45,6 +47,9 @@ import { Connection } from 'jsforce';
+ import type {
+     CustomApplication,
+     CustomField,
++    CustomHelpMenuItem,
++    CustomHelpMenuSection,
++    CustomLabelTranslation,
+     CustomMetadata,
+     CustomObject,
+     CustomValue,
+@@ -55,6 +60,7 @@ import type {
+     RemoteSiteSetting,
+     SaveResult,
+     StandardValueSet,
++    Translations,
+     ValidationRule,
+     WorkflowAlert,
+     WorkflowRule,
+@@ -89,7 +95,9 @@ type T3ComponentType =
+     | 'ValidationRule'
+     | 'CustomApplication'
+     | 'StandardValueSet'
+-    | 'FieldSet';
++    | 'FieldSet'
++    | 'CustomHelpMenuSection'
++    | 'Translations';
+ 
+ /**
+  * The slice of a jsforce `Connection` the Data-API ops touch (the
+@@ -386,6 +394,10 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 return this.applyFieldSet(orgId, conn, spec);
+             case 'customSetting':
+                 return this.applyCustomSetting(orgId, conn, spec);
++            case 'customHelpMenuSection':
++                return this.applyCustomHelpMenuSection(orgId, conn, spec);
++            case 'translations':
++                return this.applyTranslations(orgId, conn, spec);
+             default: {
+                 // Catalog JSON can carry anything; reject unknown ops loudly
+                 // (the T3 handler pre-validates, this is defense in depth).
+@@ -5041,6 +5053,265 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+         });
+     }
+ 
++    /* ------------------------- customHelpMenuSection ------------------------ */
++
++    private async applyCustomHelpMenuSection(
++        orgId: string,
++        conn: MetadataConn,
++        spec: CustomHelpMenuSectionSpec,
++    ): Promise<MetadataMutationResult> {
++        this.requireNonBlank(
++            orgId,
++            spec.fullName,
++            'customHelpMenuSection fullName',
++        );
++        this.requireNonBlank(
++            orgId,
++            spec.masterLabel,
++            'customHelpMenuSection masterLabel',
++        );
++        const items = spec.items ?? [];
++        if (items.length === 0) {
++            throw new MetadataDeployError(
++                orgId,
++                'MALFORMED_REQUEST',
++                `T3 customHelpMenuSection ${spec.fullName} has an empty items list.`,
++            );
++        }
++        for (const item of items) {
++            this.requireNonBlank(
++                orgId,
++                item?.label,
++                'customHelpMenuSection item label',
++            );
++            this.requireNonBlank(
++                orgId,
++                item?.url,
++                'customHelpMenuSection item url',
++            );
++        }
++        const fullName = spec.fullName.trim();
++        const masterLabel = spec.masterLabel.trim();
++        // Map each spec item onto the verified CustomHelpMenuItem shape: the
++        // item's `label` → `masterLabel`, `url` → `linkUrl`, and a REQUIRED
++        // 1-based `sortOrder` defaulting to the declaration index.
++        const customHelpMenuItems: CustomHelpMenuItem[] = items.map(
++            (item, i): CustomHelpMenuItem => ({
++                masterLabel: item.label,
++                linkUrl: item.url,
++                sortOrder: item.sortOrder ?? i + 1,
++            }),
++        );
++        this.logger.log({
++            action: 't3.customHelpMenuSection',
++            orgId,
++            fullName,
++            itemCount: customHelpMenuItems.length,
++        });
++
++        // 1. Read existing section (may be absent → create; present → update).
++        const before = await this.readOptional<CustomHelpMenuSection>(
++            orgId,
++            conn,
++            'CustomHelpMenuSection',
++            fullName,
++        );
++
++        // 2. Build the full component payload (update is a replace).
++        const payload: CustomHelpMenuSection = {
++            fullName,
++            masterLabel,
++            customHelpMenuItems,
++        };
++
++        // 3. UPSERT via the synchronous CRUD Metadata API.
++        const save = await this.write(
++            orgId,
++            conn,
++            'CustomHelpMenuSection',
++            payload,
++            () =>
++                before
++                    ? conn.metadata.update('CustomHelpMenuSection', payload)
++                    : conn.metadata.create('CustomHelpMenuSection', payload),
++        );
++        const planned = customHelpMenuItems.map((i) => ({
++            subject: i.masterLabel,
++        }));
++        if (coerceBoolean(save?.success) !== true) {
++            return failedWrite(
++                fullName,
++                [{ subject: `${fullName} (masterLabel)` }, ...planned],
++                joinErrors(save) ??
++                    `metadata write on CustomHelpMenuSection ${fullName} reported success=false with no error detail.`,
++                'customHelpMenuSection',
++            );
++        }
++
++        // 4. Verify by read-back: the masterLabel + each item (by label + url)
++        //    landed, and the section carries exactly the requested item count.
++        const after = await this.readOptional<CustomHelpMenuSection>(
++            orgId,
++            conn,
++            'CustomHelpMenuSection',
++            fullName,
++        );
++        const afterItems = asArray<CustomHelpMenuItem>(
++            after?.customHelpMenuItems,
++        );
++        const labelOk =
++            after?.masterLabel === masterLabel &&
++            afterItems.length === customHelpMenuItems.length;
++        const operations: MetadataOpOutcome[] = [
++            {
++                op: 'customHelpMenuSection',
++                subject: `${fullName} (masterLabel)`,
++                applied: labelOk,
++                detail: labelOk
++                    ? null
++                    : `section ${fullName} after write has masterLabel ${JSON.stringify(after?.masterLabel)} and ${afterItems.length} item(s) (expected ${JSON.stringify(masterLabel)} and ${customHelpMenuItems.length})`,
++            },
++            ...customHelpMenuItems.map((item): MetadataOpOutcome => {
++                const found = afterItems.some(
++                    (a) =>
++                        a.masterLabel === item.masterLabel &&
++                        normalizeUrl(a.linkUrl) === normalizeUrl(item.linkUrl),
++                );
++                return {
++                    op: 'customHelpMenuSection',
++                    subject: item.masterLabel,
++                    applied: found,
++                    detail: found
++                        ? null
++                        : `help menu item "${item.masterLabel}" (${item.linkUrl}) is not on section ${fullName} after write`,
++                };
++            }),
++        ];
++        return finish(fullName, operations, this.logger, {
++            action: 't3.customHelpMenuSection.done',
++            orgId,
++            fullName,
++        });
++    }
++
++    /* ------------------------------ translations ---------------------------- */
++
++    private async applyTranslations(
++        orgId: string,
++        conn: MetadataConn,
++        spec: TranslationsSpec,
++    ): Promise<MetadataMutationResult> {
++        const customLabels = spec.customLabels ?? [];
++        if (customLabels.length === 0) {
++            throw new MetadataDeployError(
++                orgId,
++                'MALFORMED_REQUEST',
++                'T3 translations has an empty customLabels list.',
++            );
++        }
++        for (const l of customLabels) {
++            this.requireNonBlank(orgId, l?.name, 'translations label name');
++            this.requireNonBlank(orgId, l?.label, 'translations label text');
++        }
++        if (spec.language !== undefined) {
++            this.requireNonBlank(orgId, spec.language, 'translations language');
++        }
++        // Platform language of the override; defaults to `en_US`.
++        const language =
++            typeof spec.language === 'string' && spec.language.trim() !== ''
++                ? spec.language.trim()
++                : 'en_US';
++        const targets = customLabels.map((l) => ({
++            name: l.name.trim(),
++            label: l.label,
++        }));
++        this.logger.log({
++            action: 't3.translations',
++            orgId,
++            language,
++            labelCount: targets.length,
++        });
++
++        // metadata.update('Translations', …) is a MERGE/UPSERT keyed by label
++        // `name` — it sets ONLY the named labels and leaves every OTHER custom
++        // label untouched. So we do NOT read+merge the (thousands of) existing
++        // labels; we just write the target labels (scoped payload = non-
++        // destructive). PROVEN LIVE (IM-1086, CamiloDevOrg): seeded an unrelated
++        // NON-EMPTY override (Auctifera__Accept), then wrote ONLY
++        // Auctifera__Default_Location — the unrelated override SURVIVED intact,
++        // confirming per-label merge, NOT a full-component replace (the
++        // adapter-spec fake models this same merge so the preserve-others
++        // contract is unit-tested). NOTE: overrides are UPSERT-only via the API
++        // — a label cannot be cleared to blank (label:'' is ignored, there is no
++        // delete), so this is a set-only idempotent op.
++        const payload: Translations = {
++            fullName: language,
++            customLabels: targets.map(
++                (t): CustomLabelTranslation => ({
++                    name: t.name,
++                    label: t.label,
++                }),
++            ),
++        } as Translations;
++        const save = await this.write(
++            orgId,
++            conn,
++            'Translations',
++            payload,
++            () => conn.metadata.update('Translations', payload),
++        );
++        if (coerceBoolean(save?.success) !== true) {
++            return failedWrite(
++                language,
++                targets.map((t) => ({ subject: t.name })),
++                joinErrors(save) ??
++                    `metadata.update on Translations ${language} reported success=false with no error detail (verify Translation Workbench is enabled and "${language}" is an active translation language).`,
++                'translations',
++            );
++        }
++
++        // Verify: read the whole component back, then filter to the target
++        // `name`s and assert each label matches (never log the whole, very
++        // large, component).
++        const after = await this.readOptional<Translations>(
++            orgId,
++            conn,
++            'Translations',
++            language,
++        );
++        const byName = new Map<string, string>();
++        for (const l of asArray<CustomLabelTranslation>(after?.customLabels)) {
++            if (typeof l?.name === 'string') byName.set(l.name, l.label);
++        }
++        const operations: MetadataOpOutcome[] = targets.map(
++            (t): MetadataOpOutcome => {
++                const actual = byName.get(t.name);
++                const applied = actual === t.label;
++                // `actual === undefined` = the label is absent from the read-back
++                // component — the write did not land. The usual cause is that the
++                // language is not an active translation language (Translation
++                // Workbench off / `${language}` not added), so surface that
++                // precondition rather than an opaque "expected X, got undefined".
++                const detail = applied
++                    ? null
++                    : actual === undefined
++                      ? `custom label "${t.name}" is not present in ${language} after update — verify Translation Workbench is enabled and "${language}" is added as an active translation language`
++                      : `custom label "${t.name}" is ${JSON.stringify(actual)} in ${language} after update (expected ${JSON.stringify(t.label)})`;
++                return {
++                    op: 'translations',
++                    subject: t.name,
++                    applied,
++                    detail,
++                };
++            },
++        );
++        return finish(language, operations, this.logger, {
++            action: 't3.translations.done',
++            orgId,
++            language,
++        });
++    }
++
+     private async readRequired<T extends { fullName?: string | null }>(
+         orgId: string,
+         conn: MetadataConn,

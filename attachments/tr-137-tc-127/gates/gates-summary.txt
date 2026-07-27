@@ -1,0 +1,38 @@
+IM-1086 / TR-137 — gate transcript summary (MigrationAppBackend @ a2ee3cbf, base 5e6675e3 = IM-1085 #257)
+=========================================================================================================
+Environment: node v25.4.0. Deps reused from the 82c35b14 clone; package.json/lock UNCHANGED a2ee3cbf..5f1fdd1d (verified).
+
+tsc --noEmit ....................... exit 0, 0 diagnostics                    [tsc-noemit.log — empty]
+eslint (6 op-code + spec .ts) ...... exit 0, 0 problems                       [eslint-touched.log — empty]
+jest op-code (adapter+handler+model) 3 suites, 310 tests, exit 0            [jest-op-code.log]
+  the 2 NEW ops, direct unit tests (verbose) [jest-newops-verbose.log]:
+   customHelpMenuSection:
+     ✓ CREATES an absent section, mapping label→masterLabel + url→linkUrl + 1-based sortOrder, and verifies
+     ✓ UPDATES an existing section (replacing its label + items) and verifies
+     ✓ honors an explicit sortOrder over the default index
+     ✓ is idempotent — re-applying an already-matching section still verifies
+   translations:
+     ✓ UPSERTS the named labels under the default en_US language and verifies
+     ✓ is idempotent — re-applying the same overrides still verifies
+     ✓ PRESERVES unrelated overrides — writes only the named labels, leaving every other override intact (blast-radius guard)
+     ✓ surfaces a Translation-Workbench precondition hint when the label is absent after the write
+     ✓ throws MALFORMED_REQUEST on an empty customLabels list
+jest 5 upgraded lockstep specs ..... 5 suites, 18 tests, exit 0 (each asserts case.version===2 lockstep)  [jest-5-lockstep.log]
+jest FULL (src + scripts) .......... 187 pass / 188 suites (1 skipped); 1971 pass / 1972 (1 skipped), 0 fail  [jest-full.log]
+
+DEV-CLAIM RECONCILIATION: PR body "jest 1970 passed / 188 suites, tsc clean, eslint clean". Reproduced: 188 total suites
+(exact), 1971 passed + 1 skipped = 1972 tests, 0 fail (+1 test vs the body's 1970 — a test added after the body, or the
+skipped counted differently); tsc 0 diagnostics; eslint 0 problems. Reported what I obtained.
+
+GENUINELY-NEW op audit (spec-fidelity/genuinely-new-audit.txt): 16 files = 6 op-code (adapter+model+handler + 3 spec.ts)
++ 10 upgrade files (5 .json + 5 .spec.ts). git grep -c: customHelpMenuSection 0→12(adapter)+4(model); translations
+0→10(adapter)+4(model) => 2 GENUINELY-NEW T3 ops. settings + workflowAlert pre-exist at base => reused.
+
+Adapter code review (read the 2 new handlers by hand — comparison-matrix.txt):
+  customHelpMenuSection: validate inputs; map items[i]→{masterLabel:item.label, linkUrl:item.url, sortOrder:item.sortOrder ?? i+1};
+    readOptional(before) → UPSERT (before? update : create) → read-back verify (masterLabel + count + each item by
+    masterLabel + normalizeUrl(linkUrl)); success=false → failedWrite (never throw). Idempotent by fullName. OK.
+  translations: language default en_US; metadata.update('Translations', {fullName:language, customLabels}) = MERGE/UPSERT
+    keyed by name (NO destructive read-merge; live-proven preserve-others + unit blast-radius guard); set-only; read-back
+    filtered to target names, with a Translation-Workbench precondition hint when a label is absent; success=false → failedWrite. OK.
+  NO DEFECTS in either op.

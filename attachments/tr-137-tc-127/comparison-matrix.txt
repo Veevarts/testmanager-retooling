@@ -1,0 +1,48 @@
+IM-1086 Metadata-gap spike (12 ICs) — evidence matrix (MigrationAppBackend#258, merge a2ee3cbf)
+Change-type: CODE PR with 2 GENUINELY-NEW T3 ops (customHelpMenuSection + translations) + reused (settings/workflowAlert). 5 upgrades v2, 7 stay-manual (2 deferred). Tier manual-confidence.
+Primary evidence = jest (op-code + 5 lockstep + full) + tsc + eslint + independent adapter code review + genuinely-new audit + manual-sweep soundness review.
+Clone: MigrationAppBackend @ a2ee3cbf (base 5e6675e3 = IM-1085 #257). Deps valid. NO live IE run (live CamiloDevOrg-only dev-proven, data reverted; v2 not seeded — seed PENDING-CREDS, AWS SSO expired).
+==============================================================================================================================
+Check                                                              | Method                          | Result                                          | Scn | Verdict
+-------------------------------------------------------------------+---------------------------------+-------------------------------------------------+-----+--------
+IC 1 settings enableAuraCDNPref=true + read-back + idempotent       | spec parse + lockstep           | v2 auto, T3 op=settings LightningExperienceSettings | S1 | PASS
+IC 5.2 workflowAlert OWEA sender + ADD recipient (preserve existing)| spec parse + lockstep           | v2 hybrid, step1 T3 op=workflowAlert (reused)     | S2  | PASS
+  -> step2 MANUAL remove 'Account owner' (API add-only)            | spec parse                      | step2 kind=MANUAL                                | S2  | PASS
+IC 3.29 customHelpMenuSection (NEW) 'Veevart Resources' + 3 links   | spec parse + adapter read + unit| v2 auto, upsert by fullName, map+sortOrder default| S3 | PASS
+  -> read-back verify (masterLabel+count+each item), idempotent    | read adapter + unit tests       | create/update/explicit-sortOrder/idempotent green| S3  | PASS
+IC 6.04 translations (NEW) en_US Auctifera__Default_Location        | spec parse + adapter read + unit| v2 auto, metadata.update('Translations') merge   | S4  | PASS
+  -> merge-by-name, NO destructive read-merge (preserve others)    | read adapter + unit test        | 'PRESERVES unrelated overrides' blast-radius guard green | S4 | PASS
+  -> set-only + read-back filtered + precondition hint             | read adapter + unit test        | set-only; TW precondition hint green             | S4  | PASS
+IC 6.05 translations (NEW, reused) 5 POS/ticketing labels           | spec parse                      | v2 hybrid, step1 T3 op=translations              | S5  | PASS
+  -> step2 MANUAL Default Workflow User (no writable setting)      | spec parse                      | step2 kind=MANUAL                                | S5  | PASS
+7 stay-manual cases: rationale sound (esp. 5.05 ground-truth)       | catalog + metadata review       | all 7 defensible; 5.04/6.01 deferred (new-op req)| S6  | PASS
+5 upgraded case+template pairs = v2 lockstep                        | jest 5 lockstep                 | each asserts case.version===2; 5 suites/18 tests | S7  | PASS
+genuinely-new: customHelpMenuSection + translations base 0 -> merge | git grep -c (adapter+model)     | cHMS 0→12+4 ; translations 0→10+4                | S7  | PASS
+settings + workflowAlert reused (pre-exist at base)                 | git grep base 5e6675e3          | settings 4 files, workflowAlert 6 files          | S7  | PASS (reused)
+scope-fit: 16 files (6 op-code + 10 spec/test), no creep            | git diff --name-only base..merge| exactly the 16 expected files                    | S7  | PASS
+gates: tsc --noEmit clean                                           | npx tsc --noEmit                | exit 0, 0 diagnostics                            | S7  | PASS
+gates: jest op-code (adapter+handler+model)                         | npx jest <op-code specs>        | 3 suites, 310 tests, exit 0                      | S7  | PASS
+gates: jest full (src+scripts)                                      | npx jest                        | 1971 pass / 1972 (1 skipped), 0 fail; 188 suites | S7  | PASS
+gates: eslint clean on 6 touched .ts                                | npx eslint <touched>            | exit 0, 0 problems                               | S7  | PASS
+
+RESULT: 7/7 scenarios PASS · 0 defects.
+
+DEV-CLAIM RECONCILIATION (independent verification):
+- PR body "jest 1970 passed / 188 suites, tsc clean, eslint clean". Reproduced: 188 total suites (EXACT), 1971 passed +
+  1 skipped = 1972 tests, 0 fail (+1 test vs 1970 — a test added after the body / skipped counted differently); tsc 0
+  diagnostics; eslint 0 problems. Reported what I obtained.
+- Both NEW ops' adapter code was read BY HAND (upsert/create-vs-update, map+sortOrder, merge-no-read-merge/set-only,
+  read-back verify, success=false-not-throw) AND their unit tests observed green (incl. the translations blast-radius
+  'preserve unrelated overrides' guard). NOT trusted from the PR body. GENUINELY-NEW proven by git grep (base 0 -> merge N).
+
+MASTER-INCLUSION open question (ticket): whether to pin the 6 flipped cases into WORKING_CASE_IDS. Answered from the
+IM-1087/TR-136 investigation: IM-1090/#262 made master selection PREDICATE-BASED (every auto/hybrid always; EXCLUDE_FROM_MASTER
+= only ic-veevart-auth), so the flipped IC 1/3.29/6.04 (auto) + 5.2/6.05 (hybrid) enter the master by the predicate — no pin
+needed. Resolved by IM-1090; no action. (3.16/3.05 that the ticket mentions were never pinned because they didn't need to be.)
+
+DEFERRED (correctly scoped as follow-ups, not gaps): 5.04 Opportunity Stages needs a NEW businessProcess/salesProcess op;
+6.01 Override Field Labels needs a NEW CustomObjectTranslation op. Neither built this spike.
+
+LIVE (deferred): all 5 upgrades + the 7 refusals were dev-proven on CamiloDevOrg (test data reverted/cleaned). Re-running via
+the app is blocked — the v2 specs are NOT seeded to MigrationApp-dev (seed PENDING-CREDS). Documented dev-proven/PENDING-CREDS,
+NOT claimed PASS/FAIL on the live path. Manual steps: IC 5.2 step2 (remove 'Account owner'), IC 6.05 step2 (Default Workflow User).
