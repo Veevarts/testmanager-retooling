@@ -1,0 +1,222 @@
+schemaVersion: "1.0"
+
+id: tr-df975304-007c-45a3-af46-a14d99870863
+key: "TR-135"
+testCaseIds:
+  - "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+
+title: "TR-135 · IM-1084 IC 3.33 Auto-Populating Membership Program Fields (TC-125) — 7/7 PASS · 0 defects · CODE PR with a GENUINELY-NEW op capability (T3 customMetadata recordPattern) #256@c671b71f"
+
+environment:
+  name: "MigrationAppBackend @ merge c671b71f (base 2271ff0f = IM-1083 #255) · node v25.4.0 · CamiloDevOrg live dev-proven · MigrationApp-dev seed PENDING-CREDS"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/256"
+  buildVersion: >-
+    CODE PR — GENUINELY-NEW op capability. Unlike the other IM-735 children this batch (spec-only), #256 changes
+    op code: it adds the `recordPattern` mode to the T3 customMetadata op (adapter + domain model). 5 files
+    (+429/-64): metadata-mutation-spec.ts (domain model), t3-metadata.adapter.ts (adapter), t3-metadata.adapter.spec.ts
+    (adapter tests), ic-3-33-…autopopulate.json (spec v1->v2), ic-3-33-…autopopulate.spec.ts (lockstep). HYBRID
+    IC 3.33 v2 (2 auto + 1 manual). Tier Low.
+  notes: |
+    ## Solution understood
+    IM-1084 reworks IC 3.33 from a v1 that hand-listed 7 (wrong-org) rollup DeveloperNames behind a MANUAL "deactivate
+    in the CRLP UI" handoff plus a SOQL verify that passed VACUOUSLY on the (mis-recorded) zero-rollup org, into a v2
+    HYBRID whose mutation is AUTOMATED and whose verify is MEANINGFUL. It does so by adding a new `recordPattern` mode
+    to the reusable T3 customMetadata op: apply `values` to the SUBSET of records whose bare DeveloperName CONTAINS the
+    pattern (SOQL LIKE), update-only, per-record SOQL read-back verify, and — crucially — TOLERATE-ABSENT (zero matches
+    is a clean informational SUCCESS no-op / skipped, not a failure like `allRecords`). Precedence: allRecords >
+    recordPattern > record (mutually exclusive). Key finding: npsp__Rollup__mdt.npsp__Active__c is subscriber-writable
+    via the synchronous CRUD Metadata API despite DeveloperControlled manageability (NPSP default rollups are
+    subscriber-owned, NamespacePrefix null) — proven live on CamiloDevOrg (false<->true flip). A genuinely
+    package-protected record the write does not commit is caught by the read-back verify as applied=false (no false pass).
+
+    ## Inferred technical tests
+    - GENUINELY-NEW op audit (git grep + git diff): recordPattern base 0 -> merge 10 (adapter) + 8 (domain model);
+      5 files changed, 2 of them op code. Proves this is the ORIGIN of the capability (not a reused-op spec PR).
+    - Adapter code review by hand (t3-metadata.adapter.ts + metadata-mutation-spec.ts): subset resolution, tolerate-absent
+      divergence from allRecords, LIKE-wildcard escaping (%->\%, _->\_ AFTER escapeSoqlLiteral so the backslash is not
+      re-doubled; only the 2 wrapper % stay wild), per-record read-back verify, mutual exclusion/precedence.
+    - jest as PRIMARY code evidence: the t3-metadata adapter spec (214 tests) incl. the 3 dedicated recordPattern tests
+      (subset+skip -> AC1/AC5, tolerate-absent -> AC3, LIKE-literal 'Foo_Bar' -> AC4); the ic-3-33 lockstep (6, asserts
+      v2); full suite (1925/1926, 0 fail); tsc --noEmit; eslint on the 5 touched files.
+    - Independent spec-fidelity: parse the 3 steps + read the step-2 apex (upsert org-default vnfp Fundraising Settings,
+      idempotent, query-back verify, throw on fail).
+
+    ## Objective fit
+    The v1 untested/vacuous gap is closed: the mutation is now automated (recordPattern) and the verify is per-record and
+    meaningful; live on CamiloDevOrg 8 active LastMembership rollups -> 8 inactive, each read-back verified. AC1-AC6 are
+    satisfiable and code-proven; AC7 stays a MANUAL handoff by platform constraint (managed Schedulable visibility). No
+    live IE run in this QA (v2 not seeded — seed PENDING-CREDS); live path documented dev-proven/PENDING-CREDS, not
+    claimed PASS/FAIL. 0 defects. The reviewer-found LOW (LIKE wildcards) was fixed in the same PR and unit-tested.
+
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 0
+    scenarioTitle: "AC1+AC2 · Deactivate the NPSP Last-Membership rollups automatically via the new T3 recordPattern mode"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 12
+    actual: >-
+      step 1 = AUTOMATED, toolName=T3, op=customMetadata, type=npsp__Rollup__mdt, recordPattern='LastMembership',
+      values={npsp__Active__c:false} (spec parse). Adapter: namePattern = trimmed non-blank recordPattern; byPattern =
+      !allRecords && namePattern!==undefined; recordDev = undefined in byPattern mode -> subset resolved dynamically by
+      DeveloperName-contains via SOQL `WHERE DeveloperName LIKE '%<escaped>%'`, update-only, no hardcoded Ids/DeveloperNames.
+      queryCmdtRecord is re-run with namePattern AFTER the write and verifies each target; success only if every matched
+      rollup reads back inactive. Only the matched subset is written (no other npsp__Rollup__mdt touched). Meaningful
+      mutation — dev-proven live on CamiloDevOrg: 8 active LastMembership rollups -> 8 inactive, each read-back verified
+      (no longer the old vacuous no-op).
+    notes: "AC1+AC2. Spec parse + hand read of the adapter op code + dev live proof. Live re-run deferred (v2 not seeded, seed PENDING-CREDS)."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/comparison-matrix.txt"
+      - "attachments/tr-135-tc-125/spec-fidelity/op-code-diff.txt"
+
+  - scenarioIndex: 1
+    scenarioTitle: "AC3 · Tolerate an org with zero matching rollups — clean informational SUCCESS no-op (skipped), no create, no fail"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 8
+    actual: >-
+      Adapter byPattern branch with discovered.length===0 returns finish(applied:false, skipped:true, detail 'no
+      <object> records match DeveloperName pattern … (tolerate-absent)') — a success no-op, no record created (update-only),
+      run not failed. Contrasts intentionally with `allRecords`, which on an empty type returns failedWrite (success=false).
+      Direct unit-test evidence: t3-metadata.adapter.spec 'recordPattern: zero matches is a tolerate-absent SUCCESS no-op
+      (skipped), never a failure' green (test data pattern 'NoSuchRollupFamily').
+    notes: "AC3. Adapter read + dedicated adapter unit test."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/gates/jest-recordpattern-verbose.log"
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC4 · SOQL LIKE metacharacters in the pattern match LITERALLY (underscore is not a single-char wildcard)"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 9
+    actual: >-
+      queryCmdtRecord builds the LIKE literal as escapeSoqlLiteral(namePattern).replace(/%/g,'\\%').replace(/_/g,'\\_')
+      — the %/_ escaping runs AFTER escapeSoqlLiteral so the added backslash is not itself re-doubled; the final clause is
+      `WHERE DeveloperName LIKE '%<escaped>%'` where only the two op-supplied wrapper % stay wild. So a pattern 'Foo_Bar'
+      matches the literal underscore in 'NPSP_Foo_Bar' and never 'NPSP_FooXBar'. The pattern is a value (LIKE literal), not
+      an identifier; field/object names are separately validated as bare SF identifiers before the SELECT/FROM -> no SOQL
+      injection surface. This was the reviewer-found LOW, fixed in the same PR (2nd commit). Unit test 'recordPattern: SOQL
+      LIKE metacharacters match LITERALLY — an underscore in the pattern is not a single-char wildcard' green (data 'Foo_Bar').
+    notes: "AC4. Adapter read + dedicated adapter unit test with a faithful LIKE evaluator (\\ escapes next char, % run, _ single)."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/spec-fidelity/genuinely-new-audit.txt"
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC5 · Idempotent re-run — already-inactive rollups skipped (no redundant write), still verifies and succeeds"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 8
+    actual: >-
+      The op compares each target's current state against `values` before writing and skips already-satisfied records
+      (no redundant write), yet still runs the read-back verify on the subset and succeeds. Direct unit-test evidence:
+      'recordPattern: deactivates only the DeveloperName-matching subset, skipping already-satisfied and non-matching
+      records' green (data pattern 'LastMembership').
+    notes: "AC5. Same recordPattern subset test that proves both subset-scoping and skip-already-satisfied."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/gates/jest-t3-adapter.log"
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC6 · Enable Veevart Contact/Account auto-population (T6, upsert org-default + query-back verify + throw on fail)"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 10
+    actual: >-
+      step 2 = AUTOMATED T6 anon apex (read). Reads the org-default vnfp__Fundraising_Settings1__c via getOrgDefaults();
+      if no org-default row exists it inserts one owned by the org (SetupOwnerId = UserInfo.getOrganizationId()) with the
+      flag true; if it exists with the flag != true it updates; if already true it is a no-op (idempotent). It then re-reads
+      the org-default and throws VerifyException (step FAILED) unless vnfp__Contact_Account_Fields_Auto_Population__c is true.
+      Object/field API names RECON-confirmed against CamiloDevOrg (the '1' suffix on vnfp__Fundraising_Settings1__c is real;
+      the flag is a boolean, updateable) — dev-proven.
+    notes: "AC6. Step-2 apex read. Live re-run deferred (v2 not seeded, seed PENDING-CREDS); dev-proven on CamiloDevOrg."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/comparison-matrix.txt"
+
+  - scenarioIndex: 5
+    scenarioTitle: "AC7 · Schedule the membership-field sync batches (manual handoff)"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 7
+    actual: >-
+      step 3 = MANUAL (no toolName), inputPayload.guide with context + structured actions + estimatedMinutes(10). Guides the
+      operator to schedule the vnfp Contact + Account membership-field fill batches (vnfp.FillContactDataBatch /
+      vnfp.FillAccountDataBatch) via App Launcher -> Veevart Settings -> Batches, or Setup -> Apex Classes -> Schedule Apex;
+      RECON the exact class names against the org first. Step is done once two CronTrigger entries (one Contact, one Account)
+      appear under Setup -> Scheduled Jobs. Correctly MANUAL: the managed class's Schedulable/global visibility cannot be
+      statically confirmed from anonymous Apex (System.schedule of a non-visible class fails to compile) — a platform
+      constraint, not a PR gap.
+    notes: "AC7. Manual handoff — Pendiente de tu parte: schedule both fill batches in the target org and confirm 2 CronTrigger entries. No live run this QA (v2 not seeded)."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/comparison-matrix.txt"
+
+  - scenarioIndex: 6
+    scenarioTitle: "Engineering gates + genuinely-new op audit + spec/version lockstep"
+    testCaseId: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+    testCaseKey: "TC-125"
+    status: passed
+    executedAt: "2026-07-27T00:00:00Z"
+    duration: 30
+    actual: >-
+      Clone @ c671b71f, deps valid (package.json/lock unchanged c671b71f..5e6675e3). tsc --noEmit exit 0, 0 diagnostics.
+      jest t3-metadata.adapter.spec = 214 tests exit 0 (incl. the 3 recordPattern tests). jest ic-3-33 lockstep = 6 tests
+      exit 0, asserting case.version===2 AND template.version===case.version (v2 lockstep; step1 recordPattern, step2 T6,
+      step3 MANUAL). jest FULL = 1925 pass / 1926 (1 skipped), 0 fail, exit 0 (dev claim "1926 pass" -> exact total match).
+      eslint on the 5 touched files exit 0, 0 problems. GENUINELY-NEW: git grep -c recordPattern = 0 at base 2271ff0f
+      (#255 IM-1083) -> 10 (adapter) + 8 (domain model) at merge c671b71f => the recordPattern mode is genuinely-new at
+      #256, the origin of the capability (contrast IM-1085/#257 which reused it). Scope-fit: exactly 5 files changed
+      (2 op + 1 spec.json + 2 test), no creep.
+    notes: "Gates + genuinely-new audit + scope-fit + lockstep. Primary code evidence for a genuinely-new op PR."
+    stepResults: []
+    attachments:
+      - "attachments/tr-135-tc-125/gates/gates-summary.txt"
+      - "attachments/tr-135-tc-125/gates/tsc-noemit.log"
+      - "attachments/tr-135-tc-125/gates/jest-full.log"
+      - "attachments/tr-135-tc-125/gates/eslint-touched.log"
+      - "attachments/tr-135-tc-125/spec-fidelity/genuinely-new-audit.txt"
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-125"
+  parentIssue: "IM-1084"
+  qaSubTask: "IM-1130"
+  epic: "IM-735"
+  prUnderTest: "https://github.com/Veevarts/MigrationAppBackend/pull/256"
+  prState: "MERGED"
+  mergeCommit: "c671b71f"
+  baseCommit: "2271ff0f"
+  changeType: "code-pr-genuinely-new-op"
+  liveStatus: "dev-proven CamiloDevOrg; v2 seed PENDING-CREDS (AWS SSO expired) — no live IE run this QA"
+
+history: []

@@ -1,0 +1,323 @@
+commit c671b71f8731077c887d85dac81efe3da42e9853
+Author: Camilo  Salguero Marín <36669483+CamiloSalgueroMarin@users.noreply.github.com>
+Date:   Thu Jul 16 02:57:21 2026 -0500
+
+    IM-1084: Automate IC 3.33 Membership Fields auto-populate (deactivate NPSP Last-Membership rollups) (#256)
+    
+    * feat(IM-1084): automate IC 3.33 Membership Fields auto-populate (deactivate NPSP Last-Membership rollups)
+    
+    Rework 3.33 from a v1 that hand-listed 7 (wrong-org) rollup DeveloperNames
+    behind a MANUAL "deactivate in the CRLP UI" handoff plus a SOQL verify that
+    passed VACUOUSLY on the (mis-recorded) zero-rollup org, into a v2 HYBRID whose
+    mutation is automated and whose verify is meaningful.
+    
+    Key finding (live on CamiloDevOrg): npsp__Rollup__mdt.npsp__Active__c is
+    subscriber-writable via the synchronous CRUD Metadata API despite its
+    DeveloperControlled field manageability — the NPSP default rollups are created
+    in the subscriber org (NamespacePrefix null, bare Type.Dev fullName), so
+    metadata.update('CustomMetadata', ...) commits (false<->true flip proven).
+    
+    T3 customMetadata op: add recordPattern mode — apply values to the
+    DeveloperName-CONTAINS subset (SOQL LIKE), update-only, per-record read-back
+    verify, TOLERATE-ABSENT (zero matches = informational success no-op, not a
+    failure like allRecords). Threads the pattern through queryCmdtRecord; the
+    pattern is escaped into the LIKE literal (not an identifier).
+    
+    3.33 v2 (case+template version 2, lockstep):
+    - step 1 T3 customMetadata recordPattern 'LastMembership' -> npsp__Active__c=false
+      (dynamic resolution, tolerate-absent, self-verifying)
+    - step 2 T6 enable vnfp__Contact_Account_Fields_Auto_Population__c (unchanged)
+    - step 3 MANUAL schedule the vnfp Contact/Account fill batches (guide format,
+      one-line description)
+    
+    Live proof: with all 8 LastMembership rollups pre-activated on CamiloDevOrg,
+    the real adapter deactivated all 8 and read-back verified each (success=true) —
+    no longer a no-op. Tests: recordPattern subset + tolerate-absent zero-match
+    adapter cases, 3.33 lockstep/surface spec. jest 1925 pass, tsc + eslint clean.
+    
+    * fix(IM-1084): escape SOQL LIKE wildcards in T3 customMetadata recordPattern
+    
+    Reviewer LOW: recordPattern built LIKE '%<pattern>%' with % and _ live, so a
+    future author's pattern containing an underscore (SF DeveloperNames routinely
+    have them, e.g. "Foo_Bar") would silently get _ as a single-char wildcard and
+    over-match. After the existing quote/backslash escaping, escape % -> \% and
+    _ -> \_ (SOQL's default LIKE escape char is \), run after escapeSoqlLiteral so
+    the added backslash is not re-doubled; only the two op-supplied wrapper % stay
+    wild. The shipped "LastMembership" pattern has no wildcards, so live behavior is
+    unchanged (case+template stay v2 — op-robustness fix, not a spec change).
+    
+    - Doc comments (metadata-mutation-spec recordPattern field) now state the
+      pattern is a plain substring whose %/_ are matched literally.
+    - Test fake's SOQL mock upgraded to a faithful LIKE evaluator (\ escapes next
+      char to literal, % = any run, _ = any single char).
+    - New adapter test proves "Foo_Bar" matches NPSP_Foo_Bar literally, never
+      NPSP_FooXBar. jest 1926 pass, tsc + eslint clean.
+
+diff --git a/src/implementations/domain/model/tools/metadata-mutation-spec.ts b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+index 1628acf1..d14c53e9 100644
+--- a/src/implementations/domain/model/tools/metadata-mutation-spec.ts
++++ b/src/implementations/domain/model/tools/metadata-mutation-spec.ts
+@@ -467,14 +467,38 @@ export interface CustomFieldSpec {
+  * skips the write entirely and still verifies. The Custom Metadata TYPE
+  * (`__mdt` object) must already exist; this op only manages a record on it.
+  *
+- * **Targeting (single vs. all records).** Provide `record` to target one record
+- * by its bare DeveloperName (the default, create-capable mode). Set
+- * `allRecords: true` to apply `values` to EVERY existing record of the type —
+- * the op SOQLs all records, writes the named fields to each (resolving each
+- * one's namespaced fullName + preserving its MasterLabel), and verifies each;
+- * the step succeeds only if every record verifies. `allRecords` is
+- * update-only — it never creates records (there is no single record to create)
+- * — and `record` is ignored when it is set.
++ * **Targeting (single vs. all vs. pattern-matched records).** Provide `record`
++ * to target one record by its bare DeveloperName (the default, create-capable
++ * mode). Set `allRecords: true` to apply `values` to EVERY existing record of
++ * the type — the op SOQLs all records, writes the named fields to each
++ * (resolving each one's namespaced fullName + preserving its MasterLabel), and
++ * verifies each; the step succeeds only if every record verifies. `allRecords`
++ * is update-only — it never creates records (there is no single record to
++ * create) — and `record` is ignored when it is set. Set `recordPattern` to
++ * apply `values` to the SUBSET of records whose bare DeveloperName CONTAINS the
++ * pattern (SOQL `LIKE '%pattern%'`) — the same update-only + verify-each
++ * machinery as `allRecords`, but scoped to matched records and, crucially,
++ * TOLERATE-ABSENT: zero matches is a clean informational SUCCESS no-op (a
++ * `skipped` outcome), NOT a failure. This is the mode for deactivating a
++ * name-defined FAMILY of managed CMDT records that a given org may or may not
++ * have (e.g. the NPSP `LastMembership` rollups — case 3.33): resolve them by
++ * their stable NPSP DeveloperName pattern instead of a hardcoded id list, and
++ * skip cleanly on an org/package version that lacks them. `recordPattern` is
++ * update-only (never creates) and `record` is ignored when it is set.
++ * `record`, `allRecords`, and `recordPattern` are mutually exclusive; when more
++ * than one is present, `allRecords` wins over `recordPattern` wins over
++ * `record`.
++ *
++ * **Writability of managed / DeveloperControlled CMDT (case 3.33 finding).**
++ * A CMDT field marked `fieldManageability=DeveloperControlled` in the package
++ * (e.g. NPSP `Rollup__mdt.Active__c`) IS writable on the SUBSCRIBER-owned
++ * records of that type via this op — the NPSP default rollups are created in the
++ * subscriber org (NamespacePrefix null, bare `Type.Dev` fullName) by NPSP's own
++ * metadata deploy, so `metadata.update('CustomMetadata', …)` commits (proven
++ * live on CamiloDevOrg: `npsp__Rollup.NPSP_AcctLastMembershipAmount.Active__c`
++ * flipped false↔true and read back). A record the write does NOT commit
++ * (genuinely package-protected) is caught by the op's SOQL read-back verify as
++ * `applied=false`, never a false pass.
+  */
+ export interface CustomMetadataSpec {
+     readonly op: 'customMetadata';
+@@ -487,15 +511,33 @@ export interface CustomMetadataSpec {
+      * Record DeveloperName, BARE (without any namespace prefix), e.g. `Default`.
+      * For a managed record the op resolves the namespaced metadata fullName
+      * (`Type.NS__Default`) itself via SOQL — callers never spell the namespace.
+-     * REQUIRED unless `allRecords` is true (ignored when it is).
++     * REQUIRED unless `allRecords` or `recordPattern` is set (ignored when
++     * either is).
+      */
+     readonly record?: string;
+     /**
+      * Apply `values` to EVERY existing record of the type instead of a single
+      * `record`. Update-only (never creates). When true, `record` is not
+-     * required and is ignored.
++     * required and is ignored. A type with zero records is a `success=false`
++     * outcome (there was nothing to update). For a TOLERATE-ABSENT subset, use
++     * `recordPattern` instead.
+      */
+     readonly allRecords?: boolean;
++    /**
++     * Apply `values` to every record whose bare DeveloperName CONTAINS this
++     * pattern (SOQL `LIKE '%recordPattern%'`), e.g. `LastMembership` to match
++     * `NPSP_AcctLastMembershipAmount`, `NPSP_ConLastMembershipDate`, … .
++     * Update-only (never creates); `record` is ignored when it is set.
++     * TOLERATE-ABSENT: zero matches is a clean informational SUCCESS no-op (a
++     * `skipped` outcome), so the same catalog JSON is safe on an org/package
++     * version that lacks the family. The pattern is a PLAIN contains-substring:
++     * it is NOT a Salesforce identifier, and the SOQL LIKE wildcards `%` and `_`
++     * it may contain are escaped to literals (the adapter escapes them into the
++     * LIKE literal after the quote/backslash escaping), so e.g. `Foo_Bar` matches
++     * the literal underscore in `NPSP_Foo_Bar`, never `FooXBar`. SF DeveloperNames
++     * routinely contain underscores, so this keeps a name-fragment pattern exact.
++     */
++    readonly recordPattern?: string;
+     /**
+      * Record label — used only when CREATING a new record (defaults to
+      * `record`). On update an existing record's MasterLabel is preserved.
+diff --git a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+index 8ceb8d58..208945fe 100644
+--- a/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
++++ b/src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts
+@@ -2429,7 +2429,13 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+     ): Promise<MetadataMutationResult> {
+         this.requireNonBlank(orgId, spec.type, 'customMetadata type');
+         const allRecords = spec.allRecords === true;
+-        if (!allRecords) {
++        const namePattern =
++            typeof spec.recordPattern === 'string' &&
++            spec.recordPattern.trim() !== ''
++                ? spec.recordPattern.trim()
++                : undefined;
++        const byPattern = !allRecords && namePattern !== undefined;
++        if (!allRecords && !byPattern) {
+             this.requireNonBlank(
+                 orgId,
+                 spec.record ?? '',
+@@ -2449,8 +2455,11 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+         const typeDev = spec.type.trim().replace(/__mdt$/i, '');
+         const soqlObject = `${typeDev}__mdt`;
+         const fieldNames = entries.map(([field]) => field);
+-        // undefined → allRecords mode (no DeveloperName filter); else the one record.
+-        const recordDev = allRecords ? undefined : spec.record!.trim();
++        // undefined → allRecords / recordPattern mode (no exact-DeveloperName
++        // filter); else the one record. `namePattern` narrows the wildcard mode
++        // to a DeveloperName-contains subset.
++        const recordDev =
++            allRecords || byPattern ? undefined : spec.record!.trim();
+ 
+         // Reject any field/object name that isn't a bare SF identifier BEFORE it
+         // reaches a SELECT/FROM clause — closes the SOQL-injection surface
+@@ -2473,6 +2482,7 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+             type: soqlObject,
+             record: recordDev ?? '*',
+             allRecords,
++            recordPattern: namePattern ?? null,
+             fieldCount: entries.length,
+         });
+ 
+@@ -2509,6 +2519,7 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 soqlObject,
+                 recordDev,
+                 fieldNames,
++                namePattern,
+             );
+ 
+             // 2. Build the target set.
+@@ -2519,10 +2530,37 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 current?: Record<string, unknown>;
+             };
+             let targets: CmdtTarget[];
+-            if (allRecords) {
+-                // Every existing record of the type. Update-only (nothing to
+-                // create) — an empty type is a NORMAL no-target outcome we flag.
++            if (allRecords || byPattern) {
++                // Every existing record of the type (allRecords) or the
++                // DeveloperName-pattern subset (recordPattern). Update-only
++                // (nothing to create).
+                 if (discovered.length === 0) {
++                    // recordPattern TOLERATES an empty match — a name-defined
++                    // family the org/package version simply does not have is a
++                    // clean informational SUCCESS no-op, not a failure. Bare
++                    // allRecords still flags an empty type (nothing to update).
++                    if (byPattern) {
++                        const subject = `${typeDev}.* (pattern '${namePattern}')`;
++                        return finish(
++                            subject,
++                            [
++                                {
++                                    op: 'customMetadata',
++                                    subject,
++                                    applied: false,
++                                    skipped: true,
++                                    detail: `no ${soqlObject} records match DeveloperName pattern '${namePattern}' — nothing to update (tolerate-absent)`,
++                                },
++                            ],
++                            this.logger,
++                            {
++                                action: 't3.customMetadata.done',
++                                orgId,
++                                recordPattern: namePattern,
++                                recordCount: 0,
++                            },
++                        );
++                    }
+                     const subject = `${typeDev}.*`;
+                     return failedWrite(
+                         subject,
+@@ -2610,6 +2648,7 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 soqlObject,
+                 recordDev,
+                 fieldNames,
++                namePattern,
+             );
+             const operations: MetadataOpOutcome[] = targets.map((t) => {
+                 const fullName = fullNameOf(t.recordDev, t.namespace);
+@@ -2643,13 +2682,15 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+                 };
+             });
+ 
+-            const summaryTarget = allRecords
+-                ? `${typeDev}.*`
+-                : fullNameOf(targets[0].recordDev, targets[0].namespace);
++            const summaryTarget =
++                allRecords || byPattern
++                    ? `${typeDev}.*${byPattern ? ` (pattern '${namePattern}')` : ''}`
++                    : fullNameOf(targets[0].recordDev, targets[0].namespace);
+             return finish(summaryTarget, operations, this.logger, {
+                 action: 't3.customMetadata.done',
+                 orgId,
+                 allRecords,
++                recordPattern: namePattern ?? null,
+                 recordCount: targets.length,
+             });
+         } catch (cause) {
+@@ -2670,11 +2711,14 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+      * SOQL a Custom Metadata type, selecting NamespacePrefix + MasterLabel (for
+      * namespaced-fullName resolution and label preservation) plus the requested
+      * fields (for idempotency + verify). `recordDev` scopes to one record by its
+-     * bare DeveloperName; pass `undefined` to return EVERY record of the type
+-     * (allRecords mode). Identifiers are pre-validated by the caller. A
+-     * deterministic SOQL spec error (bad field/object) throws `CmdtSoqlSpecError`
+-     * so the caller can fail cleanly; a transport/auth fault throws
+-     * `MetadataDeployError` so SFN retries it.
++     * bare DeveloperName; pass `undefined` with no `namePattern` to return EVERY
++     * record of the type (allRecords mode), or with `namePattern` to return the
++     * DeveloperName-CONTAINS subset (`LIKE '%namePattern%'`, recordPattern mode).
++     * Identifiers are pre-validated by the caller; `namePattern` is a value, not
++     * an identifier, so it is escaped into the LIKE literal. A deterministic SOQL
++     * spec error (bad field/object) throws `CmdtSoqlSpecError` so the caller can
++     * fail cleanly; a transport/auth fault throws `MetadataDeployError` so SFN
++     * retries it.
+      */
+     private async queryCmdtRecord(
+         orgId: string,
+@@ -2682,6 +2726,7 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+         soqlObject: string,
+         recordDev: string | undefined,
+         fieldNames: readonly string[],
++        namePattern?: string,
+     ): Promise<Array<Record<string, unknown>>> {
+         const selectList = [
+             'DeveloperName',
+@@ -2689,14 +2734,29 @@ export class T3MetadataJsforceAdapter implements T3MetadataPort {
+             'MasterLabel',
+             ...fieldNames,
+         ].join(', ');
+-        // `recordDev` undefined → ALL records of the type (allRecords mode);
+-        // otherwise scope to the one record by its bare DeveloperName.
++        // `recordDev` set → scope to the one record by its bare DeveloperName.
++        // Else `namePattern` set → the DeveloperName-contains subset. Else no
++        // filter → ALL records of the type (allRecords mode). For the LIKE path
++        // the pattern is a PLAIN substring: after the quote/backslash escaping,
++        // the SOQL LIKE wildcards `%` and `_` are escaped to literals too
++        // (SOQL's default LIKE escape char is `\`), so a pattern like `Foo_Bar`
++        // matches the literal underscore, not any-single-char. The `%`/`_`
++        // escaping runs AFTER escapeSoqlLiteral so the backslash it adds is not
++        // itself re-doubled. Only the two op-supplied wrapper `%` stay wild.
++        const likePattern =
++            namePattern !== undefined
++                ? escapeSoqlLiteral(namePattern)
++                      .replace(/%/g, '\\%')
++                      .replace(/_/g, '\\_')
++                : undefined;
+         const where =
+-            recordDev === undefined
+-                ? ''
+-                : ` WHERE DeveloperName = '${escapeSoqlLiteral(recordDev)}'`;
++            recordDev !== undefined
++                ? ` WHERE DeveloperName = '${escapeSoqlLiteral(recordDev)}'`
++                : likePattern !== undefined
++                  ? ` WHERE DeveloperName LIKE '%${likePattern}%'`
++                  : '';
+         const soql = `SELECT ${selectList} FROM ${soqlObject}${where}`;
+-        const subject = `${soqlObject}.${recordDev ?? '*'}`;
++        const subject = `${soqlObject}.${recordDev ?? (namePattern !== undefined ? `~${namePattern}` : '*')}`;
+         try {
+             const res = await (
+                 conn as unknown as {

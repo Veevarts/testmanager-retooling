@@ -1,0 +1,46 @@
+IM-1084 / TR-135 — gate transcript summary (MigrationAppBackend @ c671b71f, base 2271ff0f = IM-1083 #255)
+========================================================================================================
+Environment: node v25.4.0. Deps reused from the 82c35b14 clone; package.json/package-lock.json UNCHANGED
+across c671b71f..5e6675e3 (verified: git diff --stat empty) → node_modules valid for this ref.
+
+tsc --noEmit ....................... exit 0, 0 diagnostics                    [tsc-noemit.log — empty]
+eslint (5 touched .ts/.spec.ts) .... exit 0, 0 problems                       [eslint-touched.log — empty]
+jest t3-metadata.adapter.spec ...... 1 suite, 214 tests, exit 0              [jest-t3-adapter.log]
+  incl. the 3 NEW recordPattern tests (verbose) [jest-recordpattern-verbose.log]:
+   ✓ recordPattern: deactivates only the DeveloperName-matching subset, skipping already-satisfied and non-matching records  (AC1+AC5)
+   ✓ recordPattern: zero matches is a tolerate-absent SUCCESS no-op (skipped), never a failure                                 (AC3)
+   ✓ recordPattern: SOQL LIKE metacharacters match LITERALLY — an underscore in the pattern is not a single-char wildcard      (AC4)
+   (test data: 'LastMembership' subset, 'NoSuchRollupFamily' zero-match, 'Foo_Bar' underscore-literal)
+jest ic-3-33 lockstep spec ......... 1 suite, 6 tests, exit 0               [jest-ic-3-33.log]
+   asserts spec.case.version === 2 AND spec.template.version === spec.case.version (v2 lockstep)
+jest FULL (src + scripts) .......... 181 pass / 182 suites (1 skipped); 1925 pass / 1926 tests (1 skipped), 0 fail, exit 0  [jest-full.log]
+
+Dev PR-body/commit claim "jest 1926 pass, tsc + eslint clean" reconciled: obtained 1925 pass + 1 skipped
+= 1926 total, 0 failures. Exact total match; reported what I obtained.
+
+GENUINELY-NEW op audit (this is NOT a spec-only PR — unlike the other IM-735 children this batch):
+  files changed 2271ff0f..c671b71f = 5:
+    - src/implementations/domain/model/tools/metadata-mutation-spec.ts        (op DOMAIN MODEL, +52/-10)
+    - src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.ts (op ADAPTER,       +80/-20)
+    - src/implementations/infrastructure/adapters/tools/t3-metadata.adapter.spec.ts (adapter tests, +163/-2)
+    - src/implementations/infrastructure/seeds/specs/ic-3-33-membership-fields-autopopulate.json  (spec v1->v2, +32/-32)
+    - src/implementations/infrastructure/seeds/specs/ic-3-33-membership-fields-autopopulate.spec.ts (lockstep, +102/-0)
+  git grep -c recordPattern:  adapter base=0 -> merge=10 ; domain model base=0 -> merge=8
+  => the T3 customMetadata `recordPattern` mode is GENUINELY-NEW at #256 (origin of the capability later
+     reused by IM-1085/#257, IM-1069 etc.). NOT a reused op.
+  markers present at merge: byPattern (7), 'tolerate-absent' return branch (1), LIKE escaping
+     .replace(/%/g,'\%').replace(/_/g,'\_') at adapter lines 2749-2750.
+
+Adapter code review (read the diff by hand — spec-fidelity/genuinely-new-audit.txt + comparison-matrix.txt):
+  - subset resolution: namePattern = trimmed non-blank recordPattern; byPattern = !allRecords && namePattern!==undefined;
+    recordDev = (allRecords||byPattern) ? undefined : record  => precedence allRecords > recordPattern > record. OK.
+  - tolerate-absent: byPattern && discovered.length===0 -> finish(applied:false, skipped:true, 'tolerate-absent');
+    bare allRecords still failedWrite(success=false) on empty type. Intentional divergence. OK.
+  - LIKE escaping: escapeSoqlLiteral(pattern).replace(%->\%).replace(_->\_) BUILT AFTER escapeSoqlLiteral so the
+    added backslash is not re-doubled; WHERE DeveloperName LIKE '%<escaped>%' — only the 2 wrapper % stay wild.
+    Foo_Bar -> literal underscore, FooXBar NOT matched. OK (matches AC4 + the unit test).
+  - per-record read-back verify: queryCmdtRecord re-run with namePattern after the write; verify each; success only
+    if all matched read back to the target end-state. OK.
+  - injection surface: field/object names pre-validated as bare identifiers before SELECT/FROM; pattern escaped as a
+    LIKE *value*, not an identifier. OK.
+  NO DEFECTS.

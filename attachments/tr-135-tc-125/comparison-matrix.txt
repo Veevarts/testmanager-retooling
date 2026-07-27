@@ -1,0 +1,59 @@
+IM-1084 IC 3.33 Auto-Populating Membership Program Fields — evidence matrix (MigrationAppBackend#256, merge c671b71f)
+Change-type: CODE PR — GENUINELY-NEW op capability (T3 customMetadata `recordPattern` mode) + IC 3.33 v2 spec. HYBRID (2 auto + 1 manual). Tier Low.
+Primary evidence = jest (incl. 3 dedicated recordPattern unit tests) + tsc + eslint + independent adapter code review + genuinely-new audit.
+Clone: MigrationAppBackend @ c671b71f (base 2271ff0f = IM-1083 #255). Deps valid (package files unchanged). NO live IE run
+(live CamiloDevOrg-only dev-proven: 8 LastMembership rollups active -> 8 inactive, each read-back verified; v2 not seeded — seed PENDING-CREDS, AWS SSO expired).
+====================================================================================================================
+Check                                                            | Method                          | Result                                          | Scn | Verdict
+-----------------------------------------------------------------+---------------------------------+-------------------------------------------------+-----+--------
+step 1 AUTOMATED T3 customMetadata recordPattern 'LastMembership' | independent spec parse          | op=customMetadata type=npsp__Rollup__mdt         | S1  | PASS
+  -> values {npsp__Active__c:false}, update-only                 | spec + adapter read             | recordPattern set; recordDev=undefined (byPattern)| S1 | PASS
+  -> dynamic subset by DeveloperName-contains (SOQL LIKE)        | read adapter queryCmdtRecord    | WHERE DeveloperName LIKE '%<escaped>%'           | S1  | PASS
+  -> no hardcoded rollup Ids/DeveloperNames                      | regex over spec + adapter       | none (pattern-resolved)                          | S1  | PASS
+  -> per-record SOQL read-back verify; success iff all inactive  | read adapter                    | queryCmdtRecord re-run post-write, verify each   | S1  | PASS
+  -> no other npsp__Rollup__mdt modified; meaningful mutation    | spec design + dev live          | subset only; live 8 active -> 8 inactive verified| S1  | PASS
+step 1 tolerate-absent: zero matches = skipped success no-op     | read adapter + unit test        | byPattern && discovered==0 -> applied:false skip | S2  | PASS
+  -> no create, no run failure; diverges from allRecords         | read adapter                    | allRecords empty -> failedWrite (intentional)    | S2  | PASS
+  -> unit test green                                             | jest verbose                    | "zero matches is a tolerate-absent SUCCESS no-op"| S2  | PASS
+step 1 LIKE metacharacters match LITERALLY (underscore)          | read adapter + unit test        | escapeSoqlLiteral then %->\% _->\_ (post-escape) | S3  | PASS
+  -> Foo_Bar matches NPSP_Foo_Bar literal _, never FooXBar       | jest verbose ('Foo_Bar')        | unit test "SOQL LIKE metacharacters match LITERALLY" green | S3 | PASS
+  -> pattern is a value (escaped), not an identifier; names validated | read adapter               | no SOQL-injection surface                        | S3  | PASS
+step 1 idempotent re-run: skip already-satisfied, still verify   | read adapter + unit test        | compares current state before write; verify runs | S4  | PASS
+  -> unit test green                                             | jest verbose                    | "deactivates only the subset, skipping already-satisfied" | S4 | PASS
+step 2 T6 enable auto-population + query-back verify + throw      | read apex (step 2)              | vnfp__Contact_Account_Fields_Auto_Population__c=true | S5 | PASS
+  -> upsert org-default vnfp__Fundraising_Settings1__c; idempotent| read apex                      | getOrgDefaults; insert/update/no-op; SetupOwnerId=OrgId | S5 | PASS
+  -> throws VerifyException (FAILED) if read-back not true        | read apex                       | throw present; RECON-confirmed API names (dev)   | S5  | PASS
+step 3 MANUAL schedule Contact+Account fill batches (handoff)     | independent spec parse          | kind=MANUAL, guide.context+actions+estimatedMin  | S6  | PASS
+  -> vnfp.FillContactDataBatch + FillAccountDataBatch via UI      | spec parse                      | 2 CronTrigger entries = done; managed Schedulable not static-confirmable | S6 | PASS
+case+template version lockstep = v2                              | jest lockstep + spec parse      | case.version===2 && template.version===case.version | S7 | PASS
+genuinely-new: recordPattern base 0 -> merge 10 (adapter)+8(model)| git grep -c recordPattern       | base 2271ff0f=0 ; merge c671b71f=10/8            | S7  | PASS
+scope-fit: 5 files (2 op + 1 spec.json + 2 test), no creep       | git diff --name-only base..merge| exactly the 5 expected files                     | S7  | PASS
+gates: tsc --noEmit clean                                        | npx tsc --noEmit                | exit 0, 0 diagnostics                            | S7  | PASS
+gates: jest t3 adapter spec (incl. 3 recordPattern tests)        | npx jest <adapter spec>         | 214 tests, exit 0                                | S7  | PASS
+gates: jest ic-3-33 lockstep                                     | npx jest <3.33 spec>            | 6 tests, exit 0                                  | S7  | PASS
+gates: full jest (src+scripts)                                   | npx jest                        | 1925 pass / 1926 (1 skipped), 0 fail             | S7  | PASS
+gates: eslint clean on 5 touched files                           | npx eslint <touched>            | exit 0, 0 problems                               | S7  | PASS
+
+RESULT: 7/7 scenarios PASS · 0 defects.
+
+DEV-CLAIM RECONCILIATION (independent verification):
+- Commit msg: "jest 1926 pass, tsc + eslint clean". Reproduced: full = 1925 pass + 1 skipped = 1926 total, 0 fail;
+  tsc 0 diagnostics; eslint 0 problems. Exact total match. Reported what I obtained.
+- The recordPattern ADAPTER code (subset resolution, tolerate-absent, wildcard escaping, per-record read-back,
+  mutual exclusion) and the step-2 APEX were read BY HAND from the diff — not trusted from the PR body nor the
+  lockstep. All match the ACs. The reviewer-found LOW (unescaped LIKE %/_ ) was fixed IN the same PR (2nd commit)
+  and is covered by a dedicated adapter unit test ('Foo_Bar' -> literal). No open defect.
+- GENUINELY-NEW proven by git grep (base 0 -> merge 10/8) + git diff (2 op files changed). This is the ORIGIN of the
+  recordPattern capability; contrast with IM-1085/#257 where the SAME op was reused (spec-only). Correctly classified.
+
+LIVE (deferred): steps 1/2 + the writability finding were dev-proven on CamiloDevOrg (8 active LastMembership rollups
+-> 8 inactive, each verified; false<->true flip proven). Re-running via the app is blocked — the v2 spec is NOT seeded to
+MigrationApp-dev (seed PENDING-CREDS, AWS SSO expired). Per the ticket, documented as dev-proven/PENDING-CREDS, NOT
+claimed PASS/FAIL on the live path.
+
+OBSERVATIONS (documented, not defects):
+- step 3 stays MANUAL by platform constraint (managed vnfp fill-batch class Schedulable/global visibility cannot be
+  statically confirmed from anon apex — System.schedule of a non-visible class fails to compile), not a PR gap.
+- Writability of a DeveloperControlled CMDT field: safe here because the NPSP default rollups are subscriber-owned
+  (NamespacePrefix null); a genuinely package-protected record the write does not commit is caught by the read-back
+  verify as applied=false (never a false pass).

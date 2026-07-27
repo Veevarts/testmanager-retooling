@@ -1,0 +1,247 @@
+schemaVersion: "1.0"
+
+id: "5fc66202-a0dc-4b34-b5b4-d2067ec4fa63"
+key: "TC-125"
+title: "IM-1084 IC 3.33 Auto-Populating Membership Program Fields — harden the untested deactivate/verify path (Low): rework a v1 vacuous zero-rollup no-op into a v2 HYBRID whose T3 customMetadata mutation is automated via a NEW recordPattern mode (DeveloperName-contains subset, update-only, tolerate-absent, per-record SOQL read-back, LIKE-wildcards escaped to literals) + T6 auto-population enable + MANUAL fill-batch schedule · CODE PR with a GENUINELY-NEW op capability"
+description: |
+  Cobertura QA para IM-1084 (Historia, priority Medium/low-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1130 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 2 (Low tier). Gap del ticket: el path deactivate/verify de 3.33
+    estaba UNTESTED — el test org tenía cero NPSP Last-Membership rollups, así que la corrida v1 era un
+    no-op TRIVIAL y el verify pasaba VACUAMENTE. IM-1084 rehace 3.33 a un v2 HYBRID cuyo mutation es
+    automatizado y cuyo verify es significativo.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#256` (**MERGED** 2026-07-16 07:57Z).
+    Branch: `task/ic-3-33-membership-fields-autopopulate-IM-1084`. Merge commit `c671b71f` (base `2271ff0f`,
+    el merge de IM-1083 #255). 5 files, +429/-64.
+  - **CODE PR con op capability GENUINELY-NEW** (a diferencia de los otros hijos IM-735 de esta tanda, que
+    fueron spec-only): #256 TOCA el adapter T3 y el domain model — agrega el modo `recordPattern` al op
+    T3 `customMetadata`. Files: `t3-metadata.adapter.ts` (+80/-20, la nueva lógica), `metadata-mutation-spec.ts`
+    (domain model, +52/-10), `t3-metadata.adapter.spec.ts` (+163, unit tests del modo nuevo),
+    `ic-3-33-…autopopulate.json` (spec v1→v2), `ic-3-33-…autopopulate.spec.ts` (+102, lockstep). Este PR es
+    el ORIGEN del capability `recordPattern` que IM-1085/#257 y siguientes luego reutilizaron.
+
+  Capability nuevo (T3 customMetadata → recordPattern mode):
+  - Aplica `values` al SUBSET de records cuyo bare DeveloperName CONTIENE el pattern (SOQL `LIKE '%pattern%'`).
+  - Update-only (nunca crea), per-record SOQL read-back verify de cada write, misma maquinaria que `allRecords`.
+  - **TOLERATE-ABSENT**: cero matches = success no-op limpio (outcome `skipped`), NO un failure — a diferencia
+    de `allRecords` que sí flaggea un type vacío. Es el modo para desactivar una FAMILIA de CMDT managed
+    definida por nombre que un org puede o no tener (las NPSP `LastMembership` rollups del caso 3.33), resuelta
+    por su DeveloperName pattern estable en vez de una lista de Ids hardcodeada, con skip limpio en un
+    org/package version que no las tenga.
+  - Exclusión mutua + precedencia: `allRecords` > `recordPattern` > `record`.
+  - **LIKE-wildcard escaping** (fix del reviewer LOW, mismo PR): el pattern es un contains-substring PLANO, no un
+    identifier; después del escaping de quote/backslash (`escapeSoqlLiteral`) los wildcards SOQL `%` y `_` se
+    escapan a literales (`%`→`\%`, `_`→`\_`; el escape char default de LIKE es `\`), corriendo DESPUÉS de
+    `escapeSoqlLiteral` para que el backslash agregado no se re-doble. Solo los dos `%` wrapper del op quedan
+    wild. Así `Foo_Bar` matchea el underscore literal en `NPSP_Foo_Bar`, nunca `FooXBar`.
+  - **Writability finding**: `npsp__Rollup__mdt.npsp__Active__c` es subscriber-writable vía el synchronous CRUD
+    Metadata API a pesar de su field manageability `DeveloperControlled` — las NPSP default rollups son
+    subscriber-owned (NamespacePrefix null, bare `Type.Dev` fullName), así que `metadata.update('CustomMetadata', …)`
+    commitea (flip false↔true probado live en CamiloDevOrg). Un record genuinamente package-protected que el
+    write NO commitea lo caza el read-back verify como `applied=false`, nunca un false pass.
+
+  Spec 3.33 v2 (feasibility hybrid, 3 steps):
+  - Step 1 (T3 customMetadata, recordPattern "LastMembership"): npsp__Active__c=false sobre las NPSP
+    Last-Membership rollups (Account + Contact set) — dynamic resolution, tolerate-absent, self-verifying.
+  - Step 2 (T6 anon apex): enable vnfp__Contact_Account_Fields_Auto_Population__c en el org-default
+    vnfp__Fundraising_Settings1__c (upsert org-default, idempotente, query-back verify, throws si el flag no
+    queda true).
+  - Step 3 (MANUAL): schedule los vnfp Contact/Account membership-field fill batches (vnfp.FillContactDataBatch
+    + vnfp.FillAccountDataBatch) vía la UI soportada; confirmar 2 CronTrigger entries. La visibilidad
+    Schedulable/global de la clase managed no se puede confirmar estáticamente desde anon apex → queda manual.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR, genuinely-new op): clone en merge `c671b71f`,
+    correr el adapter `.spec.ts` (incl. los 3 tests recordPattern) + el lockstep de 3.33 + gates; re-derivar
+    el conteo del dev (jest 1926).
+  - **adapter code review independiente**: leer el diff de `t3-metadata.adapter.ts` y `metadata-mutation-spec.ts`
+    por cuenta propia — resolución del subset, tolerate-absent, wildcard escaping, per-record read-back,
+    exclusión mutua — no confiar solo en el lockstep ni en el PR body.
+  - **genuinely-new audit**: probar con `git grep -c recordPattern` que el marker = 0 en base `2271ff0f` (#255)
+    y > 0 en merge `c671b71f` (adapter + domain model) → capability GENUINELY-NEW, no reused.
+  - **spec fidelity independiente**: parsear los 3 steps + el apex del step 2 (objetos, upsert org-default,
+    verify/throw) por cuenta propia.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (dev-proven: 8 Last-Membership
+    rollups activos → 8 inactivos, cada uno read-back verificado) y el v2 NO está seeded a MigrationApp-dev
+    (seed PENDING-CREDS, AWS SSO expirado). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Low-confidence gap cerrado por diseño**: el v1 verify vacío se reemplaza por un mutation automatizado +
+    per-record read-back significativo; la parte MANUAL (step 3) queda solo por la visibilidad managed
+    Schedulable no confirmable estáticamente.
+  - **Seed PENDING-CREDS**: v2 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código (con la ventaja de que el capability nuevo
+    tiene unit tests directos en el adapter spec).
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `c671b71f` y base `2271ff0f` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR genuinely-new op: evidencia primaria por código, incl. adapter unit tests)."
+  - "Node + jq/python3 para parsear el spec v2 y leer el diff del adapter/domain model y el apex del step 2 independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven: 8 rollups→inactivos) y el v2 no seeded (seed PENDING-CREDS)."
+
+format: gherkin
+scenarios:
+  - title: "AC1+AC2 · Deactivate the NPSP Last-Membership rollups automatically via the new T3 recordPattern mode — step 1 sets npsp__Active__c=false on the DeveloperName-\"LastMembership\" subset (Account + Contact), resolves them dynamically with no hardcoded rollup Ids/DeveloperNames, verifies each by SOQL read-back, modifies no other npsp__Rollup__mdt record, and is a meaningful mutation (never the old vacuous no-op)"
+    tags:
+      - ac-1
+      - ac-2
+      - happy-path
+      - custom-metadata
+      - record-pattern
+      - read-back-verify
+      - dynamic-resolution
+      - im-1084
+      - im-735
+    given:
+      - "el spec `ic-3-33-membership-fields-autopopulate.json` v2 en merge `c671b71f` y el adapter `t3-metadata.adapter.ts`"
+    when:
+      - "se parsea el step 1 + su op y se lee la lógica del modo recordPattern en el adapter"
+    then:
+      - "step 1 es AUTOMATED, toolName=T3, op=customMetadata, type=npsp__Rollup__mdt, recordPattern='LastMembership', values={npsp__Active__c:false}"
+      - "el subset se resuelve dinámicamente por DeveloperName-contains (SOQL LIKE), sin Ids ni DeveloperNames hardcodeados (update-only, nunca crea)"
+      - "cada write se verifica por un SOQL read-back del record commiteado; el step tiene éxito solo si cada rollup matcheado lee de vuelta inactivo (npsp__Active__c=false)"
+      - "ningún otro npsp__Rollup__mdt fuera del subset se modifica; el mutation es significativo (dev-proven live CamiloDevOrg: 8 Last-Membership rollups activos → 8 inactivos, cada uno read-back verificado, ya NO un no-op)"
+
+  - title: "AC3 · Tolerate an org with zero matching rollups — when no npsp__Rollup__mdt DeveloperName contains the pattern, step 1 is a clean informational SUCCESS no-op (skipped outcome), creates no rollup, and does NOT fail the run (unlike allRecords, which flags an empty type)"
+    tags:
+      - ac-3
+      - negative
+      - tolerate-absent
+      - custom-metadata
+      - record-pattern
+      - im-1084
+    given:
+      - "el modo recordPattern del op customMetadata en `t3-metadata.adapter.ts`"
+    when:
+      - "se lee la rama byPattern con discovered.length===0"
+    then:
+      - "cero matches devuelve un outcome con applied=false, skipped=true y detail 'no … records match DeveloperName pattern … (tolerate-absent)'"
+      - "NO crea ningún record (update-only) y NO falla la corrida — es un success no-op informacional"
+      - "contrasta con `allRecords`, que en un type vacío devuelve failedWrite (success=false) — la divergencia tolerate-absent es intencional y correcta (cubierto por el adapter unit test 'zero matches is a tolerate-absent SUCCESS no-op')"
+
+  - title: "AC4 · SOQL LIKE metacharacters in the pattern match LITERALLY — a recordPattern containing an underscore (e.g. \"Foo_Bar\") is escaped so the underscore matches a literal underscore only, not any single char, so \"NPSP_Foo_Bar\" matches but \"FooXBar\" does NOT (reviewer-found LOW, fixed in the same PR)"
+    tags:
+      - ac-4
+      - edge-case
+      - like-escaping
+      - record-pattern
+      - injection-surface
+      - im-1084
+    given:
+      - "la construcción del LIKE literal en `queryCmdtRecord` (t3-metadata.adapter.ts)"
+    when:
+      - "se lee el escaping del pattern y se corre el adapter unit test de metacaracteres LIKE"
+    then:
+      - "el pattern se escapa con escapeSoqlLiteral (quote/backslash) y LUEGO %→\\% y _→\\_ (escape char default de LIKE = \\), corriendo después del escapeSoqlLiteral para que el backslash agregado no se re-doble; solo los dos % wrapper del op quedan wild"
+      - "un pattern 'Foo_Bar' matchea el underscore literal en 'NPSP_Foo_Bar' y NUNCA 'NPSP_FooXBar' (adapter unit test 'SOQL LIKE metacharacters match LITERALLY')"
+      - "el pattern es un value (no un identifier) escapado al LIKE literal; los field/object names sí se validan como identifiers bare antes del SELECT/FROM → sin superficie de SOQL injection"
+
+  - title: "AC5 · Idempotent re-run — when the Last-Membership rollups are already inactive, step 1 skips the already-satisfied records (no redundant write) yet still verifies and succeeds"
+    tags:
+      - ac-5
+      - edge-case
+      - idempotency
+      - record-pattern
+      - im-1084
+    given:
+      - "el modo recordPattern con records ya en el end-state (npsp__Active__c=false)"
+    when:
+      - "se lee la lógica de skip-already-satisfied y se corre el adapter unit test del subset"
+    then:
+      - "los rollups ya inactivos se saltan (no redundant write) — el op compara el estado actual antes de escribir"
+      - "el step igual corre el read-back verify y tiene éxito (idempotente)"
+      - "cubierto por el adapter unit test 'recordPattern: deactivates only the DeveloperName-matching subset, skipping already-satisfied and non-matching records'"
+
+  - title: "AC6 · Enable Veevart Contact/Account auto-population — step 2 (T6) sets vnfp__Contact_Account_Fields_Auto_Population__c true on the org-default vnfp__Fundraising_Settings1__c (upserting the org-default when none exists), confirms it by a query-back verify, and throws (step FAILED) if the read-back does not show it true"
+    tags:
+      - ac-6
+      - happy-path
+      - t6-custom-setting
+      - auto-population
+      - im-1084
+    given:
+      - "el step 2 (T6 anon apex) del spec v2"
+    when:
+      - "se lee el apex del step 2"
+    then:
+      - "lee el org-default vnfp__Fundraising_Settings1__c (getOrgDefaults); si no existe fila la inserta con SetupOwnerId=OrganizationId y el flag true; si existe con el flag != true lo actualiza; si ya está true es no-op (idempotente)"
+      - "re-lee el org-default y verifica que vnfp__Contact_Account_Fields_Auto_Population__c=true; throws VerifyException (step FAILED) si no"
+      - "objeto/field API-names RECON-confirmados contra CamiloDevOrg (vnfp__Fundraising_Settings1__c con el sufijo '1' real; el flag boolean updateable) — dev-proven"
+
+  - title: "AC7 · Schedule the membership-field sync batches (manual handoff) — step 3 is MANUAL: because the managed vnfp fill-batch class Schedulable/global visibility cannot be statically confirmed from anonymous Apex, the operator is guided (one-line summary + structured guide) to schedule the Contact + Account membership-field fill batches via the supported UI, and the step is done once both scheduled jobs appear"
+    tags:
+      - ac-7
+      - manual
+      - manual-handoff
+      - scheduled-jobs
+      - im-1084
+    given:
+      - "el step 3 (MANUAL) del spec v2 y su guide"
+    when:
+      - "se parsea el step 3"
+    then:
+      - "step 3 es MANUAL (sin toolName), con guide.context + guide.actions estructuradas y estimatedMinutes"
+      - "guía a schedule vnfp.FillContactDataBatch + vnfp.FillAccountDataBatch vía App Launcher → Veevart Settings → Batches, o Setup → Apex Classes → Schedule Apex; RECON de los nombres exactos contra el org antes de schedular"
+      - "el step queda done una vez que aparecen 2 CronTrigger entries en Setup → Scheduled Jobs (uno Contact, uno Account) — queda manual solo por la visibilidad managed Schedulable no confirmable estáticamente"
+
+  - title: "Engineering gates + genuinely-new op audit + spec/version lockstep — tsc/jest/eslint pass on the touched files; the adapter recordPattern unit tests (subset+skip, tolerate-absent, LIKE-literal) are green; recordPattern is proven GENUINELY-NEW (git grep = 0 in base 2271ff0f → >0 in merge c671b71f, adapter + domain model); case+template bumped to v2 in lockstep"
+    tags:
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - genuinely-new-op
+      - version-lockstep
+      - adapter-code-review
+      - scope-fit
+      - im-1084
+    given:
+      - "clone local de MigrationAppBackend en merge `c671b71f` con npm ci limpio; base `2271ff0f`"
+    when:
+      - "se corren tsc --noEmit, el adapter `.spec.ts` de T3 + el lockstep de 3.33 + eslint; y se audita el diff de #256"
+    then:
+      - "case.version=2 y template.version=2 (lockstep, asertado por el test de 3.33); step 1 recordPattern='LastMembership', step 2 T6, step 3 MANUAL"
+      - "el adapter `.spec.ts` pasa incluyendo los 3 tests recordPattern (subset+skip-satisfied, tolerate-absent zero-match, LIKE-metacharacters-literal); el lockstep de 3.33 pasa; tsc --noEmit sin type errors; eslint limpio en los archivos tocados (o hallazgo PRE-existente vía git blame); conteo del dev (jest ~1926) re-derivado"
+      - "genuinely-new: `git grep -c recordPattern` = 0 en base `2271ff0f` (#255 IM-1083) y >0 en merge `c671b71f` para `t3-metadata.adapter.ts` (10) y `metadata-mutation-spec.ts` (8) → el modo recordPattern es GENUINELY-NEW, no reused; scope-fit: 5 files (2 op + 1 spec.json + 2 test), sin scope creep"
+
+tags:
+  - im-1084
+  - im-735
+  - im-1130
+  - implementations-automation
+  - low-confidence
+  - ic-3-33
+  - npsp
+  - last-membership
+  - customizable-rollups
+  - custom-metadata
+  - record-pattern
+  - like-escaping
+  - tolerate-absent
+  - auto-population
+  - t6-verify
+  - genuinely-new-op
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-256
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 95
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
