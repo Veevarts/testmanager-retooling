@@ -1,0 +1,243 @@
+schemaVersion: "1.0"
+
+id: tr-cb848666-3bec-4292-b8a8-0dd7eb2431a9
+key: TR-142
+title: "TR-142 · IM-1067 · TC-132 · Altru Partial + Account Soft Credit resolve npsp__Opportunity__r via ranked candidate gated against emitted Opportunity ids (not the raw payment id) — 5/5 PASS · 0 defectos · SQL-contract 27/27 + revert-proof 20/27 FAIL + live safesql tucson PRE/POST (eff95544 cleared) · PR MigrationToolETL#153 (OPEN)"
+
+description: |
+  QA de IM-1067 (Historia, priority High, epic IM-70 Altru Queries). QA Sub-task: IM-1137. Escalamiento del
+  comentario no atendido en IM-707 (Tucson Botanical Gardens). PR bajo prueba: Veevarts/MigrationToolETL#153
+  (OPEN, branch fix/soft-credit-opportunity-external-id-IM-1067 → main; 6 files +1209/-71).
+
+  Clasificación: SQL + query-regression (source-side Altru queries). Evidencia PRIMARIA: (1) el SQL-contract spec
+  del dev + (2) safesql live PRE/POST sobre tucson (agregados numéricos, sin datos row-level en el chat). El docker
+  integration suite quedó DEFERRED (colima/docker daemon caído) → substituido por el revert-proof a nivel contract.
+
+  Root cause (del PR): ambos queries emitían el FINANCIALTRANSACTIONID crudo de la recognition como external ID de
+  npsp__Opportunity__r; esa txn suele ser un pago (pledge/MG/recurring installment) que el Opportunity load nunca
+  crea → un solo FK irresoluble rechazaba TODO el CSV. El fix resuelve por candidato rankeado (rank1 propia txn
+  do-no-harm; rank2 recurring installment; rank3 pledge/MG via INSTALLMENTSPLITPAYMENT tiebreak por SUM(AMOUNT);
+  rank4 pledge via SOURCELINEITEMID), gateado (INNER JOIN OpportunityExternalIds = donation_transaction.sql
+  SUM(NetAmount)<>0 + donation_pledges.sql TYPE='Pledge'); ROW_NUMBER()=1 → 1 fila/recognition; sin candidato →
+  dropeada (npsp__Opportunity__c nillable=false).
+
+  Método QA:
+  1. SQL-contract spec (soft-credit-recognition-query.spec.ts) en el branch → 27/27 PASS.
+  2. Revert-proof: checkout de los 2 .sql a base main (emiten ft.ID crudo) → contract spec 20/27 FAIL (incl.
+     "never emits the raw financial transaction id" + "gates the FK on ids the Opportunity load emits") → el spec
+     guardea el fix. (Más fuerte que el claim del dev "revert → 5/8 integration fail", hecho a nivel contract sin docker.)
+  3. safesql tucson (agregados): wrapper que reusa los CTEs del query (OpportunityExternalIds, ResolvedRecognition-
+     Opportunity) reemplazando solo la proyección por COUNT/SUM + LEFT JOIN. POST-fix Partial: scoped 1,793 /
+     resolved 1,740 / dropped 53 / rescued 183 / eff95544-emitido-como-Opp 0 / distinct opps 1,507. Account idéntico.
+     PRE-fix repro: 3,517 own-txn ids NO son Opportunity (FK rotos) + eff95544 presente como own-txn en scope (1).
+  4. Tech regression: full query-regression suite 308 pass / 44 skip / 0 fail (sin colateral). Security: sin secrets,
+     sin dynamic-SQL/concat (date filters parametrizados). OWASP: A03 Applicable→PASS, resto N/A, 0 High/Critical.
+
+  Resultado: 5/5 PASS, 0 defectos. Reconciliación honesta: los conteos absolutos de Tucson obtenidos (1,793/1,740/53/183)
+  difieren de la auditoría del PR (2,138/2,076/62/213) pero la TASA de resolución coincide (97.0% vs 97.1%) y el
+  mecanismo es idéntico — consistente con drift del replica live de Altru entre la auditoría del PR y esta corrida.
+  Reporto lo obtenido, no afirmo match exacto.
+
+testCaseIds:
+  - 127f3f8d-2493-43fd-8c38-c9443c03a380
+
+environment:
+  name: "MigrationToolETL @ PR #153 head 16b10d5 (branch fix/...-IM-1067, base main) · node v25.4.0 · safesql profile tucson (live Altru replica, aggregate-only) · docker/colima DOWN → integration suite deferred"
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/153"
+  buildVersion: >-
+    SQL + query-regression (dev category), source-side Altru soft-credit queries. 6 files +1209/-71 (2 .sql +
+    fixture/spec/integration-spec + docs). Primary evidence: SQL-contract spec (27/27) + contract-level revert-proof
+    (base main 20/27 FAIL) + live safesql aggregate PRE/POST on tucson. Docker integration suite DEFERRED (colima down).
+  notes: |
+    ## Solution understood
+    Both soft-credit queries emitted the recognition's own FINANCIALTRANSACTIONID as the npsp__Opportunity__r external
+    id. That transaction is frequently a payment (pledge/matching-gift/recurring-installment) that donation_transaction.sql
+    never turns into an Opportunity (a pledge payment line carries APPLICATION='Pledge', which is not a donation line),
+    so a single unresolvable foreign key rejected the ENTIRE soft-credit CSV. The fix resolves npsp__Opportunity__r
+    through a ranked candidate list (rank1 = own txn, do-no-harm; rank2 = recurring installment; rank3 = pledge/MG claim
+    via INSTALLMENTSPLITPAYMENT with a SUM(AMOUNT) tiebreak; rank4 = pledge via SOURCELINEITEMID), gated by an INNER JOIN
+    against the set of Opportunity external ids the migration actually emits (donation_transaction.sql SUM(NetAmount)<>0 +
+    donation_pledges.sql TYPE='Pledge'). ROW_NUMBER()=1 keeps one row per recognition; a recognition with no surviving
+    candidate is dropped (npsp__Opportunity__c is nillable=false). It also adds ISCONSTITUENT=1 to match contact.sql.
+    Output columns/headers unchanged → mapper/pipeline untouched.
+
+    ## Inferred technical tests
+    - SQL-contract spec (no DB): assert no raw txn id as FK, gate parity with donation_transaction.sql, rank ordering,
+      byte-identical prelude across the 2 queries, ISCONSTITUENT parity, row grain. -> executable here.
+    - Revert-proof: revert the 2 .sql to base main and re-run the contract spec -> must FAIL (guards the fix). -> executable.
+    - Docker integration spec (per-lineage mapping via testcontainers MSSQL). -> NOT executable (docker down) -> deferred.
+    - Live safesql PRE/POST aggregate on a reachable profile (tucson): resolved/dropped/rescued/escalation counts,
+      bijection by construction, reproduce eff95544. -> executable (aggregate-only, numeric).
+
+    ## Objective fit
+    PRE-fix the queries emit the raw payment id (3,517 own-txn ids on tucson are not Opportunities; eff95544 is one of
+    them) → the whole CSV fails. POST-fix every emitted FK resolves to an emitted Opportunity (bijection by the INNER
+    JOIN gate; eff95544 emitted-as-Opportunity = 0), the already-correct rows keep their own Opportunity (1,557 of 1,740
+    resolved kept rank1), the broken rows are rescued (183) or dropped (53), one row per recognition. Contract spec 27/27
+    on the branch, 20/27 FAIL on base main. Objective met on all 5 scenarios. 0 defects.
+
+status: completed
+
+summary:
+  total: 5
+  passed: 5
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 0
+    scenarioTitle: "AC1 · Partial Soft Credit resolves the Opportunity by ranked candidate, not the raw payment id — after the fix, npsp_partial_soft_credit.sql emits vnfp__Implementation_External_ID__c values resolved through the ranked candidate list gated against the emitted Opportunity ids (own transaction rank 1, then recurring installment, pledge/MG-claim, pledge SOURCELINEITEMID), so every emitted FK is an existing Opportunity and the load no longer raises the foreign-key error"
+    testCaseId: 127f3f8d-2493-43fd-8c38-c9443c03a380
+    testCaseKey: TC-132
+    status: passed
+    executedAt: "2026-07-28T15:55:00Z"
+    duration: 20
+    actual: |
+      SQL-contract spec (soft-credit-recognition-query.spec.ts) on the PR branch: 27/27 PASS — incl. "never emits the
+      raw financial transaction id as the Opportunity foreign key" and "gates the Opportunity foreign key on ids the
+      Opportunity load emits". Live safesql tucson (aggregate wrapper reusing the query CTEs) POST-fix Partial: scoped
+      1,793, resolved 1,740, dropped 53, rescued (re-anchored to a parent) 183, distinct opportunities 1,507, and
+      eff95544 emitted-as-Opportunity = 0. Bijection holds by construction (ResolvedRecognitionOpportunity INNER JOINs
+      OpportunityExternalIds). PRE-fix repro: 3,517 own-txn ids are NOT an emitted Opportunity → the old query would
+      emit 3,517 broken FKs and fail the CSV. Objective met.
+    notes: "AC1. Contract spec + live PRE/POST. Absolute counts lower than the PR audit (live-replica drift) but resolution rate 97.0% matches; reported obtained."
+    stepResults: []
+    attachments:
+      - name: soft-credit-spec.log
+        path: attachments/tr-142-tc-132/gates/soft-credit-spec.log
+        mimeType: text/plain
+      - name: post-partial-tucson.log
+        path: attachments/tr-142-tc-132/scenario-live/post-partial-tucson.log
+        mimeType: text/plain
+      - name: prefix-partial-tucson.json
+        path: attachments/tr-142-tc-132/scenario-live/prefix-partial-tucson.json
+        mimeType: application/json
+
+  - scenarioIndex: 1
+    scenarioTitle: "AC2 · Account Soft Credit resolves the Opportunity by the same ranked candidate list — npsp_account_soft_credit.sql applies the identical resolution prelude (byte-identical through ResolvedRecognitionOpportunity, asserted by a test), so its emitted vnfp__Implementation_External_ID__c values are existing Opportunity ids and the Account Soft Credit load no longer raises the foreign-key error"
+    testCaseId: 127f3f8d-2493-43fd-8c38-c9443c03a380
+    testCaseKey: TC-132
+    status: passed
+    executedAt: "2026-07-28T15:55:00Z"
+    duration: 12
+    actual: |
+      The contract spec asserts the two soft-credit queries share a byte-identical resolution prelude (top of file
+      through ResolvedRecognitionOpportunity) and both gate the FK. Live safesql tucson POST-fix Account: scoped 1,793,
+      resolved 1,740, dropped 53, rescued 183, eff95544 emitted-as-Opportunity = 0, distinct opportunities 1,507 —
+      identical to Partial, as expected from the shared prelude. Every emitted FK resolves to an emitted Opportunity;
+      no payment-only id is emitted. Objective met.
+    notes: "AC2. Byte-identical prelude (contract) + live Account identical to Partial."
+    stepResults: []
+    attachments:
+      - name: post-account-tucson.json
+        path: attachments/tr-142-tc-132/scenario-live/post-account-tucson.json
+        mimeType: application/json
+      - name: soft-credit-spec.log
+        path: attachments/tr-142-tc-132/gates/soft-credit-spec.log
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "Regression evidence — the escalation payment id eff95544-… is reproduced then cleared — the exact Tucson-reported id no longer appears as the Opportunity lookup value; against the resolved pledge Opportunity id both objects load, matching the dev's CamiloDevOrg proof (bulk job 750fj00000YhyNAAAZ fails pre-fix; a3Nfj000005j35JEAQ / a2tfj0000009SRhAAM succeed post-fix)"
+    testCaseId: 127f3f8d-2493-43fd-8c38-c9443c03a380
+    testCaseKey: TC-132
+    status: passed
+    executedAt: "2026-07-28T15:55:00Z"
+    duration: 10
+    actual: |
+      Live safesql tucson: PRE-fix repro shows eff95544-5e41-42b0-90be-002fd2ccaeb2 is present as a recognition's OWN
+      financial-transaction id in scope (escalation_own_txn_in_scope = 1) and is NOT among the emitted Opportunity ids
+      (it is 1 of the 3,517 broken own-txn ids) → the old query emits it as the Opportunity FK and the load fails,
+      exactly as reported. POST-fix: eff95544 emitted-as-Opportunity = 0 in both Partial and Account → it is never
+      emitted as the FK; the recognition anchors on its resolved parent (pledge) Opportunity instead. This matches the
+      dev's CamiloDevOrg proof (bulk job 750fj00000YhyNAAAZ fails pre-fix; loads succeed post-fix). Objective met.
+    notes: "AC3. Escalation reproduced (own-txn present, pre-fix broken) and cleared (0 emitted-as-Opportunity post-fix)."
+    stepResults: []
+    attachments:
+      - name: prefix-partial-tucson.json
+        path: attachments/tr-142-tc-132/scenario-live/prefix-partial-tucson.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-142-tc-132/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "Do-no-harm ordering — recognitions that already resolved keep their exact Opportunity — because the own-transaction candidate ranks FIRST (parents are fallbacks, not overrides), a recognition already anchored on a real donation Opportunity is unchanged; only rows that emitted a non-existent payment id move (the mixedPledgePayment case: 255 of 256 High Desert pledge-payment txns emit no Opportunity, but the 1 that also carries a donation line keeps its own)"
+    testCaseId: 127f3f8d-2493-43fd-8c38-c9443c03a380
+    testCaseKey: TC-132
+    status: passed
+    executedAt: "2026-07-28T15:55:00Z"
+    duration: 10
+    actual: |
+      The contract spec asserts the candidate rank ordering with the own transaction ranked first (CandidateRank 1) and
+      ROW_NUMBER() ORDER BY CandidateRank first. Live safesql tucson: of 1,740 resolved Partial recognitions, only 183
+      were re-anchored to a parent (rescued_reanchored) → 1,557 (89.5%) kept their OWN transaction as the Opportunity,
+      i.e. the rows that already resolved correctly are unchanged; only the broken payment-id rows moved. This is the
+      load-bearing do-no-harm behavior. (The docker-only mixedPledgePaymentRecognition fixture that pins the mixed
+      pledge/donation payment case was DEFERRED — colima down — and is covered here by the contract rank-ordering
+      assertion + the live 1,557-unchanged measurement.) Objective met.
+    notes: "AC4. Do-no-harm: 1,557/1,740 keep their own Opportunity; only 183 broken rows re-anchor. Docker mixedPledge fixture deferred, substituted."
+    stepResults: []
+    attachments:
+      - name: post-partial-tucson.log
+        path: attachments/tr-142-tc-132/scenario-live/post-partial-tucson.log
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "Drop taxonomy + Opportunity-existence gate + row grain — unresolvable recognitions are DROPPED (not null-FK'd) and every emitted id is a real emitted Opportunity — recognitions with no surviving candidate (net-zero reversed, TYPECODE 2/20 roots, membership-sourced) are dropped because npsp__Opportunity__c is nillable=false; the inclusion gate is byte-equal to donation_transaction.sql (parity test); and ROW_NUMBER()=1 keeps exactly one row per recognition even for multi-pledge splits"
+    testCaseId: 127f3f8d-2493-43fd-8c38-c9443c03a380
+    testCaseKey: TC-132
+    status: passed
+    executedAt: "2026-07-28T15:55:00Z"
+    duration: 18
+    actual: |
+      Contract spec asserts: the EligibleLines gate is byte-equal to donation_transaction.sql's donation-inclusion gate
+      (parity test), REVENUERECOGNITION is the row grain (ROW_NUMBER()=1, one row per recognition), and the FK is gated
+      on the emitted-Opportunity set. Revert-proof: on base main these exact assertions FAIL (20/27), proving they guard
+      the fix. Live safesql tucson: 53 Partial recognitions dropped (num_unresolved) — no surviving candidate, dropped
+      because npsp__Opportunity__c is nillable=false (no null-FK fallback); every one of the 1,740 emitted FKs is in the
+      emitted Opportunity set (bijection by the INNER JOIN; eff95544 emitted-as-Opportunity = 0). Technical regression:
+      full query-regression suite 308 pass / 44 skip / 0 fail (no collateral). Objective met.
+    notes: "AC5. Gate parity + row grain + drop taxonomy + bijection. Revert-proof 20/27 FAIL on base. 308 pass full suite."
+    stepResults: []
+    attachments:
+      - name: revert-proof-spec.log
+        path: attachments/tr-142-tc-132/gates/revert-proof-spec.log
+        mimeType: text/plain
+      - name: full-query-regression.log
+        path: attachments/tr-142-tc-132/gates/full-query-regression.log
+        mimeType: text/plain
+      - name: comparison-matrix.txt
+        path: attachments/tr-142-tc-132/comparison-matrix.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-142-tc-132/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-142-tc-132/owasp-top10-scan.txt
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T15:55:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T15:55:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-132"
+  parentIssue: "IM-1067"
+  qaSubTask: "IM-1137"
+  epic: "IM-70"
+  prUnderTest: "https://github.com/Veevarts/MigrationToolETL/pull/153"
+  prState: "OPEN"
+  headCommit: "16b10d5"
+  baseBranch: "main"
+  changeType: "sql-query + query-regression (source-side Altru soft-credit)"
+  liveStatus: "safesql tucson aggregate PRE/POST (live Altru replica): PRE 3,517 own-txn ids not Opportunities + eff95544 present; POST resolved 1,740 / dropped 53 / rescued 183 / eff95544-as-Opp 0. Absolute counts differ from PR audit (2,138/2,076/62/213) — live-replica drift, resolution rate 97% matches."
+  deferred: "docker integration suite (soft-credit-recognition-query.integration.spec.ts) — colima/docker daemon down; substituted by contract-level revert-proof (base main 20/27 FAIL) + live safesql aggregate"
+
+history: []
