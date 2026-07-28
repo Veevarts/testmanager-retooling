@@ -1,0 +1,285 @@
+schemaVersion: "1.0"
+
+id: tr-fbb6b0a3-1d80-459d-97dd-2c0df46f790c
+key: TR-140
+title: "TR-140 · IM-1083 · TC-130 · IC 3.04 My Domain + Admin User + Permission Sets (v2→v3, low-confidence) — 7/7 PASS · 0 defectos · license-aware permset assign (dynamic PSL detection + DEFER-not-fail with NON-license-still-fails symmetry) + org-agnostic rename + 2 MANUAL handoffs · CODE PR spec-only (reused T3 clonePermissionSet + T6) #255@2271ff0f"
+
+description: |
+  QA de IM-1083 (Historia, priority Medium/low-confidence, epic IM-735 Implementation Cases Automation).
+  QA Sub-task: IM-1135. PR bajo prueba: Veevarts/MigrationAppBackend#255 (CODE PR spec-only, 2 files +183/-8,
+  MERGED, merge 2271ff0f, base 1552e7a7).
+
+  IC 3.04 v3 (hybrid, 6 steps: 4 AUTOMATED + 2 MANUAL): step1 T6 rename admin user (org-agnostic, Username-
+  targeted); steps2-3 T3 clonePermissionSet (Auctifera__Veevart→Veevart2, vnfp__Veevart_Non_For_Profit→
+  Veevart_NonProfit2); step4 T6 LICENSE-AWARE assign; step5 MANUAL license handoff; step6 MANUAL My Domain.
+  El endurecimiento v2→v3 vive todo en el step4 (op T6 REUSADO): detecta la Veevart PermissionSetLicense
+  dinámicamente (lee el LicenseId del managed source de cada clone → query PermissionSetLicense status/seats),
+  asigna cada clone en su propio Database.insert(allOrNone=false) batch (idempotente), DEFIERE (log, NO throw)
+  cualquier clone rechazado por license al MANUAL step5 (step COMPLETES), y verifica cobertura SOLO sobre los
+  clones licensed. Simetría crítica: un error NO-license (per-record o abort de batch DmlException) SÍ hace
+  throw → step FAILED. Nunca enmascara fallas reales como handoff.
+
+  Método QA (reuso del clone; checkout 2271ff0f; deps válidas — package files unchanged 2271ff0f..5f1fdd1d):
+  1. Independent spec-fidelity + apex read: parse de los 6 steps + lectura a mano del apex del step1 (rename) y
+     del step4 (license-aware assign) — detección dinámica de PSL, ramas defer(license)/throw(non-license),
+     verify scoped a licensed clones, idempotencia — no solo el lockstep ni el PR body.
+  2. op-reuse audit: base..merge = 2 files (spec + spec.ts), 0 adapters → T3 clonePermissionSet (2 non-spec
+     files @base) + T6 reused, NO genuinely-new.
+  3. no-callout proof: el step4 apex no contiene '/services/data' ni 'HttpRequest' (pure DML), asertado por el spec.ts.
+  4. jest (3.04 lockstep+license-aware/defer contract + ic-seeds validity + CLI + full), tsc --noEmit, eslint touched.
+
+  Resultado: 7/7 PASS. 0 defectos. Rama license-ABSENT dev-proven en CamiloDevOrg (Auctifera__Veevart declara no
+  PSL; vnfp__Veevart_Non_For_Profit requiere una PSL no provisionada → ambos clones DEFER, step COMPLETES sin
+  fallar). El path LICENSED (auto-assign donde la license SÍ está, AC1) NO es observable en un dev-org sin la
+  Veevart license — el ticket pide verificarlo en un customer-like org → PENDING-CREDS, code-proven por lectura;
+  v3 seed a MigrationApp-dev PENDING (AWS SSO). No PASS/FAIL prematuro.
+
+testCaseIds:
+  - 442f1a4c-3605-41f6-8ecd-3172cbc85148
+
+environment:
+  name: "MigrationAppBackend @ merge 2271ff0f (base 1552e7a7) · node v25.4.0 · CamiloDevOrg live dev-proven (license-absent DEFER branch) · licensed path PENDING-CREDS · MigrationApp-dev seed PENDING"
+  url: "https://github.com/Veevarts/MigrationAppBackend/pull/255"
+  buildVersion: >-
+    CODE PR spec-only (reused T3 clonePermissionSet + T6 anon apex, NOT genuinely-new). 2 files (+183/-8): IC 3.04
+    spec v2->v3 + a new 155-line lockstep/license-aware-contract test. HYBRID: 4 AUTOMATED + 2 MANUAL. The v3
+    hardening is all inside the step-4 T6 apex (dynamic PermissionSetLicense detection + defer-not-fail). Tier low-confidence.
+  notes: |
+    ## Solution understood
+    IC 3.04 provisions My Domain, renames the Veevart admin user, clones the managed Veevart / Veevart Non For Profit
+    permission sets, and assigns them to all active users. The gap this PR hardens: the assign step is license-gated —
+    a dev org's users lack the Veevart permission-set license, so PermissionSetAssignment REJECTS the assignment. v2
+    would fail; v3 makes step 4 LICENSE-AWARE. It (a) reads each clone's managed source permset LicenseId and queries
+    that PermissionSetLicense's status/seats in the running org (dynamic detection, no hardcoded id, logged), (b)
+    assigns EACH clone in its own Database.insert(allOrNone=false) batch (idempotent via an 'existing' set; per-clone
+    isolation avoids managed-trigger partial-save aborts), (c) DEFERS to the companion MANUAL handoff (step 5) any
+    clone whose assignment is rejected for a license reason — logged, never thrown, so the step COMPLETES on a dev org
+    — and (d) verifies coverage ONLY for the clones that actually assigned (licensed). Crucially the defer is narrowly
+    license-gated: a non-license per-record error throws, and the batch-level catch(DmlException) re-throws unless the
+    abort message is license-worded — so real failures are never masked as a handoff. Step 1 (rename) is org-agnostic
+    (targets by {{adminUsername}}, sets FirstName='Admin'/LastName='Veevart for '+{{clientName}}/Nick='Veevart',
+    idempotent + verify). Steps 5 (license handoff) and 6 (My Domain, no API path per rules §11) stay MANUAL.
+
+    ## Inferred technical tests
+    - Independent spec-fidelity: parse the 6 v3 steps (order + kind + tools T6/T3/T3/T6/MANUAL/MANUAL).
+    - Adapter/apex code review by hand of step 1 (rename) and step 4 (license-aware assign): dynamic PSL detection,
+      defer(license) vs throw(non-license) branches, verify scoped to licensed clones, idempotency, no callout.
+    - op-reuse audit: base..merge = 2 files (spec .json + .spec.ts), 0 adapters -> T3 clonePermissionSet (2 non-spec
+      files @base) + T6 reused, NOT genuinely-new.
+    - jest as PRIMARY code evidence: the 3.04 spec.ts (8, incl. the regex asserting the non-license catch re-throws);
+      ic-seeds validity + publish CLI (101); tsc --noEmit; eslint touched; full suite (1916/1917, 0 fail).
+
+    ## Objective fit
+    The hardening is correct: the license is detected dynamically (no hardcoded id), a missing license DEFERS instead
+    of failing (dev-proven on CamiloDevOrg — both clones defer, step completes), a genuine non-license failure still
+    fails the step (symmetry preserved), the coverage verify only asserts licensed clones, and the manual handoffs
+    (license + My Domain) are structured. No live IE run (v3 seed PENDING; licensed auto-assign path needs a
+    customer-like org with the Veevart license) — documented dev-proven / PENDING-CREDS, never PASS/FAIL early.
+    7/7 PASS, 0 defects.
+
+status: completed
+
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 0
+    scenarioTitle: "AC1 · Auto-assign when the Veevart license is present — when the running org holds the license the cloned permission sets require, the license-aware assign step assigns each clone to every active Standard user, re-assigning is idempotent (already-assigned users skipped), and it verifies full coverage for the assigned clones and COMPLETES"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 9
+    actual: |
+      Apex read (step 4, licensed branch): for each present clone it builds `toAdd` skipping the `existing`
+      (userId|permSetId) set — idempotent, re-run adds only the missing — then `Database.insert(toAdd, false)`.
+      When no clone is license-gated, `assignedCloneIds` = both clones and the VERIFY asserts
+      `expected = userIds.size() * assignedCloneIds.size()` against a COUNT() of PermissionSetAssignment; if
+      `actual < expected` it throws, else the step COMPLETES. This licensed path is NOT observable on a dev org
+      lacking the Veevart license (on CamiloDevOrg both clones DEFER); the ticket asks to verify it on a
+      customer-like org → PENDING-CREDS, code-proven by reading. No premature PASS/FAIL.
+    notes: "AC1. Licensed auto-assign path — code-proven; live PENDING-CREDS (needs a customer-like org with the Veevart license)."
+    stepResults: []
+    attachments:
+      - name: step4-license-aware-assign-apex.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/step4-license-aware-assign-apex.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 1
+    scenarioTitle: "AC2 · License absent — DEFER instead of failing (dev org) — when the org/user license does not permit a cloned permission set's managed components, the rejected clone is DEFERRED and logged (never thrown), the step COMPLETES, the deferred clone is NOT asserted by the coverage verify, AND a NON-license error still FAILS the step (defer is narrowly license-gated)"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 12
+    actual: |
+      Apex read (step 4, defer/throw branches): per-record, a `Database.SaveResult` error whose
+      `e.getMessage().toLowerCase().contains('license')` is TRUE → `licenseGatedCloneIds.add(psId)` (logged WARN,
+      NOT thrown); a non-license per-record error → `throw new VerifyException('[3.04] assignment failed ... (non-
+      license error)')`. The batch-level `catch (DmlException ex)`: if `!ex.getMessage().toLowerCase().contains
+      ('license')` → `throw` (step FAILED); else defer + WARN. LimitException is not a DmlException so it keeps
+      propagating. The coverage VERIFY runs over `assignedCloneIds = clones − licenseGatedCloneIds`, so a deferred
+      clone is never asserted and never false-fails. Dev-proven live on CamiloDevOrg: Auctifera__Veevart declares
+      no PSL and vnfp__Veevart_Non_For_Profit requires a PSL not provisioned there → BOTH clones DEFER and the step
+      COMPLETES without failing. The spec.ts locks the symmetry with a regex over the catch block ('non-license DML abort').
+    notes: "AC2. The crux + the symmetry. Defer is narrowly license-gated; a non-license failure still FAILS the step. Dev-proven (both clones defer)."
+    stepResults: []
+    attachments:
+      - name: step4-license-aware-assign-apex.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/step4-license-aware-assign-apex.txt
+        mimeType: text/plain
+      - name: spec-3-04.log
+        path: attachments/tr-140-tc-130/gates/spec-3-04.log
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC3 · Dynamic license detection via query — the assign step hardcodes no license id: it reads each clone's managed source permission set LicenseId and queries that PermissionSetLicense's status and seats in the running org, logging the license landscape for the operator"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 8
+    actual: |
+      Apex read (step 4, detection block): for each present clone it resolves the managed source name
+      (CLONE_TO_SOURCE), then `SELECT Name, LicenseId FROM PermissionSet WHERE Name IN :presentSources AND
+      NamespacePrefix IN ('Auctifera','vnfp')`. For non-null LicenseIds it runs `SELECT Id, DeveloperName, Status,
+      TotalLicenses, UsedLicenses FROM PermissionSetLicense WHERE Id IN :pslIds` and logs status/seats/used per PSL.
+      LicenseId == null → logs 'source permset <src> declares no PermissionSetLicense'; an id present but not
+      provisioned → WARN '... requires PermissionSetLicense <id> which is NOT provisioned in this org'. No license
+      id is hardcoded anywhere — everything is resolved by query from the managed sources. spec.ts asserts the apex
+      contains 'PermissionSetLicense' and 'LicenseId'.
+    notes: "AC3. Dynamic detection, no hardcoded id. Informational license landscape logged for the operator."
+    stepResults: []
+    attachments:
+      - name: step4-license-aware-assign-apex.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/step4-license-aware-assign-apex.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC4 · Guided manual handoff for the license-gated assignment — when one or more clones were deferred, the companion MANUAL step parks as a handoff with a structured guide (context, actions, estimatedMinutes) that explains the Veevart license dependency and the Setup > Permission Sets > Manage Assignments steps; when nothing was deferred it is a quick verify-and-confirm"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 7
+    actual: |
+      Spec parse (step 5): stepId 'assign-permission-sets-license-handoff', kind MANUAL (AWAITING_HANDOFF), no
+      toolName. inputPayload.guide has context (mentions the Veevart license dependency + that where the license is
+      absent Salesforce REJECTS and the automated step DEFERS instead of failing), actions (5 items incl. 'Setup >
+      Permission Sets > open Veevart2 > Manage Assignments > Add Assignments > ... > Assign', same for Veevart
+      NonProfit2, and a VERIFY action) and estimatedMinutes = 10. The context also states the quick verify-and-
+      confirm fallback ('If the automated step reported NO deferrals, both clones are already assigned ... this is a
+      quick verify-and-confirm'). spec.ts assertion 7: guide.context contains 'license', actions.length >= 3,
+      estimatedMinutes > 0, and the MANUAL description is a single line.
+    notes: "AC4. Manual handoff — Pendiente de tu parte: assign any DEFERRED clone in Setup once Veevart Ops provisions the license (or verify-and-confirm if none deferred)."
+    stepResults: []
+    attachments:
+      - name: step5-license-handoff-guide.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/step5-license-handoff-guide.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC5 · Admin user rename stays org-agnostic — the operator supplies the Veevart admin Username and client name, the rename step targets the user by Username (never the wrong user), sets FirstName=\"Admin\" / LastName=\"Veevart for <client>\" / Nickname=\"Veevart\", is idempotent, re-reads to verify, and the client name is operator input (never hardcoded)"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 8
+    actual: |
+      Apex read (step 1, T6): `SELECT ... FROM User WHERE Username = :ADMIN_USERNAME AND IsActive = true LIMIT 1`
+      (ADMIN_USERNAME = '{{adminUsername}}') — targeted, never the wrong user; if empty it throws. It sets
+      FirstName = 'Admin', LastName = 'Veevart for ' + CLIENT_NAME (CLIENT_NAME = '{{clientName}}'),
+      CommunityNickname = 'Veevart', but only when a field differs (idempotent — else no-op). A VERIFY re-reads all
+      three and throws if any did not land. Nothing is hardcoded to a specific client (the {{adminUsername}} /
+      {{clientName}} tokens). spec.ts assertion 4 asserts the apex contains '{{adminUsername}}', '{{clientName}}'
+      and "'Veevart for ' + CLIENT_NAME".
+    notes: "AC5. Org-agnostic rename — Username-targeted, three fields, client name is operator input, idempotent + verify."
+    stepResults: []
+    attachments:
+      - name: step1-rename-apex.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/step1-rename-apex.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: "AC6 · My Domain provisioning stays a MANUAL handoff — because My Domain registration/deploy has no anonymous-Apex or Metadata API path (rules §11: no DNS, no third-party comms), the step parks as a guided MANUAL handoff with the operator instructions and the myDomainName required input; no automated step asserts the My Domain end-state"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 6
+    actual: |
+      Spec parse (step 6): stepId 'provision-my-domain-manual', kind MANUAL, order 6. The description states WHY
+      manual (My Domain registration/deploy lives in Setup + a Salesforce-side DNS provisioning round-trip; no
+      anonymous-Apex or Metadata/Tooling API path — rules §11: no DNS, no third-party comms) and that per the
+      auto-testability rule NO automated step asserts the My Domain end-state (folded into operator VERIFY). It
+      declares requiredInputs including 'myDomainName' and step-by-step operator instructions (register subdomain
+      {{myDomainName}} → Register → wait for DNS → Deploy to Users → VERIFY 'Deployed to Users'). Steps 1-4 do not
+      depend on it, so the run reaches COMPLETED. spec.ts assertion 8 asserts requiredInputs contains 'myDomainName'.
+    notes: "AC6. My Domain MANUAL handoff — Pendiente de tu parte: register + deploy My Domain in Setup (no API path)."
+    stepResults: []
+    attachments:
+      - name: op-reuse-and-license-audit.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/op-reuse-and-license-audit.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 6
+    scenarioTitle: "Version lockstep v3 + gates + scope-fit — case.version and template.version are both 3 (bumped in lockstep, asserted by a test); the 6-step order T6→T3→T3→T6→MANUAL→MANUAL holds; jest (lockstep + license-aware/defer contract + ic-seeds validity) / tsc --noEmit / eslint on touched files pass; #255 is spec-only (T3 clonePermissionSet + T6 reused, NOT genuinely-new)"
+    testCaseId: 442f1a4c-3605-41f6-8ecd-3172cbc85148
+    testCaseKey: TC-130
+    status: passed
+    executedAt: "2026-07-28T13:25:00Z"
+    duration: 22
+    actual: |
+      Clone @ 2271ff0f, deps valid (package.json/lockfile unchanged 2271ff0f..5f1fdd1d). The 3.04 spec.ts asserts
+      case.version === template.version === 3 (v3, hybrid, CORE_SETUP) and the 6-step order/kind/tools
+      [T6,T3,T3,T6,MANUAL,MANUAL]. jest ic-3-04 spec.ts = 8 tests exit 0 (schema + lockstep + 6-step order +
+      steps 2-3 clone sources + license-aware/defer contract incl. the regex asserting the catch re-throws a
+      non-license DML abort + both MANUAL guides). ic-seeds validity + publish CLI = 101 exit 0. tsc --noEmit exit
+      0. eslint on the touched .spec.ts exit 0, 0 problems (the .json is 'ignored — no matching config', a warning
+      not an error). full jest = 1916 passed / 1 skipped / 0 fail (180 suites). op-reuse: base..merge = 2 files
+      (spec .json + .spec.ts), 0 adapters → T3 clonePermissionSet (2 non-spec files @base) + T6 anon apex reused,
+      NOT genuinely-new. Step-4 apex is pure DML (no '/services/data', no 'HttpRequest').
+    notes: "AC7/gates. Version lockstep v3 + 6-step order + spec-only reused ops + tsc/jest/eslint all green."
+    stepResults: []
+    attachments:
+      - name: gates-summary.txt
+        path: attachments/tr-140-tc-130/gates/gates-summary.txt
+        mimeType: text/plain
+      - name: comparison-matrix.txt
+        path: attachments/tr-140-tc-130/comparison-matrix.txt
+        mimeType: text/plain
+      - name: op-reuse-and-license-audit.txt
+        path: attachments/tr-140-tc-130/spec-fidelity/op-reuse-and-license-audit.txt
+        mimeType: text/plain
+      - name: full-jest.log
+        path: attachments/tr-140-tc-130/gates/full-jest.log
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T13:25:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T13:25:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-130"
+  parentIssue: "IM-1083"
+  qaSubTask: "IM-1135"
+  epic: "IM-735"
+  prUnderTest: "https://github.com/Veevarts/MigrationAppBackend/pull/255"
+  prState: "MERGED"
+  mergeCommit: "2271ff0f"
+  baseCommit: "1552e7a7"
+  changeType: "code-pr-spec-only-reused-op"
+  reusedOps: "T3 clonePermissionSet + T6 anon apex (license-aware assign + rename)"
+  liveStatus: "dev-proven CamiloDevOrg (license-absent DEFER branch: both clones defer, step COMPLETES); licensed auto-assign path PENDING-CREDS (needs customer-like org with the Veevart license); v3 seed PENDING — no live IE run this QA"
+
+history: []

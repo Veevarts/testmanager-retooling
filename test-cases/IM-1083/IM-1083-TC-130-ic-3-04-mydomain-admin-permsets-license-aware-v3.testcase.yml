@@ -1,0 +1,233 @@
+schemaVersion: "1.0"
+
+id: "442f1a4c-3605-41f6-8ecd-3172cbc85148"
+key: "TC-130"
+title: "IM-1083 IC 3.04 My Domain + Admin User + Permission Sets (v2→v3, low-confidence) — validate the license-gated HARDENING: the AUTOMATED T6 assign step DETECTS the Veevart PermissionSetLicense dynamically and DEFERS (never throws) any clone whose license is absent while still FAILING on a non-license error, the companion MANUAL license handoff parks the deferred clones, plus admin-rename org-agnostic + My Domain manual + version lockstep v3 · CODE PR spec-only (reused T3 clonePermissionSet + T6 anon apex)"
+description: |
+  Cobertura QA para IM-1083 (Historia, priority Medium/low-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1135 (creada 2026-07-28).
+
+  Contexto:
+  - Post-June IM-735 continuation, Phase 2 — Low. Gap del ticket: el paso "assign permission set a
+    todos los usuarios" es license-gated — los usuarios de un dev-org NO tienen la Veevart
+    permission-set license; en un customer org con la license completa. El admin-user rename + los 2
+    clones de permission set ya estaban GREEN (T3 `clonePermissionSet`). Esta v3 endurece SOLO el paso
+    de asignación para detectar la license dinámicamente y hacer defer-not-fail cuando falta.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#255` (**MERGED**).
+    Branch: `task/ic-3-04-mydomain-admin-permsets-IM-1083`. Merge commit `2271ff0f` (base `1552e7a7`).
+    2 files, +183/-8.
+  - **CODE PR spec-only** — NO toca adapters/ops: el diff son 2 files: `ic-3-04-mydomain-admin-user-permsets.json`
+    (v2→v3) + un `.spec.ts` NUEVO de 155 líneas (lockstep + license-aware/defer contract). La lógica
+    license-aware vive dentro del apex anónimo del step 4 (T6). T3 `clonePermissionSet` y T6 ya existen → reused.
+
+  IC 3.04 v3 (feasibility hybrid, 6 steps: 4 AUTOMATED + 2 MANUAL):
+  - Step 1 (AUTOMATED T6): rename del Veevart admin user. Targeted por {{adminUsername}} (nunca otro user);
+    FirstName='Admin', LastName='Veevart for '+{{clientName}}, Nickname='Veevart'; idempotente; VERIFY re-lee
+    los 3 campos.
+  - Steps 2-3 (AUTOMATED T3 clonePermissionSet): clona `Auctifera__Veevart`→`Veevart2` y
+    `vnfp__Veevart_Non_For_Profit`→`Veevart_NonProfit2` (managed namespaced sources, dropea la license).
+  - Step 4 (AUTOMATED T6, LICENSE-AWARE): asigna cada clone presente a todos los active Standard users, cada
+    clone en su PROPIO Database.insert(allOrNone=false) batch (idempotente + aislamiento per-clone evita el
+    abort de managed-trigger). DETECTA la Veevart PermissionSetLicense dinámicamente (lee el LicenseId del
+    managed source de cada clone → query PermissionSetLicense status/seats, logea el landscape). Un clone cuya
+    asignación es RECHAZADA por license → DEFERRED (logged, NO thrown) al MANUAL step 5; el step igual COMPLETES.
+    VERIFY de cobertura SOLO sobre los clones que SÍ asignaron (licensed). Simetría crítica: un error NO-license
+    (per-record o batch DmlException abort) SÍ hace throw → el step FAILED. Nunca enmascara fallas reales como handoff.
+  - Step 5 (MANUAL): license-gated assignment handoff. Guide estructurada (context/actions/estimatedMinutes=10);
+    explica la dependencia de license + los pasos Setup > Permission Sets > Manage Assignments. Si no hubo
+    deferrals → quick verify-and-confirm.
+  - Step 6 (MANUAL): My Domain provisioning. AWAITING_HANDOFF; sin anon-apex/Metadata path (rules §11: no DNS);
+    requiredInput myDomainName.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR spec-only): clone en merge `2271ff0f`, correr el
+    `.spec.ts` de 3.04 (lockstep + 6-step order + license-aware/defer contract) + gates.
+  - **spec fidelity + apex read independiente**: parsear los 6 steps + LEER el apex del step 1 (rename) y del
+    step 4 (license-aware assign) por cuenta propia — detección dinámica de PSL, ramas defer (license) vs throw
+    (non-license), verify scoped a licensed clones, idempotencia.
+  - **op-reuse audit** (NO genuinely-new): confirmar que #255 NO toca adapters (base..merge = 2 files, ambos en
+    seeds/specs/); T3 `clonePermissionSet` (2 non-spec files @base) y T6 ya existen → reused.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (Auctifera__Veevart declara no
+    PSL; vnfp__Veevart_Non_For_Profit requiere una PSL no provisionada → la rama license-absent DEFIERE ambos
+    clones y el step COMPLETES sin fallar). El path LICENSED (auto-assign donde la license SÍ está) NO es
+    observable en un dev-org sin license → el ticket pide verificarlo en un customer-like org. Live = dev-proven
+    (defer branch) / PENDING-CREDS (licensed branch), no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **License-gated (low-confidence)**: el path auto-assign licensed NO se puede probar en un dev-org sin la Veevart
+    license; requiere un customer-like org con la license provisionada. Por diseño el defer branch cubre el dev-org.
+  - **Seed PENDING-CREDS**: v3 seeded a MigrationApp-dev pendiente de cred refresh (AWS SSO); bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg (defer branch). QA re-verifica por código.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `2271ff0f` y base `1552e7a7` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR spec-only: evidencia primaria por código)."
+  - "Node + jq/python3 para parsear el spec v3 y leer los apex de los steps 1 y 4 independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven: ambos clones DEFER, step COMPLETES) y el path licensed no observable sin la Veevart license (seed PENDING)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Auto-assign when the Veevart license is present — when the running org holds the license the cloned permission sets require, the license-aware assign step assigns each clone to every active Standard user, re-assigning is idempotent (already-assigned users skipped), and it verifies full coverage for the assigned clones and COMPLETES"
+    tags:
+      - ac-1
+      - t6-license-aware
+      - licensed-path
+      - happy-path
+      - idempotent
+      - pending-creds
+      - im-1083
+      - im-735
+    given:
+      - "el step 4 (T6 license-aware) del spec v3 en merge `2271ff0f` y un org que SÍ tiene la Veevart license"
+    when:
+      - "se lee el apex del step 4 y su rama de asignación cuando ningún clone es license-gated"
+    then:
+      - "asigna cada clone presente ('Veevart2', 'Veevart NonProfit2') a todos los active Standard users vía PermissionSetAssignment"
+      - "idempotente: construye el set `existing` (userId|permSetId) y solo agrega los faltantes; re-run agrega solo los que faltan"
+      - "VERIFY: expected = users × licensed-clones; si actual < expected → throw; en el licensed path COMPLETES (path NO observable en dev-org sin license → PENDING-CREDS, code-proven por lectura)"
+
+  - title: "AC2 · License absent — DEFER instead of failing (dev org) — when the org/user license does not permit a cloned permission set's managed components, the rejected clone is DEFERRED and logged (never thrown), the step COMPLETES, the deferred clone is NOT asserted by the coverage verify, AND a NON-license error still FAILS the step (defer is narrowly license-gated)"
+    tags:
+      - ac-2
+      - t6-license-aware
+      - defer-not-fail
+      - never-false-fail
+      - non-license-still-fails
+      - refusal-evidence
+      - im-1083
+    given:
+      - "el step 4 y un org donde una PSL requerida no está provisionada (rama license-absent, dev-proven CamiloDevOrg)"
+    when:
+      - "se lee el apex del step 4: el manejo de Database.SaveResult errors y el catch(DmlException) a nivel batch"
+    then:
+      - "per-record: si el error contiene 'license' → agrega el clone a `licenseGatedCloneIds` (DEFER, log WARN); si NO → `throw new VerifyException(... non-license error)`"
+      - "batch-level catch(DmlException): si el mensaje NO contiene 'license' → throw (step FAILED); si SÍ → defer + WARN (mirror del per-record path). LimitException no es DmlException → propaga"
+      - "VERIFY scoped: assignedCloneIds = clones − licenseGatedCloneIds; los DEFERRED NO se asertan → el step COMPLETES sin fallar (dev-proven: Auctifera__Veevart sin PSL + vnfp requiere PSL no provisionada → ambos DEFER)"
+
+  - title: "AC3 · Dynamic license detection via query — the assign step hardcodes no license id: it reads each clone's managed source permission set LicenseId and queries that PermissionSetLicense's status and seats in the running org, logging the license landscape for the operator"
+    tags:
+      - ac-3
+      - t6-license-aware
+      - dynamic-detection
+      - no-hardcoded-license
+      - informational
+      - im-1083
+    given:
+      - "el step 4 y sus queries de detección de license"
+    when:
+      - "se lee la sección de detección del apex del step 4"
+    then:
+      - "lee el LicenseId de cada managed source (`Auctifera__Veevart`, `vnfp__Veevart_Non_For_Profit`, filtrado por NamespacePrefix IN ('Auctifera','vnfp')); LicenseId==null → 'declares no PSL'"
+      - "query PermissionSetLicense (Status, TotalLicenses, UsedLicenses) SOLO para los LicenseId no nulos; logea status/seats/used por PSL; si el LicenseId no está provisionado → WARN"
+      - "ningún license id hardcodeado — todo se resuelve por query desde los managed sources"
+
+  - title: "AC4 · Guided manual handoff for the license-gated assignment — when one or more clones were deferred, the companion MANUAL step parks as a handoff with a structured guide (context, actions, estimatedMinutes) that explains the Veevart license dependency and the Setup > Permission Sets > Manage Assignments steps; when nothing was deferred it is a quick verify-and-confirm"
+    tags:
+      - ac-4
+      - manual
+      - manual-handoff
+      - license-handoff
+      - structured-guide
+      - im-1083
+    given:
+      - "el step 5 (MANUAL license handoff) del spec v3"
+    when:
+      - "se parsea el step 5 y su guide"
+    then:
+      - "step 5 es MANUAL (AWAITING_HANDOFF), sin toolName; guide con context (menciona 'license'), actions (≥3) y estimatedMinutes>0 (=10)"
+      - "el guide explica la dependencia de la Veevart license + los pasos Setup > Permission Sets > 'Veevart2'/'Veevart NonProfit2' > Manage Assignments > Add Assignments; y el fallback quick verify-and-confirm si no hubo deferrals"
+      - "la description del step es de UNA sola línea (el detalle vive en guide.context) — asertado por el spec.ts"
+
+  - title: "AC5 · Admin user rename stays org-agnostic — the operator supplies the Veevart admin Username and client name, the rename step targets the user by Username (never the wrong user), sets FirstName=\"Admin\" / LastName=\"Veevart for <client>\" / Nickname=\"Veevart\", is idempotent, re-reads to verify, and the client name is operator input (never hardcoded)"
+    tags:
+      - ac-5
+      - t6-rename
+      - org-agnostic
+      - operator-input-token
+      - idempotent
+      - im-1083
+    given:
+      - "el step 1 (T6 rename) del spec v3"
+    when:
+      - "se lee el apex del step 1"
+    then:
+      - "target por `WHERE Username = :ADMIN_USERNAME AND IsActive = true LIMIT 1` ({{adminUsername}}); si no existe → throw"
+      - "FirstName='Admin', LastName='Veevart for ' + CLIENT_NAME ({{clientName}}), CommunityNickname='Veevart'; idempotente (skip si ya está correcto)"
+      - "VERIFY: re-lee los 3 campos y throw si alguno no landeó; nada hardcodeado a un cliente específico (usa los tokens {{adminUsername}}/{{clientName}})"
+
+  - title: "AC6 · My Domain provisioning stays a MANUAL handoff — because My Domain registration/deploy has no anonymous-Apex or Metadata API path (rules §11: no DNS, no third-party comms), the step parks as a guided MANUAL handoff with the operator instructions and the myDomainName required input; no automated step asserts the My Domain end-state"
+    tags:
+      - ac-6
+      - manual
+      - manual-handoff
+      - my-domain
+      - required-inputs
+      - no-api-path
+      - im-1083
+    given:
+      - "el step 6 (MANUAL My Domain) del spec v3"
+    when:
+      - "se parsea el step 6 y sus requiredInputs + guía"
+    then:
+      - "step 6 es MANUAL (stepId `provision-my-domain-manual`), sin path automatizado (Setup-only DNS round-trip); requiredInputs incluye `myDomainName`"
+      - "la guía instruye Setup > My Domain (register subdomain {{myDomainName}} → Register → wait DNS → Deploy to Users) + VERIFY 'Deployed to Users'"
+      - "los steps 1-4 NO dependen de este manual → el run llega a COMPLETED antes o después del handoff"
+
+  - title: "Version lockstep v3 + gates + scope-fit — case.version and template.version are both 3 (bumped in lockstep, asserted by a test); the 6-step order T6→T3→T3→T6→MANUAL→MANUAL holds; jest (lockstep + license-aware/defer contract + ic-seeds validity) / tsc --noEmit / eslint on touched files pass; #255 is spec-only (T3 clonePermissionSet + T6 reused, NOT genuinely-new)"
+    tags:
+      - ac-7
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - reused-ops
+      - scope-fit
+      - im-1083
+    given:
+      - "clone local de MigrationAppBackend en merge `2271ff0f` con npm ci limpio; base `1552e7a7`"
+    when:
+      - "se corren tsc --noEmit, el `.spec.ts` de 3.04 y eslint; y se audita el diff de #255 + los ops referenciados"
+    then:
+      - "case.version=3 y template.version=3 (lockstep, asertado por el test); feasibility hybrid; 6 steps con order [1..6] y kind [AUTOMATED×4, MANUAL×2], tools [T6,T3,T3,T6]"
+      - "el `.spec.ts` de 3.04 pasa (8/8: schema + lockstep + 6-step order + license-aware/defer + regex del catch non-license + manual guides); ic-seeds validity + CLI pasan; tsc --noEmit exit 0; eslint limpio; full jest 0 fail"
+      - "op-reuse: #255 NO toca adapters (base..merge = 2 files, ambos seeds/specs/); T3 `clonePermissionSet` (2 non-spec files @base) y T6 ya existen → NO genuinely-new"
+
+tags:
+  - im-1083
+  - im-735
+  - im-1135
+  - implementations-automation
+  - low-confidence
+  - ic-3-04
+  - my-domain
+  - admin-user
+  - permission-sets
+  - license-aware
+  - defer-not-fail
+  - dynamic-license-detection
+  - t3-clone-permission-set
+  - t6-anon-apex
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-255
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T13:19:46Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T13:19:46Z"
+  version: 1

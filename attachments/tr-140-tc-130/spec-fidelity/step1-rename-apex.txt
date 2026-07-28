@@ -1,0 +1,44 @@
+// Case 3.04 step 1 - rename the Veevart admin User.
+// Pure anonymous-Apex DML on the standard User object: no callout, no Metadata
+// API. Idempotent. The admin user is selected by {{adminUsername}} (operator
+// input) so the step never renames another user.
+class VerifyException extends Exception {}
+
+final String ADMIN_USERNAME = '{{adminUsername}}';
+final String CLIENT_NAME    = '{{clientName}}';
+final String TARGET_FIRST   = 'Admin';
+final String TARGET_LAST    = 'Veevart for ' + CLIENT_NAME;
+final String TARGET_NICK    = 'Veevart';
+
+List<User> admins = [
+    SELECT Id, FirstName, LastName, CommunityNickname
+    FROM User
+    WHERE Username = :ADMIN_USERNAME AND IsActive = true
+    LIMIT 1
+];
+if (admins.isEmpty()) {
+    throw new VerifyException('[3.04] verify failed: no active user with Username ' + ADMIN_USERNAME);
+}
+
+User u = admins[0];
+if (u.FirstName != TARGET_FIRST || u.LastName != TARGET_LAST || u.CommunityNickname != TARGET_NICK) {
+    u.FirstName = TARGET_FIRST;
+    u.LastName = TARGET_LAST;
+    u.CommunityNickname = TARGET_NICK;
+    update u;
+    System.debug(LoggingLevel.INFO, '[3.04] renamed Veevart admin user ' + u.Id + ' -> ' + TARGET_FIRST + ' ' + TARGET_LAST + ' (' + TARGET_NICK + ')');
+} else {
+    System.debug(LoggingLevel.INFO, '[3.04] Veevart admin user ' + u.Id + ' already named correctly - no-op');
+}
+
+// VERIFY post-condition - re-read and assert all three values landed.
+User check = [
+    SELECT FirstName, LastName, CommunityNickname
+    FROM User
+    WHERE Username = :ADMIN_USERNAME AND IsActive = true
+    LIMIT 1
+];
+if (check.FirstName != TARGET_FIRST || check.LastName != TARGET_LAST || check.CommunityNickname != TARGET_NICK) {
+    throw new VerifyException('[3.04] verify failed: admin user not renamed (FirstName=' + check.FirstName + ', LastName=' + check.LastName + ', Nick=' + check.CommunityNickname + ')');
+}
+System.debug(LoggingLevel.INFO, '[3.04] verify OK - admin user = ' + check.FirstName + ' ' + check.LastName + ' / ' + check.CommunityNickname);

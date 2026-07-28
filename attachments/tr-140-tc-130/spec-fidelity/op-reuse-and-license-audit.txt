@@ -1,0 +1,35 @@
+OP-REUSE + LICENSE-AWARE AUDIT — IM-1083 IC 3.04 v3 — PR #255
+merge=2271ff0f base=1552e7a7
+
+[1] files changed base..merge (git diff --name-only):
+    src/implementations/infrastructure/seeds/specs/ic-3-04-mydomain-admin-user-permsets.json
+    src/implementations/infrastructure/seeds/specs/ic-3-04-mydomain-admin-user-permsets.spec.ts
+    => 2 files, BOTH under seeds/specs/. 0 adapters touched => CODE PR spec-only.
+
+[2] op pre-existence at BASE (reused if >0):
+    clonePermissionSet (T3) non-spec files @base: 2
+    T6 anon-apex tool: v2 spec step 3 already used T6 for the assign step => trivially pre-exists.
+    => T3 clonePermissionSet + T6 REUSED. NOT genuinely-new.
+
+[3] license-aware step 4 (T6) — key independent findings from reading the apex:
+    - Dynamic PSL detection: reads each clone source LicenseId (Auctifera__Veevart,
+      vnfp__Veevart_Non_For_Profit, NamespacePrefix IN ('Auctifera','vnfp')), queries
+      PermissionSetLicense Status/TotalLicenses/UsedLicenses. NO hardcoded license id.
+    - Per-clone isolated Database.insert(toAdd, false) (idempotent via 'existing' set).
+    - DEFER path: SaveResult error whose message.toLowerCase().contains('license')
+      => licenseGatedCloneIds.add(psId) (logged WARN, NOT thrown).
+    - THROW path (SYMMETRY): non-license per-record error => throw VerifyException.
+      Batch catch(DmlException ex): if !msg.contains('license') => throw (step FAILED);
+      else defer. LimitException is not DmlException => propagates. Defer is narrowly
+      license-gated; real failures are never masked as a handoff.
+    - VERIFY scoped: assignedCloneIds = clones - licenseGatedCloneIds; count asserted
+      ONLY for licensed clones => a deferred clone never false-fails the step.
+
+[4] no callout / pure DML (spec.ts asserts): apex has neither '/services/data' nor 'HttpRequest'.
+    grep '/services/data' in step4 apex: absent
+    grep 'HttpRequest' in step4 apex:      absent
+
+[5] step 1 rename (T6) — org-agnostic proof:
+    WHERE Username = :ADMIN_USERNAME AND IsActive=true LIMIT 1  (targeted; never wrong user)
+    FirstName='Admin'; LastName='Veevart for ' + CLIENT_NAME; CommunityNickname='Veevart'
+    idempotent (skip if already correct) + VERIFY re-reads all three. Tokens {{adminUsername}}/{{clientName}}.

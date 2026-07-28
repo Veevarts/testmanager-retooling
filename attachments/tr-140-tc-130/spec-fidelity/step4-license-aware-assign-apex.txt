@@ -1,0 +1,106 @@
+// Case 3.04 step 4 - assign the cloned permission sets to all active users, license-aware.
+class VerifyException extends Exception {}
+
+final Set<String> CLONE_NAMES = new Set<String>{ 'Veevart2', 'Veevart_NonProfit2' };
+final Map<String,String> CLONE_TO_SOURCE = new Map<String,String>{
+    'Veevart2' => 'Veevart', 'Veevart_NonProfit2' => 'Veevart_Non_For_Profit'
+};
+
+Map<Id,String> cloneNameById = new Map<Id,String>();
+for (PermissionSet ps : [SELECT Id, Name FROM PermissionSet WHERE Name IN :CLONE_NAMES AND IsOwnedByProfile=false]) {
+    cloneNameById.put(ps.Id, ps.Name);
+}
+if (cloneNameById.isEmpty()) {
+    throw new VerifyException('[3.04] verify failed: no cloned permission sets present to assign (run the clone steps first)');
+}
+
+// DETECT the Veevart PermissionSetLicense landscape via query (informational): read
+// each clone's managed source permset LicenseId, then report that license's status/
+// seats in the running org. LicenseId==null => the source declares no PSL.
+Map<String,Id> sourceLicenseId = new Map<String,Id>();
+Set<String> presentSources = new Set<String>();
+for (String cn : cloneNameById.values()) presentSources.add(CLONE_TO_SOURCE.get(cn));
+for (PermissionSet ps : [SELECT Name, LicenseId FROM PermissionSet WHERE Name IN :presentSources AND NamespacePrefix IN ('Auctifera','vnfp')]) {
+    sourceLicenseId.put(ps.Name, ps.LicenseId);
+}
+Set<Id> pslIds = new Set<Id>();
+for (Id lid : sourceLicenseId.values()) if (lid != null) pslIds.add(lid);
+Map<Id,PermissionSetLicense> pslById = new Map<Id,PermissionSetLicense>();
+if (!pslIds.isEmpty()) {
+    for (PermissionSetLicense psl : [SELECT Id, DeveloperName, Status, TotalLicenses, UsedLicenses FROM PermissionSetLicense WHERE Id IN :pslIds]) {
+        pslById.put(psl.Id, psl);
+        System.debug(LoggingLevel.INFO, '[3.04] PermissionSetLicense ' + psl.DeveloperName + ': status=' + psl.Status + ', seats=' + psl.TotalLicenses + ', used=' + psl.UsedLicenses);
+    }
+}
+for (String src : sourceLicenseId.keySet()) {
+    Id lid = sourceLicenseId.get(src);
+    if (lid == null) System.debug(LoggingLevel.INFO, '[3.04] source permset ' + src + ' declares no PermissionSetLicense');
+    else if (!pslById.containsKey(lid)) System.debug(LoggingLevel.WARN, '[3.04] source permset ' + src + ' requires PermissionSetLicense ' + lid + ' which is NOT provisioned in this org');
+}
+
+Set<Id> userIds = new Map<Id,User>([SELECT Id FROM User WHERE IsActive=true AND UserType='Standard']).keySet();
+
+// Existing assignments so we only add the missing ones (idempotent).
+Set<String> existing = new Set<String>();
+for (PermissionSetAssignment psa : [SELECT AssigneeId, PermissionSetId FROM PermissionSetAssignment WHERE PermissionSetId IN :cloneNameById.keySet() AND AssigneeId IN :userIds]) {
+    existing.add(psa.AssigneeId + '|' + psa.PermissionSetId);
+}
+
+// Assign EACH clone in its OWN DML batch so a license rejection on one clone never
+// poisons the partial-save batch of another (managed triggers otherwise abort the
+// mixed batch with a "too many retries" error). A clone whose assignment fails for a
+// license reason - or whose batch aborts - is DEFERRED to the companion MANUAL
+// handoff (logged, never thrown). Non-license per-record failures still throw.
+Set<Id> licenseGatedCloneIds = new Set<Id>();
+if (!userIds.isEmpty()) {
+    for (Id psId : cloneNameById.keySet()) {
+        List<PermissionSetAssignment> toAdd = new List<PermissionSetAssignment>();
+        for (Id uId : userIds) {
+            if (existing.contains(uId + '|' + psId)) continue;
+            toAdd.add(new PermissionSetAssignment(AssigneeId=uId, PermissionSetId=psId));
+        }
+        if (toAdd.isEmpty()) continue;
+        try {
+            Database.SaveResult[] results = Database.insert(toAdd, false);
+            for (Database.SaveResult r : results) {
+                if (r.isSuccess()) continue;
+                Boolean licenseErr = false; String detail = '';
+                for (Database.Error e : r.getErrors()) {
+                    detail = e.getStatusCode() + ': ' + e.getMessage();
+                    if (String.valueOf(e.getMessage()).toLowerCase().contains('license')) licenseErr = true;
+                }
+                if (licenseErr) { licenseGatedCloneIds.add(psId); }
+                else { throw new VerifyException('[3.04] assignment failed for ' + cloneNameById.get(psId) + ' (non-license error): ' + detail); }
+            }
+        } catch (DmlException ex) {
+            // Batch-level abort (e.g. managed-trigger retry exhaustion driven by
+            // license rejections). Mirror the per-record path: DEFER only when the
+            // abort is license-driven; a genuine non-license abort must FAIL the
+            // step, never be masked as a manual handoff. (LimitException is not a
+            // DmlException, so it keeps propagating.)
+            if (!String.valueOf(ex.getMessage()).toLowerCase().contains('license')) {
+                throw new VerifyException('[3.04] assignment aborted for ' + cloneNameById.get(psId) + ' (non-license DML abort): ' + ex.getMessage());
+            }
+            licenseGatedCloneIds.add(psId);
+            System.debug(LoggingLevel.WARN, '[3.04] clone ' + cloneNameById.get(psId) + ' DEFERRED after license DML abort: ' + ex.getMessage());
+        }
+    }
+    System.debug(LoggingLevel.INFO, '[3.04] assignment pass complete');
+}
+
+// VERIFY - every active Standard user holds every clone that is NOT license-gated.
+Set<Id> assignedCloneIds = new Set<Id>(cloneNameById.keySet());
+assignedCloneIds.removeAll(licenseGatedCloneIds);
+if (!assignedCloneIds.isEmpty() && !userIds.isEmpty()) {
+    Integer expected = userIds.size() * assignedCloneIds.size();
+    Integer actual = [SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSetId IN :assignedCloneIds AND AssigneeId IN :userIds];
+    if (actual < expected) {
+        throw new VerifyException('[3.04] verify failed: expected ' + expected + ' assignment(s) for the licensed clone(s) but found ' + actual);
+    }
+    System.debug(LoggingLevel.INFO, '[3.04] verify OK - ' + actual + ' assignment(s) across ' + userIds.size() + ' user(s) and ' + assignedCloneIds.size() + ' licensed clone(s)');
+}
+if (!licenseGatedCloneIds.isEmpty()) {
+    List<String> names = new List<String>();
+    for (Id psId : licenseGatedCloneIds) names.add(cloneNameById.get(psId));
+    System.debug(LoggingLevel.WARN, '[3.04] DEFERRED to manual license handoff (Veevart license absent): ' + String.join(names, ', '));
+}
