@@ -1,0 +1,213 @@
+schemaVersion: "1.0"
+
+id: "127f3f8d-2493-43fd-8c38-c9443c03a380"
+key: "TC-132"
+title: "Altru Partial + Account Soft Credit queries resolve npsp__Opportunity__r through a ranked candidate list gated against the Opportunity ids the migration actually emits (own-transaction first, do-no-harm), instead of the raw payment FINANCIALTRANSACTIONID — so soft credits load in Tucson without the foreign-key error"
+description: |
+  Cobertura QA para IM-1067 (Historia, priority High, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1137 (creada 2026-07-28).
+
+  Contexto (escalamiento):
+  - Escalamiento del comentario no atendido en IM-707 (Finalizada, trío IM-707/IM-725/TC-16 de soft-credit
+    queries). Account: **Tucson Botanical Gardens**.
+  - Los queries **Npsp Partial Soft Credit** y **Npsp Account Soft Credit** fallan en Tucson con:
+    `Foreign key external ID: eff95544-5e41-42b0-90be-002fd2ccaeb2 not found for field
+    vnfp__Implementation_External_ID__c in entity Opportunity`.
+  - **PR bajo prueba: `Veevarts/MigrationToolETL#153`** (**OPEN**, branch `fix/soft-credit-opportunity-external-id-IM-1067`
+    → main). 6 files +1209/-71: los 2 `.sql` de soft credit + 3 archivos de query-regression (fixture + spec + integration
+    spec) + `docs/altru-model-context.md`. Categoría desarrollo.
+
+  Root cause (del PR, más profundo que el ticket):
+  - Ambos queries emitían el `FINANCIALTRANSACTIONLINEITEM.FINANCIALTRANSACTIONID` de la propia recognition como el
+    external ID de `npsp__Opportunity__r`. Pero esa transacción suele ser un **pago** (pledge payment, matching-gift
+    payment, recurring installment) que el Opportunity load NUNCA crea: `donation_transaction.sql` solo trata una línea
+    como donación cuando `REVENUESPLIT_EXT.APPLICATION ∈ {Donation, Recurring gift, Planned gift, Matching gift}`; un
+    pledge payment lleva `APPLICATION='Pledge'` → sin líneas elegibles → no llega a `TransactionAgg` → no hay Opportunity.
+    Un solo FK irresoluble rechazaba TODO el CSV (fallo total: 0 soft credits cargan).
+
+  El fix (del PR):
+  - `npsp__Opportunity__r` ahora se resuelve por una **lista de candidatos rankeada**, gateada contra los ids que el
+    Opportunity load realmente emite (gate copiado VERBATIM de `donation_transaction.sql`: `SUM(NetAmount)<>0` + todo
+    `FINANCIALTRANSACTION` con `TYPE='Pledge'` de `donation_pledges.sql`):
+    * rank 1 = propia `FINANCIALTRANSACTIONID` (**primero a propósito, do-no-harm**: una fila que ya resolvía bien
+      conserva su MISMA Opportunity; los parents son fallbacks, no overrides — solo las filas rotas se re-anclan).
+    * rank 2 = recurring-gift installment id.
+    * rank 3 = pledge / MG-claim vía `INSTALLMENTSPLITPAYMENT` → `INSTALLMENTSPLIT.PLEDGEID` (tiebreak multi-pledge por
+      `SUM(INSTALLMENTSPLITPAYMENT.AMOUNT)` mayor, external id como fallback determinista).
+    * rank 4 = pledge vía `SOURCELINEITEMID`.
+    * `ROW_NUMBER()=1` → exactamente 1 fila por `REVENUERECOGNITION.ID`; sin candidato superviviente → **fila DROPEADA**
+      (`npsp__Partial/Account_Soft_Credit__c.npsp__Opportunity__c` son `nillable=false`, no hay null-FK fallback).
+  - `npsp_partial_soft_credit.sql` agrega `recognized_c.ISCONSTITUENT = 1` para igualar `contact.sql` (cierra la misma
+    clase de break en el Contact FK; no-op en High Desert). Columnas/headers sin cambio → mapper/pipeline intactos.
+
+  Estrategia de verificación (para /qa-test-executor):
+  - **Regression tests (dev evidence PRIMARIA)**: `query-regression` — `soft-credit-recognition-query.spec.ts` (SQL
+    contract: no raw txn id como FK, gate presente, rank ordering, paridad de gate con donation_transaction.sql, paridad
+    ISCONSTITUENT con contact.sql) + `...integration.spec.ts` (docker/testcontainers: mapeo por lineage, ningún payment-id
+    emitido, filas irresolubles dropeadas, 1 fila por recognition). Dev: revertir los 2 `.sql` hace fallar 5/8 integration
+    cases; suite 308 unit + 9 docker, build green. QA re-corre `npm test -- --runInBand query-regression`.
+  - **safesql `tucson`** PRE-fix vs POST-fix (read-only): re-derivar las cifras del dev en Tucson (ver riesgo #1) y cruzar
+    los external IDs emitidos contra el set de Opportunity emitidas.
+  - **Behavioral diff + scope-fit**: el cambio SOLO reasigna el lookup del soft credit vía la resolución rankeada; columnas
+    de salida, headers y semántica de date-filter (`rr.EFFECTIVEDATE`) sin cambio.
+
+  Riesgos abiertos:
+  - **Cifras del summary del PR desactualizadas**: el body dice "~1,860 resolve / 14 dropped" (audit temprano
+    Everson+High Desert). La confirmación FINAL de Tucson (credencial refrescada, `FINANCIALTRANSACTION`=668,118):
+    **2,076 de 2,138 resuelven** (1,785 donation/recurring/MG-root + **213 pledge/MG-payment re-ancladas = el rescue set**
+    + 78 pledge roots), **62 dropeadas** (57 reversed net=0, 5 recurring-root TYPECODE 2/20, 0 membership). El executor debe
+    re-derivar sobre Tucson, NO usar la línea del summary.
+  - **safesql `tucson` credencial**: fue rechazada durante el PR (luego refrescada); el executor puede toparse lo mismo →
+    si falla, pedir refresh (no marcar PASS/FAIL prematuro).
+  - **NO idempotente (dependencia IM-886)**: `Implementation_External_ID__c` no existe en ninguno de los 2 objetos
+    soft-credit → un reload inserta duplicados; el fix AUMENTA la convergencia (hasta 76 soft credits por par
+    (pledge Opp, constituent) en Tucson) así que más duplicados comparten Opportunity. NPSP lo acepta (sin unique
+    constraint, verificado en CamiloDevOrg), pero el reload no es seguro hasta crear ese campo. No es blocker de IM-1067.
+  - **Coverage gap membership-sourced**: recognitions cuya plata es de una membership Opportunity (keyed distinto) se
+    dropean — genuine gap, no regresión (el pre-fix también fallaba); en Tucson son 0. Product call, fuera de IM-1067.
+  - **PR OPEN (no merged)**: el POST-fix es el branch head, no main.
+  - Datos de cliente read-only: safesql (bastion, keychain) — credenciales y datos row-level nunca en el chat/artefactos.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "MigrationToolETL con `npm ci` limpio para correr `npm test -- --runInBand query-regression` (spec + integration docker via testcontainers) en el branch `fix/soft-credit-opportunity-external-id-IM-1067` del PR #153."
+  - "safesql profile `tucson` accesible (bastion + keychain) para PRE-fix vs POST-fix de los 2 queries y re-derivar las cifras (2,076/2,138, 62 dropeadas); si la credencial es rechazada, pedir refresh."
+  - "Acceso de lectura al org destino de Tucson (o export) para cruzar los external IDs emitidos contra Opportunity vs pago."
+  - "Los 2 CSV de error de referencia (`Npsp Partial Soft Credit - error06...csv`, `Npsp Account Soft Credit - error06...csv`) + el id `eff95544-...` para reproducir la fila del escalamiento."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Partial Soft Credit resolves the Opportunity by ranked candidate, not the raw payment id — after the fix, npsp_partial_soft_credit.sql emits vnfp__Implementation_External_ID__c values resolved through the ranked candidate list gated against the emitted Opportunity ids (own transaction rank 1, then recurring installment, pledge/MG-claim, pledge SOURCELINEITEMID), so every emitted FK is an existing Opportunity and the load no longer raises the foreign-key error"
+    tags:
+      - ac-1
+      - partial-soft-credit
+      - ranked-candidate
+      - opportunity-gate
+      - altru
+      - im-70
+      - im-1067
+      - tucson
+      - happy-path
+    given:
+      - "el query npsp_partial_soft_credit.sql del PR #153 (branch fix/...-IM-1067) y el profile safesql `tucson`"
+    when:
+      - "se corre PRE-fix vs POST-fix y se compara `vnfp__Implementation_External_ID__c`; y se corre el regression spec"
+    then:
+      - "PRE-fix: el lookup es el `FINANCIALTRANSACTIONID` crudo (a menudo un pago) → reproduce el foreign-key error en Opportunity"
+      - "POST-fix: cada `vnfp__Implementation_External_ID__c` resuelve vía la lista rankeada a un id que el Opportunity load emite (gate `SUM(NetAmount)<>0` + `TYPE='Pledge'`); ningún payment-only id se emite"
+      - "el load de Partial Soft Credit no lanza el error; el spec `soft-credit-recognition-query` (SQL contract + integration) pasa"
+
+  - title: "AC2 · Account Soft Credit resolves the Opportunity by the same ranked candidate list — npsp_account_soft_credit.sql applies the identical resolution prelude (byte-identical through ResolvedRecognitionOpportunity, asserted by a test), so its emitted vnfp__Implementation_External_ID__c values are existing Opportunity ids and the Account Soft Credit load no longer raises the foreign-key error"
+    tags:
+      - ac-2
+      - account-soft-credit
+      - ranked-candidate
+      - opportunity-gate
+      - altru
+      - im-70
+      - im-1067
+      - tucson
+      - happy-path
+    given:
+      - "el query npsp_account_soft_credit.sql del PR #153 y el profile safesql `tucson`"
+    when:
+      - "se corre PRE-fix vs POST-fix y se compara `vnfp__Implementation_External_ID__c`; y se corre el integration spec (incl. el caso org-side pledge-payment → pledge)"
+    then:
+      - "el prelude de resolución (top de archivo hasta `ResolvedRecognitionOpportunity`) es byte-identical al de Partial (asertado por un test) → misma resolución en ambos"
+      - "POST-fix: cada external ID emitido resuelve a una Opportunity existente; ningún payment-only id se emite"
+      - "el load de Account Soft Credit no lanza el error; el integration spec del lineage pledge-payment → pledge pasa"
+
+  - title: "Regression evidence — the escalation payment id eff95544-… is reproduced then cleared — the exact Tucson-reported id no longer appears as the Opportunity lookup value; against the resolved pledge Opportunity id both objects load, matching the dev's CamiloDevOrg proof (bulk job 750fj00000YhyNAAAZ fails pre-fix; a3Nfj000005j35JEAQ / a2tfj0000009SRhAAM succeed post-fix)"
+    tags:
+      - regression-evidence
+      - escalation
+      - eff95544
+      - altru
+      - im-1067
+      - tucson
+    given:
+      - "la fila del escalamiento cuyo lookup era el pago `eff95544-5e41-42b0-90be-002fd2ccaeb2` (de los CSV de error)"
+    when:
+      - "se localiza esa recognition en el output POST-fix de ambos queries y se contrasta con la repro del dev en CamiloDevOrg"
+    then:
+      - "PRE-fix: cargar `eff95544-...` reproduce `INVALID_FIELD: Foreign key external ID ... not found ... in entity Opportunity` (verbatim)"
+      - "POST-fix: `eff95544-...` ya NO se emite como `vnfp__Implementation_External_ID__c`; la recognition ancla en la pledge Opportunity resuelta y ambos objetos cargan"
+      - "si el pago genuinamente no tiene Opportunity (net=0 / TYPECODE 2/20 / membership-sourced) la fila se dropea limpio, sin re-lanzar el error"
+
+  - title: "Do-no-harm ordering — recognitions that already resolved keep their exact Opportunity — because the own-transaction candidate ranks FIRST (parents are fallbacks, not overrides), a recognition already anchored on a real donation Opportunity is unchanged; only rows that emitted a non-existent payment id move (the mixedPledgePayment case: 255 of 256 High Desert pledge-payment txns emit no Opportunity, but the 1 that also carries a donation line keeps its own)"
+    tags:
+      - do-no-harm
+      - rank-ordering
+      - regression
+      - load-bearing
+      - altru
+      - im-1067
+    given:
+      - "el output PRE-fix y POST-fix de ambos queries sobre las recognitions que YA resolvían correctamente"
+    when:
+      - "se comparan las Opportunity resueltas PRE vs POST para las filas que no estaban rotas"
+    then:
+      - "una recognition cuya propia transacción SÍ es una Opportunity emitida conserva exactamente la misma Opportunity (rank 1 gana)"
+      - "solo las filas que emitían un payment-id inexistente se re-anclan a un parent (pledge/installment/MG-claim)"
+      - "el caso `mixedPledgePaymentRecognition` (fixture) + el SQL-text test del rank ordering lo pinnean (no un cambio masivo de filas ya-correctas)"
+
+  - title: "Drop taxonomy + Opportunity-existence gate + row grain — unresolvable recognitions are DROPPED (not null-FK'd) and every emitted id is a real emitted Opportunity — recognitions with no surviving candidate (net-zero reversed, TYPECODE 2/20 roots, membership-sourced) are dropped because npsp__Opportunity__c is nillable=false; the inclusion gate is byte-equal to donation_transaction.sql (parity test); and ROW_NUMBER()=1 keeps exactly one row per recognition even for multi-pledge splits"
+    tags:
+      - drop-taxonomy
+      - opportunity-gate
+      - gate-parity
+      - row-grain
+      - bijection
+      - integrity
+      - edge-case
+      - altru
+      - im-1067
+      - tucson
+    given:
+      - "los outputs POST-fix de los 2 queries y el set de Opportunity external IDs emitidas en Tucson"
+    when:
+      - "se cruza cada external ID emitido contra las Opportunity emitidas, se cuentan las dropeadas por bucket y se corre el parity test"
+    then:
+      - "bijection: todo `vnfp__Implementation_External_ID__c` emitido existe como Opportunity emitida (gate `SUM(NetAmount)<>0` + `TYPE='Pledge'`); ningún payment-only id"
+      - "drop taxonomy Tucson: de 2,138 in-scope resuelven 2,076 (incl. 213 rescatadas), se dropean 62 (57 reversed, 5 recurring-root, 0 membership) — re-derivar vs el summary desactualizado (~1,860/14)"
+      - "row grain: `ROW_NUMBER()=1` → 1 fila por `REVENUERECOGNITION.ID` (multi-pledge tiebreak por `SUM(AMOUNT)`); el gate es byte-equal a donation_transaction.sql (parity test falla ante drift en cualquier dirección)"
+
+tags:
+  - im-1067
+  - im-70
+  - im-1137
+  - altru
+  - altru-queries
+  - soft-credits
+  - partial-soft-credit
+  - account-soft-credit
+  - implementation-external-id
+  - opportunity-mapping
+  - ranked-candidate-resolution
+  - opportunity-existence-gate
+  - do-no-harm
+  - drop-taxonomy
+  - foreign-key-error
+  - tucson
+  - escalation
+  - sql-only
+  - safesql
+  - query-regression
+  - source-side
+  - data-validation
+  - migration-tool-etl
+  - pr-153
+  - im-707-related
+  - im-886-idempotency-dependency
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T14:35:19Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T14:45:00Z"
+  version: 2
