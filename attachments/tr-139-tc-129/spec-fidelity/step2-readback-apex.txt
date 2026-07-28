@@ -1,0 +1,55 @@
+// Case 3.28 step 2 — INFORMATIONAL read-back of the org fiscal year.
+// Organization.FiscalYearStartMonth is READ-ONLY via the API (confirmed on
+// CamiloDevOrg 2026-07: describe updateable=false / createable=false; current
+// value 1). It can ONLY be set in Setup > Company Information > Fiscal Year, so
+// this step NEVER writes and NEVER fails: it reads the org's actual fiscal year
+// and REPORTS it against the operator-intended start month for the IE to
+// attest. This step contains NO throw — it can never false-fail on an org whose
+// fiscal year has not yet been set or was set differently. Idempotent pure read.
+
+// Operator-intended fiscal year START month, captured in step 1. Accepts a full
+// month name, 3-letter abbreviation, or a 1-12 number.
+final String INTENDED_START_RAW = '{{fiscalYearStartMonth}}';
+
+Map<String, Integer> MONTHS = new Map<String, Integer>{
+    'JANUARY' => 1, 'JAN' => 1, 'FEBRUARY' => 2, 'FEB' => 2,
+    'MARCH' => 3, 'MAR' => 3, 'APRIL' => 4, 'APR' => 4, 'MAY' => 5,
+    'JUNE' => 6, 'JUN' => 6, 'JULY' => 7, 'JUL' => 7,
+    'AUGUST' => 8, 'AUG' => 8, 'SEPTEMBER' => 9, 'SEP' => 9, 'SEPT' => 9,
+    'OCTOBER' => 10, 'OCT' => 10, 'NOVEMBER' => 11, 'NOV' => 11,
+    'DECEMBER' => 12, 'DEC' => 12
+};
+List<String> NAMES = new List<String>{
+    '(unknown)', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+};
+
+// Best-effort parse of the intended start month. NEVER throws — a blank or
+// unparseable value simply yields a null intended month (reported as such).
+Integer intendedStart = null;
+if (INTENDED_START_RAW != null) {
+    String raw = INTENDED_START_RAW.trim();
+    if (raw.isNumeric()) {
+        Integer n = Integer.valueOf(raw);
+        if (n >= 1 && n <= 12) { intendedStart = n; }
+    } else if (MONTHS.containsKey(raw.toUpperCase())) {
+        intendedStart = MONTHS.get(raw.toUpperCase());
+    }
+}
+
+// Read the org's ACTUAL fiscal year (read-only fields — no write path exists).
+Organization org = [SELECT FiscalYearStartMonth, UsesStartDateAsFiscalYearName FROM Organization LIMIT 1];
+Integer actualStart = org.FiscalYearStartMonth;
+String actualName = (actualStart != null && actualStart >= 1 && actualStart <= 12) ? NAMES[actualStart] : String.valueOf(actualStart);
+String intendedName = (intendedStart != null) ? NAMES[intendedStart] : ('(not provided / unparseable: \'' + INTENDED_START_RAW + '\')');
+Boolean matches = (intendedStart != null && actualStart == intendedStart);
+
+// INFORMATIONAL — this step ALWAYS succeeds (no throw anywhere), so it can NEVER
+// false-fail on an org whose fiscal year has not yet been set or was set
+// differently. It only surfaces the read-back for the IE to attest.
+System.debug(LoggingLevel.INFO, '[3.28] INFORMATIONAL fiscal year read-back: Organization.FiscalYearStartMonth=' + actualStart + ' (' + actualName + '); operator intended start=' + intendedName + '; UsesStartDateAsFiscalYearName=' + org.UsesStartDateAsFiscalYearName + '; matches=' + matches);
+if (matches) {
+    System.debug(LoggingLevel.INFO, '[3.28] ATTEST OK — the org fiscal year starts in ' + actualName + ', matching the intended start month.');
+} else {
+    System.debug(LoggingLevel.WARN, '[3.28] ATTEST NEEDED — org fiscal year start = ' + actualName + ' but operator intended ' + intendedName + '. This is NOT a failure: FiscalYearStartMonth is Setup-UI-only and cannot be written via the API. If the org is not yet configured, complete the Setup step and re-run to re-read; otherwise confirm the org value with the client and attest.');
+}

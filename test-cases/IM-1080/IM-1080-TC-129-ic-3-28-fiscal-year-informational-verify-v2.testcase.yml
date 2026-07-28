@@ -1,0 +1,186 @@
+schemaVersion: "1.0"
+
+id: "d05da8fa-cbef-4bec-ba59-39f1eda34059"
+key: "TC-129"
+title: "IM-1080 IC 3.28 Fiscal Year Set Up (v1→v2, medium-confidence) — validate the guided HYBRID: 1 MANUAL Setup handoff (2 required select inputs, nothing hardcoded) + 1 AUTOMATED T6 INFORMATIONAL read-back that reports ATTEST OK/NEEDED and NEVER false-fails (FiscalYearStartMonth is Setup-UI-only, unwritable via API) · CODE PR spec-only (reused T6 anon apex)"
+description: |
+  Cobertura QA para IM-1080 (Historia, priority Medium/medium-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1134 (creada 2026-07-27).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch D (decision & verify). Tier Medium — caveat: verify manual-dependent.
+    `Organization.FiscalYearStartMonth` es Setup-UI-only (read-only vía API: describe updateable=false /
+    createable=false, sin Metadata type). El auto-check pasa solo donde el FY del org ya coincide → por eso el
+    read-back es INFORMACIONAL + attest, y NUNCA false-fail.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#252` (**MERGED**).
+    Branch: `task/ic-3-28-fiscal-year-IM-1080`. Merge commit `adcef7d2` (base `8d66dba6` = IM-1079 #251).
+    2 files, +165/-10.
+  - **CODE PR spec-only** — NO toca adapters/ops: reutiliza T6 (anon apex) para el read-back. El diff son 2 files:
+    `ic-3-28-fiscal-year.json` (v1→v2) + el lockstep/no-throw regression `ic-3-28-fiscal-year.spec.ts` (108 líneas).
+
+  IC 3.28 v2 (feasibility hybrid, 2 steps):
+  - Step 1 (MANUAL): "Set the fiscal year in Setup". Parkea 2 requiredInputs select (nada hardcodeado):
+    * `fiscalYearStartMonth` (select, 12 meses) — required.
+    * `fiscalYearType` (select, Standard/Custom) — required.
+    Guide: Setup → Company Settings → Fiscal Year; elegir tipo ({{fiscalYearType}}: Standard normal, o Custom SOLO
+    si el cliente requiere periodos 4-4-5 — WARNING: habilitar Custom es irreversible); setear start month
+    ({{fiscalYearStartMonth}}) + year-naming; Save. estimatedMinutes 6.
+  - Step 2 (AUTOMATED T6 anon apex): "Report the fiscal year start month". READ-ONLY informational read-back —
+    NUNCA escribe, NUNCA throw. Parsea el intended start ({{fiscalYearStartMonth}}: full name / 3-letter abbrev /
+    1-12 number; blank/unparseable → null); lee Organization.FiscalYearStartMonth + UsesStartDateAsFiscalYearName;
+    matches = (intended != null && actual == intended). matches → "ATTEST OK"; else → "ATTEST NEEDED" (WARN,
+    surface org value vs intended, explícito "NOT a failure: Setup-UI-only, no API write path"). Sin throw → el step
+    SIEMPRE COMPLETED, nunca FAILED.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR spec-only): clone en merge `adcef7d2`, correr el
+    `.spec.ts` de 3.28 (lockstep + no-throw regression) + gates; re-derivar el conteo del dev (jest 84).
+  - **spec fidelity + apex read independiente**: parsear los 2 steps + LEER el apex del step 2 por cuenta propia
+    (parse del intended, read-back de los fields read-only, ramas match/mismatch/blank, ausencia de throw/DML).
+  - **op-reuse audit** (NO genuinely-new): confirmar que #252 NO toca adapters (2 files = spec + spec.ts); T6 ya existe.
+  - **no-write proof**: confirmar por lectura del apex que NO hay DML (insert/update/upsert) sobre Organization; la
+    única aparición de "FiscalYearStartMonth=" es la string de debug (concatenación de log), no un write.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (org FY=1/January; el read-back Apex
+    corrió vía executeAnonymous para match/mismatch/blank — todos COMPLETED sin excepción) y el v2 NO está seeded a
+    MigrationApp-dev (seed PENDING, AWS SSO expirado). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **FiscalYearStartMonth Setup-UI-only**: el field es unwritable vía API → el step 1 queda MANUAL y el read-back es
+    solo informacional. Por diseño, no un gap.
+  - **Seed PENDING-CREDS**: v2 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg. QA re-verifica por código.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `adcef7d2` y base `8d66dba6` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR spec-only: evidencia primaria por código)."
+  - "Node + jq/python3 para parsear el spec v2 y leer el apex del step 2 independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven: match/mismatch/blank COMPLETED) y el v2 no seeded (seed PENDING)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Operator supplies the fiscal year details as required inputs — the MANUAL Setup step parks for a required \"fiscal year start month\" select (12 calendar months) and a required \"fiscal year type\" select (Standard/Custom), the guide instructs Setup > Company Information > Fiscal Year, and nothing is hardcoded to a specific museum's fiscal year"
+    tags:
+      - ac-1
+      - manual
+      - manual-handoff
+      - required-inputs
+      - operator-input-token
+      - im-1080
+      - im-735
+    given:
+      - "el spec `ic-3-28-fiscal-year.json` v2 en merge `adcef7d2`"
+    when:
+      - "se parsea el step 1 y sus requiredInputs + guide"
+    then:
+      - "step 1 es MANUAL; parkea 2 requiredInputs select required: fiscalYearStartMonth (12 meses) y fiscalYearType (Standard/Custom)"
+      - "la guide instruye setear el FY en Setup → Company Settings → Fiscal Year (elegir tipo, setear start month, save; warns que Custom es irreversible)"
+      - "nada hardcodeado a un museo específico: usa los tokens {{fiscalYearStartMonth}} y {{fiscalYearType}}"
+
+  - title: "AC2 · The read-back reports a MATCHING org without failing — when the org fiscal-year start month equals the operator-intended start month, the AUTOMATED T6 read-back reads Organization.FiscalYearStartMonth + UsesStartDateAsFiscalYearName, reports \"ATTEST OK\", and completes successfully"
+    tags:
+      - ac-2
+      - t6-read-back
+      - informational
+      - attest-ok
+      - happy-path
+      - im-1080
+    given:
+      - "el step 2 (T6 anon apex) del spec v2 y un org cuyo start month == el intended"
+    when:
+      - "se lee el apex del step 2 y su rama match"
+    then:
+      - "lee Organization.FiscalYearStartMonth y UsesStartDateAsFiscalYearName (read-only)"
+      - "matches = (intended != null && actual == intended); en match reporta 'ATTEST OK — the org fiscal year starts in <mes>, matching the intended start month'"
+      - "el step COMPLETED exitosamente (dev-proven live CamiloDevOrg: org FY=1/January, intended January → ATTEST OK)"
+
+  - title: "AC3 · The read-back NEVER false-fails on a MISMATCHED or not-yet-configured org — when the org start month does NOT equal the intended, it reports \"ATTEST NEEDED\" surfacing the org value vs the intended value, makes clear this is NOT a failure (Setup-UI-only, unwritable via API), and completes successfully rather than FAILED"
+    tags:
+      - ac-3
+      - t6-read-back
+      - never-false-fail
+      - attest-needed
+      - refusal-evidence
+      - im-1080
+    given:
+      - "el step 2 y un org cuyo start month != el intended (o no configurado)"
+    when:
+      - "se lee el apex del step 2 y su rama mismatch"
+    then:
+      - "reporta 'ATTEST NEEDED — org fiscal year start = <actual> but operator intended <intended>' (WARN), surfaceando ambos valores"
+      - "deja explícito que NO es un failure: FiscalYearStartMonth es Setup-UI-only y no se puede escribir vía API; si el org no está configurado, completar el Setup step y re-run para re-leer"
+      - "el apex NO tiene throw en ninguna rama → el step SIEMPRE COMPLETED, nunca FAILED (dev-proven live: intended June sobre org=January → COMPLETED sin excepción)"
+
+  - title: "AC4 · The read-back is resilient to a blank or unparseable intended month — when the operator-intended start month is blank or unparseable, it reports the intended value as \"(not provided / unparseable)\" and completes successfully without raising an exception"
+    tags:
+      - ac-4
+      - t6-read-back
+      - resilient-parse
+      - edge-case
+      - no-throw
+      - im-1080
+    given:
+      - "el step 2 y un intended month blank o no parseable"
+    when:
+      - "se lee la lógica de parse del intended en el apex"
+    then:
+      - "el parse es best-effort: numeric 1-12, o full name / 3-letter abbrev (case-insensitive); blank/unparseable → intendedStart null (NUNCA throw)"
+      - "reporta el intended como '(not provided / unparseable: <raw>)' y sigue leyendo el actual del org"
+      - "el step COMPLETED sin excepción (dev-proven live: blank path ejecutado sin excepción)"
+
+  - title: "Version lockstep + no write path + gates — case.version and template.version are both 2 (bumped in lockstep, asserted by a test); no step attempts to write Organization.FiscalYearStartMonth via any API (pure read + debug, no DML); jest (lockstep + no-throw regression + ic-seeds validity) / tsc --noEmit / eslint on touched files pass; #252 is spec-only (T6 reused, NOT genuinely-new)"
+    tags:
+      - ac-5
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - no-write-path
+      - reused-ops
+      - scope-fit
+      - im-1080
+    given:
+      - "clone local de MigrationAppBackend en merge `adcef7d2` con npm ci limpio; base `8d66dba6`"
+    when:
+      - "se corren tsc --noEmit, el `.spec.ts` de 3.28 y eslint; y se audita el diff de #252 + el apex"
+    then:
+      - "case.version=2 y template.version=2 (lockstep, asertado por el test); feasibility hybrid; 2 steps (1 manual + 1 auto)"
+      - "no hay write path: el apex solo hace SELECT Organization + System.debug (sin insert/update/upsert/DML); la única 'FiscalYearStartMonth=' es la string de debug, no un write"
+      - "el `.spec.ts` de 3.28 pasa (lockstep + no-throw regression + ic-seeds validity, dev: 84 tests); tsc --noEmit sin type errors; eslint limpio; op-reuse: #252 NO toca adapters (2 files = spec + spec.ts), T6 ya existe → NO genuinely-new"
+
+tags:
+  - im-1080
+  - im-735
+  - im-1134
+  - implementations-automation
+  - medium-confidence
+  - ic-3-28
+  - fiscal-year
+  - t6-read-back
+  - informational
+  - never-false-fail
+  - no-write-path
+  - required-inputs
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-252
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 70
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-27T00:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-27T00:00:00Z"
+  version: 1
