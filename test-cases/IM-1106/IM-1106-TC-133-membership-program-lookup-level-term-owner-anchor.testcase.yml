@@ -1,0 +1,210 @@
+schemaVersion: "1.0"
+
+id: "1ec67e83-70e3-4f81-83a7-95ebc88fd5c9"
+key: "TC-133"
+title: "Membership Opportunities, POS and recurring membership anchor the mandatory vnfp__Membership_Program__c lookup on MEMBERSHIPLEVELTERM.LEVELID (the term owner level) instead of the transaction level, so every emitted key resolves to a real Membership Program and no row loads as N/A (Long Island)"
+description: |
+  Cobertura QA para IM-1106 (Historia, priority **Crítica**, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1139 (creada 2026-07-28).
+
+  Contexto (escalamiento de carga bloqueada):
+  - Account: **Long Island Children's Museum**. Al preparar el archivo de Membership Opportunities se
+    detectaron registros cuyo `vnfp__Membership_Program__c` NO existe en el query de Membership Programs.
+    El campo es **mandatorio** → esas Opportunities (y los POS que referencian el mismo programa) no cargan;
+    el lookup importa como **N/A**.
+  - Adjunto del ticket: `N_A Records (Pos Purchases & Membership Programs) - No Membership programs (N_A).csv` (107 KB).
+  - **PR bajo prueba: `Veevarts/MigrationToolETL#154`** (**OPEN**, branch `fix/membership-program-lookup-IM-1106`
+    → main). 10 files +976/-5: 4 `.sql` (membership_program, membership_transactions, recurring_membership,
+    all_recurring) + 3 de query-regression (spec estático + integration docker + fixture) + README/docs/package.json.
+
+  ⚠️ **Reinterpretación del scope (hallazgo del PR, a validar)**: el ticket pedía *"identificar los Membership
+  Programs faltantes y agregarlos al query"*. El PR concluye que **los programas NO faltan**: `membership_program.sql`
+  emite exactamente un programa por `MEMBERSHIPLEVELTERM`, con clave `"<term owner level>-<term>"` (join
+  `term.LEVELID = ml.ID`). Altru permite que un `MEMBERSHIPTRANSACTION` / `SALESORDERITEMMEMBERSHIP` registre un
+  `MEMBERSHIPLEVELID` que **no** es el level dueño del `MEMBERSHIPLEVERMTERMID` referenciado (rebuild histórico de
+  level dentro del mismo programa). Los consumidores construían la clave con ese level de la transacción (`ml.ID`),
+  produciendo un id que ninguna fila de Membership Program tiene → lookup mandatorio en N/A. El fix re-ancla la clave,
+  no agrega programas. QA debe validar que esa premisa (programas no faltantes / clave mal construida) es correcta.
+
+  El fix (del PR):
+  - `vnfp__Membership_Program__c` pasa a ser `CAST(mlt.LEVELID ...) + '-' + CAST(mlt.ID ...)` en TODOS los consumidores
+    (antes `CAST(ml.ID ...) + '-' + CAST(mlt.ID ...)`), igualando el grain del export de programas.
+  - **No-op cuando el par es consistente** (una fila de programa solo existe cuando `term.LEVELID = level id`); solo
+    cambian las filas cross-level históricas.
+  - **Campos descriptivos intactos**: el `Name` de la Opportunity, `Program_Name__c` y `vnfp__Membership_Price__c`
+    siguen reflejando lo que Altru registró en la transacción. Solo se mueve la foreign key del lookup.
+  - Archivos: `opportunity-membership/membership_transactions.sql` (ambas ramas: membership-transaction y la
+    order-backed del UNION ALL), `recurring-donation-membership/recurring_membership.sql` + `all_recurring.sql`,
+    y `membership-program/membership_program.sql` (solo comentario de grain/contract, sin cambio de SQL).
+
+  Cifras reportadas por el dev (a re-derivar por QA):
+  - Unresolved membership Opportunity rows PRE-fix: **225 (longisland)**, 1 (everson), 1 (high_desert), 1 (tucson);
+    POST-fix **0 en todos**. Cross-level pairs: 11 (longisland), 1 c/u (everson/high_desert/tucson), 0 en el resto.
+  - `SALESORDERITEMMEMBERSHIP` (POS): **0 unresolved PRE y POST** (el fix no regresiona POS).
+  - Probe de source: 0 terms sin level dueño y 0 filas con term huérfano en los 8 profiles.
+
+  Estrategia de verificación (para /qa-test-executor):
+  - **Regression tests (evidencia PRIMARIA)**: `membership-program-linkage-query.spec.ts` (invariante estático
+    catalog-wide, rápido, sin DB) + `membership-program-linkage-query.integration.spec.ts` + fixture (SQL Server
+    dockerizado, escenarios cross-level). Dev: 302 pass en `query-regression`; el spec estático FALLA con el SQL
+    pre-fix (ambas variantes `ml.ID`); 6 integration pass, 3 fallan pre-fix. QA re-corre + **revert-proof**.
+  - **safesql PRE/POST** en un profile alcanzable: contar filas con clave de programa no resoluble (LEFT JOIN contra
+    el set de claves que emite `membership_program.sql`) antes vs después, y contar los pares cross-level.
+  - **Cross-program safety**: verificar que todo par cross-level permanece dentro del MISMO `MEMBERSHIPPROGRAMID`
+    (el riesgo de re-parenting silencioso que el propio PR marca como principal).
+
+  Riesgos abiertos:
+  - **NO hay profile safesql para `longisland`** (disponibles: aspen, illinois_2, tucson, tucson_backup3) → el cliente
+    reportante (225 filas, el caso más grande) NO es verificable en vivo localmente. `tucson` sí es alcanzable y tiene
+    1 par cross-level + 1 fila unresolved pre-fix → sirve como profile de verificación live (señal chica pero real).
+    Si se requiere evidencia sobre Long Island, pedir acceso/credencial de ese profile.
+  - **Inconsistencia en el PR body**: dice "present on **5 of 8** profiles" pero enumera solo **4** con filas
+    unresolved (longisland/everson/high_desert/tucson). El executor debe re-derivar el conteo por profile y no
+    tomar la línea del summary.
+  - **PR OPEN (no merged)** → el POST-fix es el head del branch, no `main`.
+  - **Re-parenting cross-program**: si algún par cross-level cruzara de `MEMBERSHIPPROGRAMID`, la Opportunity quedaría
+    silenciosamente bajo otro programa. El PR dice haberlo verificado en los 8 profiles; QA debe re-verificarlo donde
+    tenga acceso.
+  - Datos de cliente read-only: safesql (bastion, keychain) — credenciales y datos row-level nunca en el chat/artefactos.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "MigrationToolETL con `npm ci` limpio para correr `npm test -- --runInBand query-regression` (spec estático) en el branch `fix/membership-program-lookup-IM-1106` del PR #154."
+  - "Docker/colima levantado para `npm run test:queries:docker` (integration de membership-program-linkage, escenarios cross-level); si no está, marcarlo DEFERRED y substituir con revert-proof a nivel spec estático."
+  - "safesql con al menos un profile alcanzable para el PRE/POST live — `tucson` es el candidato (1 par cross-level, 1 fila unresolved pre-fix); NO existe profile `longisland` (el cliente reportante)."
+  - "El CSV adjunto al ticket (`N_A Records (Pos Purchases & Membership Programs)...csv`) para cruzar los registros afectados reportados."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Membership Opportunities resolve the mandatory Membership Program lookup — after the fix, membership_transactions.sql (both the membership-transaction branch and the order-backed UNION ALL branch) emits vnfp__Membership_Program__c as \"<MEMBERSHIPLEVELTERM.LEVELID>-<term id>\", so every emitted key exists in the Membership Programs export and no Opportunity row loads as N/A"
+    tags:
+      - ac-1
+      - membership-opportunities
+      - membership-program-lookup
+      - level-term-owner
+      - altru
+      - im-70
+      - im-1106
+      - longisland
+      - happy-path
+    given:
+      - "el query `membership_transactions.sql` del PR #154 y un profile safesql alcanzable"
+    when:
+      - "se corre PRE-fix vs POST-fix y se cuentan las claves de programa que no resuelven contra el set emitido por `membership_program.sql`"
+    then:
+      - "PRE-fix la clave se arma con el level de la transacción (`ml.ID`) → filas con lookup no resoluble (dev: 225 en longisland, 1 en everson/high_desert/tucson)"
+      - "POST-fix la clave se arma con `mlt.LEVELID` (term owner) → **0 filas** con clave no resoluble; ambas ramas del UNION ALL aplican el mismo anclaje"
+      - "el campo mandatorio `vnfp__Membership_Program__c` deja de importar como N/A y la carga de Membership Opportunities se desbloquea"
+
+  - title: "AC2 · POS purchases keep resolving their Membership Program — the SALESORDERITEMMEMBERSHIP-backed rows use the same term-owner anchor, they had 0 unresolved pairs pre-fix and stay at 0 post-fix (no regression), and membership Opportunities only reach a POS purchase through export-eligible sales orders"
+    tags:
+      - ac-2
+      - pos-purchases
+      - sales-order-item-membership
+      - no-regression
+      - altru
+      - im-1106
+      - longisland
+    given:
+      - "las filas POS (SALESORDERITEMMEMBERSHIP) que referencian un `vnfp__Membership_Program__c`"
+    when:
+      - "se comparan los pares no resolubles de POS PRE-fix vs POST-fix"
+    then:
+      - "POS tenía **0 pares no resolubles PRE-fix** y sigue en **0 POST-fix** (el fix no introduce regresión en POS)"
+      - "las membership Opportunities alcanzan su POS purchase solo vía sales orders export-eligible (0 alcanzables a través del gate de estados excluidos)"
+      - "el ticket reporta el mismo síntoma en POS: se valida que ya no queda ningún POS con programa no resoluble"
+
+  - title: "AC3 · Recurring membership installments use the same anchor — recurring_membership.sql and all_recurring.sql build the Membership Program key from the term owner level too, so recurring membership rows do not reintroduce a dangling mandatory lookup"
+    tags:
+      - ac-3
+      - recurring-membership
+      - all-recurring
+      - consistency
+      - altru
+      - im-1106
+    given:
+      - "los queries `recurring_membership.sql` y `all_recurring.sql` del PR #154"
+    when:
+      - "se inspecciona la construcción de la clave del programa en ambos y se corre el PRE/POST"
+    then:
+      - "ambos usan `CAST(mlt.LEVELID ...) + '-' + CAST(mlt.ID ...)` (mismo anclaje que membership_transactions.sql)"
+      - "no queda ninguna fila de recurring membership con clave de programa no resoluble POST-fix"
+      - "el invariante es catalog-wide: el spec estático asegura que ningún consumidor vuelve a usar `ml.ID` para la clave"
+
+  - title: "AC4 · Re-anchoring is safe: no silent re-parenting and no-op on consistent pairs — every cross-level pair stays inside the SAME MEMBERSHIPPROGRAMID (the Opportunity is never moved to a different program), a consistent level/term pair produces exactly the same key as before, and the descriptive fields (Opportunity Name, Program_Name__c, vnfp__Membership_Price__c) still reflect what Altru recorded on the transaction"
+    tags:
+      - ac-4
+      - cross-program-safety
+      - no-silent-reparenting
+      - do-no-harm
+      - descriptive-fields-intact
+      - edge-case
+      - altru
+      - im-1106
+    given:
+      - "los pares cross-level (dev: 11 en longisland, 1 c/u en everson/high_desert/tucson) y los pares consistentes"
+    when:
+      - "se cruza cada par cross-level contra el `MEMBERSHIPPROGRAMID` de origen y de destino, y se comparan las claves de los pares consistentes PRE vs POST"
+    then:
+      - "todo par cross-level permanece dentro del MISMO `MEMBERSHIPPROGRAMID` → ninguna Opportunity se re-parenta silenciosamente a otro programa"
+      - "para un par consistente (`term.LEVELID` = level de la transacción) la clave POST-fix es idéntica a la PRE-fix → no-op, solo se mueven las filas rotas"
+      - "`Name`, `Program_Name__c` y `vnfp__Membership_Price__c` no cambian (solo se mueve la foreign key del lookup); tampoco cambian los gates de inclusión de filas (mismo grain → dependientes fund-assignment / contact-role reciben los mismos inputs)"
+
+  - title: "AC5 · Source integrity + regression gates — no MEMBERSHIPLEVELTERM lacks an owner level (so mlt.LEVELID never dangles), the static catalog-wide spec fails on the pre-fix SQL and passes after, the dockerized cross-level integration cases pass (3 of them fail pre-fix), and lint / query-regression / build are green"
+    tags:
+      - ac-5
+      - gates
+      - revert-proof
+      - orphan-term
+      - integration-docker
+      - static-invariant
+      - lint
+      - build
+      - scope-fit
+      - im-1106
+    given:
+      - "clone de MigrationToolETL en el branch del PR #154 y (si hay docker) el suite de integration"
+    when:
+      - "se corren el spec estático, el integration dockerizado, el revert-proof y los gates"
+    then:
+      - "source probe: **0 terms sin level dueño** y **0 filas con term huérfano** → `mlt.LEVELID` nunca queda colgando (si hubiera, sería un fallo de la premisa del fix)"
+      - "`membership-program-linkage-query.spec.ts` (invariante estático catalog-wide) pasa en el branch y **FALLA revirtiendo los `.sql` a base** (ambas variantes `ml.ID`); el integration dockerizado da 6 pass y 3 fallan pre-fix (dangling lookup, cross-level MT, cross-level order-backed) — si docker no está disponible, marcar DEFERRED y substituir con el revert-proof estático"
+      - "`npm run lint:check` limpio, `query-regression` verde (dev: 302 pass), `npm run build` OK con la metadata de queries regenerada; el diff no toca gates de inclusión de filas"
+
+tags:
+  - im-1106
+  - im-70
+  - im-1139
+  - altru
+  - altru-queries
+  - membership-program
+  - membership-opportunities
+  - pos-purchases
+  - recurring-membership
+  - membership-program-lookup
+  - level-term-owner
+  - dangling-foreign-key
+  - mandatory-lookup
+  - n-a-records
+  - longisland
+  - tucson
+  - escalation
+  - sql-only
+  - safesql
+  - source-side
+  - data-validation
+  - migration-tool-etl
+  - pr-154
+  - critical
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T16:31:55Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T16:31:55Z"
+  version: 1

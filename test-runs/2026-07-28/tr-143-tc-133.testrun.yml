@@ -1,0 +1,259 @@
+schemaVersion: "1.0"
+
+id: tr-3935d390-dd35-4e5f-a45f-3c1042cea08a
+key: TR-143
+title: "TR-143 · IM-1106 · TC-133 · Membership Program lookup anclado en MEMBERSHIPLEVELTERM.LEVELID (term owner) en vez del level de la transacción — 5/5 PASS · 0 defectos · static spec 9/9 + revert-proof 5/9 FAIL + live safesql tucson (unresolved 1→0, cross_program 0, orphan_terms 0) + POS sin regresión · PR MigrationToolETL#154 (OPEN)"
+
+description: |
+  QA de IM-1106 (Historia, priority **Crítica**, epic IM-70 Altru Queries). QA Sub-task: IM-1139.
+  Account: Long Island Children's Museum. PR bajo prueba: Veevarts/MigrationToolETL#154 (OPEN, branch
+  `fix/membership-program-lookup-IM-1106`, head `53177ba`, base main; 10 files +976/-5).
+
+  Clasificación: SQL (4 queries, ediciones de una línea) + query-regression (spec estático catalog-wide +
+  integration dockerizado + fixture). Evidencia PRIMARIA: (1) el spec estático del dev + revert-proof y
+  (2) safesql live PRE/POST sobre `tucson` (agregados numéricos, sin datos row-level). El integration
+  dockerizado quedó DEFERRED (colima/docker daemon caído) → substituido por el revert-proof + el live.
+
+  Reinterpretación del scope (VALIDADA por QA): el ticket pedía "identificar los Membership Programs
+  faltantes y agregarlos al query". La premisa del PR — que los programas NO faltan y que lo roto es la
+  construcción de la clave — quedó CONFIRMADA en vivo: en tucson `membership_program.sql` emite 57 claves
+  y hay 0 MEMBERSHIPLEVELTERM sin level dueño; la fila que no resolvía lo hacía porque su clave se armaba
+  con el level de la transacción (cross-level), no porque faltara el programa.
+
+  Root cause: `membership_program.sql` emite una fila por MEMBERSHIPLEVELTERM con clave "<term owner level>-<term>"
+  (join `term.LEVELID = ml.ID`). Altru permite que MEMBERSHIPTRANSACTION / SALESORDERITEMMEMBERSHIP registren un
+  MEMBERSHIPLEVELID que NO es el level dueño del term (rebuild histórico de level dentro del mismo programa). Los
+  consumidores armaban la clave con ese level de la transacción → id que ninguna fila de programa tiene → el lookup
+  mandatorio `vnfp__Membership_Program__c` importaba como N/A y bloqueaba Membership Opportunities y POS.
+
+  El fix: `CAST(mlt.LEVELID ...) + '-' + CAST(mlt.ID ...)` en los 4 puntos de proyección con clave
+  (membership_transactions.sql ×2 ramas, all_recurring.sql, recurring_membership.sql). No-op cuando el par es
+  consistente; solo se mueven las filas cross-level. Campos descriptivos y gates de inclusión intactos.
+
+  Método QA (clone reusado, checkout del branch del PR; deps válidas — package.json solo agrega el nuevo spec
+  al script docker):
+  1. Spec estático catalog-wide `membership-program-linkage-query.spec.ts` → 9/9 PASS.
+  2. Revert-proof: revertir los 3 `.sql` a base main → el mismo spec da 5/9 FAIL → guardea el fix.
+  3. Scope-fit por grep: 6 proyecciones de `vnfp__Membership_Program__c` — 4 con clave (todas term-anchored) y
+     2 NULL (`recurring_donation.sql` y la rama de donaciones de `all_recurring.sql`, que no son de membresía) →
+     ningún consumidor quedó sin arreglar.
+  4. safesql `tucson` (agregados): reconstruí el set de claves emitidas por `membership_program.sql` y conté,
+     sobre MEMBERSHIPTRANSACTION y SALESORDERITEMMEMBERSHIP, las claves PRE (level de txn) vs POST (term owner)
+     que no resuelven, los pares cross-level, los cross-PROGRAM y los terms huérfanos.
+  5. Tech regression: `test:queries` 303 pass / 46 skip / 0 fail. Lint limpio. Security + OWASP.
+
+  Resultado: 5/5 PASS, 0 defectos. Match EXACTO con el dev en tucson (1 fila unresolved pre-fix, 1 par cross-level).
+  Observaciones reportadas sin inflar: el PR dice "5 of 8 profiles" pero enumera 4; y longisland (225 filas, el caso
+  del ticket) NO es verificable en vivo porque no existe ese profile safesql.
+
+testCaseIds:
+  - 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+
+environment:
+  name: "MigrationToolETL @ PR #154 head 53177ba (branch fix/membership-program-lookup-IM-1106, base main) · node v25.4.0 · safesql profile tucson (live Altru replica, aggregate-only) · illinois_2/aspen sin túnel · NO existe profile longisland · docker/colima DOWN → integration deferred"
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/154"
+  buildVersion: >-
+    SQL + query-regression (dev category), source-side Altru. 10 files +976/-5: 4 .sql (3 con cambio real de una
+    línea + 1 solo comentario de grain) + spec estático + integration docker + fixture + README/docs/package.json.
+    Evidencia primaria: spec estático catalog-wide + revert-proof + live safesql PRE/POST en tucson.
+  notes: |
+    ## Solution understood
+    `membership_program.sql` emits one Membership Program per MEMBERSHIPLEVELTERM, keyed "<term owner level>-<term>"
+    (its FROM is `MEMBERSHIPLEVEL ml JOIN MEMBERSHIPLEVELTERM term ON term.LEVELID = ml.ID JOIN MEMBERSHIPPROGRAM p`),
+    so the key is functionally determined by the term alone. Altru, however, lets a MEMBERSHIPTRANSACTION /
+    SALESORDERITEMMEMBERSHIP record a MEMBERSHIPLEVELID that is NOT the level owning the referenced term (a historical
+    level rebuild inside the same program). The consumers built the composite key from that transaction level
+    (`ml.ID`, joined on `mt.MEMBERSHIPLEVELID = ml.ID`), producing an id no Membership Program row carries — so the
+    mandatory `vnfp__Membership_Program__c` lookup imported as N/A and blocked the Membership Opportunity and POS
+    loads. The fix anchors the key on `mlt.LEVELID` (the term owner) in all four keyed projections. It is a no-op
+    whenever the pair is consistent (a program row only exists when `term.LEVELID` = level id), so only the
+    cross-level historical rows move; descriptive fields (Name, Program_Name__c, vnfp__Membership_Price__c) and the
+    row-inclusion gates are untouched, so dependents keep the same inputs.
+
+    ## Inferred technical tests
+    - Static catalog-wide spec (no DB): every `vnfp__Membership_Program__c` projection is term-anchored; rejects the
+      original `ml.ID` bug; both membership_transactions branches. -> executable here.
+    - Revert-proof: revert the 3 .sql to base main and re-run the static spec -> must FAIL. -> executable.
+    - Scope-fit grep: enumerate ALL projections of the field to prove no consumer was left behind. -> executable.
+    - Live safesql PRE/POST on a reachable profile: unresolved keys pre vs post, cross-level pairs, cross-PROGRAM
+      pairs (the re-parenting risk), orphan terms (the premise of the fix), POS regression. -> executable (tucson).
+    - Dockerized integration spec (cross-level MT + order-backed scenarios). -> NOT executable (docker down) -> deferred.
+
+    ## Objective fit
+    PRE-fix the key is built from the transaction level, so a cross-level row emits an id that no program carries
+    (tucson: 1 unresolved of 122,668; longisland reportedly 225). POST-fix every key is term-anchored and 0 rows are
+    unresolved, while POS stays at 0/0 (no regression), no cross-level pair crosses MEMBERSHIPPROGRAMID (0 re-parenting),
+    and 0 terms lack an owner level (so `mlt.LEVELID` never dangles — the premise holds). Static spec 9/9 on the branch,
+    5/9 FAIL on base. Objective met on all 5 scenarios. 0 defects.
+
+status: completed
+
+summary:
+  total: 5
+  passed: 5
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 0
+    scenarioTitle: "AC1 · Membership Opportunities resolve the mandatory Membership Program lookup — after the fix, membership_transactions.sql (both the membership-transaction branch and the order-backed UNION ALL branch) emits vnfp__Membership_Program__c as \"<MEMBERSHIPLEVELTERM.LEVELID>-<term id>\", so every emitted key exists in the Membership Programs export and no Opportunity row loads as N/A"
+    testCaseId: 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+    testCaseKey: TC-133
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 22
+    actual: |
+      Spec estático (catalog-wide) en el branch: 9/9 PASS, incl. "opportunity-membership/membership_transactions.sql
+      anchors every Membership Program id on the membership level term" y "uses the term-anchored expression in BOTH
+      membership_transactions.sql branches" (líneas 575 y 795, ambas `CAST(mlt.LEVELID ...) + '-' + CAST(mlt.ID ...)`).
+      Live safesql tucson sobre MEMBERSHIPTRANSACTION (122,668 filas con term): reconstruí el set de 57 claves que
+      emite `membership_program.sql` y conté las que no resuelven — PRE-fix (clave con el level de la transacción)
+      **1 fila no resoluble**; POST-fix (clave con `mlt.LEVELID`) **0**. El grain no cambia (122,668 en ambos). El
+      lookup mandatorio deja de importar como N/A. Objetivo cumplido.
+    notes: "AC1. Spec estático (ambas ramas) + live tucson 1→0. Match exacto con el dev para tucson. longisland (225 filas) no verificable: no existe profile safesql."
+    stepResults: []
+    attachments:
+      - name: static-spec.log
+        path: attachments/tr-143-tc-133/gates/static-spec.log
+        mimeType: text/plain
+      - name: mt-linkage-tucson.json
+        path: attachments/tr-143-tc-133/scenario-live/mt-linkage-tucson.json
+        mimeType: application/json
+
+  - scenarioIndex: 1
+    scenarioTitle: "AC2 · POS purchases keep resolving their Membership Program — the SALESORDERITEMMEMBERSHIP-backed rows use the same term-owner anchor, they had 0 unresolved pairs pre-fix and stay at 0 post-fix (no regression), and membership Opportunities only reach a POS purchase through export-eligible sales orders"
+    testCaseId: 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+    testCaseKey: TC-133
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 12
+    actual: |
+      Live safesql tucson sobre SALESORDERITEMMEMBERSHIP (19,701 filas con term), mismo método (claves PRE vs POST
+      contra el set emitido): **pos_pre_unresolved = 0** y **pos_post_unresolved = 0**; **pos_cross_level = 0** y
+      **pos_cross_program = 0**. Es decir: en tucson POS no tenía el problema y el fix NO lo regresiona (el conteo
+      queda idéntico y el grain también, 19,701 en ambos). Coincide con lo que reporta el dev
+      ("SALESORDERITEMMEMBERSHIP had 0 unresolved pairs pre-fix and 0 post-fix"). La rama order-backed del
+      UNION ALL usa el mismo anclaje (asertado por el spec estático). Objetivo cumplido.
+    notes: "AC2. No-regresión de POS verificada en vivo (0/0). El síntoma POS del ticket es de longisland, no verificable localmente (sin profile)."
+    stepResults: []
+    attachments:
+      - name: pos-linkage-tucson.json
+        path: attachments/tr-143-tc-133/scenario-live/pos-linkage-tucson.json
+        mimeType: application/json
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC3 · Recurring membership installments use the same anchor — recurring_membership.sql and all_recurring.sql build the Membership Program key from the term owner level too, so recurring membership rows do not reintroduce a dangling mandatory lookup"
+    testCaseId: 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+    testCaseKey: TC-133
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 10
+    actual: |
+      Spec estático: "recurring-donation-membership/all_recurring.sql anchors every Membership Program id on the
+      membership level term", ídem `recurring_membership.sql`, más "keeps the recurring membership queries
+      term-anchored" — todos verdes. Scope-fit por grep independiente sobre TODAS las proyecciones del campo:
+      `recurring_membership.sql:73` y `all_recurring.sql:109` usan `CAST(mlt.LEVELID ...)`; `all_recurring.sql:175`
+      y `recurring_donation.sql:85` emiten NULL (son las ramas de donación, no de membresía) — por eso el PR
+      correctamente no toca `recurring_donation.sql`, y el spec catalog-wide igual lo cubre. 4 proyecciones con
+      clave, las 4 term-anchored: ningún consumidor quedó sin arreglar. Objetivo cumplido.
+    notes: "AC3. Invariante catalog-wide + scope-fit verificado por grep propio (6 proyecciones: 4 con clave term-anchored, 2 NULL correctas)."
+    stepResults: []
+    attachments:
+      - name: consumers.txt
+        path: attachments/tr-143-tc-133/scenario-0-unit-tests/consumers.txt
+        mimeType: text/plain
+      - name: static-spec.log
+        path: attachments/tr-143-tc-133/gates/static-spec.log
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC4 · Re-anchoring is safe: no silent re-parenting and no-op on consistent pairs — every cross-level pair stays inside the SAME MEMBERSHIPPROGRAMID (the Opportunity is never moved to a different program), a consistent level/term pair produces exactly the same key as before, and the descriptive fields (Opportunity Name, Program_Name__c, vnfp__Membership_Price__c) still reflect what Altru recorded on the transaction"
+    testCaseId: 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+    testCaseKey: TC-133
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 18
+    actual: |
+      Este es el riesgo #1 que el propio PR declara. Lo verifiqué en vivo de forma independiente: en tucson hay
+      **1 par cross-level** (`mt.MEMBERSHIPLEVELID <> mlt.LEVELID`) y **cross_program = 0** — es decir, el level de
+      la transacción y el level dueño del term pertenecen al MISMO `MEMBERSHIPPROGRAMID`, así que la Opportunity NO
+      se re-parenta silenciosamente a otro programa. En POS, 0 cross-level (nada que mover). El **no-op** en pares
+      consistentes es estructural: cuando `mt.MEMBERSHIPLEVELID = mlt.LEVELID` la expresión nueva produce
+      literalmente la misma cadena que la vieja (122,667 de 122,668 filas en tucson caen en ese caso y no cambian).
+      Campos descriptivos: el diff solo toca la línea de `vnfp__Membership_Program__c`; `Name`, `Program_Name__c` y
+      `vnfp__Membership_Price__c` (`mlt.AMOUNT`) quedan intactos, y los gates de inclusión de filas no se tocan
+      (grain idéntico verificado: 122,668 y 19,701 antes y después). El caso cross-level dockerizado del fixture
+      quedó DEFERRED (colima down) y está cubierto aquí por la medición live. Objetivo cumplido.
+    notes: "AC4. Riesgo principal del PR re-verificado en vivo: cross_program=0. No-op estructural en 122,667/122,668 filas. Fixture docker deferred, substituido."
+    stepResults: []
+    attachments:
+      - name: mt-linkage-tucson.json
+        path: attachments/tr-143-tc-133/scenario-live/mt-linkage-tucson.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-143-tc-133/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC5 · Source integrity + regression gates — no MEMBERSHIPLEVELTERM lacks an owner level (so mlt.LEVELID never dangles), the static catalog-wide spec fails on the pre-fix SQL and passes after, the dockerized cross-level integration cases pass (3 of them fail pre-fix), and lint / query-regression / build are green"
+    testCaseId: 1ec67e83-70e3-4f81-83a7-95ebc88fd5c9
+    testCaseKey: TC-133
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 25
+    actual: |
+      **Integridad de source (la premisa del fix)**: en tucson **orphan_terms = 0** — ningún MEMBERSHIPLEVELTERM
+      carece de level dueño, así que `mlt.LEVELID` nunca queda colgando; y `membership_program.sql` emite 57 claves.
+      Esto confirma que los programas NO faltaban (la reinterpretación del scope del PR es correcta).
+      **Revert-proof**: revertí los 3 `.sql` a base main (vuelven a `CAST(ml.ID ...)`, 2 ocurrencias en
+      membership_transactions) y el spec estático pasó a **5 de 9 FAIL** (las 3 aserciones por archivo + "both
+      branches" + "keeps the recurring membership queries term-anchored") → el spec guardea el fix de verdad.
+      **Gates**: `test:queries` = **303 passed / 46 skipped / 0 fail** (el dev reporta 302; obtuve 303, reporto lo
+      obtenido); `lint:check` exit 0. El `package.json` del PR solo agrega el nuevo integration spec al script
+      `test:queries:docker` (no es un bump de versión). El suite dockerizado quedó **DEFERRED** (colima/docker
+      daemon caído), substituido por el revert-proof + la medición live. Objetivo cumplido.
+    notes: "AC5. Premisa del fix confirmada en vivo (0 orphan terms). Revert-proof 5/9 FAIL. 303 pass (dev decía 302 — reporto lo obtenido). Integration docker DEFERRED."
+    stepResults: []
+    attachments:
+      - name: revert-proof.log
+        path: attachments/tr-143-tc-133/gates/revert-proof.log
+        mimeType: text/plain
+      - name: full-query-regression.log
+        path: attachments/tr-143-tc-133/gates/full-query-regression.log
+        mimeType: text/plain
+      - name: lint.log
+        path: attachments/tr-143-tc-133/gates/lint.log
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-143-tc-133/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-143-tc-133/owasp-top10-scan.txt
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T17:05:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T17:05:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-133"
+  parentIssue: "IM-1106"
+  qaSubTask: "IM-1139"
+  epic: "IM-70"
+  prUnderTest: "https://github.com/Veevarts/MigrationToolETL/pull/154"
+  prState: "OPEN"
+  headCommit: "53177ba"
+  baseBranch: "main"
+  changeType: "sql-query (4 one-line projections) + query-regression (static + docker integration)"
+  liveStatus: "safesql tucson (live Altru replica, aggregate-only): MT 122,668 filas con term — unresolved PRE 1 / POST 0, cross_level 1, cross_program 0, orphan_terms 0, 57 claves de programa emitidas; POS 19,701 filas — 0/0 unresolved, 0 cross-level. Match exacto con el dev para tucson."
+  deferred: "integration suite dockerizado (membership-program-linkage-query.integration.spec.ts) — colima/docker daemon caído; substituido por revert-proof estático (5/9 FAIL en base) + medición live PRE/POST"
+  observations: "(1) El PR body dice 'present on 5 of 8 profiles' pero enumera 4 con filas unresolved (longisland 225 / everson 1 / high_desert 1 / tucson 1) — discrepancia SIN RESOLVER, no verificable (solo tucson alcanzable). (2) longisland — el cliente del ticket, 225 filas — NO tiene profile safesql, así que su caso no se verificó en vivo. (3) full suite dio 303 pass vs 302 que reporta el dev."
+
+history: []
