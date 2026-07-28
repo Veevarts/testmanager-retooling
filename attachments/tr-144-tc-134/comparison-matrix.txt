@@ -1,0 +1,33 @@
+COMPARISON MATRIX — TC-134 / TR-144 — IM-1107 shop discount netting (PR MigrationToolETL#155, safesql tucson, aggregate-only)
+PRE-fix net = COALESCE(AMOUNTPAID, soi.TOTAL, 0)         [el gross usado como neto -> el descuento se SUMA]
+POST-fix net = COALESCE(AMOUNTPAID, soi.TOTAL - disc, 0) [neteo correcto en el fallback]
+
+Test/Metric                                              | PRE-fix      | POST-fix     | AC / Objective ref | Objective met?
+----------------------------------------------------------|--------------|--------------|--------------------|---------------
+Fast guard spec (shop-discount-query.spec.ts)            | 6 of 14 FAIL | 14 of 14 PASS| AC1,AC2,AC3,AC5    | YES
+Lineas de merchandise (tucson)                            | 1,827        | 1,827        | grain sin cambio   | YES
+  - con unit rows (path autoritativo AMOUNTPAID)          | 5            | 5            | AC2                | YES
+  - sin unit rows (fallback, 99.7%)                       | 1,822        | 1,822        | AC1                | YES
+  - fallback CON descuento (las que el bug afectaba)      | 2            | 2            | AC1                | YES
+  - lineas cuyo monto CAMBIA                              | -            | 2            | AC1                | YES
+  - lineas con unit-row cuyo monto cambia (do-no-harm)    | -            | 0            | AC2 (do-no-harm)   | YES
+  - sobre-declaracion eliminada (SUM pre_net - post_net)  | +$24         | $0           | AC1 (objetivo)     | YES
+  - lineas con monto NEGATIVO tras el neteo               | -            | 0            | AC1 (guard)        | YES
+  - violaciones de identidad TOTAL = SUM(AMOUNTPAID)+disc | -            | 0            | AC2 (premisa)      | YES
+  - lineas con gross NULL (fallback a 0)                  | 0            | 0            | AC1 (null-safe)    | YES
+Ordenes merchandise-only reconciliadas vs SALESORDER.AMOUNT| 1,480/1,481  | 1,481/1,481  | AC4                | YES
+  - varianza total de la reconciliacion                   | $9           | $0           | AC4 (objetivo)     | YES
+Item_Price__c derivado del GROSS (contrato IM-809/TC-37)  | gross        | gross        | AC3 (no regresion) | YES
+Full query-regression suite                               | n/a          | 303 pass / 57 skip / 0 fail | tech regression | YES
+lint:check / build                                        | n/a          | ambos OK     | gates              | YES
+
+RECONCILIACION vs el PR body:
+- El PR audito illinois_2, aspen, everson, high_desert, kidstream, longisland, moad — NO tucson. Yo medi en tucson
+  (el unico profile alcanzable) y el mecanismo se reproduce igual: ~99.7% de lineas sin unit rows (el PR reporta
+  99.2% en Illinois), do-no-harm exacto, reconciliacion a 100%.
+- El ejemplo del ticket (Order #12747796 / S-19225 / ext 63FAAF69, Illinois, $156 -> $24) NO es verificable en vivo:
+  illinois_2 no conecta. Cubierto por el mecanismo + la evidencia del dev (CamiloDevOrg end-to-end: 4 ordenes
+  reconcilian $24/$44/$160/$30 y el $156 buggy desaparece).
+- Full suite: obtuve 303 pass; el PR reporta 300. Reporto lo obtenido.
+
+VERDICT: 5/5 escenarios cumplen el objetivo. 0 defectos. Docker integration DEFERRED (colima down), substituido.

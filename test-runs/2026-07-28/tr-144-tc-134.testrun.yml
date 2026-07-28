@@ -1,0 +1,267 @@
+schemaVersion: "1.0"
+
+id: tr-a180217d-cd95-4e23-bae2-aa5dc10c1257
+key: TR-144
+title: "TR-144 · IM-1107 · TC-134 · Shop discounts neteados en el fallback sin unit rows (net = soi.TOTAL − descuentos) — 5/5 PASS · 0 defectos · fast spec 14/14 + revert-proof 6/14 FAIL + live safesql tucson (do-no-harm 0, negativos 0, identidad 0 violaciones, reconciliación 1480→1481/1481 y varianza $9→$0) · Item_Price__c sigue gross (IM-809 intacto) · PR MigrationToolETL#155 (OPEN)"
+
+description: |
+  QA de IM-1107 (Historia, priority **Crítica**, epic IM-70 Altru Queries). QA Sub-task: IM-1140.
+  Account: Illinois Holocaust Museum and Education Center. PR bajo prueba: Veevarts/MigrationToolETL#155
+  (OPEN, branch `fix/im-1107-shop-discount-amount-netting`, head `58f6016`, base main; 10 files +1255/-15).
+
+  Clasificación: SQL (4 queries de shop) + query-regression (spec rápido + integration docker + fixture).
+  Evidencia PRIMARIA: (1) el spec rápido del dev + revert-proof y (2) safesql live PRE/POST sobre `tucson`
+  (agregados numéricos, sin datos row-level). El integration dockerizado (15 tests / 4 órdenes) quedó
+  DEFERRED (colima/docker daemon caído) → substituido por el revert-proof + la medición live.
+
+  Root cause: `soi.TOTAL` es el total **GROSS** de la línea (antes de descuento y de impuesto). Las queries
+  usaban `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` como base **neta**, pero el `AMOUNTPAID` por
+  unidad solo existe en líneas con filas `SALESORDERITEMMERCHANDISEUNIT` — ausente en ~99 % del volumen. En esas
+  líneas el descuento terminaba **sumado**: el ítem de $90 con descuento de $66 exportaba $156 en vez de $24.
+
+  El fix: dos `CROSS APPLY` — `ld(total_discount)` y
+  `la(net_amount) = COALESCE(us.amount_paid_after_discount, soi.TOTAL - ld.total_discount, 0)`.
+  `Subtotal_before_discount__c = net + discount` (= gross), `Price_Without_Tax__c = net`, `Tax_Amount__c` y
+  `Amount__c` se recomputan desde el neto. **`Item_Price__c` NO cambia** (sigue derivado del gross): el comentario
+  del propio código dice "must NOT be pre-netted (IM-809)" porque el trigger del managed package lo multiplica por
+  la cantidad y aplica el descuento propagado desde `POS_Discount__c`. `client_purchase.sql` y
+  `sales_order_only_shop.sql` reciben la misma corrección en `subtotal_after_discount`.
+
+  Método QA (clone reusado, checkout del branch; docker no disponible):
+  1. Spec rápido `shop-discount-query.spec.ts` → **14/14 PASS** (cubre los 3 queries + fallback NULL→0 + que
+     `Item_Price` sigue derivado del gross).
+  2. Revert-proof: revertir los 4 `.sql` de shop a base main → el mismo spec da **6/14 FAIL** → guardea el fix.
+  3. Álgebra verificada a mano sobre el SQL: fallback con TOTAL=90 y disc=66 ⇒ net=24, subtotal_before=24+66=90
+     (gross correcto); con `soi.TOTAL` NULL ⇒ `NULL - disc` colapsa a NULL y el COALESCE cae a 0 (comportamiento
+     pre-fix, nunca negativo).
+  4. safesql `tucson` (agregados): replicando los CTEs del query medí PRE vs POST sobre las 1,827 líneas de
+     merchandise + la reconciliación de las 1,481 órdenes merchandise-only contra `SALESORDER.AMOUNT`.
+  5. Tech regression `test:queries` 303 pass / 57 skip / 0 fail; `lint:check` y `build` OK. Security + OWASP.
+
+  Resultado: 5/5 PASS, 0 defectos. Los 4 invariantes críticos dieron **0 violaciones** en vivo (do-no-harm sobre
+  el path unit-row, ninguna línea negativa, identidad `TOTAL = SUM(AMOUNTPAID)+descuentos`, gross NULL→0) y la
+  reconciliación de órdenes llegó al **100 %** con varianza **$0**. Observaciones reportadas sin inflar: el cliente
+  del ticket (`illinois_2`) NO es alcanzable, `tucson` no está en la lista de profiles que el PR auditó, y la suite
+  completa dio 303 pass vs los 300 que reporta el PR.
+
+testCaseIds:
+  - 19f5e997-12b7-42b1-b0b6-4837edca6853
+
+environment:
+  name: "MigrationToolETL @ PR #155 head 58f6016 (branch fix/im-1107-shop-discount-amount-netting, base main) · node v25.4.0 · safesql profile tucson (live Altru replica, aggregate-only) · illinois_2 (cliente del ticket) y aspen sin túnel · docker/colima DOWN → integration deferred"
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/155"
+  buildVersion: >-
+    SQL + query-regression (dev category), source-side Altru shop. 10 files +1255/-15: 4 .sql de shop (sale_item,
+    client_purchase, sales_order_only_shop, pos_discount_only_shop) + spec rápido + integration docker + fixture +
+    docs/README/package.json. Evidencia primaria: spec rápido + revert-proof + live safesql PRE/POST en tucson.
+  notes: |
+    ## Solution understood
+    `soi.TOTAL` on an Altru shop merchandise line is the GROSS line total (before discount, before tax). The shop
+    money queries used `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` as the NET base, but the per-unit
+    `AMOUNTPAID` only exists on lines carrying `SALESORDERITEMMERCHANDISEUNIT` rows — absent on ~99% of merchandise
+    lines (Illinois 79,055/79,713; measured 1,822/1,827 on tucson). On those fallback lines the discount was ADDED
+    into the amount instead of subtracted, so a $90 item with a $66 discount exported $156 instead of $24. The fix
+    introduces two CROSS APPLYs: `ld(total_discount)` (unit-preferring: `COALESCE(us.item_level_discount,
+    ids.total_item_discount, 0) + COALESCE(us.order_level_discount, ods.total_order_discount, 0)`) and
+    `la(net_amount) = COALESCE(us.amount_paid_after_discount, soi.TOTAL - ld.total_discount, 0)`. The authoritative
+    unit-row path is preferred first, so already-correct lines are untouched; the fallback subtracts; and a NULL
+    `soi.TOTAL` collapses the middle branch to NULL so the COALESCE lands on 0 rather than exporting a negative.
+    `Subtotal_before_discount__c` becomes `net + discount` (= the true gross), `Price_Without_Tax__c` = net, and
+    `Tax_Amount__c` / `Amount__c` are recomputed from net. `Item_Price__c` deliberately stays on the gross base —
+    the code comments it as "must NOT be pre-netted (IM-809)" because the Veevart Sale Item trigger multiplies it
+    by quantity and applies the discount propagated from `POS_Discount__c`. The parent rollup queries
+    (`client_purchase.sql`, `sales_order_only_shop.sql`) get the same fallback correction.
+
+    ## Inferred technical tests
+    - Fast guard spec (no DB): net base is not the bare gross in the 3 queries; net derived as gross minus line
+      discount; NULL gross falls back to 0; Item_Price still derived from gross. -> executable here.
+    - Revert-proof: revert the 4 shop .sql to base main and re-run the fast spec -> must FAIL. -> executable.
+    - Hand-verified algebra on the SQL (fallback, unit-row, NULL-gross branches). -> executable.
+    - Live safesql PRE/POST on a reachable profile: lines with/without unit rows, lines whose amount changes,
+      do-no-harm on the unit-row path, negative amounts, the `TOTAL = SUM(AMOUNTPAID) + discounts` identity, and
+      merchandise-only order reconciliation vs `SALESORDER.AMOUNT`. -> executable (tucson).
+    - Dockerized integration spec (15 tests over a 4-order fixture: order-level discount, item-level + tax,
+      unit-row control, no-discount control). -> NOT executable (docker down) -> deferred.
+
+    ## Objective fit
+    PRE-fix the fallback treats the gross as net, so every discounted line without unit rows over-reports by the
+    discount amount (tucson: 2 such lines, $24 of overstatement; the ticket's Illinois example inflates $24 → $156).
+    POST-fix those lines net correctly, the unit-row path is untouched (0 lines changed), no line goes negative,
+    the source identity holds with 0 violations, and merchandise-only orders reconcile 100% against SALESORDER.AMOUNT
+    (variance $9 → $0). Fast spec 14/14 on the branch, 6/14 FAIL on base. Objective met on all 5 scenarios. 0 defects.
+
+status: completed
+
+summary:
+  total: 5
+  passed: 5
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 0
+    scenarioTitle: "AC1 · A merchandise line WITHOUT unit rows nets the discount instead of adding it — on the fallback path the exported amount is derived as soi.TOTAL menos (item discount + order discount), so the $90 line with a −$66 discount exports Amount = $24 (the real Altru order total) instead of the inflated $156"
+    testCaseId: 19f5e997-12b7-42b1-b0b6-4837edca6853
+    testCaseKey: TC-134
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 25
+    actual: |
+      Spec rápido en el branch: 14/14 PASS, incl. "sale_item.sql does not use the gross line total as the net base"
+      y "sale_item.sql derives the net amount from gross minus the line discount". Álgebra verificada a mano sobre el
+      SQL: `la(net_amount) = COALESCE(us.amount_paid_after_discount, soi.TOTAL - ld.total_discount, 0)` ⇒ con
+      TOTAL=90 y disc=66 el neto es 24 y `Subtotal_before_discount__c = 24+66 = 90` (el gross real). Live safesql
+      tucson: de 1,827 líneas de merchandise, **1,822 (99.7 %) van por el fallback** (sin unit rows) — el mismo
+      patrón que el PR reporta para Illinois (79,055/79,713 = 99.2 %); **2 líneas de fallback tienen descuento** y son
+      exactamente las **2 que cambian de monto**, eliminando **$24 de sobre-declaración**. **0 líneas quedan negativas**
+      tras el neteo y **0 líneas tienen gross NULL** (el fallback a 0 está cubierto por el spec). Objetivo cumplido.
+    notes: "AC1. Fallback netea correctamente. El ejemplo del ticket (Illinois, $156→$24) NO es verificable en vivo: illinois_2 no conecta; cubierto por el mecanismo idéntico + evidencia del dev."
+    stepResults: []
+    attachments:
+      - name: shop-discount-spec.log
+        path: attachments/tr-144-tc-134/gates/shop-discount-spec.log
+        mimeType: text/plain
+      - name: shop-netting-tucson.json
+        path: attachments/tr-144-tc-134/scenario-live/shop-netting-tucson.json
+        mimeType: application/json
+
+  - scenarioIndex: 1
+    scenarioTitle: "AC2 · The authoritative unit-row path stays untouched (do-no-harm) — lines that DO carry SALESORDERITEMMERCHANDISEUNIT rows keep using AMOUNTPAID, so already-correct lines export exactly the same amount as before and the identity soi.TOTAL = SUM(AMOUNTPAID) + discounts holds with zero delta"
+    testCaseId: 19f5e997-12b7-42b1-b0b6-4837edca6853
+    testCaseKey: TC-134
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 18
+    actual: |
+      El `COALESCE` toma `us.amount_paid_after_discount` PRIMERO, y el CTE `unit_summary` lo calcula como
+      `SUM(COALESCE(AMOUNTPAID,0))` — nunca NULL cuando el grupo existe — así que la rama `soi.TOTAL - discount` se
+      alcanza SOLO cuando no hay ninguna fila de unit (documentado en el propio código y asertado por el spec).
+      Live safesql tucson: de las **5 líneas con unit rows**, **0 cambian de monto** (`unit_lines_changed = 0`) →
+      do-no-harm confirmado sobre el path autoritativo. Además la identidad de la fuente
+      `soi.TOTAL = SUM(AMOUNTPAID) + descuentos` se cumple con **0 violaciones** (tolerancia 0.005) en esas 5 líneas,
+      lo que confirma la premisa del PR (que `soi.TOTAL` es el gross tanto si hay unit rows como si no). El grain se
+      mantiene: 1,827 líneas antes y después. Objetivo cumplido.
+    notes: "AC2. Do-no-harm exacto (0 líneas con unit-row alteradas) + identidad de la fuente sin violaciones."
+    stepResults: []
+    attachments:
+      - name: shop-netting-tucson.json
+        path: attachments/tr-144-tc-134/scenario-live/shop-netting-tucson.json
+        mimeType: application/json
+
+  - scenarioIndex: 2
+    scenarioTitle: "AC3 · Derived money fields are recomputed from the net while Item_Price__c stays gross — Subtotal_before_discount__c, Price_Without_Tax__c, Tax_Amount__c and Amount__c all derive from the netted base, but Item_Price__c keeps the gross base so the managed package's POS_Discount__c propagation established in IM-809 / TC-37 still lands correctly"
+    testCaseId: 19f5e997-12b7-42b1-b0b6-4837edca6853
+    testCaseKey: TC-134
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 15
+    actual: |
+      Lectura del `sale_item.sql` del branch: `Subtotal_before_discount__c = la.net_amount + ld.total_discount`,
+      `Discount_Amount__c = -ld.total_discount`, `Price_Without_Tax__c = la.net_amount`,
+      `Tax_Amount__c = ROUND(la.net_amount * tax_pct / 100, 2)` y
+      `Amount__c = ROUND(la.net_amount + (la.net_amount * tax_pct / 100), 2)` — los cinco derivan del neto y son
+      coherentes entre sí (`gross = net + discount`). **`Item_Price__c` NO se tocó**: sigue derivado de `soi.TOTAL`
+      (gross), y el propio código lo justifica — *"Item_Price is the GROSS unit price … the Veevart Sale Item trigger
+      multiplies Item_Price by quantity for the pre-discount base and applies the discount propagated from
+      POS_Discount__c, so it must NOT be pre-netted (IM-809)"*. El spec rápido lo blinda con dos guards: "derives
+      Item_Price from the gross line total, not the net amount paid" y "uses the gross line total as the discount
+      base". → **sin regresión del contrato de IM-809 / TC-37**. Objetivo cumplido.
+    notes: "AC3. Derivados desde el neto; Item_Price__c gross preservado y protegido por guards → IM-809/TC-37 intacto."
+    stepResults: []
+    attachments:
+      - name: shop-discount-spec.log
+        path: attachments/tr-144-tc-134/gates/shop-discount-spec.log
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-144-tc-134/regression-results.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "AC4 · Parent rollups reconcile the order total to 100% — client_purchase.sql and sales_order_only_shop.sql apply the same fallback correction on subtotal_after_discount, so merchandise-only orders match SALESORDER.AMOUNT exactly (Illinois 2,533 → 3,189/3,189, High Desert 55,250 → 65,097/65,097, Long Island 3,939 → 5,040/5,040) and the POS Purchase / Client Purchase totals stop over-reporting"
+    testCaseId: 19f5e997-12b7-42b1-b0b6-4837edca6853
+    testCaseKey: TC-134
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 20
+    actual: |
+      El spec rápido asegura que los tres queries aplican la misma corrección: "client_purchase.sql subtracts the
+      unit-preferring discount from the gross fallback" y lo mismo para `sales_order_only_shop.sql` (más los guards
+      de "does not use the gross line total as the net base"). Live safesql tucson sobre las **1,481 órdenes
+      merchandise-only**: reconciliadas contra `SALESORDER.AMOUNT` pasan de **1,480/1,481 (PRE)** a **1,481/1,481
+      (POST) = 100 %**, y la **varianza total pasa de $9 a $0**. Es el mismo patrón que el PR reporta para los
+      profiles que auditó (Illinois 2,533→3,189/3,189, High Desert 55,250→65,097/65,097, Long Island
+      3,939→5,040/5,040) — en tucson el volumen afectado es chico pero la dirección y el resultado final (100 %,
+      varianza 0) son idénticos. Objetivo cumplido.
+    notes: "AC4. Reconciliación al 100% y varianza $0 en tucson. Las cifras de Illinois/HD/LI del PR no son re-derivables (profiles sin túnel)."
+    stepResults: []
+    attachments:
+      - name: shop-reconcile-tucson.json
+        path: attachments/tr-144-tc-134/scenario-live/shop-reconcile-tucson.json
+        mimeType: application/json
+      - name: comparison-matrix.txt
+        path: attachments/tr-144-tc-134/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "AC5 · Regression evidence + gates — the ticket's own example (Order #12747796 / S-19225, ext ID 63FAAF69-…) exports $24 instead of $156; the fast CI guard blocks reintroducing the bare gross fallback and fails on the pre-fix SQL (dev: 11 of the new cases fail pre-fix); the dockerized 4-order integration suite passes; and lint / query-regression / build are green"
+    testCaseId: 19f5e997-12b7-42b1-b0b6-4837edca6853
+    testCaseKey: TC-134
+    status: passed
+    executedAt: "2026-07-28T17:05:00Z"
+    duration: 22
+    actual: |
+      **Revert-proof**: revertí los 4 `.sql` de shop a base main (el patrón buggy
+      `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` reaparece **5 veces** en `sale_item.sql`) y el spec
+      rápido pasó a **6 de 14 FAIL** — exactamente los guards del neteo en los 3 queries → el test guardea el fix.
+      **Gates**: `test:queries` = **303 passed / 57 skipped / 0 fail** (el PR reporta 300; obtuve 303, reporto lo
+      obtenido); `lint:check` exit 0; `npm run build` exit 0. El `package.json` solo agrega el nuevo integration spec
+      al script `test:queries:docker`. **El ejemplo concreto del ticket** (Order #12747796 / S-19225 / ext ID
+      `63FAAF69-7E48-4AC3-9AE9-2AC6B6952C0D`, Illinois) **NO pudo verificarse en vivo**: el profile `illinois_2` no
+      conecta. Queda cubierto por el mecanismo (idéntico, medido en tucson) y por la evidencia del dev en CamiloDevOrg
+      (4 órdenes reconcilian $24/$44/$160/$30 y el $156 buggy desaparece). El suite dockerizado (15 tests) quedó
+      **DEFERRED** (colima caído), substituido por el revert-proof + la medición live. Objetivo cumplido.
+    notes: "AC5. Revert-proof 6/14 FAIL. 303 pass (dev 300 — reporto lo obtenido). Ejemplo del ticket NO verificable en vivo (illinois_2 sin túnel); integration docker DEFERRED."
+    stepResults: []
+    attachments:
+      - name: revert-proof.log
+        path: attachments/tr-144-tc-134/gates/revert-proof.log
+        mimeType: text/plain
+      - name: full-query-regression.log
+        path: attachments/tr-144-tc-134/gates/full-query-regression.log
+        mimeType: text/plain
+      - name: build.log
+        path: attachments/tr-144-tc-134/gates/build.log
+        mimeType: text/plain
+      - name: lint.log
+        path: attachments/tr-144-tc-134/gates/lint.log
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-144-tc-134/owasp-top10-scan.txt
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T17:02:46Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T17:02:46Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-134"
+  parentIssue: "IM-1107"
+  qaSubTask: "IM-1140"
+  epic: "IM-70"
+  prUnderTest: "https://github.com/Veevarts/MigrationToolETL/pull/155"
+  prState: "OPEN"
+  headCommit: "58f6016"
+  baseBranch: "main"
+  changeType: "sql-query (4 shop queries, net-vs-gross base) + query-regression (fast guards + docker integration)"
+  liveStatus: "safesql tucson (live Altru replica, aggregate-only): 1,827 líneas merchandise — 5 con unit rows / 1,822 fallback (99.7%); 2 líneas fallback con descuento = 2 líneas que cambian; overstatement removido $24; unit-row lines changed 0; negativos 0; violaciones de identidad 0; gross NULL 0. Reconciliación merchandise-only: 1,480/1,481 → 1,481/1,481 (100%), varianza $9 → $0."
+  deferred: "integration suite dockerizado (shop-discount-query.integration.spec.ts, 15 tests / 4 órdenes) — colima/docker daemon caído; substituido por revert-proof (6/14 FAIL en base) + medición live PRE/POST"
+  observations: "(1) El profile del cliente del ticket (illinois_2, Illinois Holocaust Museum) NO conecta → el ejemplo concreto (Order #12747796 / S-19225 / $156→$24) no se verificó en vivo. (2) tucson — el único profile alcanzable — NO figura entre los 7 que el PR auditó (illinois_2, aspen, everson, high_desert, kidstream, longisland, moad); aun así el mecanismo se reproduce igual. (3) full suite dio 303 pass vs 300 reportados por el PR. (4) La ambigüedad del ticket sobre la semántica de Amount se resuelve a favor del neto: Amount__c = neto (+ tax) y el gross queda en Item_Price__c / Subtotal_before_discount__c."
+
+history: []

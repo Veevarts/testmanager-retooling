@@ -1,0 +1,214 @@
+schemaVersion: "1.0"
+
+id: "19f5e997-12b7-42b1-b0b6-4837edca6853"
+key: "TC-134"
+title: "Shop merchandise lines without unit rows derive the exported Amount as soi.TOTAL menos los descuentos (item + order) en vez de sumarlos, el path autoritativo AMOUNTPAID queda intacto, Item_Price__c sigue en base gross (IM-809 POS_Discount) y los rollups padre reconcilian el order total al 100% (Illinois Holocaust Museum)"
+description: |
+  Cobertura QA para IM-1107 (Historia, priority **Crítica**, epic IM-70 Altru Queries).
+  QA Sub-task asociada: IM-1140 (creada 2026-07-28).
+
+  Contexto (discrepancia financiera en validación de Shop Sales):
+  - Account: **Illinois Holocaust Museum and Education Center**. Durante la validación de Shop Sales se detectó
+    que los descuentos de Altru **no se restan** en el campo `Amount` al migrar — se **suman**, inflando el monto.
+    `Subtotal` y `Total` sí quedaban correctos; `Amount` inflaba los totales de la validación financiera.
+  - **Ejemplo 1 (regression evidence)**: Order Altru **#12747796** (1/25/2025, Total real **$24.00**) → Sale Item SF
+    **S-19225**, Implementation External ID **63FAAF69-7E48-4AC3-9AE9-2AC6B6952C0D**. Merchandise "Family Membership"
+    $90.00 + Discount −$66.00 ⇒ Altru $24.00, pero SF mostró `Amount` = **$156.00** ❌ (= 90 + 66), `Discount Amount`
+    = −$66.00, `Subtotal` = $90.00 ✅, `Total` = $90.00 ✅.
+  - **Ejemplo 2**: Order Altru **#12747862** → Sale Item SF `a2wan000006zl68AAA`.
+  - 3 screenshots adjuntos al ticket como evidencia.
+  - **PR bajo prueba: `Veevarts/MigrationToolETL#155`** (**OPEN**, branch `fix/im-1107-shop-discount-amount-netting`
+    → main). 10 files +1255/-15: 4 `.sql` de shop + 3 de query-regression (spec rápido + integration docker + fixture)
+    + docs/README/package.json.
+
+  Root cause (del PR):
+  - `soi.TOTAL` de una línea de merchandise en Altru es el total **GROSS** de la línea (antes de descuento y antes de
+    impuesto). Las queries de shop usaban `COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)` como base **neta**,
+    pero el `AMOUNTPAID` por unidad **solo existe en líneas que tienen filas `SALESORDERITEMMERCHANDISEUNIT`** —
+    ausente en la enorme mayoría (**Illinois 79,055/79,713**, Long Island 238,776/241,547 ≈ 99 %). En esas líneas el
+    descuento terminaba **sumado** al monto en vez de restado ⇒ el ítem de $90 con descuento de $66 exportaba
+    `Amount = $156` en lugar de $24.
+
+  El fix (del PR):
+  - El monto neto se deriva vía `CROSS APPLY` como `COALESCE(AMOUNTPAID, soi.TOTAL - (item discount + order discount))`
+    **solo en el fallback**; el path autoritativo de unit-row (`AMOUNTPAID`) queda **intacto** (las líneas ya correctas
+    no cambian).
+  - `sale_item.sql`: `Subtotal_before_discount__c`, `Price_Without_Tax__c`, `Tax_Amount__c` y `Amount__c` se recomputan
+    desde ese neto. **`Item_Price__c` NO cambia: se queda en base gross** para que la propagación de `POS_Discount__c`
+    del managed package siga aterrizando bien (contrato establecido en **IM-809 / TC-37**).
+  - `client_purchase.sql` y `sales_order_only_shop.sql`: misma corrección del fallback sobre `subtotal_after_discount`
+    (rollups padre de POS Purchase / Client Purchase). `pos_discount_only_shop.sql`: solo contrato/comentario.
+
+  Estrategia de verificación (para /qa-test-executor):
+  - **Regression tests (evidencia PRIMARIA)**: `shop-discount-query.spec.ts` (guards rápidos que bloquean la
+    reintroducción del fallback gross) + `shop-discount-query.integration.spec.ts` + fixture (SQL Server dockerizado,
+    4 órdenes: descuento a nivel orden, descuento a nivel ítem + impuesto, control con unit-row, control sin descuento;
+    asserts de montos neteados, integridad referencial cross-query, rollups padre y la identidad `gross = net + discount`).
+    Dev: 300 pass en `query-regression`, 15 tests docker, **pre-fix falla 11 de los nuevos casos**. QA re-corre + **revert-proof**.
+  - **safesql PRE/POST** en un profile alcanzable: contar líneas sin unit-rows, verificar la identidad
+    `soi.TOTAL = SUM(AMOUNTPAID) + descuentos` (delta 0) en las líneas con unit-row, que ninguna línea quede **negativa**
+    tras el fix, y la reconciliación de órdenes merchandise-only contra `SALESORDER.AMOUNT`.
+  - **Regresión de IM-809 / TC-37**: confirmar que `Item_Price__c` sigue gross y que la propagación de `POS_Discount__c`
+    no se rompe (es el contrato que TC-37 fijó: "sale_item gross").
+
+  Riesgos abiertos:
+  - **El profile safesql `illinois_2` (Illinois Holocaust Museum, el cliente del ticket) NO conecta** (túnel caído;
+    tampoco aspen). El único alcanzable hoy es **`tucson`**, que además **NO figura** entre los profiles que el PR dice
+    haber auditado (illinois_2, aspen, everson, high_desert, kidstream, longisland, moad) → puede no tener datos de shop
+    comparables. Si la verificación live sobre el cliente es requisito, hay que levantar el túnel de `illinois_2`.
+  - **Ambigüedad en el ticket sobre la semántica de `Amount`**: el ticket dice *"El campo Amount debería reflejar el
+    precio antes del descuento ($156.00 puede ser el precio original del item)"*, pero también reporta que el impacto es
+    que los reportes muestran **más dinero del real**. El PR resuelve que `Amount` es el **neto** ($24) y deja el gross en
+    `Item_Price__c`. QA debe validar que esa semántica es la correcta y que ambos campos quedan coherentes.
+  - **Blast radius grande**: el fallback afecta ~99 % de las líneas de merchandise (Illinois 79,055 de 79,713) — no es un
+    caso de borde, cambia el monto exportado de casi todas las líneas con descuento.
+  - **PR OPEN (no merged)** → el POST-fix es el head del branch, no `main`.
+  - Datos de cliente read-only: safesql (bastion, keychain) — credenciales y datos row-level nunca en el chat/artefactos.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "MigrationToolETL con `npm ci` limpio para correr `npm test -- --runInBand query-regression` en el branch `fix/im-1107-shop-discount-amount-netting` del PR #155."
+  - "Docker/colima levantado para `npm run test:queries:docker` (nuevo `shop-discount-query.integration.spec.ts`, 15 tests sobre 4 órdenes); si no está, marcarlo DEFERRED y substituir con el revert-proof del spec rápido."
+  - "safesql con un profile alcanzable para el PRE/POST live — el cliente es `illinois_2` pero hoy NO conecta; `tucson` es el único disponible (y no está en la lista auditada por el PR)."
+  - "El ejemplo del ticket (Order #12747796 / Sale Item S-19225 / ext ID 63FAAF69-7E48-4AC3-9AE9-2AC6B6952C0D) y los 3 screenshots adjuntos para cruzar la evidencia."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · A merchandise line WITHOUT unit rows nets the discount instead of adding it — on the fallback path the exported amount is derived as soi.TOTAL menos (item discount + order discount), so the $90 line with a −$66 discount exports Amount = $24 (the real Altru order total) instead of the inflated $156"
+    tags:
+      - ac-1
+      - shop-sales
+      - sale-item
+      - net-amount
+      - discount-netting
+      - fallback-path
+      - altru
+      - im-70
+      - im-1107
+      - illinois
+      - happy-path
+    given:
+      - "una línea de merchandise sin filas `SALESORDERITEMMERCHANDISEUNIT` (el ~99 % del volumen) con descuento aplicado"
+    when:
+      - "se corre `sale_item.sql` PRE-fix vs POST-fix sobre la misma línea"
+    then:
+      - "PRE-fix el descuento se SUMA al monto (base gross usada como neta) → Amount inflado (90 + 66 = 156)"
+      - "POST-fix el neto es `COALESCE(AMOUNTPAID, soi.TOTAL - (item discount + order discount))` → Amount = 24"
+      - "ninguna línea queda con monto negativo tras el neteo"
+
+  - title: "AC2 · The authoritative unit-row path stays untouched (do-no-harm) — lines that DO carry SALESORDERITEMMERCHANDISEUNIT rows keep using AMOUNTPAID, so already-correct lines export exactly the same amount as before and the identity soi.TOTAL = SUM(AMOUNTPAID) + discounts holds with zero delta"
+    tags:
+      - ac-2
+      - do-no-harm
+      - unit-row-path
+      - amountpaid
+      - identity-check
+      - regression
+      - im-1107
+    given:
+      - "líneas de merchandise CON filas de unit (`AMOUNTPAID` presente) — Illinois 658 de 79,713"
+    when:
+      - "se comparan los montos exportados PRE-fix vs POST-fix para esas líneas y se verifica la identidad de la fuente"
+    then:
+      - "el `COALESCE` toma `AMOUNTPAID` primero → el monto exportado NO cambia (do-no-harm sobre las líneas ya correctas)"
+      - "en la fuente se cumple `soi.TOTAL = SUM(AMOUNTPAID) + descuentos` con delta 0 (validado por el dev en 7 profiles)"
+      - "el grain se mantiene: una Sale Item por línea de merchandise, sin filas nuevas ni perdidas"
+
+  - title: "AC3 · Derived money fields are recomputed from the net while Item_Price__c stays gross — Subtotal_before_discount__c, Price_Without_Tax__c, Tax_Amount__c and Amount__c all derive from the netted base, but Item_Price__c keeps the gross base so the managed package's POS_Discount__c propagation established in IM-809 / TC-37 still lands correctly"
+    tags:
+      - ac-3
+      - derived-fields
+      - item-price-gross
+      - pos-discount
+      - im-809-regression
+      - tc-37-contract
+      - im-1107
+    given:
+      - "el `sale_item.sql` del PR #155 y el contrato de IM-809 / TC-37 (\"sale_item gross\" para propagar POS_Discount__c)"
+    when:
+      - "se inspeccionan las expresiones de los campos derivados y se corre la carga con triggers activos"
+    then:
+      - "`Subtotal_before_discount__c`, `Price_Without_Tax__c`, `Tax_Amount__c` y `Amount__c` se recomputan desde el neto"
+      - "`Item_Price__c` NO cambia: sigue en base **gross** → la propagación de `POS_Discount__c` del managed package no se rompe (no hay regresión de IM-809)"
+      - "los campos quedan coherentes entre sí (el `Discount Amount` sigue siendo el descuento y `gross = net + discount`)"
+
+  - title: "AC4 · Parent rollups reconcile the order total to 100% — client_purchase.sql and sales_order_only_shop.sql apply the same fallback correction on subtotal_after_discount, so merchandise-only orders match SALESORDER.AMOUNT exactly (Illinois 2,533 → 3,189/3,189, High Desert 55,250 → 65,097/65,097, Long Island 3,939 → 5,040/5,040) and the POS Purchase / Client Purchase totals stop over-reporting"
+    tags:
+      - ac-4
+      - parent-rollups
+      - client-purchase
+      - sales-order
+      - order-reconciliation
+      - financial-validation
+      - im-1107
+      - illinois
+    given:
+      - "los queries `client_purchase.sql` y `sales_order_only_shop.sql` del PR y las órdenes merchandise-only"
+    when:
+      - "se comparan los totales reconciliados contra `SALESORDER.AMOUNT` PRE-fix vs POST-fix"
+    then:
+      - "la reconciliación de órdenes merchandise-only pasa de parcial a **100 %** (Illinois 3,189/3,189; High Desert 65,097/65,097; Long Island 5,040/5,040)"
+      - "los rollups padre (POS Purchase / Client Purchase) dejan de inflar el total y reflejan el monto real de la orden"
+      - "la integridad referencial cross-query se mantiene (Sale Item ↔ Client Purchase ↔ Sales Order)"
+
+  - title: "AC5 · Regression evidence + gates — the ticket's own example (Order #12747796 / S-19225, ext ID 63FAAF69-…) exports $24 instead of $156; the fast CI guard blocks reintroducing the bare gross fallback and fails on the pre-fix SQL (dev: 11 of the new cases fail pre-fix); the dockerized 4-order integration suite passes; and lint / query-regression / build are green"
+    tags:
+      - ac-5
+      - regression-evidence
+      - s-19225
+      - revert-proof
+      - gates
+      - integration-docker
+      - lint
+      - build
+      - scope-fit
+      - im-1107
+    given:
+      - "el clone en el branch del PR #155 y el ejemplo concreto del ticket"
+    when:
+      - "se localiza la línea del ejemplo en el output POST-fix y se corren los gates + el revert-proof"
+    then:
+      - "el ejemplo del ticket (ext ID `63FAAF69-7E48-4AC3-9AE9-2AC6B6952C0D`, Order #12747796) exporta **Amount = $24.00** y ya no $156.00; el ejemplo 2 (#12747862) también reconcilia"
+      - "el spec rápido `shop-discount-query.spec.ts` pasa en el branch y **FALLA revirtiendo los `.sql` a base** (dev: 11 de los nuevos casos fallan pre-fix); el integration dockerizado (15 tests, 4 órdenes) pasa — si docker no está disponible, marcar DEFERRED y substituir con el revert-proof"
+      - "`npm run lint:check` limpio, `query-regression` verde (dev: 300 pass) y `npm run build` OK; el diff no cambia el grain ni el path de unit-row"
+
+tags:
+  - im-1107
+  - im-70
+  - im-1140
+  - altru
+  - altru-queries
+  - shop
+  - shop-sales
+  - sale-item
+  - client-purchase
+  - pos-purchase
+  - discount-netting
+  - net-vs-gross
+  - amount-field
+  - item-price-gross
+  - pos-discount
+  - im-809-regression
+  - order-reconciliation
+  - financial-validation
+  - illinois
+  - illinois-holocaust-museum
+  - sql-only
+  - safesql
+  - source-side
+  - data-validation
+  - migration-tool-etl
+  - pr-155
+  - critical
+
+estimatedDuration: 100
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T16:51:15Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T16:51:15Z"
+  version: 1

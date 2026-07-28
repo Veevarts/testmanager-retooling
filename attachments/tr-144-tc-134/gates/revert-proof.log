@@ -1,0 +1,1161 @@
+(node:24612) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts
+  shop discount migration — gross-base contract
+    sale_item.sql
+      ✓ locates the per-unit Item_Price division (1 ms)
+      ✓ derives Item_Price from the gross line total, not the net amount paid
+    pos_discount_only_shop.sql
+      ✓ uses the gross line total as the discount base
+      ✓ emits an Amount discount with the gross subtotal as Value
+      ✓ does not carry the unused net amount-paid aggregate
+    net-amount fallback must subtract discounts (IM-1107)
+      ✕ sale_item.sql does not use the gross line total as the net base (1 ms)
+      ✕ client_purchase.sql does not use the gross line total as the net base
+      ✕ sales_order_only_shop.sql does not use the gross line total as the net base (1 ms)
+      ✕ sale_item.sql derives the net amount from gross minus the line discount
+      ✓ sale_item.sql falls back to 0 when the gross line total is NULL
+      ✓ client_purchase.sql falls back to 0 when the gross line total is NULL
+      ✓ sales_order_only_shop.sql falls back to 0 when the gross line total is NULL
+      ✕ client_purchase.sql subtracts the unit-preferring discount from the gross fallback
+      ✕ sales_order_only_shop.sql subtracts the unit-preferring discount from the gross fallback
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › sale_item.sql does not use the gross line total as the net base
+
+    expect(received).not.toMatch(expected)
+
+    Expected pattern: not /COALESCE\(\s*us\.amount_paid_after_discount\s*,\s*soi\.TOTAL\s*,\s*0\s*\)/
+    Received string:      "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);
+
+    -- Sale Item records for shop merchandise order lines
+    -- Expected cardinality: 1 SALESORDERITEMMERCHANDISE line -> 1 Sale_Item__c
+
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    )
+    SELECT
+        CAST(soi.ID AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CAST(so.ID AS NVARCHAR(255)) AS 'Auctifera__Client_Purchase__r:Implementation_External_ID__c',
+        CAST(mp.ID AS NVARCHAR(255)) AS 'Auctifera__Catalog_Item__r:Auctifera__Implementation_External_ID__c',
+        CAST(pi.ID AS NVARCHAR(255)) AS 'Auctifera__Item_Variant__r:Implementation_External_ID__c',
+        so.SALESMETHODTYPE AS Auctifera__Source__c,
+        CASE
+            WHEN so.REFUNDSTATUS IS NOT NULL AND so.REFUNDSTATUS = 2 THEN 'Refunded'
+            WHEN so.STATUSCODE = 5 THEN 'Canceled'
+            WHEN COALESCE(us.returned_qty, 0) >= CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT)
+             AND CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) > 0 THEN 'Refunded'
+            WHEN so.STATUSCODE IN (1, 2, 3, 4) THEN 'Sold'
+            ELSE 'Pending'
+        END AS Auctifera__Purchase_Status__c,
+        CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS Auctifera__Number_of_Items_bought__c,
+        CAST(COALESCE(us.returned_qty, 0) AS INT) AS Auctifera__Refunded_Items__c,
+        COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)
+            + COALESCE(us.item_level_discount, ids.total_item_discount, 0)
+            + COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS Auctifera__Subtotal_before_discount__c,
+        -(
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0)
+            + COALESCE(us.order_level_discount, ods.total_order_discount, 0)
+        ) AS Auctifera__Discount_Amount__c,
+        COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS Auctifera__Price_Without_Tax__c,
+        -- Item_Price is the GROSS unit price (soi.TOTAL is the pre-discount line total). The
+        -- Veevart Sale Item trigger multiplies Item_Price by quantity for the pre-discount
+        -- base and applies the discount propagated from POS_Discount__c, so it must NOT be
+        -- pre-netted (IM-809). The remaining amount fields are recomputed by that trigger.
+        CASE
+            WHEN CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) > 0 THEN
+                ROUND(
+                    COALESCE(soi.TOTAL, 0)
+                        / CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS DECIMAL(18, 2)),
+                    2
+                )
+            ELSE 0
+        END AS Auctifera__Item_Price__c,
+        COALESCE(pih_sale.COST, pi.COST, 0) AS Auctifera__Cost_at_the_moment_of_the_purchase__c,
+        COALESCE(ts.total_tax_pct, 0) AS Auctifera__Tax_2__c,
+        ROUND(COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0, 2) AS Auctifera__Tax_Amount__c,
+        ROUND(
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)
+                + (COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0),
+            2
+        ) AS Auctifera__Amount__c,
+        COALESCE(us.refunded_amount_after_discount, 0) AS Auctifera__Subtotal_Refunded__c,
+        ROUND(
+            COALESCE(us.refunded_amount_after_discount, 0)
+                + (COALESCE(us.refunded_amount_after_discount, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0),
+            2
+        ) AS Auctifera__Total_Refunded__c,
+        CASE WHEN COALESCE(ts.total_tax_pct, 0) = 0 THEN 1 ELSE 0 END AS Auctifera__Tech_Is_Tax_Exempt__c,
+        0 AS Auctifera__Disabled_for_Total_Stock__c
+    FROM SALESORDERITEM soi
+    INNER JOIN SALESORDERITEMMERCHANDISE soim
+        ON soim.ID = soi.ID
+    INNER JOIN SALESORDER so
+        ON so.ID = soi.SALESORDERID
+    INNER JOIN MERCHANDISEPRODUCTINSTANCE pi
+        ON pi.ID = soim.MERCHANDISEPRODUCTINSTANCEID
+    INNER JOIN MERCHANDISEPRODUCT mp
+        ON mp.ID = pi.MERCHANDISEPRODUCTID
+    OUTER APPLY (
+        SELECT TOP 1
+            h.COST
+        FROM MERCHANDISEPRODUCTINSTANCEHISTORY h
+        WHERE h.MERCHANDISEPRODUCTINSTANCEID = pi.ID
+          AND CAST(h.ACTIONDATE AS DATETIME) <= so.DATEADDED
+        ORDER BY h.ACTIONDATE DESC, h.DATECHANGED DESC, h.ID DESC
+    ) pih_sale
+    LEFT JOIN item_discount_summary ids
+        ON ids.SALESORDERITEMID = soi.ID
+    LEFT JOIN order_discount_summary ods
+        ON ods.SALESORDERITEMID = soi.ID
+    LEFT JOIN tax_summary ts
+        ON ts.SALESORDERITEMID = soi.ID
+    LEFT JOIN unit_summary us
+        ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(so.TRANSACTIONDATE, so.DATEADDED) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(so.TRANSACTIONDATE, so.DATEADDED) AS DATE) <= @filterDateTo);
+    "
+
+      86 |       ['sales_order_only_shop.sql', posPurchase],
+      87 |     ])('%s does not use the gross line total as the net base', (_name, sql) => {
+    > 88 |       expect(sql).not.toMatch(bareFallback);
+         |                       ^
+      89 |     });
+      90 |
+      91 |     it('sale_item.sql derives the net amount from gross minus the line discount', () => {
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:88:23
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › client_purchase.sql does not use the gross line total as the net base
+
+    expect(received).not.toMatch(expected)
+
+    Expected pattern: not /COALESCE\(\s*us\.amount_paid_after_discount\s*,\s*soi\.TOTAL\s*,\s*0\s*\)/
+    Received string:      "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);
+
+    -- Client Purchase records for shop merchandise orders
+    -- Expected cardinality: 1 SALESORDER with merchandise -> 1 ClientPurchase__c
+
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    ),
+    payment_method_candidates AS (
+        SELECT
+            sop.SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDERPAYMENT sop
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = sop.PAYMENTID
+
+        UNION ALL
+
+        SELECT
+            so.ID AS SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDER so
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = so.REVENUEID
+    ),
+    payment_method_summary AS (
+        SELECT
+            SALESORDERID,
+            CASE
+                WHEN COUNT(DISTINCT normalized_payment_method) = 0 THEN NULL
+                WHEN COUNT(DISTINCT normalized_payment_method) = 1 THEN MAX(normalized_payment_method)
+                ELSE 'Multiple'
+            END AS payment_method
+        FROM payment_method_candidates
+        WHERE normalized_payment_method IS NOT NULL
+        GROUP BY SALESORDERID
+    ),
+    merchandise_lines AS (
+        SELECT
+            so.ID AS salesorder_id,
+            so.SALESMETHODTYPE,
+            so.STATUSCODE,
+            so.REFUNDSTATUS,
+            so.TRANSACTIONDATE,
+            so.DATEADDED,
+            CASE
+                WHEN c.ISORGANIZATION = 0
+                 AND c.ISGROUP = 0
+                 AND c.ISCONSTITUENT = 1 THEN so.CONSTITUENTID
+                ELSE NULL
+            END AS contact_id,
+            CASE
+                WHEN c.ISORGANIZATION = 1
+                  OR c.ISGROUP = 1
+                  OR c.ISCONSTITUENT = 0 THEN so.CONSTITUENTID
+                ELSE chh.HOUSEHOLDID
+            END AS account_id,
+            CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS quantity_bought,
+            CAST(COALESCE(us.returned_qty, 0) AS INT) AS refunded_qty,
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0) AS item_discount_abs,
+            COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS order_discount_abs,
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS subtotal_after_discount,
+            COALESCE(us.refunded_amount_after_discount, 0) AS subtotal_refunded_after_discount,
+            COALESCE(ts.total_tax_pct, 0) AS tax_pct
+        FROM SALESORDERITEM soi
+        INNER JOIN SALESORDERITEMMERCHANDISE soim
+            ON soim.ID = soi.ID
+        INNER JOIN SALESORDER so
+            ON so.ID = soi.SALESORDERID
+        LEFT JOIN CONSTITUENT c
+            ON c.ID = so.CONSTITUENTID
+        LEFT JOIN CONSTITUENTHOUSEHOLD chh
+            ON chh.ID = so.CONSTITUENTID
+        LEFT JOIN item_discount_summary ids
+            ON ids.SALESORDERITEMID = soi.ID
+        LEFT JOIN order_discount_summary ods
+            ON ods.SALESORDERITEMID = soi.ID
+        LEFT JOIN tax_summary ts
+            ON ts.SALESORDERITEMID = soi.ID
+        LEFT JOIN unit_summary us
+            ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    ),
+    calculated_lines AS (
+        SELECT
+            ml.*,
+            -(COALESCE(ml.item_discount_abs, 0) + COALESCE(ml.order_discount_abs, 0)) AS discount_amount,
+            COALESCE(ml.subtotal_after_discount, 0) AS subtotal_without_tax,
+            ROUND(COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0, 2) AS tax_amount,
+            ROUND(
+                COALESCE(ml.subtotal_refunded_after_discount, 0)
+                    + (COALESCE(ml.subtotal_refunded_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_refunded_amount
+        FROM merchandise_lines ml
+    ),
+    order_totals AS (
+        SELECT
+            salesorder_id,
+            MAX(SALESMETHODTYPE) AS sales_method_type,
+            MAX(STATUSCODE) AS status_code,
+            MAX(REFUNDSTATUS) AS refund_status,
+            MAX(TRANSACTIONDATE) AS transaction_date,
+            MAX(DATEADDED) AS date_added,
+            MAX(contact_id) AS contact_id,
+            MAX(account_id) AS account_id,
+            SUM(discount_amount) AS total_discount_amount,
+            SUM(quantity_bought) AS total_items,
+            SUM(refunded_qty) AS refunded_items,
+            SUM(subtotal_refunded_after_discount) AS subtotal_refunded,
+            SUM(total_refunded_amount) AS total_refunded,
+            SUM(subtotal_without_tax + tax_amount) AS total_amount
+        FROM calculated_lines
+        GROUP BY salesorder_id
+    )
+    SELECT
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS 'Auctifera__POS_Purchase__r:Implementation_External_ID__c',
+        ot.account_id AS Auctifera__Account__c,
+        ot.contact_id AS Auctifera__Contact__c,
+        ot.sales_method_type AS Auctifera__Channel__c,
+        ot.sales_method_type AS Auctifera__Source__c,
+        CASE
+            WHEN ot.refund_status IS NOT NULL AND ot.refund_status = 2 THEN 'Refunded'
+            WHEN ot.refunded_items >= ot.total_items AND ot.total_items > 0 THEN 'Refunded'
+            WHEN ot.status_code IN (1, 2, 3, 4) THEN 'Sold'
+            WHEN ot.status_code = 5 THEN 'Canceled'
+            ELSE 'Pending'
+        END AS Auctifera__Status__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Client_Purchase_Date__c,
+        pms.payment_method AS Auctifera__Payment_Method__c,
+        0 AS Auctifera__Number_of_Charges__c,
+        ot.total_discount_amount AS Auctifera__Total_Discount_Amount__c,
+        ot.refunded_items AS Auctifera__Refunded_Items2__c,
+        ot.subtotal_refunded AS Auctifera__Subtotal_Refunded2__c,
+        ot.total_refunded AS Auctifera__Refunded_Value__c,
+        ot.total_amount AS Auctifera__Paid_Value__c,
+        ot.total_amount AS Auctifera__Total2__c
+    FROM order_totals ot
+    LEFT JOIN payment_method_summary pms
+        ON pms.SALESORDERID = ot.salesorder_id
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) <= @filterDateTo);
+    "
+
+      86 |       ['sales_order_only_shop.sql', posPurchase],
+      87 |     ])('%s does not use the gross line total as the net base', (_name, sql) => {
+    > 88 |       expect(sql).not.toMatch(bareFallback);
+         |                       ^
+      89 |     });
+      90 |
+      91 |     it('sale_item.sql derives the net amount from gross minus the line discount', () => {
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:88:23
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › sales_order_only_shop.sql does not use the gross line total as the net base
+
+    expect(received).not.toMatch(expected)
+
+    Expected pattern: not /COALESCE\(\s*us\.amount_paid_after_discount\s*,\s*soi\.TOTAL\s*,\s*0\s*\)/
+    Received string:      "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);
+
+    -- POS Purchase records for shop merchandise orders
+    -- Expected cardinality: 1 SALESORDER with merchandise -> 1 POS_Purchase__c
+
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    ),
+    payment_method_candidates AS (
+        SELECT
+            sop.SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDERPAYMENT sop
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = sop.PAYMENTID
+
+        UNION ALL
+
+        SELECT
+            so.ID AS SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDER so
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = so.REVENUEID
+    ),
+    payment_method_summary AS (
+        SELECT
+            SALESORDERID,
+            CASE
+                WHEN COUNT(DISTINCT normalized_payment_method) = 0 THEN NULL
+                WHEN COUNT(DISTINCT normalized_payment_method) = 1 THEN MAX(normalized_payment_method)
+                ELSE 'Multiple'
+            END AS payment_method
+        FROM payment_method_candidates
+        WHERE normalized_payment_method IS NOT NULL
+        GROUP BY SALESORDERID
+    ),
+    merchandise_lines AS (
+        SELECT
+            so.ID AS salesorder_id,
+            so.LOOKUPID,
+            so.REVENUEID,
+            so.SALESMETHODTYPE,
+            so.STATUSCODE,
+            so.REFUNDSTATUS,
+            so.TRANSACTIONDATE,
+            so.DATEADDED,
+            so.AMOUNT AS salesorder_amount,
+            CASE
+                WHEN c.ISORGANIZATION = 0
+                 AND c.ISGROUP = 0
+                 AND c.ISCONSTITUENT = 1 THEN so.CONSTITUENTID
+                ELSE NULL
+            END AS client_contact_id,
+            CASE
+                WHEN c.ISORGANIZATION = 1
+                  OR c.ISGROUP = 1
+                  OR c.ISCONSTITUENT = 0 THEN so.CONSTITUENTID
+                ELSE chh.HOUSEHOLDID
+            END AS client_account_id,
+            addr.POSTCODE,
+            CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS quantity_bought,
+            CAST(COALESCE(us.returned_qty, 0) AS INT) AS refunded_qty,
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0) AS item_discount_abs,
+            COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS order_discount_abs,
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS subtotal_after_discount,
+            COALESCE(us.refunded_amount_after_discount, 0) AS subtotal_refunded_after_discount,
+            COALESCE(ts.total_tax_pct, 0) AS tax_pct
+        FROM SALESORDERITEM soi
+        INNER JOIN SALESORDERITEMMERCHANDISE soim
+            ON soim.ID = soi.ID
+        INNER JOIN SALESORDER so
+            ON so.ID = soi.SALESORDERID
+        LEFT JOIN ADDRESS addr
+            ON addr.ID = so.ADDRESSID
+        LEFT JOIN CONSTITUENT c
+            ON c.ID = so.CONSTITUENTID
+        LEFT JOIN CONSTITUENTHOUSEHOLD chh
+            ON chh.ID = so.CONSTITUENTID
+        LEFT JOIN item_discount_summary ids
+            ON ids.SALESORDERITEMID = soi.ID
+        LEFT JOIN order_discount_summary ods
+            ON ods.SALESORDERITEMID = soi.ID
+        LEFT JOIN tax_summary ts
+            ON ts.SALESORDERITEMID = soi.ID
+        LEFT JOIN unit_summary us
+            ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    ),
+    calculated_lines AS (
+        SELECT
+            ml.*,
+            -(COALESCE(ml.item_discount_abs, 0) + COALESCE(ml.order_discount_abs, 0)) AS discount_amount,
+            COALESCE(ml.subtotal_after_discount, 0)
+                + COALESCE(ml.item_discount_abs, 0)
+                + COALESCE(ml.order_discount_abs, 0) AS subtotal_before_discount,
+            COALESCE(ml.subtotal_after_discount, 0) AS subtotal_without_tax,
+            ROUND(COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0, 2) AS tax_amount,
+            ROUND(
+                COALESCE(ml.subtotal_after_discount, 0)
+                    + (COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_amount,
+            ROUND(
+                COALESCE(ml.subtotal_refunded_after_discount, 0)
+                    + (COALESCE(ml.subtotal_refunded_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_refunded_amount
+        FROM merchandise_lines ml
+    ),
+    order_totals AS (
+        SELECT
+            salesorder_id,
+            MAX(LOOKUPID) AS lookup_id_legacy,
+            MAX(REVENUEID) AS revenue_id,
+            MAX(SALESMETHODTYPE) AS sales_method_type,
+            MAX(STATUSCODE) AS status_code,
+            MAX(REFUNDSTATUS) AS refund_status,
+            MAX(TRANSACTIONDATE) AS transaction_date,
+            MAX(DATEADDED) AS date_added,
+            MAX(salesorder_amount) AS salesorder_amount,
+            MAX(client_contact_id) AS client_contact_id,
+            MAX(client_account_id) AS client_account_id,
+            MAX(POSTCODE) AS postal_code,
+            SUM(quantity_bought) AS items_count,
+            SUM(refunded_qty) AS refunded_items_count,
+            SUM(subtotal_before_discount) AS subtotal_before_discount,
+            SUM(subtotal_without_tax) AS subtotal,
+            SUM(total_amount) AS total_amount,
+            SUM(total_refunded_amount) AS refunded_amount
+        FROM calculated_lines
+        GROUP BY salesorder_id
+    )
+    SELECT
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CASE
+            WHEN ot.refund_status IS NOT NULL AND ot.refund_status = 2 THEN 'Refunded'
+            WHEN ot.refunded_items_count >= ot.items_count AND ot.items_count > 0 THEN 'Refunded'
+            WHEN ot.status_code IN (1, 2, 3, 4) THEN 'Sold'
+            WHEN ot.status_code = 5 THEN 'Canceled'
+            ELSE 'Pending'
+        END AS Auctifera__Status__c,
+        ot.sales_method_type AS Auctifera__Source__c,
+        ot.client_contact_id AS Auctifera__Client__c,
+        ot.client_account_id AS Auctifera__Client2__c,
+        pms.payment_method AS Auctifera__Payment_Method__c,
+        ot.postal_code AS Auctifera__Postal_Code__c,
+        1 AS Auctifera__Prevent_Email_Notification__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Transaction_Date__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Sold_Date__c,
+        ot.items_count AS Auctifera__Items__c,
+        ot.subtotal_before_discount AS Auctifera__Subtotal_before_discount__c,
+        ot.subtotal AS Auctifera__Subtotal__c,
+        ot.total_amount AS Auctifera__Total__c,
+        ot.total_amount AS Auctifera__Amount_Received__c,
+        ot.refunded_amount AS Auctifera__Amount_Refunded__c,
+        ot.refunded_items_count AS Auctifera__Refunded_Items__c
+    FROM order_totals ot
+    LEFT JOIN payment_method_summary pms
+        ON pms.SALESORDERID = ot.salesorder_id
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) <= @filterDateTo);
+    "
+
+      86 |       ['sales_order_only_shop.sql', posPurchase],
+      87 |     ])('%s does not use the gross line total as the net base', (_name, sql) => {
+    > 88 |       expect(sql).not.toMatch(bareFallback);
+         |                       ^
+      89 |     });
+      90 |
+      91 |     it('sale_item.sql derives the net amount from gross minus the line discount', () => {
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:88:23
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › sale_item.sql derives the net amount from gross minus the line discount
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "soi.TOTAL - ld.total_discount"
+    Received string:    "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);·
+    -- Sale Item records for shop merchandise order lines
+    -- Expected cardinality: 1 SALESORDERITEMMERCHANDISE line -> 1 Sale_Item__c·
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    )
+    SELECT
+        CAST(soi.ID AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CAST(so.ID AS NVARCHAR(255)) AS 'Auctifera__Client_Purchase__r:Implementation_External_ID__c',
+        CAST(mp.ID AS NVARCHAR(255)) AS 'Auctifera__Catalog_Item__r:Auctifera__Implementation_External_ID__c',
+        CAST(pi.ID AS NVARCHAR(255)) AS 'Auctifera__Item_Variant__r:Implementation_External_ID__c',
+        so.SALESMETHODTYPE AS Auctifera__Source__c,
+        CASE
+            WHEN so.REFUNDSTATUS IS NOT NULL AND so.REFUNDSTATUS = 2 THEN 'Refunded'
+            WHEN so.STATUSCODE = 5 THEN 'Canceled'
+            WHEN COALESCE(us.returned_qty, 0) >= CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT)
+             AND CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) > 0 THEN 'Refunded'
+            WHEN so.STATUSCODE IN (1, 2, 3, 4) THEN 'Sold'
+            ELSE 'Pending'
+        END AS Auctifera__Purchase_Status__c,
+        CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS Auctifera__Number_of_Items_bought__c,
+        CAST(COALESCE(us.returned_qty, 0) AS INT) AS Auctifera__Refunded_Items__c,
+        COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)
+            + COALESCE(us.item_level_discount, ids.total_item_discount, 0)
+            + COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS Auctifera__Subtotal_before_discount__c,
+        -(
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0)
+            + COALESCE(us.order_level_discount, ods.total_order_discount, 0)
+        ) AS Auctifera__Discount_Amount__c,
+        COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS Auctifera__Price_Without_Tax__c,
+        -- Item_Price is the GROSS unit price (soi.TOTAL is the pre-discount line total). The
+        -- Veevart Sale Item trigger multiplies Item_Price by quantity for the pre-discount
+        -- base and applies the discount propagated from POS_Discount__c, so it must NOT be
+        -- pre-netted (IM-809). The remaining amount fields are recomputed by that trigger.
+        CASE
+            WHEN CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) > 0 THEN
+                ROUND(
+                    COALESCE(soi.TOTAL, 0)
+                        / CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS DECIMAL(18, 2)),
+                    2
+                )
+            ELSE 0
+        END AS Auctifera__Item_Price__c,
+        COALESCE(pih_sale.COST, pi.COST, 0) AS Auctifera__Cost_at_the_moment_of_the_purchase__c,
+        COALESCE(ts.total_tax_pct, 0) AS Auctifera__Tax_2__c,
+        ROUND(COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0, 2) AS Auctifera__Tax_Amount__c,
+        ROUND(
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0)
+                + (COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0),
+            2
+        ) AS Auctifera__Amount__c,
+        COALESCE(us.refunded_amount_after_discount, 0) AS Auctifera__Subtotal_Refunded__c,
+        ROUND(
+            COALESCE(us.refunded_amount_after_discount, 0)
+                + (COALESCE(us.refunded_amount_after_discount, 0) * COALESCE(ts.total_tax_pct, 0) / 100.0),
+            2
+        ) AS Auctifera__Total_Refunded__c,
+        CASE WHEN COALESCE(ts.total_tax_pct, 0) = 0 THEN 1 ELSE 0 END AS Auctifera__Tech_Is_Tax_Exempt__c,
+        0 AS Auctifera__Disabled_for_Total_Stock__c
+    FROM SALESORDERITEM soi
+    INNER JOIN SALESORDERITEMMERCHANDISE soim
+        ON soim.ID = soi.ID
+    INNER JOIN SALESORDER so
+        ON so.ID = soi.SALESORDERID
+    INNER JOIN MERCHANDISEPRODUCTINSTANCE pi
+        ON pi.ID = soim.MERCHANDISEPRODUCTINSTANCEID
+    INNER JOIN MERCHANDISEPRODUCT mp
+        ON mp.ID = pi.MERCHANDISEPRODUCTID
+    OUTER APPLY (
+        SELECT TOP 1
+            h.COST
+        FROM MERCHANDISEPRODUCTINSTANCEHISTORY h
+        WHERE h.MERCHANDISEPRODUCTINSTANCEID = pi.ID
+          AND CAST(h.ACTIONDATE AS DATETIME) <= so.DATEADDED
+        ORDER BY h.ACTIONDATE DESC, h.DATECHANGED DESC, h.ID DESC
+    ) pih_sale
+    LEFT JOIN item_discount_summary ids
+        ON ids.SALESORDERITEMID = soi.ID
+    LEFT JOIN order_discount_summary ods
+        ON ods.SALESORDERITEMID = soi.ID
+    LEFT JOIN tax_summary ts
+        ON ts.SALESORDERITEMID = soi.ID
+    LEFT JOIN unit_summary us
+        ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(so.TRANSACTIONDATE, so.DATEADDED) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(so.TRANSACTIONDATE, so.DATEADDED) AS DATE) <= @filterDateTo);
+    "
+
+      90 |
+      91 |     it('sale_item.sql derives the net amount from gross minus the line discount', () => {
+    > 92 |       expect(saleItem).toContain('soi.TOTAL - ld.total_discount');
+         |                        ^
+      93 |       expect(saleItem).toContain('AS la(net_amount)');
+      94 |       expect(saleItem).toContain(
+      95 |         'la.net_amount + ld.total_discount AS Auctifera__Subtotal_before_discount__c',
+
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:92:24)
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › client_purchase.sql subtracts the unit-preferring discount from the gross fallback
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "- COALESCE(us.item_level_discount, ids.total_item_discount, 0)"
+    Received string:    "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);·
+    -- Client Purchase records for shop merchandise orders
+    -- Expected cardinality: 1 SALESORDER with merchandise -> 1 ClientPurchase__c·
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    ),
+    payment_method_candidates AS (
+        SELECT
+            sop.SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDERPAYMENT sop
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = sop.PAYMENTID·
+        UNION ALL·
+        SELECT
+            so.ID AS SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDER so
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = so.REVENUEID
+    ),
+    payment_method_summary AS (
+        SELECT
+            SALESORDERID,
+            CASE
+                WHEN COUNT(DISTINCT normalized_payment_method) = 0 THEN NULL
+                WHEN COUNT(DISTINCT normalized_payment_method) = 1 THEN MAX(normalized_payment_method)
+                ELSE 'Multiple'
+            END AS payment_method
+        FROM payment_method_candidates
+        WHERE normalized_payment_method IS NOT NULL
+        GROUP BY SALESORDERID
+    ),
+    merchandise_lines AS (
+        SELECT
+            so.ID AS salesorder_id,
+            so.SALESMETHODTYPE,
+            so.STATUSCODE,
+            so.REFUNDSTATUS,
+            so.TRANSACTIONDATE,
+            so.DATEADDED,
+            CASE
+                WHEN c.ISORGANIZATION = 0
+                 AND c.ISGROUP = 0
+                 AND c.ISCONSTITUENT = 1 THEN so.CONSTITUENTID
+                ELSE NULL
+            END AS contact_id,
+            CASE
+                WHEN c.ISORGANIZATION = 1
+                  OR c.ISGROUP = 1
+                  OR c.ISCONSTITUENT = 0 THEN so.CONSTITUENTID
+                ELSE chh.HOUSEHOLDID
+            END AS account_id,
+            CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS quantity_bought,
+            CAST(COALESCE(us.returned_qty, 0) AS INT) AS refunded_qty,
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0) AS item_discount_abs,
+            COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS order_discount_abs,
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS subtotal_after_discount,
+            COALESCE(us.refunded_amount_after_discount, 0) AS subtotal_refunded_after_discount,
+            COALESCE(ts.total_tax_pct, 0) AS tax_pct
+        FROM SALESORDERITEM soi
+        INNER JOIN SALESORDERITEMMERCHANDISE soim
+            ON soim.ID = soi.ID
+        INNER JOIN SALESORDER so
+            ON so.ID = soi.SALESORDERID
+        LEFT JOIN CONSTITUENT c
+            ON c.ID = so.CONSTITUENTID
+        LEFT JOIN CONSTITUENTHOUSEHOLD chh
+            ON chh.ID = so.CONSTITUENTID
+        LEFT JOIN item_discount_summary ids
+            ON ids.SALESORDERITEMID = soi.ID
+        LEFT JOIN order_discount_summary ods
+            ON ods.SALESORDERITEMID = soi.ID
+        LEFT JOIN tax_summary ts
+            ON ts.SALESORDERITEMID = soi.ID
+        LEFT JOIN unit_summary us
+            ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    ),
+    calculated_lines AS (
+        SELECT
+            ml.*,
+            -(COALESCE(ml.item_discount_abs, 0) + COALESCE(ml.order_discount_abs, 0)) AS discount_amount,
+            COALESCE(ml.subtotal_after_discount, 0) AS subtotal_without_tax,
+            ROUND(COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0, 2) AS tax_amount,
+            ROUND(
+                COALESCE(ml.subtotal_refunded_after_discount, 0)
+                    + (COALESCE(ml.subtotal_refunded_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_refunded_amount
+        FROM merchandise_lines ml
+    ),
+    order_totals AS (
+        SELECT
+            salesorder_id,
+            MAX(SALESMETHODTYPE) AS sales_method_type,
+            MAX(STATUSCODE) AS status_code,
+            MAX(REFUNDSTATUS) AS refund_status,
+            MAX(TRANSACTIONDATE) AS transaction_date,
+            MAX(DATEADDED) AS date_added,
+            MAX(contact_id) AS contact_id,
+            MAX(account_id) AS account_id,
+            SUM(discount_amount) AS total_discount_amount,
+            SUM(quantity_bought) AS total_items,
+            SUM(refunded_qty) AS refunded_items,
+            SUM(subtotal_refunded_after_discount) AS subtotal_refunded,
+            SUM(total_refunded_amount) AS total_refunded,
+            SUM(subtotal_without_tax + tax_amount) AS total_amount
+        FROM calculated_lines
+        GROUP BY salesorder_id
+    )
+    SELECT
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS 'Auctifera__POS_Purchase__r:Implementation_External_ID__c',
+        ot.account_id AS Auctifera__Account__c,
+        ot.contact_id AS Auctifera__Contact__c,
+        ot.sales_method_type AS Auctifera__Channel__c,
+        ot.sales_method_type AS Auctifera__Source__c,
+        CASE
+            WHEN ot.refund_status IS NOT NULL AND ot.refund_status = 2 THEN 'Refunded'
+            WHEN ot.refunded_items >= ot.total_items AND ot.total_items > 0 THEN 'Refunded'
+            WHEN ot.status_code IN (1, 2, 3, 4) THEN 'Sold'
+            WHEN ot.status_code = 5 THEN 'Canceled'
+            ELSE 'Pending'
+        END AS Auctifera__Status__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Client_Purchase_Date__c,
+        pms.payment_method AS Auctifera__Payment_Method__c,
+        0 AS Auctifera__Number_of_Charges__c,
+        ot.total_discount_amount AS Auctifera__Total_Discount_Amount__c,
+        ot.refunded_items AS Auctifera__Refunded_Items2__c,
+        ot.subtotal_refunded AS Auctifera__Subtotal_Refunded2__c,
+        ot.total_refunded AS Auctifera__Refunded_Value__c,
+        ot.total_amount AS Auctifera__Paid_Value__c,
+        ot.total_amount AS Auctifera__Total2__c
+    FROM order_totals ot
+    LEFT JOIN payment_method_summary pms
+        ON pms.SALESORDERID = ot.salesorder_id
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) <= @filterDateTo);
+    "
+
+      124 |         // Same unit-preferring spelling as sale_item.sql's ld.total_discount, so
+      125 |         // all three queries express one identical net-amount rule.
+    > 126 |         expect(sql).toContain(
+          |                     ^
+      127 |           '- COALESCE(us.item_level_discount, ids.total_item_discount, 0)',
+      128 |         );
+      129 |         expect(sql).toContain(
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:126:21
+
+  ● shop discount migration — gross-base contract › net-amount fallback must subtract discounts (IM-1107) › sales_order_only_shop.sql subtracts the unit-preferring discount from the gross fallback
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "- COALESCE(us.item_level_discount, ids.total_item_discount, 0)"
+    Received string:    "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);·
+    -- POS Purchase records for shop merchandise orders
+    -- Expected cardinality: 1 SALESORDER with merchandise -> 1 POS_Purchase__c·
+    WITH item_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_item_discount
+        FROM SALESORDERITEMITEMDISCOUNT
+        GROUP BY SALESORDERITEMID
+    ),
+    order_discount_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(AMOUNT, 0)) AS total_order_discount
+        FROM SALESORDERITEMORDERDISCOUNTDETAIL
+        GROUP BY SALESORDERITEMID
+    ),
+    tax_summary AS (
+        SELECT
+            SALESORDERITEMID,
+            SUM(COALESCE(TOTALTAX, 0)) AS total_tax_pct
+        FROM SALESORDERITEMTAX
+        GROUP BY SALESORDERITEMID
+    ),
+    unit_summary AS (
+        SELECT
+            SALESORDERITEMMERCHANDISEID,
+            COUNT(*) AS unit_rows,
+            SUM(COALESCE(AMOUNTPAID, 0)) AS amount_paid_after_discount,
+            SUM(COALESCE(ITEMLEVELDISCOUNTSAPPLIED, 0)) AS item_level_discount,
+            SUM(COALESCE(ORDERLEVELDISCOUNTSAPPLIED, 0)) AS order_level_discount,
+            SUM(COALESCE(REFUNDEDAMOUNT, 0)) AS refunded_amount_after_discount,
+            SUM(CASE WHEN COALESCE(ISRETURNED, 0) = 1 THEN 1 ELSE 0 END) AS returned_qty
+        FROM SALESORDERITEMMERCHANDISEUNIT
+        GROUP BY SALESORDERITEMMERCHANDISEID
+    ),
+    payment_method_candidates AS (
+        SELECT
+            sop.SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDERPAYMENT sop
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = sop.PAYMENTID·
+        UNION ALL·
+        SELECT
+            so.ID AS SALESORDERID,
+            CASE
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CREDIT%' THEN 'Credit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DEBIT%' THEN 'Debit Card'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%ACH%'
+                  OR UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%DIRECT%' THEN 'ACH'
+                WHEN UPPER(COALESCE(rpm.PAYMENTMETHOD, '')) LIKE '%CASH%' THEN 'Cash'
+                ELSE NULL
+            END AS normalized_payment_method
+        FROM SALESORDER so
+        LEFT JOIN REVENUEPAYMENTMETHOD rpm
+            ON rpm.REVENUEID = so.REVENUEID
+    ),
+    payment_method_summary AS (
+        SELECT
+            SALESORDERID,
+            CASE
+                WHEN COUNT(DISTINCT normalized_payment_method) = 0 THEN NULL
+                WHEN COUNT(DISTINCT normalized_payment_method) = 1 THEN MAX(normalized_payment_method)
+                ELSE 'Multiple'
+            END AS payment_method
+        FROM payment_method_candidates
+        WHERE normalized_payment_method IS NOT NULL
+        GROUP BY SALESORDERID
+    ),
+    merchandise_lines AS (
+        SELECT
+            so.ID AS salesorder_id,
+            so.LOOKUPID,
+            so.REVENUEID,
+            so.SALESMETHODTYPE,
+            so.STATUSCODE,
+            so.REFUNDSTATUS,
+            so.TRANSACTIONDATE,
+            so.DATEADDED,
+            so.AMOUNT AS salesorder_amount,
+            CASE
+                WHEN c.ISORGANIZATION = 0
+                 AND c.ISGROUP = 0
+                 AND c.ISCONSTITUENT = 1 THEN so.CONSTITUENTID
+                ELSE NULL
+            END AS client_contact_id,
+            CASE
+                WHEN c.ISORGANIZATION = 1
+                  OR c.ISGROUP = 1
+                  OR c.ISCONSTITUENT = 0 THEN so.CONSTITUENTID
+                ELSE chh.HOUSEHOLDID
+            END AS client_account_id,
+            addr.POSTCODE,
+            CAST(COALESCE(us.unit_rows, soi.QUANTITY, 0) AS INT) AS quantity_bought,
+            CAST(COALESCE(us.returned_qty, 0) AS INT) AS refunded_qty,
+            COALESCE(us.item_level_discount, ids.total_item_discount, 0) AS item_discount_abs,
+            COALESCE(us.order_level_discount, ods.total_order_discount, 0) AS order_discount_abs,
+            COALESCE(us.amount_paid_after_discount, soi.TOTAL, 0) AS subtotal_after_discount,
+            COALESCE(us.refunded_amount_after_discount, 0) AS subtotal_refunded_after_discount,
+            COALESCE(ts.total_tax_pct, 0) AS tax_pct
+        FROM SALESORDERITEM soi
+        INNER JOIN SALESORDERITEMMERCHANDISE soim
+            ON soim.ID = soi.ID
+        INNER JOIN SALESORDER so
+            ON so.ID = soi.SALESORDERID
+        LEFT JOIN ADDRESS addr
+            ON addr.ID = so.ADDRESSID
+        LEFT JOIN CONSTITUENT c
+            ON c.ID = so.CONSTITUENTID
+        LEFT JOIN CONSTITUENTHOUSEHOLD chh
+            ON chh.ID = so.CONSTITUENTID
+        LEFT JOIN item_discount_summary ids
+            ON ids.SALESORDERITEMID = soi.ID
+        LEFT JOIN order_discount_summary ods
+            ON ods.SALESORDERITEMID = soi.ID
+        LEFT JOIN tax_summary ts
+            ON ts.SALESORDERITEMID = soi.ID
+        LEFT JOIN unit_summary us
+            ON us.SALESORDERITEMMERCHANDISEID = soim.ID
+    ),
+    calculated_lines AS (
+        SELECT
+            ml.*,
+            -(COALESCE(ml.item_discount_abs, 0) + COALESCE(ml.order_discount_abs, 0)) AS discount_amount,
+            COALESCE(ml.subtotal_after_discount, 0)
+                + COALESCE(ml.item_discount_abs, 0)
+                + COALESCE(ml.order_discount_abs, 0) AS subtotal_before_discount,
+            COALESCE(ml.subtotal_after_discount, 0) AS subtotal_without_tax,
+            ROUND(COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0, 2) AS tax_amount,
+            ROUND(
+                COALESCE(ml.subtotal_after_discount, 0)
+                    + (COALESCE(ml.subtotal_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_amount,
+            ROUND(
+                COALESCE(ml.subtotal_refunded_after_discount, 0)
+                    + (COALESCE(ml.subtotal_refunded_after_discount, 0) * COALESCE(ml.tax_pct, 0) / 100.0),
+                2
+            ) AS total_refunded_amount
+        FROM merchandise_lines ml
+    ),
+    order_totals AS (
+        SELECT
+            salesorder_id,
+            MAX(LOOKUPID) AS lookup_id_legacy,
+            MAX(REVENUEID) AS revenue_id,
+            MAX(SALESMETHODTYPE) AS sales_method_type,
+            MAX(STATUSCODE) AS status_code,
+            MAX(REFUNDSTATUS) AS refund_status,
+            MAX(TRANSACTIONDATE) AS transaction_date,
+            MAX(DATEADDED) AS date_added,
+            MAX(salesorder_amount) AS salesorder_amount,
+            MAX(client_contact_id) AS client_contact_id,
+            MAX(client_account_id) AS client_account_id,
+            MAX(POSTCODE) AS postal_code,
+            SUM(quantity_bought) AS items_count,
+            SUM(refunded_qty) AS refunded_items_count,
+            SUM(subtotal_before_discount) AS subtotal_before_discount,
+            SUM(subtotal_without_tax) AS subtotal,
+            SUM(total_amount) AS total_amount,
+            SUM(total_refunded_amount) AS refunded_amount
+        FROM calculated_lines
+        GROUP BY salesorder_id
+    )
+    SELECT
+        CAST(ot.salesorder_id AS NVARCHAR(255)) AS Implementation_External_ID__c,
+        CASE
+            WHEN ot.refund_status IS NOT NULL AND ot.refund_status = 2 THEN 'Refunded'
+            WHEN ot.refunded_items_count >= ot.items_count AND ot.items_count > 0 THEN 'Refunded'
+            WHEN ot.status_code IN (1, 2, 3, 4) THEN 'Sold'
+            WHEN ot.status_code = 5 THEN 'Canceled'
+            ELSE 'Pending'
+        END AS Auctifera__Status__c,
+        ot.sales_method_type AS Auctifera__Source__c,
+        ot.client_contact_id AS Auctifera__Client__c,
+        ot.client_account_id AS Auctifera__Client2__c,
+        pms.payment_method AS Auctifera__Payment_Method__c,
+        ot.postal_code AS Auctifera__Postal_Code__c,
+        1 AS Auctifera__Prevent_Email_Notification__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Transaction_Date__c,
+        CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) AS Auctifera__Sold_Date__c,
+        ot.items_count AS Auctifera__Items__c,
+        ot.subtotal_before_discount AS Auctifera__Subtotal_before_discount__c,
+        ot.subtotal AS Auctifera__Subtotal__c,
+        ot.total_amount AS Auctifera__Total__c,
+        ot.total_amount AS Auctifera__Amount_Received__c,
+        ot.refunded_amount AS Auctifera__Amount_Refunded__c,
+        ot.refunded_items_count AS Auctifera__Refunded_Items__c
+    FROM order_totals ot
+    LEFT JOIN payment_method_summary pms
+        ON pms.SALESORDERID = ot.salesorder_id
+    WHERE
+        (@useDateFrom = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) >= @filterDateFrom)
+        AND (@useDateTo = 0 OR CAST(COALESCE(ot.transaction_date, ot.date_added) AS DATE) <= @filterDateTo);
+    "
+
+      124 |         // Same unit-preferring spelling as sale_item.sql's ld.total_discount, so
+      125 |         // all three queries express one identical net-amount rule.
+    > 126 |         expect(sql).toContain(
+          |                     ^
+      127 |           '- COALESCE(us.item_level_discount, ids.total_item_discount, 0)',
+      128 |         );
+      129 |         expect(sql).toContain(
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts:126:21
+
+Test Suites: 1 failed, 1 total
+Tests:       6 failed, 8 passed, 14 total
+Snapshots:   0 total
+Time:        0.188 s, estimated 1 s
+Ran all test suites matching src/data-migration/infrastructure/destination/sql-server/query-regression/shop-discount-query.spec.ts.
