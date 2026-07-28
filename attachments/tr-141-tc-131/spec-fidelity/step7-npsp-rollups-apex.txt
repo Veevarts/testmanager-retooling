@@ -1,0 +1,60 @@
+// Case 3.12 — ensure 'Use Fiscal Year' is enabled on the NPSP customizable
+// rollups. npsp__Rollup__mdt is a Custom Metadata Type (READ-ONLY to Apex DML),
+// so the flag is set via Metadata.Operations.enqueueDeployment — which deploys
+// ASYNCHRONOUSLY (the deployment runs after THIS transaction commits, so a
+// same-transaction read-back cannot observe it; a synchronous hard-verify is
+// not possible). This step is therefore idempotent and self-verifying on re-run:
+//   - all present rollups already true -> success (end-state verified)
+//   - some still false                 -> enqueue the deploy and succeed (applies
+//                                          in a few seconds; re-running confirms)
+// v11 (IM-1082): per-version absence is TOLERATED (historyTracking-style) — a
+// rollup DeveloperName absent in this NPSP version is logged and skipped, NOT a
+// hard precondition failure, so the step is org-agnostic across NPSP versions.
+// The rollups are resolved dynamically by their (NPSP-stable) DeveloperNames.
+class StepException extends Exception {}
+final List<String> DEV_NAMES = new List<String>{
+  'NPSP_ConNumGiftsLastYear','NPSP_ConNumGiftsThisYear','NPSP_ConNumGiftsTwoYearsAgo',
+  'NPSP_ConNumSoftCreditsLastYear','NPSP_ConNumSoftCreditsThisYear','NPSP_ConNumSoftCreditsTwoYearsA',
+  'NPSP_ConSoftCreditLastYear','NPSP_ConSoftCreditThisYear','NPSP_ConSoftCreditTwoYearsAgo',
+  'NPSP_ConTotalGiftsLastYear','NPSP_ConTotalGiftsThisYear','NPSP_ConTotalGiftsTwoYearsAgo',
+  'NPSP_AcctNumGiftsLastYear','NPSP_AcctNumGiftsThisYear','NPSP_AcctNumGiftsTwoYearsAgo',
+  'NPSP_AcctTotalGiftsLastYear','NPSP_AcctTotalGiftsThisYear','NPSP_AcctTotalGiftsTwoYearsAgo'
+};
+Map<String, npsp__Rollup__mdt> byDevName = new Map<String, npsp__Rollup__mdt>();
+for (npsp__Rollup__mdt r : [SELECT DeveloperName, npsp__Use_Fiscal_Year__c FROM npsp__Rollup__mdt WHERE DeveloperName IN :DEV_NAMES]) {
+    byDevName.put(r.DeveloperName, r);
+}
+List<String> absent = new List<String>();
+List<String> toEnable = new List<String>();
+for (String dn : DEV_NAMES) {
+    if (!byDevName.containsKey(dn)) { absent.add(dn); }
+    else if (byDevName.get(dn).npsp__Use_Fiscal_Year__c != true) { toEnable.add(dn); }
+}
+if (!absent.isEmpty()) {
+    System.debug(LoggingLevel.WARN, '[3.12 rollups] ' + absent.size() + ' of ' + DEV_NAMES.size() + ' rollup(s) absent in this NPSP version — tolerated/skipped: ' + String.join(absent, ', '));
+}
+if (toEnable.isEmpty()) {
+    System.debug(LoggingLevel.INFO, '[3.12 rollups] verified — all present rollups already have Use Fiscal Year enabled (' + byDevName.size() + ' of ' + DEV_NAMES.size() + ' present)');
+} else {
+    List<String> fullNames = new List<String>();
+    for (String dn : toEnable) { fullNames.add('npsp__Rollup.' + dn); }
+    List<Metadata.Metadata> records = Metadata.Operations.retrieve(Metadata.MetadataType.CustomMetadata, fullNames);
+    if (records.size() != fullNames.size()) {
+        throw new StepException('[3.12 rollups] retrieve returned ' + records.size() + ' of ' + fullNames.size() + ' expected rollup metadata records');
+    }
+    Metadata.DeployContainer container = new Metadata.DeployContainer();
+    for (Metadata.Metadata md : records) {
+        Metadata.CustomMetadata cm = (Metadata.CustomMetadata) md;
+        Boolean done = false;
+        for (Metadata.CustomMetadataValue v : cm.values) {
+            if (v.field == 'npsp__Use_Fiscal_Year__c') { v.value = true; done = true; }
+        }
+        if (!done) {
+            Metadata.CustomMetadataValue nv = new Metadata.CustomMetadataValue();
+            nv.field = 'npsp__Use_Fiscal_Year__c'; nv.value = true; cm.values.add(nv);
+        }
+        container.addMetadata(cm);
+    }
+    Id jobId = Metadata.Operations.enqueueDeployment(container, null);
+    System.debug(LoggingLevel.INFO, '[3.12 rollups] enqueued CMDT deployment for ' + toEnable.size() + ' rollup(s) (applies asynchronously); jobId=' + jobId);
+}

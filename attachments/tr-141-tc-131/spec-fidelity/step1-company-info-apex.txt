@@ -1,0 +1,63 @@
+// Case 3.12 — seed the primary Auctifera Company Information record.
+// Pure anonymous-Apex DML: no callout, no Metadata API. Idempotent.
+// COMPANY_NAME is REQUIRED (operator input {{companyName}}); the address /
+// contact fields are OPTIONAL ({{...?}}) — a blank one is left unset, so the
+// operator can provide as much or as little as they have.
+// v11 (IM-1082): the optional managed Auctifera fields are written via a
+// describe-guarded dynamic put (SObjectType.getDescribe().fields), mirroring the
+// mock-Contact Description pattern, so a per-package-version absent/renamed
+// optional field can no longer break the anonymous-block COMPILE — it is simply
+// skipped. The identity anchors (Name, Auctifera__Primary_Company__c) stay
+// static: if those drift the whole case is moot.
+class VerifyException extends Exception {}
+final String COMPANY_NAME = '{{companyName}}';
+final String WEBSITE      = '{{website?}}';
+final String TELEPHONE    = '{{companyTelephone?}}';
+final String ADDRESS      = '{{address?}}';
+final String CITY         = '{{city?}}';
+final String STATE        = '{{state?}}';
+final String POSTAL_CODE  = '{{postalCode?}}';
+final String COUNTRY      = '{{country?}}';
+
+List<Auctifera__Company_Information__c> existing = [
+    SELECT Id FROM Auctifera__Company_Information__c
+    WHERE Auctifera__Primary_Company__c = true LIMIT 1
+];
+Auctifera__Company_Information__c co = existing.isEmpty()
+    ? new Auctifera__Company_Information__c(Auctifera__Primary_Company__c = true)
+    : existing[0];
+co.Name = COMPANY_NAME;
+// Optional managed fields — written only when supplied AND present+updateable in
+// this package version (dynamic describe: absent field name is skipped, not a
+// compile error). Field API names are kept literal so the intent stays readable.
+Map<String, String> optionalValues = new Map<String, String>{
+    'Auctifera__Website__c'           => WEBSITE,
+    'Auctifera__Company_Telephone__c' => TELEPHONE,
+    'Auctifera__Address__c'           => ADDRESS,
+    'Auctifera__City__c'              => CITY,
+    'Auctifera__State__c'             => STATE,
+    'Auctifera__Postal_Code__c'       => POSTAL_CODE,
+    'Auctifera__Country__c'           => COUNTRY
+};
+Map<String, Schema.SObjectField> coFields = Auctifera__Company_Information__c.SObjectType.getDescribe().fields.getMap();
+for (String fieldName : optionalValues.keySet()) {
+    String value = optionalValues.get(fieldName);
+    if (String.isBlank(value)) { continue; }
+    Schema.SObjectField tok = coFields.get(fieldName.toLowerCase());
+    if (tok != null && tok.getDescribe().isUpdateable()) {
+        co.put(tok, value);
+    } else {
+        System.debug(LoggingLevel.WARN, '[3.12] optional Company Information field absent/not-writable in this package version, skipped: ' + fieldName);
+    }
+}
+upsert co;
+System.debug(LoggingLevel.INFO, '[3.12] upserted primary Company Information ' + co.Id + ' -> ' + COMPANY_NAME);
+
+Integer companies = [
+    SELECT COUNT() FROM Auctifera__Company_Information__c
+    WHERE Auctifera__Primary_Company__c = true AND Name = :COMPANY_NAME
+];
+if (companies == 0) {
+    throw new VerifyException('[3.12] verify failed: no primary Company Information named ' + COMPANY_NAME);
+}
+System.debug(LoggingLevel.INFO, '[3.12] verify OK — primary Company Information confirmed');

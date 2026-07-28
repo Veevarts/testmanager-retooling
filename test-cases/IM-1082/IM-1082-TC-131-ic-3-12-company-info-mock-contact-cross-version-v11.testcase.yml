@@ -1,0 +1,195 @@
+schemaVersion: "1.0"
+
+id: "272d926a-d987-4f28-85c2-1ac834fe2a20"
+key: "TC-131"
+title: "IM-1082 IC 3.12 Company Info & Mock Contact Creation (v10→v11, medium-confidence) — validate the flagship cross-version hardening: the 3 AUTOMATED T6 steps compile+run org-agnostically across package versions via (1) a describe-guarded dynamic put for the optional Company Information fields and (2) NPSP rollups that TOLERATE per-version absence (log+skip, not a hard precondition), plus 4 well-structured MANUAL handoffs and version lockstep v11 · CODE PR spec-only (reused T6 anon apex)"
+description: |
+  Cobertura QA para IM-1082 (Historia, priority Medium/medium-confidence, epic IM-735 Implementation
+  Cases Automation).
+  QA Sub-task asociada: IM-1136 (creada 2026-07-28).
+
+  Contexto:
+  - Post-June IM-735 continuation, Batch D (decision & verify). Flagship case (operator-input + T6 +
+    handoffs), verificado en Tucson; cross-version re-run en CamiloDevOrg. El re-run NO surfaceó drift;
+    la version se bumpeó 10→11 (lockstep) y se endurecieron 2 superficies hardcodeadas para volver el
+    caso org-agnostic entre versiones de package.
+  - PR bajo prueba: `Veevarts/MigrationAppBackend#254` (**MERGED**).
+    Branch: `task/ic-3-12-company-info-mock-contact-IM-1082`. Merge commit `1552e7a7` (base `545e2cb0` = IM-1081 #253).
+    2 files, +34/-7.
+  - **CODE PR spec-only** — NO toca adapters/ops: el diff son 2 files: `demo-company-info-mock-contact.json`
+    (v10→v11) + su `.spec.ts` (+29/-2). El caseId es `company-info-and-mock-contact`. T6 anon apex ya existe → reused.
+
+  IC 3.12 v11 (feasibility hybrid, 7 steps: 3 AUTOMATED T6 + 4 MANUAL):
+  - Step 1 (T6): seed del primary Auctifera Company Information record (idempotente upsert; required companyName).
+    **Hardening v11 #1:** los optional managed fields (website, telephone, address, city, state, postalCode, country)
+    se escriben vía un DESCRIBE-GUARDED dynamic put — `SObjectType.getDescribe().fields.getMap()` + `isUpdateable()`
+    + `co.put(tok, value)`; un field ausente/renombrado en la versión del package se logea y se SALTA (ya no rompe el
+    COMPILE del anon-block, como sí lo hacía el static ref — la clase de bug "Field does not exist"). Los anchors de
+    identidad (Name, Auctifera__Primary_Company__c) siguen static (moot si driftan). El required company Name siempre se setea.
+  - Steps 2-4, 6 (MANUAL): Lightning page (Manage Files component + org-default record page, sin API), logo upload,
+    Veevart File layout fields (managed package, sin Metadata API), fiscal-year Setup (FiscalYearStartMonth read-only
+    vía API). Cada uno con guide estructurada (context/actions/estimatedMinutes).
+  - Step 5 (T6): seed del Auctifera mock Contact (idempotente; flag Auctifera__Mock_Contact__c vía DML; Description
+    vía describe-guarded dynamic put + isCreateable — el patrón que el step 1 ahora replica).
+  - Step 7 (T6): habilitar 'Use Fiscal Year' en los 18 NPSP rollups (resueltos dinámicamente por DeveloperName).
+    `npsp__Rollup__mdt` es CMDT (read-only a Apex DML) → el flag se setea vía `Metadata.Operations.enqueueDeployment`
+    (ASÍNCRONO). **Hardening v11 #2:** per-version absence TOLERADA — un DeveloperName ausente en esta versión de NPSP
+    se logea y se SALTA (antes: `throw 'precondition failed'` hard). Ramas: todos presentes+enabled → success (18/18);
+    algunos disabled → enqueue CMDT deploy + success; ausentes → log+skip.
+
+  Estrategia de verificación:
+  - **jest + tsc + eslint como evidencia PRIMARIA** (CODE PR spec-only): clone en merge `1552e7a7`, correr el
+    `.spec.ts` de 3.12 (lockstep + describe-guarded put + tolerate-absence + pure-Apex) + gates.
+  - **spec fidelity + apex read independiente**: parsear los 7 steps + LEER el apex de los steps 1 (Company Info v11),
+    5 (mock Contact) y 7 (NPSP rollups v11) por cuenta propia — dynamic put guarded, tolerate-absence, no static ref,
+    no callout — + las 4 guides MANUAL.
+  - **op-reuse audit** (NO genuinely-new): confirmar que #254 NO toca adapters (base..merge = 2 files, ambos seeds/specs/);
+    T6 ya existe → reused.
+  - **NO hay live IE run en este QA**: la verificación live fue CamiloDevOrg-only (org 00Dfj00000QJMx7EAH, vía sf-CLI
+    anonymous Apex porque AWS SSO expiró → run-plan-local CLI no bootea Secrets Manager): 18/18 rollups present+enabled,
+    dynamic company put escribió website/telephone, mutaciones de test limpiadas. v11 NO seeded a MigrationApp-dev (seed
+    PENDING). Live = dev-proven/PENDING-CREDS, no PASS/FAIL prematuro.
+
+  Riesgos abiertos (del ticket):
+  - **Cross-version drift (medium-confidence)**: el re-run no surfaceó drift; el v11 endurece las 2 superficies static
+    restantes para robustez a futuro. El pre-v9 record-page select del caveat ya fue removido en IM-753 y correctamente
+    sigue removido (sin API de Salesforce para él).
+  - **Seed PENDING-CREDS**: v11 no seeded (append-only) → seed en cred refresh; bloquea re-correr via la app.
+  - Verificado por el dev en CamiloDevOrg (+ Tucson previo). QA re-verifica por código.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "GitHub CLI (`gh`) autenticado — diff + árbol en merge `1552e7a7` y base `545e2cb0` de MigrationAppBackend."
+  - "Clone local de `MigrationAppBackend` con `npm ci` limpio + jest/tsc/eslint (CODE PR spec-only: evidencia primaria por código)."
+  - "Node + jq/python3 para parsear el spec v11 y leer los apex de los steps 1/5/7 independientemente."
+  - "NO se requiere org ni IE run: live fue CamiloDevOrg-only (dev-proven: 18/18 rollups, dynamic company put) y el v11 no seeded (seed PENDING)."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Flagship re-runs green on CamiloDevOrg under current package versions — the Company Information T6 step compiles and upserts the primary Company Information record, the Mock Contact T6 step compiles and ensures the flagged anonymous Contact exists (idempotent), the NPSP rollups T6 step compiles and reports the fiscal-year end-state, and no step fails due to a missing managed field, object, or rollup"
+    tags:
+      - ac-1
+      - flagship
+      - t6-seed
+      - cross-version
+      - idempotent
+      - happy-path
+      - im-1082
+      - im-735
+    given:
+      - "el spec `demo-company-info-mock-contact.json` v11 en merge `1552e7a7` seeded contra CamiloDevOrg"
+    when:
+      - "se leen los apex de los 3 steps T6 (1 Company Info, 5 mock Contact, 7 NPSP rollups) y su compilación/ejecución"
+    then:
+      - "step 1 upserta el primary Company Information (Auctifera__Primary_Company__c=true) con el required Name; idempotente"
+      - "step 5 asegura el mock Contact (Auctifera__Mock_Contact__c=true) idempotente (insert solo si no existe) + VERIFY COUNT"
+      - "step 7 reporta el end-state de los rollups; ningún step falla por field/object/rollup faltante (dev-proven live CamiloDevOrg: 18/18 present+enabled)"
+
+  - title: "AC2 · Optional Company Information fields are written org-agnostically — a supplied subset of optional fields (website, telephone, address, city, state, postal code, country) is written only when present+updateable in the current package version via a describe-guarded dynamic put; an absent/renamed field is logged and skipped; the anonymous Apex still compiles (no static reference to an absent field); and the required company name + Primary Company anchor are always set"
+    tags:
+      - ac-2
+      - t6-company-info
+      - describe-guarded
+      - dynamic-put
+      - org-agnostic
+      - im-1082
+    given:
+      - "el step 1 (T6 Company Info) v11 y un subset de optional fields provisto por el operador"
+    when:
+      - "se lee el apex del step 1 y su bloque de optional fields"
+    then:
+      - "usa `Auctifera__Company_Information__c.SObjectType.getDescribe().fields.getMap()`; por field: si blank skip; si tok!=null && tok.getDescribe().isUpdateable() → `co.put(tok, value)`; else WARN+skip"
+      - "el anon-block COMPILA sin static reference a un field ausente (a diferencia de v10 que hacía `co.Auctifera__Website__c = ...`)"
+      - "los identity anchors (Name, Auctifera__Primary_Company__c) siguen static; el required company Name siempre se setea; VERIFY COUNT del primary"
+
+  - title: "AC3 · NPSP fiscal-year rollups tolerate per-version absence — the 18 named NPSP gift/soft-credit rollups are resolved dynamically by DeveloperName; when every present rollup already has Use Fiscal Year enabled the step succeeds reporting the verified end-state (e.g. 18 of 18 present); when some present rollups are not enabled it enqueues an asynchronous CMDT deployment and succeeds; and when a rollup DeveloperName is absent in this NPSP version it is logged and skipped rather than failing a hard precondition"
+    tags:
+      - ac-3
+      - t6-npsp-rollups
+      - tolerate-absence
+      - cmdt-deploy
+      - org-agnostic
+      - im-1082
+    given:
+      - "el step 7 (T6 NPSP rollups) v11 y los 18 DeveloperNames resueltos dinámicamente"
+    when:
+      - "se lee el apex del step 7 y sus ramas present/disabled/absent"
+    then:
+      - "query `npsp__Rollup__mdt WHERE DeveloperName IN :DEV_NAMES`; todos present+enabled → success reportando 'X of 18 present'"
+      - "algunos present+disabled → `Metadata.Operations.enqueueDeployment` (async CMDT deploy) + success (self-verifying en re-run)"
+      - "un DeveloperName ausente en esta versión de NPSP → WARN+skip (tolerado), NO `throw 'precondition failed'` (asertado por el spec.ts: deploy contiene 'absent' y NO 'precondition failed')"
+
+  - title: "AC4 · Manual handoffs remain well-structured guides — the parts with no Salesforce API (Manage Files component + org-default record page, logo upload, Veevart File layout fields, fiscal-year Setup) each render a structured guide with context, numbered actions, and an estimate; and the fiscal-year Setup step stays manual because FiscalYearStartMonth is read-only via the API"
+    tags:
+      - ac-4
+      - manual
+      - manual-handoff
+      - structured-guide
+      - no-api-path
+      - im-1082
+    given:
+      - "los steps MANUAL 2 (Lightning page), 3 (logo), 4 (Veevart File layout fields) y 6 (fiscal-year Setup) del spec v11"
+    when:
+      - "se parsean los steps MANUAL y sus guides"
+    then:
+      - "cada step MANUAL tiene guide con context, actions numeradas (≥3) y estimatedMinutes>0 (step2=6, step3=3, step4=5, step6=5)"
+      - "step 2 explica que no hay API para agregar un componente managed a una Lightning page managed ni setear el org-default record page; step 4 que el Veevart File layout es managed (sin Metadata API)"
+      - "el step 6 (fiscal-year) sigue MANUAL porque FiscalYearStartMonth es read-only vía la API"
+
+  - title: "Version lockstep v11 + gates + scope-fit — case.version and template.version are both 11 (lockstep, asserted by a test); the 7 steps stay strictly ordered 1..7; every T6 step is pure Apex (no HTTP callout / Data API / session theft); jest (lockstep + describe-guarded put + tolerate-absence) / tsc --noEmit / eslint on touched files pass; #254 is spec-only (T6 reused, NOT genuinely-new)"
+    tags:
+      - ac-5
+      - gates
+      - jest
+      - tsc
+      - eslint
+      - version-lockstep
+      - no-callout
+      - reused-ops
+      - scope-fit
+      - im-1082
+    given:
+      - "clone local de MigrationAppBackend en merge `1552e7a7` con npm ci limpio; base `545e2cb0`"
+    when:
+      - "se corren tsc --noEmit, el `.spec.ts` de 3.12 y eslint; y se audita el diff de #254 + los apex"
+    then:
+      - "case.version=11 y template.version=11 (lockstep, asertado por el test); feasibility hybrid; 7 steps order 1..7 (3 T6 + 4 MANUAL)"
+      - "cada step T6 es pure Apex (asertado: sin HttpRequest / /services/data / session theft); el `.spec.ts` pasa (8/8: schema+lockstep+order+describe-guarded put+separate seed steps+tolerate-absence+pure-apex)"
+      - "tsc --noEmit exit 0; eslint limpio; full jest 0 fail; op-reuse: #254 NO toca adapters (base..merge = 2 files, ambos seeds/specs/), T6 reused → NO genuinely-new"
+
+tags:
+  - im-1082
+  - im-735
+  - im-1136
+  - implementations-automation
+  - medium-confidence
+  - ic-3-12
+  - company-information
+  - mock-contact
+  - npsp-rollups
+  - cross-version
+  - describe-guarded
+  - tolerate-absence
+  - org-agnostic
+  - t6-anon-apex
+  - reused-ops
+  - hybrid
+  - manual-handoff
+  - migration-app-backend
+  - code-pr
+  - pr-254
+  - pending-creds
+  - post-june-delivery
+  - production
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-28T14:22:21Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-28T14:22:21Z"
+  version: 1

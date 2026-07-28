@@ -1,0 +1,34 @@
+OP-REUSE + v11 HARDENING AUDIT — IM-1082 IC 3.12 (company-info-and-mock-contact) — PR #254
+merge=1552e7a7 base=545e2cb0 (= IM-1081 #253 merge)
+
+[1] files changed base..merge:
+    src/implementations/infrastructure/seeds/specs/demo-company-info-mock-contact.json
+    src/implementations/infrastructure/seeds/specs/demo-company-info-mock-contact.spec.ts
+    => 2 files, BOTH seeds/specs/. 0 adapters => CODE PR spec-only. T6 reused => NOT genuinely-new.
+
+[2] v11 hardening #1 — Company Info optional fields: static refs -> describe-guarded dynamic put.
+    BEFORE (v10): co.Auctifera__Website__c = WEBSITE; ... (static field ref; absent/renamed field
+                  breaks the anon-block COMPILE — prior 'Field does not exist: Description' class of bug).
+    AFTER  (v11): Map<String,String> optionalValues; coFields = ...SObjectType.getDescribe().fields.getMap();
+                  per field: if blank skip; tok=coFields.get(name.toLowerCase()); if tok!=null && tok.getDescribe()
+                  .isUpdateable() -> co.put(tok,value); else WARN+skip. Identity anchors (Name, Primary_Company__c)
+                  stay STATIC (moot if they drift). Required company Name always set. VERIFY COUNT unchanged.
+
+[3] v11 hardening #2 — NPSP rollups: hard precondition -> tolerate per-version absence.
+    BEFORE (v10): missing list -> if !empty throw StepException('precondition failed: N of 18 not found').
+    AFTER  (v11): absent list -> WARN+skip (tolerated, NOT thrown); only present-but-disabled get the async
+                  CMDT deploy (Metadata.Operations.enqueueDeployment); reports 'X of 18 present'. Rollups
+                  resolved dynamically by (NPSP-stable) DeveloperName. spec.ts asserts deploy contains 'absent'
+                  and NOT 'precondition failed'.
+
+[4] mock Contact (step 5, untouched): idempotent (insert only if no Mock_Contact__c=true exists);
+    Description via describe-guarded dynamic put (getMap().get('description') + isCreateable() + c.put) —
+    the SAME pattern v11 now applies to Company Info. VERIFY COUNT.
+
+[5] no-callout purity (spec.ts asserts): every T6 step pure Apex — no HttpRequest / /services/data / session theft.
+    step1 has '/services/data' or 'HttpRequest': absent
+    step7 has '/services/data' or 'HttpRequest': absent
+
+[6] structure: 7 steps hybrid — T6(1 Company Info), MANUAL(2 Lightning page/Manage Files+org-default),
+    MANUAL(3 logo), MANUAL(4 Veevart File layout fields), T6(5 mock Contact), MANUAL(6 fiscal-year Setup),
+    T6(7 NPSP rollups). case.version==template.version==11 (lockstep, spec.ts asserts).

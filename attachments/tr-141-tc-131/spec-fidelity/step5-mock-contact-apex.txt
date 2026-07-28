@@ -1,0 +1,24 @@
+// Case 3.12 — seed the Auctifera mock Contact. Pure anonymous-Apex DML, idempotent.
+// The runbook's "add the Mock Contact field to the Contact layout, tick it, then
+// remove the field" UI dance is obviated: the flag Auctifera__Mock_Contact__c is
+// set directly via DML. Description is referenced dynamically and set only when
+// the running user can create it, so a missing / FLS-hidden Contact.Description
+// cannot break the anonymous-block compile (a static field reference would).
+class VerifyException extends Exception {}
+List<Contact> existing = [SELECT Id FROM Contact WHERE Auctifera__Mock_Contact__c = true LIMIT 1];
+if (existing.isEmpty()) {
+    Contact c = new Contact(
+        LastName = 'Anonymous Contact (Please do not touch)',
+        Auctifera__Mock_Contact__c = true);
+    Schema.SObjectField descTok = Contact.SObjectType.getDescribe().fields.getMap().get('description');
+    if (descTok != null && descTok.getDescribe().isCreateable()) {
+        c.put('description', 'This is the contact to whom all anonymous purchases are assigned');
+    }
+    insert c;
+    System.debug(LoggingLevel.INFO, '[3.12] inserted Mock Contact');
+} else {
+    System.debug(LoggingLevel.INFO, '[3.12] Mock Contact already present: ' + existing[0].Id);
+}
+Integer mockContacts = [SELECT COUNT() FROM Contact WHERE Auctifera__Mock_Contact__c = true];
+if (mockContacts == 0) { throw new VerifyException('[3.12] verify failed: no Mock Contact present'); }
+System.debug(LoggingLevel.INFO, '[3.12] verify OK — mock contact confirmed');
