@@ -1,0 +1,75 @@
+TR-145 / TC-135 — IM-774 · Matriz de cobertura AC ↔ tests del PR MigrationToolETL#160
+Branch: bug/ticketing-trigger-bypass-IM-774 · head 4a441524 · merge-base 9e15cc52 (main @ #158)
+Ejecutado por: codex · 2026-07-29
+
+TESTS AÑADIDOS POR EL PR (3 archivos nuevos, 0 modificados)
+-----------------------------------------------------------------------------------
+1. src/data-migration/infrastructure/destination/sql-server/query-regression/
+   ticketing-trigger-bypass-query.spec.ts .................. 43 tests (nuevo)
+2. src/data-migration/infrastructure/destination/sql-server/mappers/
+   ticketing.mapper.spec.ts ................................ 18 tests (nuevo)
+3. src/data-migration/application/pipelines/
+   ticketing-csv-descriptor.builder.spec.ts ................ 11 tests (nuevo)
+   (+ ticketing-event-query.spec.ts y ticketing-program-query.spec.ts preexistentes: 14 tests)
+
+TOTAL suites de ticketing en el branch: 5 suites · 86 tests · 86 PASS · 0 FAIL
+   (el PR reporta 86 — coincide exactamente)
+
+MAPEO AC ↔ TEST
+-----------------------------------------------------------------------------------
+AC1 · bypass 'true' en cada fila, nunca 1, nunca condicional, simetría UNION ALL
+     → ticketing-trigger-bypass-query.spec.ts
+       · "emits Auctifera__Technical_Bypass_Triggers__c"            ×4 queries
+       · "emits the flag as the string literal 'true'"              ×4 queries
+       · "never emits the flag as a bare 1"                         ×4 queries
+       · "emits the flag unconditionally, never behind a CASE"      ×4 queries
+       · "both event-path queries project <col>"                    ×2 columnas
+       · "projects <col> in both branches" (UNION ALL)              ×2 columnas
+       · "uses the identical bypass literal in both branches"
+     COBERTURA: COMPLETA (contrato sobre el texto SQL). Verificada además por revert-proof.
+
+AC2 · Confirmed_Date_Time__c histórico, desde RESERVATION.STARTDATETIME, normalizado a UTC
+     → ticketing-trigger-bypass-query.spec.ts
+       · "derives it from RESERVATION.STARTDATETIME under the Confirmed branch"  ×3 queries
+       · "never derives the instant from the date-only ARRIVALDATE"              ×3 queries
+       · "declares @timeZone and normalises to UTC"                              ×3 queries
+       · "types the column as NVARCHAR"                                          ×4 queries
+       · "status CASE has no THEN Confirmed branch"                              ×3 queries
+       · "ticketing_direct_registrant.sql emits a typed NULL of the same type"
+       · "never falls back to a load-time timestamp"
+     → ticketing.mapper.spec.ts
+       · "does not fall back to the current time for a blank column"
+       · "preserves the exact instant for the UTC ISO string the query now emits"
+     COBERTURA: COMPLETA en contrato. GAP: ningún test ejecuta la query contra datos
+     reales → cubierto por QA con safesql tucson (ver scenario-2/).
+
+AC3 · pass-through TS mapper → entity → descriptor CSV
+     → ticketing.mapper.spec.ts (18): parseNullableBoolean ('true'/1/'1'/bool/false/'0'/0/
+       null/''/ausente) + parseNullableDate (null/''/inválido/Date/ISO UTC)
+     → ticketing-csv-descriptor.builder.spec.ts (11): "declares the bypass column in headers",
+       "emits the bypass value in the row, not just the header", "carries the flag on every row",
+       "emits an empty string, never a load-time timestamp, when absent",
+       "keeps every header a row key, and every row key a header"
+     COBERTURA: COMPLETA. Verificada por mutación (parseNullableDate → parseDate ⇒ 5 FAIL).
+
+AC4 · efecto observable en org: 0 Rental Resources auto-creados, 1 solo migrado con external id
+     → SIN test automatizado en el repo (es comportamiento de Salesforce, no del ETL).
+     GAP DECLARADO: el PR lo respalda con un A/B manual sobre 64 filas reales de Tucson en
+     CamiloDevOrg (64 → 0). QA NO puede re-ejecutarlo: CamiloDevOrg no está autenticado
+     localmente. QA compensa con: (a) el contrato SQL/TS que garantiza que el flag llega al CSV,
+     (b) la población fuente afectada medida en vivo (safesql tucson: 1,379 órdenes ticket-backed
+     con Rental Event), (c) el preflight del campo por org.
+
+AC5 · prerrequisitos de rollout por org
+     → SIN test automatizado (es estado de org, no de código).
+     Cubierto por QA con `sf sobject describe` + `sf package installed list` en los 4 orgs
+     alcanzables (ver scenario-5/).
+
+GAPS DE COBERTURA DEL DEV
+-----------------------------------------------------------------------------------
+· AC4 y AC5 no tienen —ni pueden tener— cobertura automatizada en este repo: dependen del
+  estado de una org Salesforce, no del ETL. NO es una omisión del dev; el PR documenta el A/B
+  y los prerrequisitos explícitamente. QA los cubre por evidencia externa (safesql + describe).
+· Todos los specs del PR son de CONTRATO (asertan sobre el TEXTO del SQL), no de EJECUCIÓN
+  contra una base. Es coherente con el resto del repo (query-regression) y se compensa con la
+  verificación live de QA sobre tucson.

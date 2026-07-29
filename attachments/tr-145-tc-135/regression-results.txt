@@ -1,0 +1,106 @@
+TR-145 / TC-135 — IM-774 · Resultados de la matriz de regresión
+PR MigrationToolETL#160 · head 4a441524 · base 9e15cc52 · ejecutado 2026-07-29 por codex
+
+TÉCNICA
+-----------------------------------------------------------------------------------------------
+T1  Column set previo de las 4 queries intacto ............................................ PASS
+    `npm run test:queries` en branch: 393 pass / 63 skip / 0 fail (40 de 52 suites).
+    Los specs preexistentes ticketing-event-query / ticketing-program-query (14 tests) siguen
+    verdes: mapeo de status, OUTER APPLY sin multiplicar filas, filtros de fecha, etc.
+
+T2  Simetría de las 2 ramas del UNION ALL en ticketing.sql ................................ PASS
+    "projects <col> in both branches" ⇒ exactamente 2 matches por columna.
+    "uses the identical bypass literal in both branches" ⇒ 2 matches de 'true'.
+    Mismo literal, mismo tipo, misma posición ordinal ⇒ sin conversión implícita (hazard IM-770).
+
+T3  Paridad de column set del par del TicketingEventExtractor ............................. PASS
+    only_event + direct_registrant proyectan ambas columnas nuevas (comparten mapper y descriptor).
+
+T4  El descriptor CSV no pierde columnas previas ......................................... PASS
+    "keeps every header a row key, and every row key a header" verde; las 2 columnas nuevas se
+    añaden a `rows` Y a `headers` (builder.ts:21-22 y :41-46).
+
+T5  `parseDate` (no-nullable) intacto para campos preexistentes ........................... PASS
+    visitorManagementDate y ticketDateDoNotMap siguen usando parseDate; el diff sobre esas 2
+    líneas es SOLO reformateo de prettier (misma expresión partida en varias líneas).
+
+T6  Ningún otro query/pipeline del repo afectado .......................................... PASS
+    base   9e15cc52 : 350 pass / 63 skip / 39 suites
+    branch 4a441524 : 393 pass / 63 skip / 40 suites
+    Delta = +43 tests, +1 suite = exactamente ticketing-trigger-bypass-query.spec.ts (43 tests).
+    CERO tests preexistentes rotos.
+
+T7  `donation-transaction-recurring.spec.ts` preexistente ................................. PASS
+    branch: 10 failed / 10 total ......... base: 10 failed / 10 total  → IDÉNTICO.
+    Causa raíz en ambos: `MSSQLServerContainer.start` (testcontainers sin docker; colima abajo).
+    La afirmación del dev queda verificada: preexistente y ambiental, NO atribuible al PR.
+
+T8  Lint y build ......................................................................... PASS
+    `npm run lint:check` sin salida (limpio). `npm run build` OK ([query-metadata] 102 entries).
+
+T9  Los guards nuevos NO son vacuos (revert-proof) ....................................... PASS
+    (a) revertir las 4 .sql a base ⇒ ticketing-trigger-bypass-query.spec.ts: 28 FAIL / 15 pass.
+        (los 15 que pasan son las aserciones NEGATIVAS —"never a bare 1", "no THEN 'Confirmed'",
+         "never falls back to a load-time timestamp"— que se cumplen trivialmente cuando la
+         columna no existe. Las 28 positivas caen todas.)
+    (b) revertir los 3 .ts a base ⇒ mapper + descriptor specs: 23 FAIL / 3 pass (26 total).
+    (c) mutación dirigida `parseNullableDate` → `parseDate` ⇒ 5 FAIL / 13 pass — coincide
+        EXACTAMENTE con las "5 assertions" que el PR reporta en el review round 1 #2.
+
+T10 El dato fuente soporta la derivación (safesql tucson, aggregate-only) ................ PASS
+    confirmed_ticket_backed .......... 27
+    startdatetime_populated .......... 27/27  (100 %)
+    date_eq_arrivaldate .............. 27/27  (100 %)
+    time_eq_arrivaltime .............. 27/27  (100 %)
+    real_time_of_day (≠ medianoche) .. 27/27  (100 %)
+    confirmed_missing_instant ........ 0
+    Reproduce el 27/27 que reporta el PR, sobre el mismo account. La rama Confirmed nunca
+    exportará NULL en Tucson, y como ninguna cae en medianoche, usar ARRIVALDATE habría
+    desplazado el instante en las 27.
+
+T11 Los orgs destino aceptan la columna nueva ............................ FAIL (bloqueo de rollout)
+    `Auctifera__Technical_Bypass_Triggers__c` en Auctifera__Group_Reservation__c:
+      veevartd (Tucson trainings) ....... ABSENTE   · Auctifera 8.254.0.1
+      illinois-trainings ................ ABSENTE   · Auctifera 8.254.0.1
+      hammer-trainings .................. ABSENTE   · Auctifera 8.254.0.1
+      maloof-trainings .................. ABSENTE   · Auctifera 8.254.0.1
+    4 de 4 orgs alcanzables por debajo del piso 8.317.0.2. Una columna desconocida falla el
+    Bulk job COMPLETO ⇒ cargar ticketing con este cambio en cualquiera de estos orgs hoy rompe
+    la carga entera.
+    NO es un defecto del código: el PR lo declara como prerrequisito y aporta el comando de
+    preflight. Es un BLOQUEO DE ROLLOUT verificado, no una advertencia teórica.
+    Prerrequisito 2 (`Auctifera__Bypass_POS_Transaction_Lock__c` en el usuario de carga):
+    el campo SÍ existe ya en 8.254.0.1 ⇒ satisfacible hoy, solo requiere activarlo.
+
+SEGURIDAD
+-----------------------------------------------------------------------------------------------
+S1  Secretos / credenciales en el diff ................................................... PASS
+    grep de password|api_key|secret|token|bearer|.env|BEGIN sobre el diff completo: 0 matches.
+
+S2  Inyección SQL por concatenación dinámica ............................................. PASS
+    0 matches de concatenación/interpolación en el TS cambiado. En SQL, el único parámetro nuevo
+    es `@timeZone`, declarado server-side con literal constante ('Eastern Standard Time') — no
+    proviene de entrada de usuario ni se concatena; se usa como operando de AT TIME ZONE.
+
+S3  Datos de cliente (PII) en artefactos QA ............................................... PASS
+    La verificación fuente es aggregate-only: la query devuelve exclusivamente COUNT(*). Cero
+    filas, cero identificadores de cliente, cero PII en adjuntos. Credenciales vía keychain.
+
+S4  Dependencias nuevas o vulnerables ..................................................... PASS
+    `git diff base..HEAD -- package.json package-lock.json` vacío: sin cambios de dependencias.
+
+S5  Alcance del bypass de automatización de negocio (el core del PR) ...................... PASS
+    · El flag es un campo TÉCNICO del managed package (PP-1438), no un hack: existe para esto.
+    · Su alcance es una sola escritura: el framework lo resetea a `false` durante el insert.
+    · Verificado por el dev en org que las 3 escrituras posteriores (re-run con flag, update sin
+      flag, insert de 98 ticket items hijos) ejecutan el handler normalmente y dejan 0 Rental
+      Resources; el read-back `= false` es la prueba de que el path del bypass corrió.
+    · No amplía permisos ni desactiva validaciones de seguridad: solo evita la creación
+      automática de un registro derivado que la migración ya aporta con su external id.
+    · El segundo prerrequisito (POS lock) es explícitamente por-usuario, no global.
+
+S6  OWASP Top 10 (2021) ................................................. PASS (ver owasp-top10-scan.txt)
+    2 categorías Applicable (A04, A08), ambas PASS. 8 N/A justificadas. 0 High/Critical.
+
+RESUMEN: 12 items técnicos → 10 PASS · 1 FAIL (T11, bloqueo de ROLLOUT, no de código) · 0 TBD
+         6 items de seguridad → 6 PASS · 0 FAIL · 0 High/Critical · 0 TBD

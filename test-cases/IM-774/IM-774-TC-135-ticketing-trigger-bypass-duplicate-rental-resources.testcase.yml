@@ -1,0 +1,231 @@
+schemaVersion: "1.0"
+
+id: "cbb3b5af-30fd-49ae-a7d6-2d1759945279"
+key: "TC-135"
+title: "Las cuatro queries de ticketing emiten Auctifera__Technical_Bypass_Triggers__c = 'true' en cada fila para que ReservationTriggerHandler no auto-cree un Rental Resource sin Implementation External ID, y Confirmed_Date_Time__c se toma de RESERVATION.STARTDATETIME normalizado a UTC en vez del reloj de la corrida (Tucson 8-11410182)"
+description: |
+  Cobertura QA para IM-774 (**Error**, priority **High**, severity **1 - Business Stopping**, environment
+  **Production**, epic IM-70 Altru Queries). QA Sub-task asociada: IM-1141 (creada 2026-07-29).
+
+  Contexto (defecto reportado):
+  - Durante la migración de Rentals/Groups se crean **Rental Resources duplicados**: el mismo ticket resource
+    aparece dos veces para un solo Rental Event/Group, partiendo/duplicando el monto total. El ticket documenta
+    el caso de **un solo resource con monto correcto $120** que termina como dos registros.
+  - **Ejemplo concreto (regression evidence)**: account **Tucson**, ID **8-11410182**. En Salesforce quedaron dos
+    Rental Resources para el mismo Ticketing/Rental Event: **R-1230** (`a2iVz000002RaTZIA0`, **sin**
+    Implementation External ID, creado 2026-04-08 12:38:56 UTC) y **R-1597** (`a2iVz000002zUG9IAM`, **con**
+    external ID, creado 2026-05-28 15:35:42 UTC). El ticket **R-0044** (`a1vVz00000T35KvIAJ`) se creó
+    2026-04-08 12:38:54 UTC, **dos segundos antes** que R-1230.
+  - 7 screenshots adjuntos al ticket como evidencia (Sara Montenegro / veevart_josed).
+  - **PR bajo prueba: `Veevarts/MigrationToolETL#160`** (**OPEN**, branch `bug/ticketing-trigger-bypass-IM-774`
+    → main, head `4a441524`). 13 files +1202/-7: 4 `.sql` de ticketing + mapper + entity + descriptor builder
+    + 3 specs nuevos + docs/openspec.
+
+  Root cause (confirmado en el análisis del ticket y en el PR):
+  - Cargar una fila de Ticketing con Rental Event dispara `GroupReservation_Trg` →
+    `ReservationTriggerHandler.afterInsert()` → `RentalEventManageResources.createRentalItemsForTicket()`, que
+    **auto-crea** un `Auctifera__Rental_Resources__c` **sin** `Implementation_External_ID__c`.
+  - El Rental Resource migrado (external id = el id de Ticketing/SalesOrder, del CTE `AggregatedTicketRentalResources`
+    de IM-462) **no tiene sobre qué hacer upsert** → coexisten los dos registros. El duplicado NO lo genera el SQL:
+    el análisis previo verificó que `rental_resource.sql` emite **una sola** línea para 8-11410182 y 0 grupos de
+    external-id duplicados en high-desert / muhammed2 / tucson / everson / kidstream.
+
+  El fix (del PR):
+  - Las 4 queries de ticketing (`ticketing_only_event.sql`, `ticketing_only_program.sql`,
+    `ticketing_direct_registrant.sql` y el combinado legacy `ticketing.sql` en **ambas ramas del UNION ALL**)
+    emiten dos columnas nuevas: **`Auctifera__Technical_Bypass_Triggers__c`** (literal string `'true'`, en **todas**
+    las filas, nunca detrás de un CASE) y **`Auctifera__Confirmed_Date_Time__c`**.
+  - `Confirmed_Date_Time__c` lo estampaba `ReservationTriggerHandler.beforeInsert` con `Datetime.now()` (la fecha de
+    la corrida de migración, no la histórica). Al bypassear el trigger se pierde, así que ahora se calcula en la
+    query desde **`RESERVATION.STARTDATETIME`** con
+    `CONVERT(NVARCHAR(40), (r.STARTDATETIME AT TIME ZONE @timeZone) AT TIME ZONE 'UTC', 127)` — el mismo idiom que
+    ya usan `rental_resource.sql:22` y `rental_events_groups.sql:66`.
+  - Wiring TS: `ticketing.mapper.ts` (`parseNullableBoolean` + `parseNullableDate`, que **no** cae a `now()`),
+    `ticketing-record.entity.ts` (getters + `confirmedDateTimeIso`) y `ticketing-csv-descriptor.builder.ts`
+    (**header Y row key**, porque `fast-csv-writer.adapter.ts` filtra estrictamente por `headers`).
+
+  Estrategia de verificación (para /qa-test-executor):
+  - **Regression specs (evidencia PRIMARIA)**: `ticketing-trigger-bypass-query.spec.ts` (nuevo, guards de contrato
+    sobre el texto SQL: literal `'true'`, nunca `1`, nunca `END AS ...` condicional, paridad de columnas del par del
+    `TicketingEventExtractor`, simetría de las 2 ramas del UNION ALL, `NVARCHAR(40)`, nunca `GETDATE()/SYSDATETIME()`,
+    nunca desde `ARRIVALDATE`, y el pin de que el CASE de status **no** tiene rama `THEN 'Confirmed'`),
+    `ticketing.mapper.spec.ts` y `ticketing-csv-descriptor.builder.spec.ts`. Dev: query-regression **393** pass,
+    suites de ticketing **86** pass. QA re-corre + **revert-proof** (revertir los `.sql`/TS a base ⇒ los specs deben FALLAR).
+  - **safesql `tucson` (source-side, aggregate-only)**: cobertura de `RESERVATION.STARTDATETIME` en las reservas
+    Confirmed con ticket (el PR reporta 27/27, y date/time component == `ARRIVALDATE`/`ARRIVALTIME` 27/27), cuántas
+    filas de ticketing llevan Rental Event (las candidatas al duplicado) y que ninguna fila Confirmed quede sin fecha.
+  - **Target-side**: el A/B de 64 filas reales de Tucson en `CamiloDevOrg` es evidencia **del dev**; QA re-verifica lo
+    que sí es alcanzable — presencia del campo `Auctifera__Technical_Bypass_Triggers__c` en
+    `Auctifera__Group_Reservation__c` (preflight de versión) en los orgs con alias autenticado.
+
+  Riesgos abiertos:
+  - **Prerrequisito de versión por org**: el campo `Auctifera__Technical_Bypass_Triggers__c` sale de **PP-1438**
+    (AuctiferaDX#2465, merged) y existe desde **Auctifera ≥ 8.317.0.2**; los orgs cliente estaban en **8.254–8.291**.
+    Una columna desconocida **falla el Bulk job completo**, no fila por fila → sin el preflight esto rompe la carga.
+  - **Prerrequisito por usuario**: `Auctifera__Bypass_POS_Transaction_Lock__c = true` en el usuario que carga. El
+    bypass cubre **solo Apex**; una automatización no-Apex sigue actualizando el POS Purchase padre y
+    `POSPurchaseTriggerHandler.cls:225` la rechaza — en la prueba del dev **13 de 64 filas** fallaron y se llevaron el batch.
+  - **`CamiloDevOrg` NO está autenticado localmente** (`sf org list`: hammer/illinois/maloof/veevartd/…), así que el
+    A/B de 64 filas no se puede re-ejecutar tal cual; se re-verifica por specs + safesql + describe del campo.
+  - **`@timeZone` hardcodeado a `'Eastern Standard Time'`** en las 3 queries (limitación **heredada**, no introducida):
+    para un museo fuera de US Eastern la **fecha** queda bien pero la **hora** queda corrida. Documentado en `proposal.md`.
+  - **Acoplamiento documentado**: la rama Confirmed evalúa el `so.STATUS` **crudo**, mientras `Auctifera__Status__c` es
+    el valor mapeado. Coinciden solo porque ninguna rama del CASE produce `'Confirmed'` (sobrevive por el `ELSE`).
+    Agregar un `THEN 'Confirmed'` exportaría las filas Confirmed con fecha en blanco en 3 archivos a la vez.
+  - **Fuera de alcance (declarado)**: remediar los duplicados **ya existentes** en orgs migrados (queda **manual**,
+    per ticket); `Auctifera__Source__c` seleccionado por las 4 queries y descartado por el descriptor;
+    `1 AS Auctifera__Disable_Trigger__c` en `rental_resource.sql:114/:177` y las 4 queries de ticket-item (mismo
+    hazard del bare `1`, ticket de follow-up); el `ELSE so.STATUS` que emite `'Finalized'`, valor **inválido** del
+    picklist `Auctifera__Status__c` (159 órdenes en Tucson).
+  - **`donation-transaction-recurring.spec.ts` falla con y sin el cambio** (error de conexión a SQL Server):
+    preexistente y ambiental, no atribuible al PR — QA debe confirmarlo en ambos lados.
+  - **PR OPEN (no merged)** → el POST-fix es el head del branch, no `main`.
+  - Datos de cliente read-only: safesql (bastion, keychain) — credenciales y datos row-level nunca en el chat/artefactos.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "MigrationToolETL con `npm ci` limpio para correr `npm test -- --runInBand query-regression` y las suites de ticketing en el branch `bug/ticketing-trigger-bypass-IM-774` del PR #160 (head `4a441524`)."
+  - "safesql con el profile `tucson` alcanzable para el conteo aggregate-only source-side (es el account del ejemplo del ticket)."
+  - "Alias `sf` autenticado contra al menos un org con Auctifera instalado para el preflight de `Auctifera__Technical_Bypass_Triggers__c`; `CamiloDevOrg` (donde el dev hizo el A/B de 64 filas) NO está autenticado localmente."
+  - "El ejemplo del ticket (Tucson 8-11410182, R-1230 / R-1597 / R-0044) y los 7 screenshots adjuntos para cruzar la evidencia."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · The four ticketing queries emit the trigger bypass on EVERY row as the string literal 'true' — never a bare 1 (a Bulk API CSV silently reads 1 as FALSE in a Checkbox column and the trigger runs anyway), never behind a CASE (the framework bypass is batch-scoped, so a conditional flag would make behaviour depend on Bulk chunking), and with both UNION ALL branches of the legacy ticketing.sql in ordinal and type symmetry"
+    tags:
+      - ac-1
+      - trigger-bypass
+      - technical-bypass-triggers
+      - ticketing
+      - bulk-api-checkbox
+      - union-all-symmetry
+      - altru
+      - im-70
+      - im-774
+      - happy-path
+    given:
+      - "las 4 queries de ticketing del PR #160 (`ticketing_only_event.sql`, `ticketing_only_program.sql`, `ticketing_direct_registrant.sql` y el combinado legacy `ticketing.sql`)"
+    when:
+      - "se corre `ticketing-trigger-bypass-query.spec.ts` sobre el branch y luego se revierten los `.sql` a base (revert-proof)"
+    then:
+      - "las 4 queries proyectan `Auctifera__Technical_Bypass_Triggers__c` con el literal `'true'` y **ninguna** lo emite como `1` ni como `END AS ...` (condicional)"
+      - "`ticketing.sql` lo proyecta **2 veces** (una por rama del UNION ALL) con el mismo literal, y el par del `TicketingEventExtractor` (`ticketing_only_event` + `ticketing_direct_registrant`) mantiene el mismo column set"
+      - "revirtiendo los `.sql` a base el spec **FALLA** (prueba de que el guard no es vacuo)"
+
+  - title: "AC2 · Confirmed_Date_Time__c carries the historical arrival instant, never the migration run clock — it is derived from RESERVATION.STARTDATETIME (not the date-only ARRIVALDATE, which would land on midnight and render as the PREVIOUS day west of UTC) and normalised with (AT TIME ZONE @timeZone) AT TIME ZONE 'UTC' style 127, so the app path and a hand-run export resolve to the same instant"
+    tags:
+      - ac-2
+      - confirmed-date-time
+      - startdatetime
+      - timezone-normalization
+      - iso-8601-utc
+      - no-load-timestamp
+      - edge-case
+      - im-774
+    given:
+      - "que `ReservationTriggerHandler.beforeInsert` estampaba `Confirmed_Date_Time__c` con `Datetime.now()` (la fecha de la corrida) y el bypass lo elimina"
+    when:
+      - "se inspecciona la proyección de `Auctifera__Confirmed_Date_Time__c` en las 3 queries con rama Confirmed y se verifica la cobertura de `STARTDATETIME` en la fuente vía safesql `tucson`"
+    then:
+      - "la rama Confirmed usa `CONVERT(NVARCHAR(40), (r.STARTDATETIME AT TIME ZONE @timeZone) AT TIME ZONE 'UTC', 127)`; **nunca** `GETDATE()/SYSDATETIME()/GETUTCDATE()` ni `CAST(r.ARRIVALDATE AS DATETIME)`"
+      - "`ticketing_direct_registrant.sql` emite `CAST(NULL AS NVARCHAR(40))` (no hay RESERVATION en ese path y el status es el literal `'Sold'`) → el column set queda alineado"
+      - "en la fuente, las reservas Confirmed con ticket tienen `STARTDATETIME` poblado y con hora real del día (el PR reporta 27/27 en Tucson, con date component == `ARRIVALDATE` y time component == `ARRIVALTIME`)"
+
+  - title: "AC3 · The TypeScript pass-through actually delivers both columns to the CSV — the mapper parses them without defaulting a missing date to now(), the entity exposes them, and the descriptor registers BOTH the row key and the header (fast-csv-writer.adapter.ts filters strictly by headers, which is exactly why Auctifera__Source__c, selected by all four queries, has never reached Salesforce)"
+    tags:
+      - ac-3
+      - mapper
+      - entity
+      - csv-descriptor
+      - pass-through
+      - fast-csv-writer
+      - mutation-proof
+      - integration
+      - im-774
+    given:
+      - "el wiring TS del PR: `ticketing.mapper.ts`, `ticketing-record.entity.ts` y `ticketing-csv-descriptor.builder.ts`"
+    when:
+      - "se corren `ticketing.mapper.spec.ts` y `ticketing-csv-descriptor.builder.spec.ts` y se aplica la mutación del review (`parseNullableDate` → `parseDate`)"
+    then:
+      - "`parseNullableBoolean` acepta `'true'`/`1`/booleano y `parseNullableDate` deja `null` cuando falta el valor — **no** cae a `now()` (el punto entero del ticket)"
+      - "el descriptor incluye `Auctifera__Technical_Bypass_Triggers__c` y `Auctifera__Confirmed_Date_Time__c` **tanto en `rows` como en `headers`**, así que ambas columnas llegan al CSV"
+      - "la mutación `parseNullableDate` → `parseDate` hace **fallar** el spec del mapper (el dev reporta 5 asserts) → el test no es vacuo"
+
+  - title: "AC4 · With the bypass in place the ticketing load leaves exactly one Rental Resource per ticket-backed Rental Event, carrying the migration external id — reproducing the reported Tucson case 8-11410182 (R-1230 without external ID vs R-1597 with it), and the flag reads back false so later writes (ETL re-run, staff edit, child ticket items) behave normally"
+    tags:
+      - ac-4
+      - regression-evidence
+      - duplicate-rental-resources
+      - tucson
+      - 8-11410182
+      - implementation-external-id
+      - idempotency
+      - im-774
+    given:
+      - "el caso reportado en Tucson (8-11410182): R-1230 `a2iVz000002RaTZIA0` sin external ID + R-1597 `a2iVz000002zUG9IAM` con external ID, y el ticket R-0044 `a1vVz00000T35KvIAJ` creado 2 segundos antes"
+    when:
+      - "se compara el comportamiento con el trigger activo vs con el flag de bypass (A/B del dev sobre 64 filas reales de Tucson en `CamiloDevOrg`) y se re-verifica la fuente vía safesql `tucson`"
+    then:
+      - "con el trigger activo se auto-crean **64** Rental Resources sin external ID; con el bypass, **0** → queda exactamente **1** Rental Resource por Rental Event con ticket, el migrado con `Implementation_External_ID__c`"
+      - "`Auctifera__Technical_Bypass_Triggers__c` **lee de vuelta `false`** en cada Ticketing cargado (prueba de que el path del bypass se ejecutó y no de que la columna se ignoró)"
+      - "los 3 caminos posteriores dejan el conteo en 0: re-run con el flag, update **sin** el flag (edición de staff) e inserción de los 98 ticket items hijos (que además sí disparan el rollup en los 64 padres)"
+      - "el único campo perdido por el bypass es `Confirmed_Date_Time__c`, ya cubierto por AC2 (`Compact_Confirmed_Time__c` y `Ticket_QR_Code__c` son fórmulas derivadas)"
+
+  - title: "AC5 · Rollout prerequisites per org are a hard gate, not a footnote — an org below Auctifera 8.317.0.2 lacks Auctifera__Technical_Bypass_Triggers__c and an unknown column fails the ENTIRE Bulk job (client orgs were on 8.254–8.291), and without Auctifera__Bypass_POS_Transaction_Lock__c on the loading user every order whose POS Purchase is already Sold/Refunded is rejected (13 of the dev's 64 rows took the whole batch down)"
+    tags:
+      - ac-5
+      - rollout-prerequisites
+      - version-floor
+      - pp-1438
+      - pos-transaction-lock
+      - negative
+      - preflight
+      - gates
+      - im-774
+    given:
+      - "el campo del bypass proviene de PP-1438 (AuctiferaDX#2465, merged) y existe desde Auctifera **8.317.0.2**, mientras los orgs cliente estaban en **8.254–8.291**"
+    when:
+      - "se corre el preflight `sf sobject describe -s Auctifera__Group_Reservation__c | grep Technical_Bypass` en los orgs alcanzables y se revisan las gates del PR"
+    then:
+      - "el preflight reporta explícitamente por org si el campo existe; donde **no** existe, la carga de ticketing con este cambio **rompería el Bulk job completo** → es un bloqueante de rollout, no una advertencia"
+      - "el prerrequisito `Auctifera__Bypass_POS_Transaction_Lock__c = true` en el usuario de carga queda documentado y verificado como necesario (el bypass cubre solo Apex; `POSPurchaseTriggerHandler.cls:225` rechaza el update del POS Purchase padre)"
+      - "las gates del repo quedan verdes en el branch — `npm run lint:check` limpio, `query-regression` (dev: 393 pass), suites de ticketing (dev: 86 pass) y `npm run build` OK — y `donation-transaction-recurring.spec.ts` falla **igual con y sin** el cambio (preexistente/ambiental)"
+
+tags:
+  - im-774
+  - im-70
+  - im-1141
+  - altru
+  - altru-queries
+  - ticketing
+  - group-reservation
+  - rental-resources
+  - rental-events
+  - duplicate-records
+  - trigger-bypass
+  - technical-bypass-triggers
+  - confirmed-date-time
+  - implementation-external-id
+  - timezone-normalization
+  - pp-1438
+  - auctifera
+  - tucson
+  - sql-only
+  - safesql
+  - source-side
+  - migration-tool-etl
+  - pr-160
+  - business-stopping
+  - high
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-29T14:32:03Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-29T14:32:03Z"
+  version: 1

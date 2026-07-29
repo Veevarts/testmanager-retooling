@@ -1,0 +1,26 @@
+TR-145 / TC-135 · Escenario 2 (AC2) — Confirmed_Date_Time__c histórico, no el reloj de la corrida
+Fuente: contrato SQL + safesql tucson (aggregate-only, sin filas ni PII)
+
+Source/Test                          | Métrica                                   | Pre-fix              | Post-fix                    | Delta | AC | Objetivo | Veredicto
+-------------------------------------|-------------------------------------------|----------------------|-----------------------------|-------|----|----------|----------
+ticketing_only_event / only_program / | derivación desde r.STARTDATETIME          | no existe (lo         | CONVERT(NVARCHAR(40),       | +3    | AC2| SI       | PASS
+ticketing.sql                         |                                           | estampaba el trigger  | (r.STARTDATETIME AT TIME    |       |    |          |
+                                      |                                           | con Datetime.now())   | ZONE @timeZone) AT TIME     |       |    |          |
+                                      |                                           |                       | ZONE 'UTC', 127)            |       |    |          |
+las 4 queries                         | GETDATE/SYSDATETIME/GETUTCDATE en la col. | n/a                   | 0                           | 0     | AC2| SI       | PASS
+las 3 queries con rama Confirmed      | CAST(r.ARRIVALDATE AS DATETIME)           | n/a                   | 0                           | 0     | AC2| SI       | PASS
+ticketing_direct_registrant.sql       | CAST(NULL AS NVARCHAR(40)) tipado         | n/a                   | presente                    | +1    | AC2| SI       | PASS
+las 3 queries                         | rama `THEN 'Confirmed'` en el CASE status | n/a                   | 0 (pin del acoplamiento)    | 0     | AC2| SI       | PASS
+safesql tucson · reservas Confirmed ticket-backed | filas                       | 27                    | 27                          | 0     | AC2| SI       | PASS
+safesql tucson · STARTDATETIME poblado            | filas                       | —                     | 27/27 (100 %)               | —     | AC2| SI       | PASS
+safesql tucson · date component == ARRIVALDATE    | filas                       | —                     | 27/27 (100 %)               | —     | AC2| SI       | PASS
+safesql tucson · time component == ARRIVALTIME    | filas                       | —                     | 27/27 (100 %)               | —     | AC2| SI       | PASS
+safesql tucson · hora real (no medianoche)        | filas                       | —                     | 27/27 (100 %)               | —     | AC2| SI       | PASS
+safesql tucson · Confirmed sin instante           | filas                       | —                     | 0                           | —     | AC2| SI       | PASS
+
+Objetivo del ticket: que el campo lleve la fecha histórica, no la de la corrida de migración.
+Pre-fix obtenido: el valor lo escribía el trigger = Datetime.now() (fecha de la corrida).
+Post-fix obtenido: se deriva de la fuente Altru y se normaliza a UTC con designador explícito.
+Independencia: los 27/27 los reprodujo QA en vivo sobre tucson, no se tomaron del cuerpo del PR.
+Nota: como las 27 llevan hora real del día (ninguna a medianoche), usar ARRIVALDATE (date-only)
+habría desplazado el instante en las 27 — el riesgo que el review round 2 #8 detectó es real.

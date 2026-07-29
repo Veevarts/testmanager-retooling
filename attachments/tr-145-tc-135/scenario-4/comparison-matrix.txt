@@ -1,0 +1,34 @@
+TR-145 / TC-135 · Escenario 4 (AC4) — un solo Rental Resource por Rental Event con ticket
+NOTA DE ALCANCE: el A/B en org (64 filas de Tucson en CamiloDevOrg) es evidencia DEL DEV.
+CamiloDevOrg no está autenticado en esta máquina (`sf org list`: hammer / illinois / maloof /
+veevartd / veevart-admin / veevart-prod). QA NO lo re-ejecutó y NO lo reporta como propio.
+Lo que QA sí verificó de forma independiente está marcado [QA].
+
+Source/Test                                   | Métrica                                  | Trigger activo | Con bypass | AC | Objetivo | Veredicto
+-----------------------------------------------|------------------------------------------|----------------|------------|----|----------|----------
+CamiloDevOrg · A/B 64 filas (evidencia dev)    | Rental Resources auto-creados            | 64             | 0          |AC4 | SI       | PASS (dev)
+CamiloDevOrg · A/B (evidencia dev)             | campos que difieren en Group_Reservation | —              | 1          |AC4 | SI       | PASS (dev)
+CamiloDevOrg · re-run con flag (dev)           | Rental Resources                         | —              | 0          |AC4 | SI       | PASS (dev)
+CamiloDevOrg · update SIN flag (dev)           | Rental Resources                         | —              | 0          |AC4 | SI       | PASS (dev)
+CamiloDevOrg · insert 98 ticket items (dev)    | Rental Resources / rollups en 64 padres  | —              | 0 / 98     |AC4 | SI       | PASS (dev)
+[QA] safesql tucson                            | órdenes con Rental Event (r.ID = so.ID)  | 1,555          | 1,555      |AC4 | —        | PASS
+[QA] safesql tucson                            | de esas, ticket-backed (población que     | 1,379          | 1,379      |AC4 | SI       | PASS
+                                               | dispara createRentalItemsForTicket)      |                |            |    |          |
+[QA] contrato SQL + TS                         | el flag llega al CSV en cada fila         | no             | sí         |AC4 | SI       | PASS
+
+Objetivo del ticket: exactamente 1 Rental Resource por Rental Event con ticket, el migrado,
+con Implementation_External_ID__c.
+Pre-fix obtenido (reportado y reproducido en el ticket): 2 registros para el mismo Ticketing/
+Rental Event — R-1230 (a2iVz000002RaTZIA0, SIN external ID, creado 2026-04-08 12:38:56 UTC, dos
+segundos después del ticket R-0044) y R-1597 (a2iVz000002zUG9IAM, CON external ID, 2026-05-28).
+Post-fix obtenido: el auto-creado desaparece (64 → 0) y queda solo el migrado.
+
+CADENA CAUSAL VERIFICADA POR QA (sin org):
+1. El duplicado NO lo genera el SQL — el análisis del ticket ya había medido 0 grupos de
+   external-id duplicados en 5 profiles y una sola línea para 8-11410182.
+2. La población expuesta en Tucson es de 1,379 órdenes ticket-backed con Rental Event: cada una
+   habría recibido un Rental Resource huérfano.
+3. El fix hace que el flag llegue al CSV (escenarios 1 y 3, ambos con revert-proof), que es la
+   única palanca que el ETL tiene sobre el trigger.
+La medición 64 → 0 en org sigue siendo del dev; QA la acepta como consistente con 1-3, y la
+marca como tal en vez de reclamarla.

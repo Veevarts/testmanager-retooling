@@ -1,0 +1,73 @@
+TR-145 / TC-135 — IM-774 · OWASP Top 10 (2021) — scan de aplicabilidad
+PR MigrationToolETL#160 (4 .sql de ticketing + mapper + entity + descriptor CSV + 3 specs + docs)
+Superficie: ETL source-side (SQL Server read-only) → CSV → Bulk API a Salesforce. Sin endpoints
+HTTP, sin authn/authz propia, sin UI, sin dependencias nuevas.
+
+ID   Categoría                                  Aplicable  Método de verificación                                   Veredicto
+---- ------------------------------------------ ---------- -------------------------------------------------------- ---------
+A01  Broken Access Control                      N/A        El diff no introduce control de acceso ni lo modifica.
+                                                           El único cambio con sabor a "permiso" es el prerrequisito
+                                                           por-usuario Auctifera__Bypass_POS_Transaction_Lock__c, que
+                                                           es un campo existente del managed package administrado por
+                                                           el admin del org, no algo que el ETL conceda.                  —
+
+A02  Cryptographic Failures                     N/A        No se cifra, firma ni almacena nada nuevo. Las credenciales
+                                                           de la fuente siguen en el keychain vía safesql; el diff no
+                                                           toca configuración de conexión.                                —
+
+A03  Injection                                  N/A        Sin SQL dinámico ni concatenación en el diff (grep: 0
+                                                           matches en TS y SQL). `@timeZone` es un DECLARE server-side
+                                                           con literal constante, usado como operando de AT TIME ZONE,
+                                                           no interpolado ni originado en entrada de usuario.            —
+
+A04  Insecure Design                            SÍ         El PR DESACTIVA deliberadamente una automatización de
+                                                           negocio (ReservationTriggerHandler) durante la carga.
+                                                           Revisado el diseño del bypass:
+                                                           · usa el campo técnico del managed package creado para
+                                                             ese propósito (PP-1438), no un workaround;
+                                                           · su alcance es UNA escritura — el framework resetea el
+                                                             campo a false durante el insert;
+                                                           · el dev midió el delta COMPLETO a nivel de campo (A/B de
+                                                             64 filas): exactamente 1 campo perdido, y el PR lo
+                                                             repone desde la fuente en vez de dejarlo caer;
+                                                           · las 3 rutas de escritura posteriores fueron ejercitadas
+                                                             y el handler corre normalmente en las tres;
+                                                           · el read-back `= false` es una aserción de que el bypass
+                                                             se consumió y no quedó pegado.
+                                                           No hay pérdida silenciosa de reglas de negocio.               PASS
+
+A05  Security Misconfiguration                  N/A        Sin cambios de configuración, infra, CORS, headers ni
+                                                           flags de entorno. `@timeZone` es un valor de dominio
+                                                           (zona horaria del museo), no configuración de seguridad.      —
+
+A06  Vulnerable and Outdated Components         N/A        `git diff base..HEAD -- package.json package-lock.json`
+                                                           vacío: cero dependencias añadidas, quitadas o subidas.        —
+
+A07  Identification and Authentication Failures N/A        El diff no toca autenticación ni gestión de sesión. El
+                                                           acceso a la fuente es el mismo camino read-only de safesql.   —
+
+A08  Software and Data Integrity Failures       SÍ         Esta es exactamente la clase de falla que el PR corrige:
+                                                           un `1` en una columna Checkbox de un CSV de Bulk API se
+                                                           interpreta SILENCIOSAMENTE como FALSE, de modo que el
+                                                           bypass "se aplicaba" sin aplicarse. Verificado:
+                                                           · el literal emitido es la cadena 'true' en las 4 queries;
+                                                           · hay un guard explícito "never emits the flag as a bare 1"
+                                                             que FALLA al revertir a base (no es vacuo);
+                                                           · el descriptor registra la columna en headers Y en rows,
+                                                             cerrando el otro modo de pérdida silenciosa (una row key
+                                                             sin header la descarta fast-csv-writer.adapter.ts).
+                                                           OBSERVACIÓN (no bloqueante, fuera de alcance declarado):
+                                                           el mismo hazard del bare `1` sigue vivo en 6 archivos
+                                                           (rental_resource.sql:114/:177 + 4 queries de ticket-item);
+                                                           en rental_resource SÍ se exporta la columna
+                                                           (rental-resource.pipeline.ts:39), así que un hand-run de
+                                                           esa query produce un CSV cuyo bypass carga como FALSE.
+                                                           El PR lo declara y lo difiere a un ticket de follow-up
+                                                           que a la fecha de esta corrida NO existe todavía.            PASS
+
+A09  Security Logging and Monitoring Failures   N/A        Sin cambios de logging, auditoría ni telemetría.              —
+
+A10  Server-Side Request Forgery (SSRF)         N/A        Sin llamadas salientes ni URLs construidas en el diff.        —
+
+RESUMEN: 2 aplicables · 2 PASS · 0 FAIL · 8 N/A (justificadas) · 0 hallazgos High/Critical
+VEREDICTO DE SEGURIDAD: sin bloqueadores. No se levanta ningún defecto por OWASP.
