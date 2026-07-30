@@ -1,0 +1,190 @@
+TR-146 / TC-96 v2 — IM-966 · RESULTADOS DE LA MATRIZ DE REGRESIÓN
+Ejecutado 2026-07-30. Resuelve cada TBD de regression-plan.txt.
+
+TOPOLOGÍA VERIFICADA (dato que condiciona todo lo demás)
+  main .................. 737a62b6  "fix: general survey placement IM-966 (#28)"  <- lo que validó TR-097
+  épica ................. 14bde9d2  epic/nps-survey-delivery-and-metrics
+  commits de la épica que NO están en main:
+      7f55b912 (#29) · 60e1058c (#30) · 8c1e78b1 (#31) · 338f6b1c (#32) · 36e6a0e5 (#33) · 14bde9d2 (#34)
+  diff main -> épica: 16 archivos, +2061 / -416
+  737a62b6 es a la vez el HEAD de main Y el commit base de #29 => main NO se movió desde la v1.
+  El deploy de surveytool.dev.veevart.ai corre la ÉPICA: GET /api/surveys/general/eligible responde
+  200 y esa ruta no existe en main.
+
+==================================================================================================
+REGRESIÓN TÉCNICA
+==================================================================================================
+T1 · Entrega feature-specific preexistente (contrato IM-963) .......................... PASS
+     Suite server/ sobre la épica: 85 tests / 85 pass / 0 fail / 11 suites (661 ms).
+     Los tests de apiBoundary que fijan el comportamiento feature-specific siguen verdes.
+     En vivo: GET /api/features/rentals/surveys sin surveyId -> [{id 1, feature}]. Sin alteración.
+
+T2 · Compat hacia atrás de generales legacy con generalClientOrgId .................... PASS
+     surveyAllowsClientOrg() conserva la rama de match exacto ANTES de evaluar audience, así que
+     una general legacy sigue resolviendo igual. Cubierto por la suite; ninguna aserción legacy
+     cayó al correr la épica.
+
+T3 · Separación afterLogin vs featureTrigger (no contaminar IM-1099) .................. PASS
+     Verificado EN LOS DOS SENTIDOS, en vivo:
+       · General 17 en modo afterLogin -> el endpoint de FEATURE no la sirve (devuelve la de
+         Rentals). No es un fallo del AC4: selectEligibleSurveysForFeature pasa triggerMode
+         "featureTrigger" y la filtra correctamente.
+       · General 19 en modo featureTrigger -> GET /api/surveys/general/eligible devuelve [].
+     Fijado por el test "delivers after-login general surveys only through the general
+     eligibility endpoint", que CAE al revertir.
+
+T4 · Estado del respondent por clientOrgId en generales globales ...................... PASS (con observación)
+     Test "keeps global general survey respondent state scoped by organization" verde, y CAE al
+     revertir. Control negativo con dos orgs REALES: el mismo respondentId 005Rt00000XjqlyIAB
+     recibe la General acotada a VNFP con su propio clientOrgId, y NO la recibe con el de
+     Auctifera (recibe la feature survey).
+     OBSERVACIÓN PARA PRODUCTO: es un cambio de semántica silencioso frente a la v1. El mismo
+     usuario puede volver a ver la misma General en otra organización. Si producto no lo quiere
+     así, es una decisión de diseño a revisar — el código hace lo que el test dice.
+
+T5 · requestedSurveyId honrado por el backend (AuctiferaDX #2525) ..................... PASS
+     Probe: GET /api/features/rentals/surveys?surveyId=17 -> [{id 17, GENERAL}] (triggerMode "any").
+     surveyId inválido -> 400 {"error":"Invalid surveyId"}.
+     En la org REAL, la URL del iframe capturada del DOM tras Quick Save:
+       .../survey/rentals?surveyId=20&clientOrgId=computing-power-944-dev-ed
+                         &respondentId=005dq00000NLWpIAAX
+                         &userCreatedDate=2026-07-01T15%3A58%3A58.000Z&usageCount=3
+     El widget abre la survey que ELIGIÓ el backend, no re-resuelve por contexto de feature.
+
+T6 · PRs que comparten la rama épica (#30/#31 display rules, #34 CSV export) .......... PASS
+     Sus tests viven en la misma suite y están dentro de los 85 verdes. Al revertir server/src,
+     5 de los 14 fallos son de ellos (Start Date, triesBetweenShows, interaction threshold,
+     max shows per day, CSV export) — o sea la suite los cubre de verdad.
+     NOTA DE ALCANCE: #30/#31/#32/#34 NO son IM-966. Se verifican solo como no-regresión porque
+     viajan en la misma rama; su validación funcional pertenece a IM-965 / IM-1099.
+
+T7 · Lado navegador: userCreatedDate serializado en el submit .......................... PASS
+     Suite client/ sobre la épica: 8 tests / 8 pass / 0 fail / 3 suites (280 ms).
+     Aserciones directamente relevantes al AC6:
+       ✔ prefers the canonical userCreatedDate over legacy aliases
+       ✔ resolves supported aliases for response submission context
+       ✔ serializes supported aliases as userCreatedDate in the response payload
+     TOTAL DE TESTS DEL REPO EJECUTADOS: 85 (server) + 8 (client) = 93.
+
+T8 · Los guards nuevos NO son vacuos (revert-proof) ................................... PASS
+     Método: git checkout 737a62b6 -- server/src/{lib/surveyRuntime.ts,lib/validation.ts,
+     routes/features.ts,routes/responses.ts,routes/surveys.ts}, dejando los tests en la épica.
+     Resultado: 85 tests -> 71 pass / 14 FAIL.
+     Los 9 fallos imputables a IM-966, mapeados a su AC:
+       rejects converting a survey to general without user-age delay ................... AC1
+       rejects organization-scoped general surveys without selected organizations ...... AC2
+       delivers and validates organization-scoped general surveys only for selected orgs  AC2
+       prioritizes a global general survey for active organizations .................... AC3+AC4
+       keeps global general survey respondent state scoped by organization ............. AC3
+       renders the requested surveyId through public eligibility even with general priority AC4
+       validates global general survey response eligibility context .................... AC6
+       rejects overlapping active general survey scopes ................................ AC7
+       delivers after-login general surveys only through the general eligibility endpoint  separación de modos
+     Los 5 restantes son de #30/#31/#34 (ver T6).
+
+T9 · Blast radius por subject ......................................................... PASS (con observación)
+     Con UNA General activa en modo featureTrigger, la eligibility se consultó contra CADA subject
+     registrado:
+       rentals · payments · ticketing · shop · fundraising · accounting  -> los SEIS sirven la General
+       courses · groups                                                  -> "Feature not found"
+     Confirma que el cambio afecta a TODOS los triggers, no solo a Rentals. Rentals es simplemente
+     el punto que se validó visualmente.
+     OBSERVACIÓN PARA PRODUCTO: "Courses" y "Groups" aparecen en el filtro de producto del admin
+     pero no están registrados como subjects, así que hoy no tienen trigger. Puede ser intencional.
+
+T10 · Higiene del entorno dev COMPARTIDO .............................................. PASS
+     Tres ventanas de escritura, cada una con snapshot previo y verificación de cierre:
+       ventana 1 (escenarios 2/4/5/6) — general 19 creada y borrada; survey 17 restaurada campo a
+                                        campo contra RESTORE-survey-17.json
+       ventana 2 (escenario 10)       — general 20 creada y borrada (arrastra la respuesta 14)
+       ventana 3 (escenario 11)       — general 21 creada y borrada (arrastra la respuesta 15)
+     Estado final verificado por API: 9 surveys (idéntico al inicio) · generales = [{id 17}] ·
+     0 respuestas de QA · 0 rastros de "QA TC-96".
+     ÚNICA DIFERENCIA CON EL ESTADO INICIAL: la survey 17 queda con active=false POR DECISIÓN
+     EXPLÍCITA DEL USUARIO ("no es necesario reactivarla"). Su configuración (audience=everyone,
+     generalTrigger=afterLogin, maxImpressions 10, maxDismissals 3, delay 0) permanece intacta:
+     solo cambia el flag. Queda registrado como decisión del dueño del entorno, no como omisión
+     de QA. RESTORE-survey-17.json permite revertirlo en un PUT si se decide lo contrario.
+
+==================================================================================================
+REGRESIÓN DE SEGURIDAD
+==================================================================================================
+S1 · Secretos / credenciales en el diff ............................................... PASS
+     grep de (api_key|secret|password|token|bearer|private_key|aws_|client_secret) sobre las
+     líneas AÑADIDAS del diff main->épica: 3 hits, los TRES son la función `detailsTokens`
+     (el splitter de la lista de audiencia). CERO secretos reales.
+
+S2 · Inyección SQL en los archivos tocados ............................................ PASS
+     0 usos de sql.raw(), .raw() o execute(). Los 6 usos del tagged template `sql` de drizzle son:
+       sql`date('now')`                                        <- literal, sin interpolación
+       sql`datetime('now', ${`-${cooldownDays} days`})`        <- interpolación PARAMETRIZADA
+     Y cooldownDays no es texto de usuario: sale de getCooldownDays() -> toPositiveInt(), o sea un
+     entero positivo validado o null. Doblemente seguro: valor tipado + binding del driver.
+     Todo el resto del acceso a datos usa el query builder (eq/and/gte), no concatenación.
+
+S3 · Dependencias nuevas o actualizadas ............................................... PASS (nada introducido)
+     git diff main->épica sobre package.json / package-lock.json / server/package.json /
+     client/package.json: VACÍO. Ninguna dependencia agregada, quitada ni actualizada.
+     npm audit en server/: 2 high + 7 moderate (9 total)
+        · drizzle-orm — SQL injection via improperly escaped SQL identifiers ......... high
+        · path-to-regexp — ReDoS via multiple route parameters ....................... high
+     Como el lockfile es IDÉNTICO entre main y la épica, las 9 son PREEXISTENTES: este cambio no
+     introduce ninguna. Coincide con lo ya reportado en TR-085.
+     NOTA sobre la CVE de drizzle-orm: aplica a identificadores SQL mal escapados. En los archivos
+     tocados no se construye ningún identificador dinámico (ver S2), así que el cambio no amplía la
+     exposición a esa CVE. Actualizar drizzle-orm sigue siendo deuda del equipo, no de este PR.
+
+S4 · Control de acceso de las rutas admin ............................................. PASS
+     server/src/index.ts monta `app.use("/api/admin", requireAdminAuth)` ANTES de todos los
+     sub-routers admin => guarda transversal, no por-ruta (no hay forma de olvidarse en una nueva).
+     index.ts NO fue tocado por la épica: la guarda es preexistente y sigue intacta.
+     Probes ANÓNIMOS ejecutados contra el deploy:
+       GET  /api/admin/surveys ........... 401
+       GET  /api/admin/responses ......... 401
+       GET  /api/admin/organizations ..... 401
+       GET  /api/admin/settings .......... 401
+       POST /api/admin/surveys ........... 401   <- intento anónimo de crear una General: rechazado
+     Las escrituras de scope que agrega este PR quedan detrás de la misma guarda.
+
+S5 · PII en logs ...................................................................... PASS
+     Solo 2 console.* en los archivos tocados, y NINGUNO es nuevo de esta épica:
+       responses.ts:184  console.error("[salesforce-sync] response <id> failed:", e)  -> id interno
+       features.ts:209   console.warn("General survey skipped", {reason, surveyId,
+                                       hasClientOrgId: <bool>, hasRespondentId: <bool>})
+     El segundo es un ejemplo de logging correcto: registra la PRESENCIA de clientOrgId y
+     respondentId como booleanos, nunca sus valores. No se loguea userCreatedDate.
+
+S6 · Superficie del endpoint público anónimo ...................... OBSERVACIÓN (severidad BAJA)
+     El handler público devuelve la fila completa de la survey: `db.select().from(surveys)` ->
+     parseSurveyRow -> selectEligibleSurveysForFeature FILTRA filas pero no recorta columnas.
+     Verificado con un probe anónimo: la respuesta incluye 31 campos, entre ellos `audienceDetails`
+     y `generalClientOrgId`.
+     IMPACTO: `audienceDetails` es la lista de subdominios de organizaciones cliente a las que
+     apunta la General — y es un campo NUEVO de #29. Un llamador anónimo que conozca UN clientOrgId
+     válido puede leer QUÉ OTRAS organizaciones están en la audiencia de esa survey. Los subdominios
+     no son secretos (viven en URLs), por eso es BAJA y no bloquea: no expone respuestas, ni
+     puntajes, ni identidades de respondents. Pero es divulgación de la cartera de clientes hacia un
+     endpoint sin autenticación.
+     RECOMENDACIÓN (no bloqueante, para el equipo): serializar la respuesta pública con una lista
+     blanca de campos — el widget solo necesita id, questionText, scale, layout, followUp*,
+     customQuestions, questionOrder y los flags de presentación. `audienceDetails`,
+     `generalClientOrgId`, `audience`, `maxImpressions`, `maxDismissals` y `triggerDetails` son
+     configuración de targeting y no tienen por qué viajar al navegador.
+     NO se levanta defecto en Jira: severidad Baja, preexistente en forma (el endpoint ya devolvía
+     la fila entera) y agravada solo marginalmente por el campo nuevo.
+
+S7 · OWASP Top 10 ..................................................................... ver owasp-top10-scan.txt
+     Resumen: 6 categorías APLICABLES, todas PASS; 1 observación Baja (A01/A05, la misma S6);
+     4 no aplicables. 0 findings High/Critical => 0 defectos de seguridad en Jira.
+
+==================================================================================================
+VEREDICTO DE REGRESIÓN
+==================================================================================================
+10/10 items técnicos PASS (T4 y T9 con observación para producto, no defectos).
+6/7 items de seguridad PASS; S6 queda como observación de severidad Baja con recomendación.
+0 regresiones introducidas. 0 defectos bloqueantes.
+
+RIESGO DE RELEASE A REPORTAR (no es un defecto de código):
+Todo lo validado vive en epic/nps-survey-delivery-and-metrics. main sigue en 737a62b6. El merge de
+la épica a main es un paso pendiente fuera del control de QA, y hasta que ocurra, main NO tiene
+IM-966 más allá de lo que ya validó TR-097.

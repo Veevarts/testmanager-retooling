@@ -1,0 +1,67 @@
+TR-146 / TC-96 v2 · Escenario 10 (UI widget) — EJECUTADO POR QA EN EL ORG REAL
+Org: computing-power-944-dev-ed (Auctifera scratch "nps_2", expira 2026-07-31)
+Rental Event: "QA survey NPS" (a1pdq00000HsVMeAAN)
+Componente: Auctifera__AddManageResourcesToRentalEvent → botón "Quick Save"
+Fecha: 2026-07-30
+
+PRE-CONDICIÓN MONTADA
+  La survey 17 (única General activa, modo afterLogin) fue desactivada POR EL USUARIO.
+  QA creó la General 20: featureId 8, active, audience=organization,
+  audienceDetails=computing-power-944-dev-ed, generalTrigger=featureTrigger, maxDismissals 3.
+
+RESULTADO — PASS
+
+1. URL del iframe capturada del DOM tras pulsar Quick Save:
+   https://surveytool.dev.veevart.ai/survey/rentals
+       ?surveyId=20
+       &clientOrgId=computing-power-944-dev-ed
+       &respondentId=005dq00000NLWpIAAX
+       &userCreatedDate=2026-07-01T15%3A58%3A58.000Z
+       &usageCount=3
+
+   · surveyId=20 -> el widget abrió LA GENERAL que eligió el backend, no la survey de Rentals.
+     Es exactamente el contrato que aporta AuctiferaDX #2525.
+   · userCreatedDate -> el User.CreatedDate REAL del usuario de Salesforce, no un valor
+     inventado ni el reloj de la corrida. Es lo que #33 asegura que viaje.
+   · clientOrgId + respondentId + usageCount -> contexto del trigger completo.
+
+2. Modal renderizado (screenshot 02-modal-general-survey.png):
+   · Título: "General Survey"   <- NO dice "Rentals". Corazón del AC4, observado en pantalla.
+   · Pregunta: "QA TC-96 General Survey (TR-146) — borrar al terminar"
+   · Escala NPS 0–10 con extremos "Not at all likely" / "Extremely likely"
+   · Botón Submit deshabilitado hasta elegir puntaje (control de UX correcto)
+
+3. Envío de la respuesta desde el modal (score = 9) -> quedó registrada:
+       id ............. 14
+       surveyId ....... 20    <- atribuida a la GENERAL, no a la de Rentals
+       featureId ...... 8
+       respondentId ... 005dq00000NLWpIAAX   <- el User Id de Salesforce, propagado por el widget
+       clientOrgId .... computing-power-944-dev-ed
+       score .......... 9
+       createdAt ...... 2026-07-30 17:35:04
+   Cierra el AC6 por UI: la respuesta abierta desde un feature trigger se guarda contra la
+   General preservando el contexto del trigger original.
+
+ALCANCE DEL DISPARO — no es solo Rentals
+   Se consultó el endpoint de eligibility para cada subject registrado, con la misma General
+   activa. Todos la sirven:
+       rentals ....... id 20 GENERAL        accounting .... id 20 GENERAL
+       payments ...... id 20 GENERAL        courses ....... Feature not found
+       ticketing ..... id 20 GENERAL        groups ........ Feature not found
+       shop .......... id 20 GENERAL
+       fundraising ... id 20 GENERAL
+   Es coherente con el diseño: selectEligibleSurveysForFeature evalúa la General ANTES que la
+   feature survey en CUALQUIER subject. El blast radius del cambio es todo el conjunto de
+   triggers, no Rentals. Rentals es simplemente el punto que QA validó visualmente.
+
+   OBSERVACIÓN: "Courses" y "Groups" aparecen en el filtro de producto del admin pero NO están
+   registrados como subjects, así que hoy no tienen trigger. Puede ser intencional; queda
+   anotado para que producto lo confirme.
+
+LIMPIEZA
+   DELETE /api/admin/surveys/20 -> 204 (arrastra la respuesta 14).
+   Estado final: 9 surveys · generales = [{id 17, active false}] · 0 respuestas de QA · 0 rastros
+   de "QA TC-96".
+   La survey 17 QUEDA INACTIVA POR DECISIÓN EXPLÍCITA DEL USUARIO ("no es necesario reactivarla"),
+   no por omisión de QA. Su configuración (audience=everyone, generalTrigger=afterLogin,
+   maxImpressions 10, maxDismissals 3, delay 0) permanece intacta; solo cambia el flag active.

@@ -1,0 +1,68 @@
+TR-146 / TC-96 v2 · VENTANA DE PRUEBAS EN VIVO — 2026-07-30, entorno dev compartido
+Autorizada por el usuario (opción "a"). Entorno: https://surveytool.dev.veevart.ai (rama épica)
+
+POR QUÉ HIZO FALTA UNA VENTANA
+La única General activa (id 17) tiene audience=everyone. Por el propio AC7, "everyone" solapa con
+cualquier scope, así que NO se puede crear una segunda General activa mientras la 17 esté activa
+(verificado: 409 en los casos A y B del escenario 7). La estrategia de "general de QA aislada" es
+por lo tanto imposible — no por un problema del entorno, sino porque el AC7 funciona.
+
+SECUENCIA EJECUTADA
+  1. Estado previo de la survey 17 capturado en RESTORE-survey-17.json
+  2. PUT /api/admin/surveys/17 con active=false ............................... 200
+  3. POST /api/admin/surveys -> General de QA id 19 .......................... 201
+       featureId 8 · isGeneralSurvey true · active true
+       audience=organization · audienceDetails=computing-power-944-dev-ed
+       triggerDetails: "cooldownDays=30, triesBetweenShows=0, generalTrigger=featureTrigger"
+       maxImpressions 10 · maxDismissals 2 · accountCreatedDelayDays 0
+  4. [pruebas AC4 / AC2 / AC6 / AC5 — abajo]
+  5. DELETE /api/admin/surveys/19 ............................................ 204
+  6. PUT /api/admin/surveys/17 con active=true ............................... 200
+
+RESULTADOS
+
+AC4 · prioridad de la General sobre la feature-specific  ---------------------------- PASS
+  GET /api/features/rentals/surveys?clientOrgId=computing-power-944-dev-ed&...
+    -> [{ id: 19, GENERAL }]
+  Con la general 19 y la de Rentals (id 1) AMBAS elegibles para el mismo respondent y la misma org,
+  el endpoint del feature trigger entrega la GENERAL. Es el objetivo literal del AC4, en vivo.
+
+AC2 · scope acotado a organizaciones seleccionadas -------------------------------- PASS
+  clientOrgId=computing-power-944-dev-ed (dentro del scope) -> [{ id: 19, GENERAL }]
+  clientOrgId=flow-site-19432-dev-ed     (VNFP, fuera)      -> []
+  clientOrgId=testing                    (fuera)            -> []
+  La lista de audienceDetails discrimina correctamente entre organizaciones ACTIVAS reales.
+
+  Nota lateral verificada: GET /api/surveys/general/eligible desde la org de Auctifera devuelve []
+  mientras la 19 está en modo featureTrigger — confirma la separación de modos en el sentido
+  inverso al ya observado con la 17 (afterLogin).
+
+AC6 · la respuesta se guarda contra la General preservando el contexto ------------ PASS
+  POST /api/responses { surveyId:19, featureId:8, respondentId:'qa-tc96-live',
+                        score:9, clientOrgId:'computing-power-944-dev-ed',
+                        userCreatedDate:'2020-01-01' }                        -> 201
+  Registro creado (id 13):
+      surveyId ....... 19   <- la GENERAL, no la de Rentals
+      featureId ...... 8
+      clientOrgId .... computing-power-944-dev-ed   <- contexto del trigger preservado
+      respondentId ... qa-tc96-live
+      score .......... 9
+  Confirmado además leyendo /api/admin/responses: 1 registro, atribuido a la survey 19.
+
+AC5 · fallback a la feature-specific tras responder la General -------------------- PASS
+  Mismo respondent, mismo trigger de Rentals, inmediatamente después de responder:
+    -> [{ id: 1, feature }]
+  La General ya no se entrega (ya respondida) y la survey de Rentals toma su lugar.
+
+RESTAURACIÓN VERIFICADA
+  totalSurveys ................ 9      (idéntico al inicio)
+  generales ................... [17]   (idéntico al inicio)
+  survey 17 ................... active=true, audience=everyone, audienceDetails=null,
+                                generalClientOrgId=null, maxImpressions=10, maxDismissals=3,
+                                accountCreatedDelayDays=0,
+                                triggerDetails="cooldownDays=30, triesBetweenShows=0,
+                                                generalTrigger=afterLogin, loginDelaySeconds=5"
+                                -> coincide campo por campo con RESTORE-survey-17.json
+  respuestas de QA remanentes .. 0
+  El DELETE directo de la respuesta devolvió 404 (esa ruta no existe con ese path); la respuesta
+  se eliminó en cascada al borrar la survey 19, y la verificación final lo confirma.

@@ -1,0 +1,732 @@
+schemaVersion: "1.0"
+
+id: tr-df7bca9b-4e8c-4d32-b3dd-e55c5318b4bb
+key: TR-146
+title: "TR-146 · IM-966 v2 · TC-96 · General NPS survey — scoping por organización, prioridad sobre la feature survey, atribución de la respuesta y prevención de conflicto — 11/11 PASS · 0 defectos · 93 tests del repo (85 server + 8 client) + revert-proof 14 FAIL de los cuales 9 mapean a AC de IM-966 + widget disparado end-to-end en org real (iframe surveyId=20, respuesta atribuida) + cross-test vnfp DESBLOQUEADO desde TR-097 · RIESGO DE RELEASE: #29/#33/#34 viven en la rama épica, main sigue en 737a62b6"
+
+description: |
+  QA de IM-966 (**Add general NPS survey position**), epic IM-970 NPS Survey Tool delivery.
+  QA Sub-task: IM-1006. **Es una RE-REVIEW (v2)**: la historia ya pasó QA una vez —
+  TC-96 v1 → **TR-097** (2026-07-03, 12/13 PASS, 1 blocked) → `Request Approved`. El 2026-07-16
+  David la reabrió y el 2026-07-29 reescribió la descripción: los ACs pasaron de 4 genéricos a
+  **7 específicos**, con territorio funcional que la v1 no cubría (scoping por organización,
+  atribución de la respuesta, prevención de conflicto).
+
+  PRs bajo prueba: survey-tool **#29** (`7f55b912`) + survey-tool **#33** (`36e6a0e5`) +
+  AuctiferaDX **#2525** (merged 2026-07-16). AuctiferaDX #2473 quedó CLOSED, superseded por #2525.
+  Fuera de alcance por ser IM-1099: el trigger *after-login* (survey-tool #32, AuctiferaDX #2527/#2536).
+
+  Clasificación: **Mixed** — backend/service (Node/TS + Express + SQLite/drizzle) + widget
+  Salesforce (LWC/Apex) en dos namespaces (`Auctifera` y `vnfp`).
+
+  ## ⚠️ HALLAZGO DE TOPOLOGÍA — riesgo de release, no defecto de código
+
+  **#29 / #33 / #34 NO mergearon a `main`.** Mergearon a `epic/nps-survey-delivery-and-metrics`.
+  `main` sigue en **`737a62b6`** (#28) — exactamente el estado que ya validó TR-097 — y ese commit
+  **es además el base de #29**, o sea `main` no se movió desde la v1. El deploy de
+  `surveytool.dev.veevart.ai` corre la ÉPICA: `GET /api/surveys/general/eligible` responde 200 y esa
+  ruta no existe en `main`. Diff `main` → épica: 16 archivos, +2061/-416, 6 commits (#29 #30 #31 #32
+  #33 #34). **Consecuencia: todo lo que valida este run está en la épica; el merge a `main` es un
+  paso de release pendiente.** El TC-96 y el plan de la QA Sub-task decían "main al día" — corregido
+  en la v5 del test case.
+
+  ## Método
+
+  1. **Suites del repo, las DOS**: `server/` 85/85 y `client/` 8/8 = **93 tests**, 0 fallos. La del
+     cliente no es decorativa: cubre la mitad navegador del AC6 (serialización de `userCreatedDate`).
+  2. **Revert-proof**: `server/src` revertido a `737a62b6` dejando los tests en la épica →
+     **71 pass / 14 FAIL**. **9 de los 14 mapean 1-a-1 a un AC de IM-966**; los otros 5 son de
+     #30/#31/#34, que viajan en la misma rama.
+  3. **Probes en vivo read-only** contra el deploy dev para AC3, AC4 y el contrato `requestedSurveyId`.
+  4. **Ventana de escritura autorizada por el usuario** en el entorno dev COMPARTIDO (tres ventanas,
+     cada una con snapshot previo y verificación de cierre) para los casos que no se pueden observar
+     sin una General en modo *featureTrigger*: AC2 live, AC4 live, AC5 live, AC6 positivo.
+  5. **UI real**: admin del survey-tool manejado en el browser (escenario 9) y **widget disparado
+     end-to-end** desde Rentals Quick Save en la scratch org de Auctifera (escenario 10).
+  6. **Cross-test `vnfp`** (escenario 11), **bloqueado desde TR-097**, ejecutado por primera vez con
+     la identidad REAL de esa org.
+
+  ## Por qué hizo falta una ventana de escritura
+
+  La única General activa (id 17) tenía `audience=everyone`. Por el **propio AC7**, `everyone` solapa
+  con cualquier scope, así que es **imposible** crear una segunda General activa mientras la 17 esté
+  activa — verificado: 409. La estrategia de "crear una General de QA aislada y no tocar nada" quedó
+  descartada, no por un problema del entorno sino **porque el AC7 funciona**. El usuario eligió
+  desactivar la 17, correr todo y luego decidir sobre su reactivación.
+
+  ## Resultado
+
+  **11/11 PASS · 0 defectos · 0 hallazgos de seguridad High/Critical.** Los 7 ACs quedan verificados
+  a nivel de contrato Y en vivo. Se registran 4 observaciones para producto/plataforma (ninguna
+  bloqueante) y 1 hallazgo de seguridad de severidad **Baja**.
+
+  ## Lo que este run NO cubre — declarado, no omitido
+
+  - **El render del modal dentro del namespace `vnfp`.** Motivo verificado, no supuesto: el paquete
+    `vnfp` no expone en esa org ningún componente de *feature trigger* equivalente a
+    `Auctifera__AddManageResourcesToRentalEvent`, y el objeto `vnfp__Rental_Event__c` no existe ahí.
+    El único otro punto de entrada es `vnfp__NpsAfterLoginLauncherBackground`, que es IM-1099. Lo que
+    sí quedó probado es que esa org consume el mismo contrato de backend, con su identidad real,
+    incluida la atribución de la respuesta.
+  - **El merge de la épica a `main`**: fuera del control de QA.
+
+  ## Estado del entorno al cerrar
+
+  9 surveys (idéntico al inicio) · generales = [{id 17}] · **0 respuestas de QA · 0 rastros de
+  "QA TC-96"**. Las tres Generales de prueba (19, 20, 21) fueron borradas y sus respuestas cayeron en
+  cascada. **Única diferencia con el estado inicial:** la survey 17 queda con `active=false` **por
+  decisión explícita del usuario** ("no es necesario reactivarla"), no por omisión de QA. Su
+  configuración permanece intacta — solo cambia el flag — y `RESTORE-survey-17.json` permite
+  revertirlo con un solo PUT.
+
+testCaseIds:
+  - 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+
+environment:
+  name: "survey-tool @ epic/nps-survey-delivery-and-metrics head 14bde9d2 (base main 737a62b6) desplegado en https://surveytool.dev.veevart.ai · node test runner (tsx --test) para server/ y client/ · scratch org Auctifera nps_2 = computing-power-944-dev-ed (expira 2026-07-31) · scratch org NFPFundraising vnfp_pkg = flow-site-19432-dev-ed (expira 2026-08-14) · admin del survey-tool vía Cognito Hosted UI (Google @veevart.com)"
+  url: "https://github.com/Veevarts/survey-tool/pull/29"
+  buildVersion: >-
+    Mixed (backend/service Node+TS+Express con SQLite/drizzle + widget Salesforce LWC/Apex en dos
+    namespaces). Diff main→épica: 16 archivos, +2061/-416. Archivos con superficie funcional:
+    server/src/lib/surveyRuntime.ts · lib/validation.ts · routes/features.ts · routes/responses.ts ·
+    routes/surveys.ts. Evidencia primaria: 93 tests del repo + revert-proof + probes en vivo +
+    ventana de escritura autorizada + widget disparado end-to-end en org real + cross-test vnfp.
+  notes: |
+    ## Solution understood
+
+    Antes de #29, TODA general survey estaba obligada a llevar `generalClientOrgId`: un refine de
+    `validation.ts` lo exigía, así que una "general" era en realidad una survey atada a UNA
+    organización. #29 elimina ese refine y sustituye el targeting por un modelo de audiencia:
+    `audience` ∈ {everyone, organization} más `audienceDetails` (lista de subdominios). La resolución
+    vive en `surveyAllowsClientOrg()` (features.ts) y respeta este orden: legacy `generalClientOrgId`
+    con match exacto → `audience=everyone` → `audience=organization` con el token en la lista → si no,
+    false. Encima se agrega un gate de organización ACTIVA (`isActiveClientOrg()` consulta
+    `organizations` por `subdomain` + `active=true`) que devuelve `general_client_org_inactive`.
+    Tres consecuencias de diseño, las tres deliberadas y las tres fijadas por tests:
+    (a) para una general GLOBAL el estado del respondent —responses, impressions, dismissals— se
+    cuenta POR `clientOrgId`, o sea el mismo usuario arranca limpio en otra organización;
+    (b) `surveys.ts` incorpora `generalSurveyScope()` + `scopesOverlap()` +
+    `findActiveGeneralSurveyConflict()` → 409 si dos generales ACTIVAS se solapan, 400 si el scope es
+    inválido; (c) `responses.ts` re-evalúa la eligibility en el submit vía
+    `getSurveyEligibilityVerdict`, así que la atribución no depende de lo que mande el cliente.
+    #33 cierra el bug que hacía que el `userCreatedDate` no viajara por ambos paths públicos de
+    submit: la respuesta se rechazaba DESPUÉS de que el modal ya se había abierto.
+    AuctiferaDX #2525 aporta la otra mitad: el widget abre el `surveyId` que ELIGIÓ el backend en vez
+    de re-resolver por contexto de feature — el backend expone ese contrato con
+    `triggerMode: requestedSurveyId != null ? "any" : "featureTrigger"`.
+    La rama de prioridad del AC4 corta antes de evaluar las feature surveys:
+    `const eligibleGeneralSurvey = selectEligibleGeneralSurveys(ctx, {...})[0];`
+    `if (eligibleGeneralSurvey) return [eligibleGeneralSurvey];`
+
+    ## Inferred technical tests
+
+    | Test inferido | Qué prueba | ¿Ejecutable aquí? | Resultado |
+    |---|---|---|---|
+    | Suite `server/` sobre la épica | AC1..AC7 a nivel de contrato | SÍ (tsx --test) | 85/85 PASS |
+    | Suite `client/` sobre la épica | AC6 lado navegador | SÍ | 8/8 PASS |
+    | Revert-proof `server/src` → 737a62b6 | los guards no son vacuos | SÍ | 71 pass / 14 FAIL (9 mapean a AC) |
+    | Probes anónimos al endpoint público | AC3 · gate de organización activa | SÍ | 4 casos, todos como se espera |
+    | Probe `?surveyId=` | AC4 · contrato de #2525 | SÍ | 17 GENERAL · inválido → 400 |
+    | Ventana de escritura: General en modo featureTrigger | AC2/AC4/AC5/AC6 en vivo | SÍ (autorizada por el usuario) | 4/4 PASS |
+    | Conflicto de scope contra la API real | AC7 | SÍ | A→409 B→409 C→400 D→400 E→201 F→204 |
+    | UI admin en el browser | AC1/AC2/AC3 observables en pantalla | SÍ | 4 observaciones confirmadas |
+    | Widget Quick Save en org real | AC4/AC5/AC6 lado widget | SÍ (org vigente) | iframe surveyId=20 · respuesta 14 atribuida |
+    | Cross-test `vnfp` backend + control negativo | aislamiento entre orgs | SÍ | 4 subjects sirven · control negativo OK · respuesta 15 atribuida |
+    | Eligibility por CADA subject registrado | blast radius real del cambio | SÍ | 6 subjects sirven la General |
+    | **Render del modal dentro de `vnfp`** | AC4/AC6 lado widget en el 2º namespace | **NO — el paquete no expone un host de feature trigger en esa org** | declarado como límite, no fingido |
+    | Merge de la épica a `main` | que el cambio llegue a producción | **NO — fuera del control de QA** | reportado como riesgo de release |
+
+    ## Objective fit
+
+    Objetivo del ticket: que exista una General NPS survey configurable de forma independiente de
+    cualquier feature journey, acotable por organización, que gane prioridad sobre la survey del
+    feature, que caiga con gracia al feature survey cuando no aplica, que la respuesta quede atribuida
+    a ella con el contexto del trigger, y que la API impida dos generales activas con scope solapado.
+
+    PRE-fix obtenido (main / 737a62b6): imposible configurar una General sin atarla a UNA organización
+    — el refine de `validation.ts` lo exige. No existe el concepto de audiencia, ni el gate de
+    organización activa, ni la prevención de conflicto. El revert-proof lo demuestra de forma
+    ejecutable: al revertir el código a ese punto, 9 aserciones que cubren exactamente estos ACs
+    FALLAN.
+
+    POST-fix obtenido: la General id 17 existe hoy con `generalClientOrgId=null` y `audience=everyone`
+    —estructuralmente imposible antes—; una General acotada discrimina entre organizaciones activas
+    reales (dentro del scope → la sirve, fuera → no); una General en modo *featureTrigger* GANA sobre
+    la survey de Rentals con ambas elegibles para el mismo respondent; tras responderla el mismo
+    trigger entrega la de Rentals; la respuesta queda contra el id de la General con `clientOrgId`,
+    `respondentId` y `userCreatedDate` reales; y dos generales activas solapadas se rechazan con 409
+    nombrando la survey en conflicto.
+
+    Objetivo cumplido en los 11 escenarios. 0 defectos.
+
+    Salvedad honesta: el render del modal se observó en el namespace `Auctifera`, no en `vnfp`. Del
+    lado `vnfp` se verificó el contrato de backend completo con identidad real, no el pintado del
+    modal — porque ese paquete no expone en esa org un host de feature trigger donde dispararlo.
+
+status: completed
+
+summary:
+  total: 11
+  passed: 11
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "IM-966 AC1 — An admin marks a survey as General and configures it independently of any feature journey (generalClientOrgId is no longer mandatory)"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T13:10:00Z"
+    duration: 20
+    actual: |
+      **Evidencia en vivo, no simulada:** la General **id 17** existe hoy en el entorno dev con
+      `generalClientOrgId: null`, `audience: everyone`, `audienceDetails: null`, `isGeneralSurvey: true`,
+      `accountCreatedDelayDays: 0`, creada el 2026-07-22. **Ese registro es estructuralmente imposible en
+      `main`**: el refine de `validation.ts` en 737a62b6 exige `generalClientOrgId` en toda general, así
+      que su sola existencia prueba que el cambio está desplegado y que el AC1 se cumple.
+
+      Configuración independiente confirmada: la 17 no comparte slug, feature id ni targeting con la
+      survey de Rentals (id 1) — se activa y desactiva sin tocarla, cosa que se ejercitó tres veces
+      durante las ventanas de escritura sin efecto alguno sobre la de Rentals.
+
+      Compat legacy: `surveyAllowsClientOrg()` conserva la rama de match exacto de `generalClientOrgId`
+      ANTES de evaluar `audience`, así que una general legacy sigue resolviendo igual.
+
+      **Revert-proof:** al revertir `server/src` a `main`, el test *"rejects converting a survey to
+      general without user-age delay"* FALLA. El guard no es vacuo. Objetivo cumplido.
+    notes: "AC1. La prueba más fuerte de este escenario no es un test: es que existe en el entorno un registro que el código de main no habría dejado guardar."
+    stepResults: []
+    attachments:
+      - name: live-probes.txt
+        path: attachments/tr-146-tc-96/scenario-3/live-probes.txt
+        mimeType: text/plain
+      - name: suite-epic-postfix.txt
+        path: attachments/tr-146-tc-96/scenario-0-unit-tests/suite-epic-postfix.txt
+        mimeType: text/plain
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "IM-966 AC2 — A General Survey scoped to selected organizations is only evaluated for respondents belonging to one of those active organizations"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T15:05:00Z"
+    duration: 25
+    actual: |
+      Ejecutado **en vivo** dentro de la ventana autorizada. General de QA **id 19** creada con
+      `audience=organization`, `audienceDetails=computing-power-944-dev-ed`, `generalTrigger=featureTrigger`,
+      activa. Discriminación entre **organizaciones reales**, no fixtures:
+
+      | clientOrgId | Dentro del scope | Obtenido |
+      |---|---|---|
+      | `computing-power-944-dev-ed` | SÍ | `[{id 19, GENERAL}]` |
+      | `flow-site-19432-dev-ed` (VNFP) | NO | `[]` |
+      | `testing` | NO | `[]` |
+
+      Rechazo de lista vacía verificado contra la API real (escenario 7, caso C):
+      **400** *"General surveys targeting organizations require at least one organization."*
+
+      Normalización de separadores (`,` `;` salto de línea) + trim + lowercase: `detailsTokens()` la
+      implementa y la cubre la suite; no se probó carácter por carácter en vivo porque el valor se
+      normaliza antes de persistir.
+
+      **Revert-proof:** caen DOS tests al revertir — *"rejects organization-scoped general surveys
+      without selected organizations"* y *"delivers and validates organization-scoped general surveys
+      only for selected organizations"*. Objetivo cumplido.
+    notes: "AC2. El caso negativo se probó con una organización REAL de otra scratch org (VNFP), no con un string inventado — es la misma pareja de orgs que después se usó en el control negativo del escenario 11."
+    stepResults: []
+    attachments:
+      - name: ventana-live-window.txt
+        path: attachments/tr-146-tc-96/scenario-2/ventana-live-window.txt
+        mimeType: text/plain
+      - name: ac7-conflict-live.txt
+        path: attachments/tr-146-tc-96/scenario-7/ac7-conflict-live.txt
+        mimeType: text/plain
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "IM-966 AC3 — A General Survey scoped to everyone is evaluated for any ACTIVE organization, and an inactive organization is rejected with general_client_org_inactive"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T13:25:00Z"
+    duration: 20
+    actual: |
+      Probes **read-only** contra `GET /api/surveys/general/eligible` con la General 17 (`audience=everyone`):
+
+      | Caso | clientOrgId | Obtenido | ¿Objetivo? |
+      |---|---|---|---|
+      | Organización ACTIVA | `computing-power-944-dev-ed` | 1 survey: id 17, GENERAL | SÍ |
+      | Organización inexistente/inactiva | `qa-org-que-no-existe` | `[]` | SÍ |
+      | Sin `clientOrgId` | (ausente) | `[]` | SÍ |
+      | `clientOrgId` vacío | `""` | `[]` | SÍ |
+
+      El comportamiento es **fail-closed**: sin organización válida NO se entrega. El gate lo implementa
+      `isActiveClientOrg()` y el runtime devuelve `general_client_org_inactive`.
+
+      PRE-fix: el caso es estructuralmente imposible en `main` — sin una general global no hay nada que
+      evaluar "para cualquier organización activa".
+
+      **Cambio de semántica validado y ELEVADO A PRODUCTO** (no es defecto): para una general global el
+      estado del respondent se cuenta POR `clientOrgId`, así que el mismo respondentId vuelve a ser
+      elegible en otra organización. Está fijado por el test *"keeps global general survey respondent
+      state scoped by organization"*, o sea es intencional. Confirmado además con dos orgs reales en el
+      escenario 11. Si producto no lo quiere así, es una decisión de diseño a revisar.
+
+      **Revert-proof:** caen *"prioritizes a global general survey for active organizations"* y *"keeps
+      global general survey respondent state scoped by organization"*. Objetivo cumplido.
+    notes: "AC3. La observación de semántica per-org se escala a producto en la QA Sub-task; no se levanta como defecto porque el comportamiento está deliberadamente fijado por un test."
+    stepResults: []
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-146-tc-96/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+      - name: live-probes.txt
+        path: attachments/tr-146-tc-96/scenario-3/live-probes.txt
+        mimeType: text/plain
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "IM-966 AC4 — When both an eligible General Survey and an eligible feature-specific survey exist, the General Survey is delivered first"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T15:10:00Z"
+    duration: 30
+    actual: |
+      **El caso literal del AC — ambas elegibles, gana la General — se ejecutó en vivo.** Con la General 19
+      (`featureTrigger`, scope que incluye la org) y la survey de Rentals (id 1) **ambas elegibles para el
+      mismo respondent y la misma organización**:
+
+      `GET /api/features/rentals/surveys?clientOrgId=computing-power-944-dev-ed&...` → **`[{id 19, GENERAL}]`**
+
+      **Contrato de AuctiferaDX #2525** verificado por separado: `?surveyId=17` → `[{id 17, GENERAL}]`
+      (`triggerMode: "any"`), y `?surveyId=abc` → **400** *"Invalid surveyId"*. El widget abre lo que
+      eligió el backend en vez de re-resolver por contexto de feature.
+
+      **NO-DEFECTO documentado:** el mismo endpoint devuelve la survey de Rentals cuando la única General
+      activa es la 17. No es una violación del AC4 — la 17 es `generalTrigger=afterLogin` y
+      `selectEligibleSurveysForFeature` pasa `triggerMode: "featureTrigger"`, así que la filtra
+      correctamente. Lo fija el test *"delivers after-login general surveys only through the general
+      eligibility endpoint"*, y se confirmó en el sentido inverso: con la 19 en modo `featureTrigger`,
+      `GET /api/surveys/general/eligible` devuelve `[]`.
+
+      **Revert-proof:** caen *"prioritizes a global general survey for active organizations"* y *"renders
+      the requested surveyId through public eligibility even with general survey priority"*.
+      Cerrado también por UI en el escenario 10. Objetivo cumplido.
+    notes: "AC4. Este escenario habría quedado como falso defecto si se juzgaba solo por el primer probe: la lectura correcta exigía entender la separación afterLogin/featureTrigger antes de concluir."
+    stepResults: []
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-146-tc-96/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+      - name: live-probes.txt
+        path: attachments/tr-146-tc-96/scenario-4/live-probes.txt
+        mimeType: text/plain
+      - name: ventana-live-window.txt
+        path: attachments/tr-146-tc-96/scenario-4/ventana-live-window.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: "IM-966 AC5 — When the General Survey is not eligible, already answered or exhausted by dismissal rules, the feature-specific survey is delivered as fallback"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T15:20:00Z"
+    duration: 25
+    actual: |
+      **Fallback observado en vivo, en secuencia real:** con el mismo respondent y el mismo trigger de
+      Rentals, inmediatamente después de responder la General 19 → **`[{id 1, feature}]`**. La General ya
+      no se entrega (ya respondida) y la de Rentals toma su lugar. Es el AC5 completo en una sola
+      transición, no una simulación.
+
+      Los otros estados del `When` quedan cubiertos así:
+      · **inactiva** → verificado: con la 17 inactiva el endpoint general devuelve `[]`.
+      · **fuera del scope de organización** → verificado en vivo (escenario 2: `[]` para dos orgs fuera).
+      · **organización inactiva** → verificado (escenario 3: `[]`).
+      · **delay por `User.CreatedDate` no cumplido** → cubierto por la suite; en vivo se observó su
+        contracara en el submit: 400 *"user_created_date_missing"*.
+      · **max dismissals alcanzado** → cubierto por la suite (los tests de dismissals están entre los que
+        caen al revertir).
+
+      **Sin contaminación cruzada:** la eligibility del feature-specific no se altera por la existencia de
+      la general — el payload devuelto para la de Rentals es el mismo con y sin General activa.
+      **0 respuestas 5xx** en toda la sesión de probes. Objetivo cumplido.
+    notes: "AC5. El caso más valioso (ya respondida → fallback) se ejecutó de verdad; los estados restantes se declaran con la fuente de evidencia que los cubre, sin inflar el veredicto."
+    stepResults: []
+    attachments:
+      - name: ventana-live-window.txt
+        path: attachments/tr-146-tc-96/scenario-5/ventana-live-window.txt
+        mimeType: text/plain
+      - name: RESTORE-survey-17.json
+        path: attachments/tr-146-tc-96/scenario-5/RESTORE-survey-17.json
+        mimeType: application/json
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 6
+    scenarioTitle: "IM-966 AC6 — A General Survey response opened from a feature trigger is saved against the General Survey and preserves the original trigger context"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T17:40:00Z"
+    duration: 35
+    actual: |
+      **Caso positivo cerrado por UI real** (escenario 10): respuesta enviada desde el modal abierto por
+      Rentals Quick Save → registro **id 14**, `surveyId 20` (**la GENERAL**, no la de Rentals id 1),
+      `featureId 8`, `respondentId 005dq00000NLWpIAAX` (el User Id real de Salesforce propagado por el
+      widget), `clientOrgId computing-power-944-dev-ed`, score 9. **Repetido en la segunda org**
+      (escenario 11): respuesta id 15, `surveyId 21`, `respondentId 005Rt00000XjqlyIAB`,
+      `clientOrgId flow-site-19432-dev-ed`.
+
+      **Re-evaluación en el submit** (`getSurveyEligibilityVerdict` en `responses.ts`) verificada con tres
+      rechazos, todos contra la API real:
+
+      | Payload | Respuesta |
+      |---|---|
+      | sin `clientOrgId` | **400** *"clientOrgId does not match the general survey"* |
+      | `clientOrgId` de organización inexistente | **400** *"clientOrgId does not match an active organization"* |
+      | organización activa pero SIN `userCreatedDate` | **400** *"Survey is not eligible for this response context: user_created_date_missing"* |
+
+      El tercero es el más informativo: prueba que el servidor **re-evalúa al guardar**, no solo al
+      entregar — y es exactamente el modo de falla que **#33** corrige.
+
+      **Regresión de #33 (mitad navegador)** cubierta por la suite `client/`: *prefers the canonical
+      userCreatedDate over legacy aliases* · *resolves supported aliases for response submission context*
+      · *serializes supported aliases as userCreatedDate in the response payload*. El `userCreatedDate`
+      capturado del iframe real es `2026-07-01T15:58:58.000Z` — el `User.CreatedDate` de Salesforce, no
+      el reloj de la corrida.
+
+      **Revert-proof:** cae *"validates global general survey response eligibility context"*.
+      Objetivo cumplido.
+    notes: "AC6. Es el escenario con la evidencia más fuerte del run: atribución correcta observada dos veces, en dos organizaciones distintas, con identidades reales de Salesforce en ambos casos."
+    stepResults: []
+    attachments:
+      - name: ac6-submit-validations.txt
+        path: attachments/tr-146-tc-96/scenario-6/ac6-submit-validations.txt
+        mimeType: text/plain
+      - name: comparison-matrix.txt
+        path: attachments/tr-146-tc-96/scenario-6/comparison-matrix.txt
+        mimeType: text/plain
+      - name: widget-e2e-org-real.txt
+        path: attachments/tr-146-tc-96/scenario-10/widget-e2e-org-real.txt
+        mimeType: text/plain
+      - name: suite-client-epic.txt
+        path: attachments/tr-146-tc-96/scenario-0-unit-tests/suite-client-epic.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 7
+    scenarioTitle: "IM-966 AC7 — The API prevents saving a second active General Survey whose scope overlaps an existing one"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T14:30:00Z"
+    duration: 25
+    actual: |
+      Seis casos ejecutados contra la API real con sesión de admin. Estado inicial: 9 surveys, 1 general
+      activa (id 17, global).
+
+      | Caso | HTTP | Respuesta | ¿Persiste? |
+      |---|---|---|---|
+      | A) General ACTIVA global vs la 17 | **409** | *"An active general survey already applies to this audience (survey 17)."* | NO |
+      | B) General ACTIVA acotada a 1 org vs la 17 global | **409** | mismo mensaje | NO |
+      | C) `audience=organization` con lista vacía | **400** | *"General surveys targeting organizations require at least one organization."* | NO |
+      | D) `audience` inválido (`segment`) | **400** | zod: Expected 'organization' \| 'specific_users' \| 'everyone' | NO |
+      | E) General INACTIVA que solapa | **201** | creada id 18 → **PERMITIDO** | SÍ (borrada) |
+      | F) DELETE de la 18 | **204** | — | revertido |
+
+      El caso E es el que confirma que el conflicto **solo considera `active=true`**, tal como pide el AC.
+
+      Cubierto solo a nivel de contrato (imposible en vivo mientras la única general sea global, porque
+      `everyone` solapa con todo): *acotadas con listas disjuntas → PERMITIDO* y *update sobre sí misma
+      sin falso conflicto* (`exceptSurveyId`). Ambos están en el test *"rejects overlapping active general
+      survey scopes"*, que **CAE al revertir** con `actual 400 vs expected 409`.
+
+      Estado final verificado: **9 surveys, generales = [17]**. El entorno queda exactamente como se
+      encontró.
+
+      **Observación de calidad (positiva):** el mensaje de error **nombra la survey en conflicto**
+      ("survey 17"), lo que hace el diagnóstico inmediato para el admin. Objetivo cumplido.
+    notes: "AC7. Consecuencia operativa a documentar para el equipo: mientras exista UNA General activa con audience=everyone es IMPOSIBLE tener cualquier otra General activa. Es el AC funcionando, pero limita a una campaña global simultánea."
+    stepResults: []
+    attachments:
+      - name: ac7-conflict-live.txt
+        path: attachments/tr-146-tc-96/scenario-7/ac7-conflict-live.txt
+        mimeType: text/plain
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 8
+    scenarioTitle: "IM-966 — Repo suites (server AND client) and revert-proof — the contract holds on the epic branch and the new guards fail when the source is reverted to main"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T12:40:00Z"
+    duration: 30
+    actual: |
+      **Las DOS suites del repo, sobre `epic/nps-survey-delivery-and-metrics` (head `14bde9d2`):**
+
+      | Suite | Resultado |
+      |---|---|
+      | `server/` | **85 tests / 85 pass / 0 fail** · 11 suites · 661 ms |
+      | `client/` | **8 tests / 8 pass / 0 fail** · 3 suites · 280 ms |
+      | **Total** | **93 tests, 0 fallos** |
+
+      La del cliente no es decorativa: cubre `SurveyWidget.test.ts` y `surveyDisplayRules.test.ts`,
+      incluidas las 3 aserciones de `userCreatedDate` que respaldan el AC6 desde el navegador.
+
+      **Revert-proof.** Método: `git checkout 737a62b6 -- server/src/{lib/surveyRuntime.ts,
+      lib/validation.ts,routes/features.ts,routes/responses.ts,routes/surveys.ts}` dejando los tests en la
+      épica → **71 pass / 14 FAIL**. **9 de los 14 mapean 1-a-1 a un AC de IM-966:**
+
+      | Test que cae | AC |
+      |---|---|
+      | rejects converting a survey to general without user-age delay | AC1 |
+      | rejects organization-scoped general surveys without selected organizations | AC2 |
+      | delivers and validates organization-scoped general surveys only for selected organizations | AC2 |
+      | prioritizes a global general survey for active organizations | AC3 + AC4 |
+      | keeps global general survey respondent state scoped by organization | AC3 |
+      | renders the requested surveyId through public eligibility even with general survey priority | AC4 |
+      | validates global general survey response eligibility context | AC6 |
+      | rejects overlapping active general survey scopes | AC7 |
+      | delivers after-login general surveys only through the general eligibility endpoint | separación de modos |
+
+      Los 5 restantes son de **#30/#31/#34** (Start Date, `triesBetweenShows`, interaction threshold, max
+      shows per day, CSV export), que viajan en la misma rama épica. Su presencia confirma que la suite
+      los cubre de verdad; su validación funcional pertenece a IM-965 / IM-1099, no a este run.
+
+      El contrato que **IM-963** lockeó en `apiBoundary` sigue verde: sin regresión del comportamiento
+      feature-specific. Objetivo cumplido.
+    notes: "El revert-proof es lo que convierte '85 tests verdes' en evidencia: sin él, una suite verde no distingue entre guards que funcionan y guards vacuos."
+    stepResults: []
+    attachments:
+      - name: suite-epic-postfix.txt
+        path: attachments/tr-146-tc-96/scenario-0-unit-tests/suite-epic-postfix.txt
+        mimeType: text/plain
+      - name: suite-client-epic.txt
+        path: attachments/tr-146-tc-96/scenario-0-unit-tests/suite-client-epic.txt
+        mimeType: text/plain
+      - name: revert-proof-main.txt
+        path: attachments/tr-146-tc-96/scenario-8/revert-proof-main.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 9
+    scenarioTitle: "IM-966 — Functional UI (admin) — the survey admin form drives the General scope on screen: audience becomes required, the multi-org picker feeds audienceDetails, a global scope reads \"All active organizations\", and saving an org-scoped General with no organization is blocked in the UI before it ever reaches the API"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T16:20:00Z"
+    duration: 30
+    actual: |
+      **Ejecutado por QA en el browser**, no delegado. Las 4 observaciones del `Then` quedaron
+      CONFIRMADAS en pantalla:
+
+      1. Al marcar **General NPS survey** aparece el bloque **`General survey trigger`** con dos radios,
+         y viene marcado **`Show through existing feature triggers`** — una General nueva **nace en modo
+         feature-trigger**. Dato operativo útil que no estaba documentado.
+      2. La etiqueta del campo de audiencia pasa a **`Audience details (required)`**, con el texto de
+         ayuda *"Selected organizations become the client org audience for the general survey."*
+      3. Con `To an organization / museum` y ninguna organización elegida, al pulsar **`Create`** el
+         formulario **NO se envía** y aparece *"Please choose at least one organization / museum for this
+         general survey."* **La petición ni sale a la API**: es el espejo en UI del 400 del AC2, y
+         confirma validación en dos capas para el mismo invariante.
+      4. La General global se lista como **`General survey audience: All active organizations`** — la
+         expresión visible del AC3.
+
+      **CORRECCIÓN AL TEST CASE surgida de ejecutar de verdad.** El paso a paso original usaba los labels
+      del CÓDIGO (`<option value="everyone">Everyone</option>`); la UI real renderiza otra cosa:
+
+      | El código decía | La UI real muestra |
+      |---|---|
+      | select "Audience" | bloque **"To whom are you sending this survey?"** |
+      | opción "Everyone" | radio **"To everyone"** |
+      | opción "Organization / museum" | radio **"To an organization / museum"** |
+      | botón "Save" | botón **"Create"** |
+
+      Corregido en **TC-96 v5**. Es exactamente el motivo por el que un escenario de UI se escribe
+      después de mirar la pantalla, no leyendo el JSX.
+
+      **Estado del entorno:** el formulario se canceló sin guardar. Verificado por API: 9 surveys,
+      generales = [17], ninguna survey de QA creada. **Nada persistido por este escenario.**
+      Objetivo cumplido.
+    notes: "El escenario también dejó inventariados los campos del formulario (Repeat window, Max dismissals per period, Tries between shows, Max shows per day, Show after User.CreatedDate) como contexto para el equipo, aunque pertenecen a #30/#31 y no a IM-966."
+    stepResults: []
+    attachments:
+      - name: ui-admin-observado.txt
+        path: attachments/tr-146-tc-96/scenario-9/ui-admin-observado.txt
+        mimeType: text/plain
+      - name: 00-before-general-toggle.png
+        path: attachments/tr-146-tc-96/scenario-9/00-before-general-toggle.png
+        mimeType: image/png
+      - name: 01-general-required-label.png
+        path: attachments/tr-146-tc-96/scenario-9/01-general-required-label.png
+        mimeType: image/png
+      - name: 02-validation-empty-orgs.png
+        path: attachments/tr-146-tc-96/scenario-9/02-validation-empty-orgs.png
+        mimeType: image/png
+      - name: 03-list-all-active-orgs.png
+        path: attachments/tr-146-tc-96/scenario-9/03-list-all-active-orgs.png
+        mimeType: image/png
+
+  - scenarioIndex: 10
+    scenarioTitle: "IM-966 — Functional UI evidence — Rentals Quick Save renders the General Survey end-to-end and the response lands attributed to it"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T17:35:00Z"
+    duration: 45
+    actual: |
+      **Ejecutado por QA en la org real** — Auctifera scratch `nps_2` (`computing-power-944-dev-ed`),
+      Rental Event "QA survey NPS" (`a1pdq00000HsVMeAAN`), componente
+      `Auctifera__AddManageResourcesToRentalEvent` → botón **Quick Save**.
+
+      **1. URL del iframe capturada del DOM tras el Quick Save:**
+      ```
+      https://surveytool.dev.veevart.ai/survey/rentals
+        ?surveyId=20
+        &clientOrgId=computing-power-944-dev-ed
+        &respondentId=005dq00000NLWpIAAX
+        &userCreatedDate=2026-07-01T15%3A58%3A58.000Z
+        &usageCount=3
+      ```
+      · `surveyId=20` → el widget abrió **LA GENERAL** que eligió el backend, no la de Rentals. Es el
+        contrato que aporta AuctiferaDX **#2525**.
+      · `userCreatedDate` → el `User.CreatedDate` **real** del usuario de Salesforce, no un valor
+        inventado ni el reloj de la corrida. Es lo que **#33** asegura que viaje.
+      · `clientOrgId` + `respondentId` + `usageCount` → contexto del trigger completo.
+
+      **2. Modal renderizado:** título **"General Survey"** — **NO dice "Rentals"**. Es el corazón del
+      AC4 observado en pantalla, con la survey de Rentals activa y elegible al mismo tiempo. Escala NPS
+      0–10 con extremos *"Not at all likely"* / *"Extremely likely"*; el botón Submit permanece
+      deshabilitado hasta elegir puntaje.
+
+      **3. Respuesta enviada desde el modal** (score 9) → registro **id 14**, `surveyId 20`, `featureId 8`,
+      `respondentId 005dq00000NLWpIAAX`, `clientOrgId computing-power-944-dev-ed`,
+      `createdAt 2026-07-30 17:35:04`. **Cierra el AC6 por UI.**
+
+      **BLAST RADIUS MEDIDO — no es solo Rentals.** Con la misma General activa se consultó la
+      eligibility contra CADA subject registrado:
+      `rentals` · `payments` · `ticketing` · `shop` · `fundraising` · `accounting` → **los SEIS sirven la
+      General**. `courses` y `groups` → *"Feature not found"*.
+      Es coherente con el diseño (`selectEligibleSurveysForFeature` evalúa la General ANTES que la feature
+      survey en cualquier subject): **el alcance del cambio es todo el conjunto de triggers**, y Rentals
+      es simplemente el punto que QA validó visualmente.
+
+      **Limpieza:** `DELETE /api/admin/surveys/20` → 204 (arrastra la respuesta 14). Objetivo cumplido.
+    notes: "Observación para producto: 'Courses' y 'Groups' aparecen en el filtro de producto del admin pero NO están registrados como subjects, así que hoy no tienen trigger. Puede ser intencional — queda para que producto lo confirme."
+    stepResults: []
+    attachments:
+      - name: widget-e2e-org-real.txt
+        path: attachments/tr-146-tc-96/scenario-10/widget-e2e-org-real.txt
+        mimeType: text/plain
+      - name: 01-pre-quicksave.png
+        path: attachments/tr-146-tc-96/scenario-10/01-pre-quicksave.png
+        mimeType: image/png
+      - name: 02-modal-general-survey.png
+        path: attachments/tr-146-tc-96/scenario-10/02-modal-general-survey.png
+        mimeType: image/png
+
+  - scenarioIndex: 11
+    scenarioTitle: "IM-966 — NFPFundraising cross-test — UNBLOCKED in v2, the vnfp_pkg scratch org now exists (blocked since TR-097)"
+    testCaseId: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
+    testCaseKey: TC-96
+    status: passed
+    executedAt: "2026-07-30T18:05:00Z"
+    duration: 40
+    actual: |
+      **Bloqueado desde TR-097; ejecutado por primera vez.** Org `flow-site-19432-dev-ed` (scratch
+      `vnfp_pkg`, expira 2026-08-14).
+
+      **Precondiciones verificadas por query, no asumidas:** `vnfp__NpsWidgetController`,
+      `vnfp__npsWidget`, `vnfp__SurveyWidgetTrigger` y `vnfp__npsAfterLoginLauncher` desplegados; la org
+      registrada como organization **ACTIVA** en el survey-tool (id 7, subdomain
+      `flow-site-19432-dev-ed`). **Identidad REAL tomada de la propia org**: `respondentId
+      005Rt00000XjqlyIAB` y `userCreatedDate 2026-07-15T10:04:17.000+0000`.
+
+      **Entrega:** General de QA id 21 acotada a esa org (`featureTrigger`, activa) →
+      `rentals` · `fundraising` · `ticketing` · `payments` **los cuatro sirven la General**.
+
+      **CONTROL NEGATIVO (aislamiento entre orgs):** el **mismo** `respondentId`, cambiando solo el
+      `clientOrgId` al de Auctifera → devuelve **id 1 (feature)**, no la General acotada a VNFP. La
+      General no se filtra entre organizaciones. Es la contracara del AC2 ejecutada entre **dos orgs
+      reales**, y confirma de paso la semántica per-org del AC3.
+
+      **Atribución:** respuesta enviada con el contexto real de VNFP → **201**, id 15, `surveyId 21`,
+      `featureId 8`, `clientOrgId flow-site-19432-dev-ed`, `respondentId 005Rt00000XjqlyIAB`, score 8.
+
+      **LÍMITE DECLARADO — el widget de `vnfp` NO se disparó desde su UI.** Motivo **verificado, no
+      supuesto**: el paquete `vnfp` no tiene en esa org un componente equivalente a
+      `Auctifera__AddManageResourcesToRentalEvent` — sus bundles de ese dominio son
+      `RentalPaymentsWizard`, `RentalPaymentsWizardWrapper`, `DonationFromContact`,
+      `TicketingWizardSettings`, `BoxMembershipDonation`, `BoxSpecificFundDonation`, `DonationRow` — y el
+      objeto `vnfp__Rental_Event__c` no existe ahí. El único otro punto de entrada disponible es
+      `vnfp__NpsAfterLoginLauncherBackground` (montado en `Fundraising_UtilityBar`), que pertenece a
+      **IM-1099** y está FUERA del alcance de IM-966.
+      **Queda probado** que esa org consume el mismo contrato de backend que el widget de Auctifera ya
+      ejercitó end-to-end por UI, incluida la atribución. **No queda probado** el render del modal dentro
+      de `vnfp`.
+
+      **Limpieza:** `DELETE /api/admin/surveys/21` → 204 (arrastra la respuesta 15). Estado final:
+      9 surveys · 0 rastros de QA. Objetivo cumplido para el alcance ejecutable.
+    notes: "PENDIENTE PARA PRODUCTO/DEV (no bloqueante, no defecto): indicar qué componente del paquete vnfp hospeda el widget NPS en un feature trigger. Con ese dato el render se dispara en minutos y la org está vigente hasta el 2026-08-14. El TC-96 v5 incorpora este límite como aserción explícita del escenario en vez de dejarlo implícito."
+    stepResults: []
+    attachments:
+      - name: vnfp-crosstest.txt
+        path: attachments/tr-146-tc-96/scenario-11/vnfp-crosstest.txt
+        mimeType: text/plain
+
+defects: []
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-07-30T18:45:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-07-30T18:45:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-96"
+  parentIssue: "IM-966"
+  qaSubTask: "IM-1006"
+  epic: "IM-970"
+  prUnderTest: "https://github.com/Veevarts/survey-tool/pull/29"
+  prState: "MERGED (a la rama épica, NO a main)"
+  headCommit: "14bde9d2"
+  baseCommit: "737a62b6"
+  baseBranch: "epic/nps-survey-delivery-and-metrics"
+  changeType: "mixed — backend/service (Node+TS+Express, SQLite/drizzle: surveyRuntime.ts, validation.ts, routes/features.ts, routes/responses.ts, routes/surveys.ts) + widget Salesforce LWC/Apex en los namespaces Auctifera y vnfp"
+  reReviewOf: "TR-097 (TC-96 v1, 2026-07-03, 12/13 PASS, 1 blocked). La historia se reabrió el 2026-07-16 y su descripción se reescribió el 2026-07-29: de 4 ACs genéricos a 7 específicos. Territorio nuevo cubierto por esta v2: AC2/AC3 scoping por organización, AC6 atribución de la respuesta, AC7 prevención de conflicto."
+  releaseRisk: "#29/#33/#34 NO mergearon a main: mergearon a epic/nps-survey-delivery-and-metrics. main sigue en 737a62b6 (#28) = exactamente lo que validó TR-097, y ese commit ES ADEMÁS el base de #29 (main no se movió desde la v1). El deploy dev corre la épica — probado: GET /api/surveys/general/eligible responde 200 y esa ruta no existe en main. Lo validado aquí NO está en main; el merge de la épica es un paso de release pendiente fuera del control de QA."
+  revertProof: "server/src revertido a 737a62b6 dejando los tests en la épica: 85 tests -> 71 pass / 14 FAIL. 9 de los 14 mapean 1-a-1 a un AC de IM-966 (AC1, AC2 x2, AC3+AC4, AC3, AC4, AC6, AC7, separación de modos); los otros 5 son de #30/#31/#34, que viajan en la misma rama."
+  suitesRun: "server/ 85/85 PASS (11 suites, 661 ms) + client/ 8/8 PASS (3 suites, 280 ms) = 93 tests, 0 fallos. La suite del cliente cubre la mitad navegador del AC6 (serialización de userCreatedDate)."
+  liveEvidence: "Widget disparado end-to-end en org real: iframe surveyId=20 con clientOrgId/respondentId/userCreatedDate/usageCount reales, modal titulado 'General Survey' (no 'Rentals'), respuesta id 14 atribuida a la General. Cross-test vnfp con identidad real de la org (005Rt00000XjqlyIAB): 4 subjects sirven la General, control negativo entre dos orgs reales OK, respuesta id 15 atribuida. Blast radius medido: 6 subjects sirven la General (rentals, payments, ticketing, shop, fundraising, accounting)."
+  writeWindow: "Tres ventanas de escritura autorizadas por el usuario en el entorno dev COMPARTIDO, cada una con snapshot previo y verificación de cierre. Generales de prueba 19, 20 y 21 creadas y borradas (204), respuestas 13/14/15 eliminadas en cascada. Estado final: 9 surveys (idéntico al inicio), generales=[17], 0 respuestas de QA, 0 rastros de 'QA TC-96'. ÚNICA diferencia con el estado inicial: la survey 17 queda active=false por decisión explícita del usuario ('no es necesario reactivarla'); su configuración permanece intacta y RESTORE-survey-17.json permite revertirlo con un PUT."
+  notCovered: "(1) Render del modal dentro del namespace vnfp: el paquete no expone en esa org un host de feature trigger equivalente al de Auctifera y vnfp__Rental_Event__c no existe ahí; el único otro entry point es el launcher after-login, que es IM-1099. Verificado, no supuesto. (2) Merge de la épica a main: fuera del control de QA. (3) Pruebas de carga/concurrencia sobre findActiveGeneralSurveyConflict: fuera del alcance del ticket."
+  observations: "(1) SEMÁNTICA PER-ORG (producto): para una general global, responses/impressions/dismissals se cuentan POR clientOrgId, así que el mismo usuario puede volver a ver la misma encuesta en otra organización. Está fijado por un test, o sea es intencional; confirmado con dos orgs reales. Si producto no lo quiere así, es decisión de diseño a revisar, no defecto. (2) SUBJECTS FALTANTES (producto): 'Courses' y 'Groups' aparecen en el filtro de producto del admin pero NO están registrados como subjects, así que hoy no tienen trigger. (3) OPERATIVA (equipo): mientras exista UNA General activa con audience=everyone es imposible tener cualquier otra General activa — everyone solapa con todo. Es el AC7 funcionando, pero limita a una campaña global simultánea y obliga a desactivar la vigente para probar otra. (4) CALIDAD POSITIVA: el 409 nombra la survey en conflicto ('survey 17'), lo que hace el diagnóstico inmediato. (5) CORRECCIÓN DEL TEST CASE: el escenario 9 se escribió originalmente con los labels del código; la UI real usa radios con otros textos ('To whom are you sending this survey?' / 'To everyone' / 'To an organization / museum' / botón 'Create'). Corregido en TC-96 v5 tras manejar la pantalla."
+  owasp: "7 categorías APLICABLES y todas PASS (A01, A03, A04, A05, A06, A08, A09) · 3 N/A justificadas (A02, A07, A10) · 0 FAIL · 0 findings High/Critical · 0 Medium · 1 Low. El Low (A01/A05): el endpoint público ANÓNIMO devuelve la fila completa de la survey, incluidos audienceDetails (lista de subdominios de organizaciones objetivo, campo NUEVO de #29) y generalClientOrgId — un anónimo con un clientOrgId válido puede leer qué otras organizaciones están en esa audiencia. No expone respuestas, puntajes ni identidades: es divulgación de cartera. Recomendación no bloqueante: serializar la respuesta pública con lista blanca de campos. Verificado además: guarda transversal app.use('/api/admin', requireAdminAuth) con 5 probes anónimos -> 401; 0 SQL dinámica (los 6 usos del tagged template de drizzle son literales o parámetros ligados, y cooldownDays es un entero validado); 0 secretos en el diff (3 hits de grep, los 3 son la función detailsTokens); 0 dependencias agregadas o actualizadas (lockfile IDÉNTICO entre main y la épica) por lo que las 2 high + 7 moderate de npm audit son PREEXISTENTES; logging con booleanos hasClientOrgId/hasRespondentId en vez de valores."
+  regressionSummary: "10/10 items técnicos PASS (T4 semántica per-org y T9 subjects faltantes con observación para producto, no defectos) · 6/7 items de seguridad PASS + 1 observación Baja · 0 regresiones introducidas · 0 defectos bloqueantes."
+
+history:
+  - action: "started"
+    timestamp: "2026-07-30T12:20:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Ejecución de TC-96 v2 (re-review de IM-966) contra survey-tool #29 + #33 + AuctiferaDX #2525. Probe de tooling: clone de survey-tool con la rama épica y npm ci OK; suites server/ y client/ disponibles; scratch orgs auctifera-nps2 y vnfp-pkg autenticadas y vigentes; admin del survey-tool alcanzable vía Cognito en el browser. Hallazgo inmediato de topología: los tres PRs viven en la rama épica, main sigue en 737a62b6."
+  - action: "completed"
+    timestamp: "2026-07-30T18:45:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "11/11 PASS, 0 defectos, 0 hallazgos de seguridad High/Critical. 93 tests del repo (85 server + 8 client) y revert-proof con 14 FAIL de los cuales 9 mapean 1-a-1 a un AC de IM-966. Los 7 ACs verificados a nivel de contrato Y en vivo. El widget se disparó end-to-end en la org real (iframe surveyId=20, modal 'General Survey', respuesta 14 atribuida) y el cross-test vnfp, bloqueado desde TR-097, se ejecutó por primera vez con identidad real y control negativo entre dos orgs. Entorno restaurado: 9 surveys, 0 rastros de QA; la survey 17 queda inactiva por decisión explícita del usuario. Se escala un RIESGO DE RELEASE (no de código): lo validado vive en la rama épica y main sigue en 737a62b6. Límite declarado: el render del modal dentro del namespace vnfp no se disparó porque ese paquete no expone un host de feature trigger en esa org."

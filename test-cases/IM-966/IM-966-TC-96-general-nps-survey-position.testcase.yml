@@ -1,89 +1,131 @@
 schemaVersion: '1.0'
 id: 568bef96-cec4-47a1-bc50-21c0a9f5cdbc
 key: TC-96
-title: IM-966 — Add general (non-feature) NPS survey position (survey-tool + widget, Rentals Quick Save trigger)
+title: IM-966 v2 — General NPS survey scoping, priority and conflict prevention (survey-tool org audience + response attribution + AuctiferaDX widget contract)
 description: |
-  Cobertura QA de IM-966 (Add general NPS survey position), bajo el epic IM-970
-  NPS Survey Tool delivery. Extiende el modelo de surveys product-feature-scoped
-  a un survey NPS **general** no atado a ninguna feature, que se sirve
-  piggybacking desde los triggers de Salesforce existentes cuando la eligibility
-  del general placement lo permite.
+  **v2 — RE-REVIEW.** Cobertura QA de IM-966 (Add general NPS survey position), bajo el epic
+  IM-970 NPS Survey Tool delivery. QA Sub-task asociada: IM-1006.
 
-  Contexto pinneado (per QA-NPS-Survey-Tool.md):
-  - Env dev: `https://surveytool.dev.veevart.ai`
-  - Client org id: `computing-power-944-dev-ed` (scratch org validada)
-  - Trigger validado: **Rentals Quick Save** (mismo path que TC-78 runtime)
-  - Placement general se evalúa ANTES que el feature-specific
-  - Delay del general usa Salesforce `User.CreatedDate`
+  ## Por qué existe una v2
 
-  Config concreta esperada del general survey:
-    Subject / Feature: General Veevart NPS
-    Feature slug: general-veevart
-    Type: NPS
-    Active: true
-    General survey: true
-    Client org: computing-power-944-dev-ed
-    Show after User.CreatedDate: 0 days
-    Max dismissals: 1
-    Audience: everyone
-    Trigger: No trigger
+  La historia YA pasó por QA una vez: **TC-96 v1 → TR-097 (2026-07-03, 12/13 PASS, 1 blocked)**
+  → `Request Approved`. El **2026-07-16** David la reabrió (Request Approved → Not started →
+  In Progress → Under Code Review) y el **2026-07-29** **reescribió la descripción**: los ACs
+  pasaron de 4 genéricos a **7 específicos**, con territorio funcional nuevo que la v1 no cubría.
 
-  Eligibility response shape esperada cuando el general es eligible:
-    {
-      "isGeneralSurvey": true,
-      "generalClientOrgId": "computing-power-944-dev-ed",
-      "accountCreatedDelayDays": 0
-    }
+  Lo que la v1 YA validó y sigue vigente: prioridad general-antes-que-feature, fallback,
+  supresión por respuesta previa y por max dismissals, contrato del iframe URL, delay por
+  `User.CreatedDate`, endpoint de reset admin.
+  Lo que es **NUEVO** en los ACs y NO estaba en la v1:
+  - **AC2/AC3 — scoping por organización** (`audience=organization` multi-org y `audience=everyone`),
+    con validación de que la organización esté **activa**.
+  - **AC6 — atribución de la respuesta**: la respuesta se guarda contra la General Survey
+    preservando el contexto del trigger original.
+  - **AC7 — prevención de conflicto**: la API impide guardar dos General Surveys activas cuyos
+    scopes se solapen.
 
-  Iframe URL contract cuando eligibility retorna el general desde un trigger
-  de Rentals:
-    /survey/rentals?surveyId=<generalSurveyId>&clientOrgId=<org>&respondentId=<user>&userCreatedDate=<date>
+  ## PRs bajo prueba (los tres MERGEADOS, no los de la v1)
 
-  Repos en scope:
-  - `survey-tool` — admin flow + public endpoint del general placement
-  - `AuctiferaDX` — widget integration del trigger Rentals (validado)
-  - `NFPFundraising` — namespace `vnfp`, widget NPS pendiente en branch
-    `origin/story/nps-surveys-implementation-for-REN-394` (no en `main`)
+  La v1 validó survey-tool #25 + #27 + #28. El alcance nuevo vive en:
 
-  Validar:
-  1) admin puede crear + activar general NPS independiente de product-specific,
-  2) con general active + delay elapsed + no prior response/dismissal, Rentals
-     Quick Save muestra modal con título "General Survey" (no "Rentals"),
-  3) fallback a Rentals con título "Rentals" cuando: general inactive / delay
-     not elapsed / already answered / max dismissals reached / general exhausted,
-  4) coexistencia no regresa product-specific behavior (39/39 boundary tests),
-  5) missing userCreatedDate → general no evaluable,
-  6) iframe URL preserva surveyId + userCreatedDate (si falta cualquiera, modal
-     dice "No active survey for this subject"),
-  7) admin reset route disponible para QA state management,
-  8) implementación construida sobre dynamic placement model (no slug hardcoded),
-  9) NFPFundraising cross-test blocked hasta unblock via beta/scratch/source deploy.
+  | AC | PR |
+  | --- | --- |
+  | AC1, AC2, AC3, AC4, AC5, AC7 | **survey-tool #29** `fix/survey-general-frequency-ux` (merged 2026-07-15) — 7 files, `apiBoundary.test.ts` +589 |
+  | AC6 | **survey-tool #33** `fix/general-survey-submit-user-created-date-IM-1099` (merged 2026-07-17) |
+  | AC4, AC5, AC6 (lado widget) | **AuctiferaDX #2525** `fix/nps-widget-render-selected-survey-IM-966` (merged 2026-07-16) |
 
-  QA Sub-task asociada: IM-1006
-  Riesgos abiertos:
-  - Dynamic placement dependency: si el dev metió slug hardcoded como fallback,
-    es deuda técnica — validar approach en PR review.
-  - NFPFundraising widget NPS está en branch pending, no en `main` — cross-test
-    blocked hasta beta package, scratch preparado, o source deploy autorizado.
-  - Priority rule 8 (missing userCreatedDate) es data-quality issue: si el
-    Salesforce trigger no envía User.CreatedDate, el general no funcionará
-    aunque esté activo — validar el trigger context antes de exigir el AC.
+  AuctiferaDX **#2473** (`fix: pass selected survey to NPS widget IM-966`) quedó **CLOSED**,
+  superseded por #2525.
+
+  **Fuera de alcance (es IM-1099, no IM-966):** el trigger *after-login* — survey-tool #32 y
+  AuctiferaDX #2527 / #2536. El AC6 de IM-966 dice explícitamente *"when it was opened from a
+  feature trigger"*, no desde login.
+
+  ## Mecánica confirmada en el código de #29
+
+  - `validation.ts`: se **eliminó** el refine que exigía `generalClientOrgId` en toda general
+    survey → habilita la configuración independiente del AC1.
+  - `features.ts`: `surveyAllowsClientOrg()` resuelve el scope — legacy `generalClientOrgId`
+    (match exacto, compat hacia atrás) → `audience=everyone` (true) → `audience=organization`
+    (la lista de tokens contiene el clientOrgId) → si no, false.
+  - `features.ts`: `isActiveClientOrg()` consulta `organizations` por `subdomain` + `active=true`;
+    `surveyRuntime.ts` devuelve `reason: "general_client_org_inactive"` cuando no lo está.
+  - `features.ts`: para una general **global** (sin `generalClientOrgId`), el estado del respondent
+    —responses, impressions, dismissals— se cuenta **por `clientOrgId`**: el mismo respondent en
+    otra organización arranca con estado limpio.
+  - `responses.ts`: el submit exige `clientOrgId` (400), valida que la org esté activa cuando la
+    survey es global (400 *"clientOrgId does not match an active organization"*) y **re-evalúa la
+    eligibility al momento de guardar** vía `getSurveyEligibilityVerdict`.
+  - `surveys.ts`: `generalSurveyScope()` + `scopesOverlap()` + `findActiveGeneralSurveyConflict()`
+    → **409** si dos general activas se solapan (global↔global, global↔org, org↔org con org común);
+    **400** si el scope es inválido (`audience=organization` sin ninguna org, o audience distinto de
+    everyone/organization).
+
+  ## Entorno
+
+  - `https://surveytool.dev.veevart.ai` — admin y endpoint público del survey-tool.
+  - **Scratch org Auctifera `nps_2`** (alias local `auctifera-nps2`) — para el widget de AuctiferaDX
+    y el trigger Rentals Quick Save (`Auctifera__AddManageResourcesToRentalEvent`).
+    **Expira 2026-07-31.** Verificado: su instancia es
+    `computing-power-944-dev-ed.scratch.my.salesforce.com`, es decir **la MISMA org que usó TR-097**
+    — no había expirado. Su build de Auctifera es source local (no package instalado) con
+    `Auctifera__npsWidget` modificado el **2026-07-21** y `Auctifera__NpsWidgetController` el
+    **2026-07-22**, ambos posteriores al merge de #2525 (2026-07-16) ⇒ **incluye el PR bajo prueba**.
+  - **Scratch org NFPFundraising `vnfp_pkg`** (alias local `vnfp-pkg`) — para el cross-test del
+    namespace `vnfp`. **Expira 2026-08-14.** Verificado: tiene `vnfp__NpsWidgetController`,
+    `vnfp__npsWidget`, `vnfp__SurveyWidgetTrigger` y `vnfp__npsAfterLoginLauncher` (creados
+    2026-07-16 / 2026-07-21), más **Auctifera 8.309.0.2** como package instalado.
+  - Credenciales de ambas orgs: fuera de este artefacto y fuera de Jira, por política. Se manejan
+    solo en la sesión de ejecución.
+
+  ## Riesgos abiertos
+
+  - **⏳ La org de Auctifera expira el 2026-07-31.** Los escenarios AC4, AC5, AC6 (lado widget) y la
+    evidencia funcional UI dependen de ella y hay que ejecutarlos ANTES de esa fecha. Si expira
+    primero, quedan `not-run` con hand-off explícito, nunca fingidos como PASS.
+  - **La versión de Auctifera de la org `vnfp_pkg` (8.309.0.2) es un package instalado de fecha
+    2026-07-16**, el mismo día en que #2525 mergeó a las 21:27 UTC — no está confirmado que lo
+    incluya. Por eso los escenarios del widget Auctifera se ejecutan en `auctifera-nps2`, cuyo build
+    sí es posterior, y la org `vnfp_pkg` se usa solo para el cross-test del namespace `vnfp`.
+  - **Los tres PRs están mergeados**: no hay pre-fix vs post-fix por checkout de branch abierta —
+    el baseline es el commit anterior a cada merge, y el revert-proof se hace revirtiendo los
+    archivos a ese punto.
+  - **⚠️ TOPOLOGÍA DE RAMAS — riesgo de release.** #29 / #33 / #34 **NO mergearon a `main`**:
+    mergearon a `epic/nps-survey-delivery-and-metrics`. `main` sigue en **`737a62b6`** (#28), que
+    es exactamente el estado que ya validó TR-097 y que además **es el commit base de #29** — o sea
+    `main` no se movió desde la v1. El deploy de `surveytool.dev.veevart.ai` corre la rama épica
+    (comprobado: `GET /api/surveys/general/eligible` responde 200 y esa ruta no existe en `main`).
+    Consecuencia: **lo que QA valida acá está en la épica, no en `main`**; el merge de la épica a
+    `main` es un paso de release todavía pendiente y fuera del control de este test case.
+  - **AC2/AC3 necesitan al menos 2 organizations en el survey-tool** (una activa y otra inactiva, o
+    dos activas distintas) para probar scoping y el caso `general_client_org_inactive`. El entorno de
+    TR-097 solo tenía `computing-power-944-dev-ed` → hay que crear las orgs de prueba o dejar esos
+    asserts en el nivel de suite (`apiBoundary.test.ts`).
+  - **Estado per-org del respondent**: es un cambio de semántica silencioso frente a la v1 — el mismo
+    respondentId puede volver a ver la general en otra org. Si el producto NO lo quiere así, es un
+    defecto de diseño a levantar, no un PASS.
+  - **NFPFundraising: el cross-test queda DESBLOQUEADO y verificado en esta v2.** En TR-097 quedó
+    `blocked` porque el widget NPS vivía en la branch `origin/story/nps-surveys-implementation-for-REN-394`
+    y no había scratch org. Ya existe la scratch `vnfp_pkg` y **se confirmó por query que el widget
+    del namespace `vnfp` está desplegado** (`vnfp__NpsWidgetController`, `vnfp__npsWidget`,
+    `vnfp__SurveyWidgetTrigger`). El escenario pasa de bloqueado a ejecutable.
 type: integration
 priority: medium
 status: active
 preconditions:
-- Build de `survey-tool` con IM-966 desplegado en `surveytool.dev.veevart.ai`
-- Widget AuctiferaDX enganchado al Rentals Quick Save trigger (validado en TR-087)
+- 'survey-tool desplegado en `surveytool.dev.veevart.ai` desde la rama `epic/nps-survey-delivery-and-metrics` (ahí viven #29/#33/#34). NO desde `main` — ver el riesgo de topología de ramas'
+- AuctiferaDX con `main` al día (incluye #2525) instalado en la scratch org Auctifera `nps_2`
+- 'Scratch org Auctifera `nps_2` autenticada en el CLI y VIGENTE — expira 2026-07-31: los escenarios de widget y UI se ejecutan antes de esa fecha o quedan `not-run` con hand-off'
+- 'Scratch org NFPFundraising `vnfp_pkg` (alias `NFPFundraising__vnfp_pkg`) autenticada y VIGENTE — expira 2026-08-14; habilita el cross-test del namespace `vnfp`'
 - Admin user del survey-tool con Google `@veevart.com` (Cognito Hosted UI)
-- Organization creada en survey-tool con `clientOrgId = computing-power-944-dev-ed`
+- 'Al menos DOS organizations en el survey-tool para cubrir scoping: una activa distinta de la del trigger, y una inactiva'
 - Product-specific Rentals survey activo (fixture reutilizado de TC-78) — slug `rentals`, NPS, active
-- General Veevart NPS survey configurable (slug `general-veevart`, general=true, activable/desactivable durante los scenarios)
-- Browser con DevTools (Network + Console) — inspección de eligibility payload y iframe URL
-- Cliente HTTP (curl) para hits directos al public endpoint sin cookies
-- Acceso al admin reset endpoint `DELETE /api/admin/features/:featureId/respondent-state/:respondentId` para reset entre scenarios
+- Clone de `survey-tool` para correr la suite del repo (`apiBoundary.test.ts`, +589 líneas en #29) y el revert-proof
+- Browser con DevTools (Network + Console) y cliente HTTP (curl) para hits anónimos al endpoint público
+- Endpoint de reset admin `DELETE /api/admin/features/:featureId/respondent-state/:respondentId` para limpiar estado entre escenarios
 format: gherkin
 scenarios:
-- title: IM-966 — Admin creates a general NPS survey with the expected concrete config
+- title: IM-966 AC1 — An admin marks a survey as General and configures it independently of any feature journey (generalClientOrgId is no longer mandatory)
   tags:
   - happy-path
   - im-966
@@ -92,226 +134,202 @@ scenarios:
   - ac-1
   - admin
   - survey-tool
+  - pr-29
   given:
-  - un admin autenticado en `surveytool.dev.veevart.ai` (Cognito + Google `@veevart.com`)
-  - existe la organization con `clientOrgId = computing-power-944-dev-ed`
+  - un admin autenticado en `surveytool.dev.veevart.ai`
   - existe un product-specific Rentals survey activo (slug `rentals`, NPS)
   when:
-  - "el admin crea una nueva survey con la config: Subject `General Veevart NPS`, slug `general-veevart`, Type NPS, Active true, General survey true, Client org `computing-power-944-dev-ed`, Show after User.CreatedDate 0 days, Max dismissals 1, Audience everyone, Trigger `No trigger`"
-  - activa la survey
+  - el admin crea una survey marcada como **General NPS Survey** SIN asignarle un `generalClientOrgId`
   then:
-  - la general survey queda persistida con placement general (`isGeneralSurvey=true`)
-  - "config es independiente de cualquier product-specific survey: no comparte slug, ni feature id, ni targeting"
-  - el admin endpoint distingue placement=general de placement=feature en el response schema
-  - queda activable/desactivable desde el admin UI
-- title: IM-966 — Rentals Quick Save serves the general survey when eligible (title "General Survey", eligibility + iframe URL contract)
+  - la survey se persiste con `isGeneralSurvey=true` y la API la acepta — el refine que antes exigía `generalClientOrgId` fue eliminado en `validation.ts` (#29)
+  - la configuración es independiente de cualquier feature journey — no comparte slug, feature id ni targeting con el Rentals survey
+  - el admin puede activarla y desactivarla sin tocar ninguna survey product-specific
+  - las general surveys legacy que SÍ traen `generalClientOrgId` siguen siendo válidas (compat hacia atrás)
+- title: IM-966 AC2 — A General Survey scoped to selected organizations is only evaluated for respondents belonging to one of those active organizations
   tags:
   - happy-path
   - im-966
   - im-1006
   - im-970
   - ac-2
-  - widget
-  - salesforce
-  - rentals
-  - priority-rule-1
-  - priority-rule-2
-  - priority-rule-3
+  - org-scoping
+  - audience-organization
+  - pr-29
   given:
-  - la general survey `general-veevart` está active con delay=0 días
-  - "no hay prior response ni dismissal del general para el `respondentId` bajo test"
-  - "el widget está enganchado a Rentals Quick Save en el scratch org `computing-power-944-dev-ed` (mismo path validado en TR-087)"
+  - una General Survey activa con `audience=organization` y una lista de orgs que INCLUYE `computing-power-944-dev-ed` y EXCLUYE una segunda org activa
   when:
-  - "el usuario dispara Rentals Quick Save (cmp `Auctifera__AddManageResourcesToRentalEvent` → botón Quick Save)"
-  - el widget hace GET a `/api/features/rentals/surveys?clientOrgId=...&respondentId=...&userCreatedDate=...&today=...&usageCount=...`
+  - se pide eligibility para un respondent de `computing-power-944-dev-ed` y luego para un respondent de la org excluida
   then:
-  - "response es 200 con eligibility payload: `isGeneralSurvey: true`, `generalClientOrgId: computing-power-944-dev-ed`, `accountCreatedDelayDays: 0`"
-  - NO hay redirect a Cognito (mismo gate que TC-78 AC1)
-  - request es anónima sin admin cookie (mismo gate que TC-78 AC6)
-  - "iframe/modal URL incluye AMBOS `surveyId=<generalSurveyId>` Y `userCreatedDate=<date>` en query"
-  - "el modal renderiza el general survey — título dice exactamente `General Survey`, NO `Rentals`"
-- title: IM-966 — Rentals fallback with title "Rentals" when the general survey is inactive
+  - el respondent de la org incluida SÍ obtiene la General Survey — `surveyAllowsClientOrg()` encuentra el token en `audienceDetails`
+  - el respondent de la org excluida NO la obtiene, y cae al comportamiento feature-specific
+  - la lista tolera separadores `,` `;` y salto de línea, y compara normalizado (trim + lowercase)
+  - una General Survey con `audience=organization` y lista vacía es rechazada por la API con **400** *"General surveys targeting organizations require at least one organization."*
+- title: IM-966 AC3 — A General Survey scoped to everyone is evaluated for any ACTIVE organization, and an inactive organization is rejected with general_client_org_inactive
+  tags:
+  - happy-path
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - ac-3
+  - org-scoping
+  - audience-everyone
+  - active-org-validation
+  - pr-29
+  given:
+  - una General Survey activa con `audience=everyone` y sin `generalClientOrgId`
+  - dos organizations en el survey-tool — una `active=true` y otra `active=false`
+  when:
+  - se pide eligibility para un respondent de la org activa y luego para uno de la org inactiva
+  then:
+  - el respondent de la org **activa** obtiene la General Survey en cualquier organización, sin necesidad de listarla
+  - 'el respondent de la org **inactiva** NO la obtiene — `isActiveClientOrg()` falla y el runtime devuelve `reason: "general_client_org_inactive"`'
+  - un `clientOrgId` ausente o vacío tampoco es elegible (`surveyAllowsClientOrg()` retorna false sin org)
+  - "**cambio de semántica a validar con producto**: para una general global, el estado del respondent (responses, impressions, dismissals) se cuenta POR `clientOrgId` — el mismo respondentId vuelve a ser elegible en otra organización. Si producto NO quiere ese comportamiento, se levanta como defecto de diseño"
+- title: IM-966 AC4 — When both an eligible General Survey and an eligible feature-specific survey exist, the General Survey is delivered first
   tags:
   - happy-path
   - im-966
   - im-1006
   - im-970
-  - ac-3
+  - ac-4
+  - priority
+  - rentals
+  - widget
+  - pr-29
+  - pr-2525
+  given:
+  - una General Survey activa y elegible para el respondent bajo test
+  - el Rentals product-specific survey también activo y elegible para el mismo respondent
+  when:
+  - se dispara Rentals Quick Save y el widget pide eligibility al endpoint del feature
+  then:
+  - la respuesta entrega la **General Survey**, no la de Rentals — la prioridad general-antes-que-feature se mantiene tras el refactor de scope de #29
+  - el widget abre exactamente la survey seleccionada por el backend (AuctiferaDX #2525 pasa el `surveyId` elegido en vez de re-resolver por contexto de feature)
+  - el modal muestra el título de la General Survey, no `Rentals`
+  - el payload preserva el contexto del trigger — `clientOrgId`, `respondentId`, `userCreatedDate` y `usageCount`
+- title: IM-966 AC5 — When the General Survey is not eligible, already answered or exhausted by dismissal rules, the feature-specific survey is delivered as fallback
+  tags:
+  - happy-path
+  - edge-case
+  - im-966
+  - im-1006
+  - im-970
+  - ac-5
   - fallback
   - rentals
-  given:
-  - la general survey está inactive (nunca activada o desactivada, o placement general disabled)
-  - el product-specific Rentals survey está active y eligible
-  when:
-  - Rentals Quick Save trigger fires
-  - el widget hace GET al eligibility endpoint
-  then:
-  - "response NO indica general survey (`isGeneralSurvey` no está o es false)"
-  - "el widget renderiza el Rentals survey — título dice exactamente `Rentals`"
-  - no hay error en console
-- title: IM-966 — Rentals fallback when general delay has not elapsed (priority rule 4)
-  tags:
-  - edge-case
-  - im-966
-  - im-1006
-  - im-970
-  - ac-3
-  - priority-rule-4
-  - user-created-date
-  given:
-  - la general survey está active con `Show after User.CreatedDate` > age del user en días
-  - el respondent user tiene `User.CreatedDate` reciente (delay no ha pasado)
-  - el product-specific Rentals survey está active y eligible
-  when:
-  - Rentals Quick Save fires
-  then:
-  - eligibility response NO retorna el general
-  - el general NO aparece
-  - el Rentals survey aparece si es eligible (título `Rentals`)
-- title: IM-966 — General survey is hidden after the same respondent already answered it (priority rule 5)
-  tags:
-  - edge-case
-  - im-966
-  - im-1006
-  - im-970
-  - ac-3
-  - priority-rule-5
-  - repeat-suppression
-  given:
-  - la general survey está active y fue eligible en un run anterior
-  - el mismo `respondentId` SUBMITED una response al general
-  when:
-  - Rentals Quick Save fires otra vez para el mismo respondent
-  then:
-  - el general NO aparece de nuevo
-  - "eligibility response del general endpoint indica no-show (isGeneralSurvey ausente/false o accountCreatedDelayDays lock)"
-  - el Rentals survey puede aparecer si su propia eligibility lo permite
-- title: IM-966 — General survey is hidden after reaching Max dismissals (priority rule 6)
-  tags:
-  - edge-case
-  - im-966
-  - im-1006
-  - im-970
-  - ac-3
-  - priority-rule-6
-  - dismissal-suppression
-  given:
-  - la general survey está active con `Max dismissals = 1`
-  - el mismo `respondentId` alcanzó el max dismissals (dismissed una vez)
-  when:
-  - Rentals Quick Save fires otra vez para el mismo respondent
-  then:
-  - el general NO aparece de nuevo
-  - el Rentals survey puede aparecer si su propia eligibility lo permite
-- title: IM-966 — Product-specific Rentals survey keeps working when a general survey coexists (no regression, boundary 39/39)
-  tags:
   - regression
+  - pr-29
+  - pr-2525
+  given:
+  - el Rentals product-specific survey activo y elegible
+  when:
+  - "se dispara Rentals Quick Save con la General Survey en cada uno de estos estados: inactiva · delay por `User.CreatedDate` no cumplido · ya respondida por ese respondent · max dismissals alcanzado · org fuera del scope · org inactiva"
+  then:
+  - en los seis casos la General Survey NO se entrega y el widget cae al Rentals survey con su título propio
+  - la eligibility del feature-specific NO se ve alterada por la existencia de la general — no hay contaminación cruzada en el payload
+  - no se registran errores en consola ni respuestas 5xx
+- title: IM-966 AC6 — A General Survey response opened from a feature trigger is saved against the General Survey and preserves the original trigger context
+  tags:
+  - happy-path
   - im-966
   - im-1006
   - im-970
-  - ac-4
-  - eligibility
-  - regression-evidence
-  - priority-rule-7
+  - ac-6
+  - response-attribution
+  - trigger-context
+  - pr-33
+  - pr-2525
   given:
-  - la general survey está active
-  - el Rentals product-specific survey está active
-  - la general survey NO es eligible (delay/answered/dismissed exhausted)
+  - una General Survey elegible entregada desde el trigger de Rentals (feature trigger)
   when:
-  - Rentals Quick Save fires
+  - el respondent envía la respuesta desde el modal
   then:
-  - el response del Rentals feature endpoint retorna el Rentals survey (no el general)
-  - la eligibility del Rentals NO se ve afectada por la existencia del general
-  - los apiBoundary tests que lockearon el contrato en IM-963 siguen 39/39 en el CI
-  - NO hay cross-contamination entre general y feature en el response payload
-- title: IM-966 — Missing User.CreatedDate is treated as data-quality issue (priority rule 8)
+  - la respuesta queda guardada contra el **id de la General Survey**, no contra el feature survey
+  - el contexto del trigger original se preserva en el registro — `clientOrgId`, `respondentId` y `userCreatedDate`
+  - "`responses.ts` re-evalúa la eligibility en el submit (`getSurveyEligibilityVerdict`): un envío para una survey que ya no es elegible en ese contexto se rechaza en vez de guardarse"
+  - "el submit sin `clientOrgId` responde **400** *\"clientOrgId does not match the general survey\"*; con una org no activa sobre una general global responde **400** *\"clientOrgId does not match an active organization\"*"
+  - "regresión de #33: el `userCreatedDate` viaja por AMBOS paths públicos de submit — era el bug por el que la respuesta se rechazaba después de abrir el modal"
+- title: IM-966 AC7 — The API prevents saving a second active General Survey whose scope overlaps an existing one
   tags:
   - negative
   - im-966
   - im-1006
   - im-970
+  - ac-7
+  - conflict-prevention
+  - overlap
+  - api-boundary
+  - pr-29
+  given:
+  - una General Survey ACTIVA ya guardada
+  when:
+  - un admin intenta guardar (create o update) una segunda General Survey activa con distintas combinaciones de scope
+  then:
+  - "**global vs global** → rechazado con **409** *\"An active general survey already exists...\"*"
+  - "**global vs scoped a organizaciones** → rechazado con **409** (`scopesOverlap` retorna true en cuanto cualquiera de los dos es global)"
+  - "**scoped vs scoped compartiendo al menos una org** → rechazado con **409**"
+  - "**scoped vs scoped con listas disjuntas** → PERMITIDO, se guarda correctamente"
+  - guardar la MISMA survey (update sobre sí misma) no dispara falso conflicto — `exceptSurveyId` la excluye
+  - 'una general **inactiva** que solape no bloquea el guardado: el conflicto solo considera `active=true`'
+  - "un audience distinto de `everyone`/`organization` en una general se rechaza con **400** *\"General surveys can only target everyone or organizations.\"*"
+- title: IM-966 — Repo suites (server AND client) and revert-proof — the contract holds on the epic branch and the new guards fail when the source is reverted to main
+  tags:
+  - regression
+  - im-966
+  - im-1006
+  - im-970
+  - api-boundary
+  - revert-proof
+  - gates
+  - pr-29
+  - pr-33
+  given:
+  - "clone de `survey-tool` con la rama `epic/nps-survey-delivery-and-metrics` (donde viven #29/#33/#34) y el commit base `737a62b6`, que además ES el HEAD actual de `main`"
+  when:
+  - se corren AMBAS suites (`server/` y `client/`) sobre la épica y luego se revierte solo el código de `server/src` a `737a62b6`, dejando los tests en la épica
+  then:
+  - "la suite de `server/` pasa completa (incluye las +589 líneas que #29 añadió a `apiBoundary.test.ts`)"
+  - "la suite de `client/` pasa completa — cubre `SurveyWidget.test.ts` y `surveyDisplayRules.test.ts`, con las aserciones de `userCreatedDate` que respaldan el AC6 desde el lado del navegador"
+  - "revirtiendo `surveys.ts` / `features.ts` / `responses.ts` / `validation.ts` / `surveyRuntime.ts` al estado de `main`, los tests de scoping, prioridad, conflicto y atribución **FALLAN** — los guards no son vacuos"
+  - el contrato que IM-963 lockeó en `apiBoundary` sigue verde — sin regresión del comportamiento feature-specific
+- title: 'IM-966 — Functional UI (admin) — the survey admin form drives the General scope on screen: audience becomes required, the multi-org picker feeds audienceDetails, a global scope reads "All active organizations", and saving an org-scoped General with no organization is blocked in the UI before it ever reaches the API'
+  tags:
+  - happy-path
+  - negative
+  - im-966
+  - im-1006
+  - im-970
+  - ac-1
+  - ac-2
   - ac-3
-  - priority-rule-8
-  - missing-doc
-  - data-quality
+  - functional-ui
+  - evidence-ui
+  - screenshots
+  - manual-execution
+  - admin-ui
+  - survey-tool
+  - pr-29
   given:
-  - la general survey está active con delay=0
-  - el Salesforce trigger context NO envía `userCreatedDate` (missing / null)
+  - "PASO 0 (acceso) — abrí `https://surveytool.dev.veevart.ai/` en el browser. Te redirige al login de Cognito; entrá con **Google, cuenta `@veevart.com`**. Al entrar caés en `/admin/features`."
+  - "PASO 0b (verificá que haya con qué probar) — en el menú lateral entrá a **Organizations**. Necesitás **al menos dos** organizations. Una tiene que ser `computing-power-944-dev-ed` (la del scratch org). Si hay una sola, creá otra cualquiera — solo se usa para poder seleccionar/deseleccionar en el picker. Anotá cuáles están **activas**."
   when:
-  - Rentals Quick Save fires
+  - "1. En el menú lateral hacé click en **Surveys** (te lleva a `/admin/surveys`). Arriba a la derecha está el botón **New survey**."
+  - "2. Abrí **New survey**. Elegí el subject en **Select subject** y escribí cualquier texto en **Main question** — ese contenido no importa para esta prueba. 📸 `00-before-general-toggle.png` ANTES de tocar nada más: así queda el estado base para comparar."
+  - "3. Buscá el check **General NPS survey** y marcalo. 📸 `01-general-required-label.png`"
+  - "4. ⚠️ OJO CON EL NOMBRE — la audiencia NO es un select llamado *Audience*. La pantalla muestra un bloque titulado **`To whom are you sending this survey?`** con DOS radios: **`To everyone`** y **`To an organization / museum`**. Dejalo en `To everyone` y mirá cómo queda el bloque."
+  - "5. Marcá el radio **`To an organization / museum`**. Se despliega el selector de organizaciones. Seleccioná DOS."
+  - "6. Ahora deseleccioná TODAS las organizations y apretá el botón de guardado — que en el alta se llama **`Create`**, no *Save*. 📸 `02-validation-empty-orgs.png`"
+  - "7. Cancelá el formulario sin guardar y mirá en el listado la General que ya existe (la id 17). 📸 `03-list-all-active-orgs.png`"
   then:
-  - la general survey NO es evaluada como eligible (delay-based delivery no puede evaluarse)
-  - QA registra el missing `User.CreatedDate` como config/data-quality issue contra el widget o el trigger context
-  - "el server NO crashea: retorna gracefully (feature-specific fallback si aplica, o empty payload)"
-- title: IM-966 — Iframe URL contract — missing surveyId or userCreatedDate makes the modal show "No active survey for this subject"
-  tags:
-  - edge-case
-  - im-966
-  - im-1006
-  - im-970
-  - iframe-contract
-  - network-contract
-  given:
-  - eligibility retorna el general survey con `surveyId` + `userCreatedDate` válidos
-  when:
-  - "QA inspecciona el iframe/modal request URL: `/survey/rentals?surveyId=...&clientOrgId=...&respondentId=...&userCreatedDate=...`"
-  then:
-  - "si AMBOS `surveyId` Y `userCreatedDate` están en el query: el modal renderiza el general survey correctamente"
-  - "si cualquiera de los dos falta: el modal muestra `No active survey for this subject` — esto es el failure mode que QA debe reproducir para validar el error path"
-  - este scenario también actúa como regression guard para futuros cambios del widget/iframe contract
-- title: IM-966 — Dynamic placement model dependency (fallback to hardcoded slug = tech debt)
-  tags:
-  - missing-doc
-  - im-966
-  - im-1006
-  - im-970
-  - dependency
-  - architecture
-  given:
-  - technical scope de IM-966 pide "build on the dynamic placement model when available, rather than adding another hardcoded slug path"
-  when:
-  - QA revisa el PR del survey-tool
-  then:
-  - si el dev usó el dynamic placement model → PASS y alineado con la arquitectura target
-  - si el dev metió slug hardcoded como fallback → raiseo defect linkeando a la story del dynamic placement, marco este scenario fail y pido refactor cuando el dynamic placement esté listo
-- title: IM-966 — Admin reset endpoint enables repeatable QA runs (DELETE respondent state)
-  tags:
-  - qa-tooling
-  - im-966
-  - im-1006
-  - im-970
-  - admin
-  - reset
-  given:
-  - un respondent ya ejecutó submissions/dismissals contra el general survey
-  - QA necesita re-correr los scenarios 4-7 sin cambiar de user
-  when:
-  - QA llama `DELETE /api/admin/features/:featureId/respondent-state/:respondentId` con admin auth
-  then:
-  - el endpoint retorna 200/204
-  - la request requiere admin authentication (Cognito Hosted UI cookie); sin cookie retorna 401/302 a login (mismo gate que otros admin endpoints)
-  - post-reset, Rentals Quick Save vuelve a mostrar el general survey (state limpio)
-  - este endpoint queda documentado en el runbook de QA como el mecanismo canónico de reset entre runs
-- title: IM-966 — NFPFundraising cross-test (blocked until beta / prepared scratch / source deploy authorized)
-  tags:
-  - regression-evidence
-  - im-966
-  - im-1006
-  - im-970
-  - nfpfundraising
-  - cross-test
-  - blocked-if-missing
-  given:
-  - "el widget NPS de NFPFundraising está en branch `origin/story/nps-surveys-implementation-for-REN-394` — no en `main`, no en un installed package version"
-  - "el package usa namespace `vnfp`; la branch incluye `lwc/npsWidget/*`, `classes/NpsWidgetController.cls`, `staticresources/SurveyWidgetTrigger.js` + Aura integrations para Fundraising/Payment/Ticketing"
-  when:
-  - "una de las siguientes esté disponible: (a) beta/installable package version de NFPFundraising con el widget, (b) scratch org preparada con la branch deployed, (c) approval para source deploy de la branch a scratch"
-  then:
-  - QA re-ejecuta scenarios 2-8 desde el sandbox NFPFundraising con namespace `vnfp`
-  - el general widget se comporta igual que en AuctiferaDX
-  - se validan trigger context values (featureSlug, clientOrgId, respondentId, userCreatedDate, selected surveyId) desde los triggers Fundraising/Membership
-  - "MIENTRAS el package/scratch no esté disponible: scenario queda `blocked` con nota explícita — NO es blocker de IM-966 en AuctiferaDX; es cross-package coverage con dependencia externa"
-- title: IM-966 — Functional UI evidence — Rentals Quick Save renders the "General Survey" modal end-to-end with screenshots
+  - "PASO 3 — al marcar **General NPS survey** pasan DOS cosas. (a) La etiqueta del campo de audiencia pasa a decir **`Audience details (required)`** — en una survey NO general dice `(optional)`; ese cambio de palabra es el que hay que ver. (b) Aparece un bloque nuevo **`General survey trigger`** con dos radios, **`Show through existing feature triggers`** y **`Show after login`**, y viene marcado el PRIMERO: una General nueva nace en modo feature-trigger."
+  - "PASO 5 — debajo del selector de organizaciones aparece el texto de ayuda **`Selected organizations become the client org audience for the general survey.`**"
+  - "PASO 6 — **no se guarda**. Aparece en pantalla el mensaje **`Please choose at least one organization / museum for this general survey.`** y el formulario queda abierto. Esto es lo importante: el bloqueo ocurre en el browser, la petición ni siquiera sale a la API. Es el espejo visual del error 400 del AC2."
+  - "PASO 7 — la General global se lista con la audiencia **`General survey audience: All active organizations`** (no con el nombre de una organización). Es cómo se ve el AC3 en pantalla."
+  - "Compat legacy (opcional, solo si querés dejarlo documentado): con **exactamente UNA** organización seleccionada el form manda `generalClientOrgId`; con dos o más lo manda en `null` y usa `audienceDetails`. Se ve en DevTools → Network → el PUT/POST de la survey."
+  - "Dejá los screenshots en `attachments/tr-146-tc-96/scenario-9/`. El formulario se CANCELA sin guardar: este escenario no debe persistir ninguna survey. Si algún paso no se comporta como dice el `Then`, sacá igual la captura y avisá — eso sería un defecto real, no un error tuyo."
+
+- title: IM-966 — Functional UI evidence — Rentals Quick Save renders the General Survey end-to-end and the response lands attributed to it
   tags:
   - happy-path
   - im-966
@@ -324,25 +342,49 @@ scenarios:
   - salesforce
   - rentals
   given:
-  - IE logueado en el scratch org `computing-power-944-dev-ed` con permisos para navegar el Auctifera Rental Event component
-  - un respondent fresco o resetted (state limpio contra el general survey id=8) — reset via `DELETE /api/admin/features/8/respondent-state/<respondentId>` con admin cookie si el user ya vio la survey
-  - general survey activo en `surveytool.dev.veevart.ai` con `isGeneralSurvey=true`, `generalClientOrgId=computing-power-944-dev-ed`, `accountCreatedDelayDays=0`
-  - browser con DevTools Network abierto para capturar el request al eligibility endpoint y al iframe URL
+  - "⚠️ EL ORDEN IMPORTA: este escenario NO funciona hasta que haya una General **activa** en modo *feature trigger* cuyo scope incluya `computing-power-944-dev-ed`. La General preexistente (id 17) está en **Show after login**, y en ese modo el widget de Rentals NO la sirve — a propósito. Sin resolver esto vas a ver la survey de Rentals y parecerá un bug que no lo es."
+  - "PASO 0 (liberar el scope) — por el AC7, mientras la id 17 esté **activa** con audiencia global no se puede crear NINGUNA otra General activa: `everyone` solapa con todo y la API responde 409. Entonces primero **desactivá la id 17** (Edit survey → destildar **`Active (shown to respondents)`** → guardar), y anotá su configuración completa antes de tocarla para poder restaurarla."
+  - "PASO 0b (crear la General de prueba) — creá una General nueva: **`General NPS survey`** marcado, bloque **`To whom are you sending this survey?`** → **`To an organization / museum`** con `computing-power-944-dev-ed` seleccionada, bloque **`General survey trigger`** → **`Show through existing feature triggers`**, delay por antigüedad de usuario en 0, y **`Active (shown to respondents)`** marcado. 📸 `00-trigger-feature-mode.png`"
+  - "PASO 0c (respondent limpio) — si ese usuario ya respondió o descartó la survey antes, no va a volver a aparecer. Reseteá su estado con `DELETE /api/admin/features/<featureId>/respondent-state/<respondentId>` usando la cookie de admin del browser ya logueado."
+  - "PASO 0d — abrí DevTools en la pestaña **Network** ANTES de disparar nada, si no perdés las peticiones."
   when:
-  - IE navega a `/lightning/cmp/Auctifera__AddManageResourcesToRentalEvent?Auctifera__recordID=<rentalEventId>` en el scratch org
-  - captura screenshot pre-click (`01-pre-quicksave.png`) de la Lightning page con el botón Quick Save visible
-  - hace click en Quick Save
-  - espera a que el widget dispare el request al eligibility endpoint
-  - captura el request en DevTools Network (URL + response body) — el response debe incluir `isGeneralSurvey: true`
-  - captura el iframe URL cuando el modal se abre — debe incluir AMBOS `surveyId=8` (o el id del general) Y `userCreatedDate`
+  - "1. Entrá al scratch org de Auctifera (`computing-power-944-dev-ed`). Abrí un Rental Event y navegá a `/lightning/cmp/Auctifera__AddManageResourcesToRentalEvent?Auctifera__recordID=<id del rental event>`. 📸 `01-pre-quicksave.png` con el botón **Quick Save** visible."
+  - "2. Hacé click en **Quick Save**. Esperá a que aparezca el modal de la encuesta."
+  - "3. 📸 `02-modal-general-survey.png` con el modal abierto."
+  - "4. En DevTools → Network buscá la llamada a `/api/features/.../surveys`. 📸 `03-devtools-eligibility.png` mostrando la respuesta."
+  - "5. Ubicá la URL del iframe del modal (en el mismo Network, o inspeccionando el elemento `<iframe>`). 📸 `04-iframe-url.png`"
+  - "6. Respondé la encuesta y enviala. 📸 `05-post-submit.png`"
+  - "7. Volvé al admin del survey-tool, entrá a **Dashboard**, y buscá la respuesta recién enviada. 📸 `06-response-attributed.png`"
   then:
-  - screenshot `02-post-quicksave-modal-open.png` muestra el modal abierto sobre la Lightning page
-  - screenshot `03-modal-title-general-survey.png` muestra el `<h1>` del modal con texto literal "General Survey" (no "Rentals")
-  - screenshot `04-modal-nps-question.png` muestra la pregunta NPS ("How likely are you to recommend us to a friend or colleague?") con la escala 1-10
-  - screenshot `05-devtools-network-eligibility.png` (opcional) muestra en DevTools el GET a `/api/features/rentals/surveys?...` con response containing `isGeneralSurvey:true, generalClientOrgId:"computing-power-944-dev-ed", accountCreatedDelayDays:0`
-  - screenshot `06-iframe-url-preserved.png` (opcional) muestra el iframe/modal URL en la barra de dirección (o en DevTools) preservando `surveyId + userCreatedDate`
-  - (opcional) screenshot `07-post-submit.png` cierra el flow con el estado post-submit del respondent (thank-you o modal cerrado)
-  - todos los screenshots se dropan en `attachments/tr-097-tc-96/scenario-12/` (o el TR correspondiente al ciclo)
+  - "PASO 3 — el modal muestra el título de la **General Survey**, NO dice `Rentals`. Ese es el corazón del AC4: había una survey de Rentals elegible y aun así ganó la general."
+  - "PASO 4 — la respuesta del eligibility trae la General (`isGeneralSurvey: true`) y el `clientOrgId` de la org. Si en cambio devuelve la de Rentals, revisá primero que el PASO 0 haya quedado guardado en *feature triggers*."
+  - "PASO 5 — la URL del iframe lleva **ambos** parámetros: `surveyId=<id de la general>` y `userCreatedDate=<fecha>`. Si falta cualquiera de los dos el modal diría `No active survey for this subject`."
+  - "PASO 6 — la encuesta se envía sin error. Un 400 acá sería el bug que #33 arregló (el `userCreatedDate` no viajaba en el submit); si pasa, capturá la respuesta del POST — es defecto."
+  - "PASO 7 — la respuesta figura asociada a la **General Survey**, no a la de Rentals. Eso cierra el AC6."
+  - "PASO 8 (limpieza, obligatorio) — borrá la General de prueba (`DELETE /api/admin/surveys/<id>`, arrastra en cascada la respuesta enviada) y dejá constancia del estado final: total de surveys, generales que quedan y 0 respuestas de QA. La id 17 se restaura a su estado previo salvo que el dueño del entorno diga otra cosa."
+  - "Dejá los screenshots y el detalle en `attachments/tr-146-tc-96/scenario-10/`. Si el scratch org ya expiró (vence **2026-07-31**), el escenario queda `not-run` con esa razón — nunca se marca PASS sin evidencia."
+- title: IM-966 — NFPFundraising cross-test — UNBLOCKED in v2, the vnfp_pkg scratch org now exists (blocked since TR-097)
+  tags:
+  - regression-evidence
+  - im-966
+  - im-1006
+  - im-970
+  - nfpfundraising
+  - cross-test
+  - vnfp
+  - unblocked-in-v2
+  given:
+  - "la scratch org `vnfp_pkg` (alias local `vnfp-pkg`, expira 2026-08-14) — la condición (b) que TR-097 declaró como desbloqueo"
+  - "verificado por query que el widget del namespace está desplegado: `vnfp__NpsWidgetController`, `vnfp__npsWidget`, `vnfp__SurveyWidgetTrigger`"
+  - la General Survey configurada en `surveytool.dev.veevart.ai` con un scope que incluya la organización de esa org
+  when:
+  - se ejecutan desde esa org los escenarios de scoping, prioridad, fallback y atribución de la respuesta
+  then:
+  - "usando la identidad REAL de esa org (`User.Id` como `respondentId` y `User.CreatedDate` como `userCreatedDate`, leídos de la propia org, nunca inventados), la General acotada a esa organización se entrega desde sus subjects — igual que en Auctifera"
+  - "**control negativo de aislamiento**: el MISMO `respondentId` con el `clientOrgId` de Auctifera NO recibe la General acotada a `vnfp`, sino la feature survey. Es la contracara del AC2 ejecutada entre dos orgs reales"
+  - la respuesta enviada con el contexto de `vnfp` queda atribuida a la General Survey, con `clientOrgId` y `respondentId` de esa org preservados
+  - "**límite declarado**: si el paquete `vnfp` no expone en esa org un componente de *feature trigger* equivalente a `Auctifera__AddManageResourcesToRentalEvent`, el render del modal dentro de `vnfp` NO se puede disparar y así se documenta — el escenario cubre el contrato de backend, no el render. El launcher after-login de `vnfp` NO sirve como sustituto: es IM-1099, fuera de alcance"
+  - "si al verificar resulta que el widget `vnfp` NO está desplegado en esa org, el escenario vuelve a `blocked` — pero con esa razón concreta y verificada, no con la de TR-097"
 tags:
 - im-966
 - im-1006
@@ -350,6 +392,12 @@ tags:
 - survey-tool
 - nps
 - general-placement
+- org-scoping
+- audience-everyone
+- audience-organization
+- active-org-validation
+- conflict-prevention
+- response-attribution
 - public-widget
 - salesforce
 - auctifera-dx
@@ -357,9 +405,13 @@ tags:
 - rentals
 - priority-rules
 - functional-ui
-version: 3
+- re-review
+- pr-29
+- pr-33
+- pr-2525
+version: 5
 metadata:
   createdBy: codex
   createdAt: '2026-07-02T20:00:00Z'
   lastModifiedBy: codex
-  lastModifiedAt: '2026-07-03T18:10:00Z'
+  lastModifiedAt: '2026-07-30T18:40:00Z'

@@ -1,0 +1,71 @@
+TR-146 / TC-96 v2 — IM-966 · MATRIZ DE REGRESIÓN (técnica + seguridad)
+Planificada ANTES de ejecutar. Los veredictos se resuelven en regression-results.txt.
+
+SUT: survey-tool (Node/TS + Express + SQLite/drizzle) rama epic/nps-survey-delivery-and-metrics
+     + widget NPS de AuctiferaDX (LWC/Apex) + namespace vnfp de NFPFundraising
+PRs bajo prueba: survey-tool #29, survey-tool #33, AuctiferaDX #2525
+Base de comparación: 737a62b6 (= HEAD de main = commit base de #29)
+
+RADIO DE IMPACTO DECLARADO
+El cambio toca la RUTA DE DECISIÓN de qué survey se entrega, y esa ruta la comparten TODOS los
+subjects, no solo Rentals. Por eso la regresión no se limita al feature Rentals: hay que verificar
+que la entrega feature-specific preexistente siga intacta en cualquier subject y que los otros PRs
+que viajan en la misma rama épica (#30/#31 display rules, #34 CSV export) no queden rotos.
+
+--------------------------------------------------------------------------------------------------
+REGRESIÓN TÉCNICA
+--------------------------------------------------------------------------------------------------
+Item | Tipo | Riesgo | Método de verificación | Veredicto
+-----|------|--------|------------------------|----------
+T1  Entrega feature-specific preexistente (contrato que IM-963 lockeó en apiBoundary)
+    | técnica | ALTO | suite server/ completa sobre la épica + probe en vivo sin surveyId | TBD
+T2  Compat hacia atrás de generales legacy con generalClientOrgId (match exacto)
+    | técnica | ALTO | rama legacy de surveyAllowsClientOrg() + aserciones de la suite | TBD
+T3  Separación afterLogin vs featureTrigger (no contaminar IM-1099)
+    | técnica | ALTO | probe en vivo en ambos modos + test "delivers after-login general surveys
+    |         |      | only through the general eligibility endpoint" | TBD
+T4  Cambio de semántica: estado del respondent por clientOrgId en generales globales
+    | técnica | MEDIO | test "keeps global general survey respondent state scoped by organization"
+    |         |       | + control negativo entre dos orgs REALES | TBD
+T5  Contrato del widget: requestedSurveyId honrado por el backend (AuctiferaDX #2525)
+    | técnica | ALTO | probe con surveyId + URL del iframe capturada del DOM en org real | TBD
+T6  PRs que comparten la rama épica (#30/#31 display rules, #34 CSV export) no rotos
+    | técnica | MEDIO | suite server/ completa (sus tests viven en la misma suite) | TBD
+T7  Lado navegador: userCreatedDate serializado en el submit (mitad cliente del AC6)
+    | técnica | ALTO | suite client/ completa (tsx --test) | TBD
+T8  Los guards NUEVOS no son vacuos
+    | técnica | ALTO | revert-proof: server/src revertido a 737a62b6 con los tests en la épica | TBD
+T9  Blast radius por subject: qué triggers sirven la General
+    | técnica | MEDIO | eligibility contra CADA subject registrado con la misma General activa | TBD
+T10 Higiene del entorno dev COMPARTIDO (no dejar basura de QA)
+    | operativa | ALTO | snapshot previo + verificación campo a campo al cerrar cada ventana | TBD
+
+--------------------------------------------------------------------------------------------------
+REGRESIÓN DE SEGURIDAD
+--------------------------------------------------------------------------------------------------
+Item | Tipo | Riesgo | Método de verificación | Veredicto
+-----|------|--------|------------------------|----------
+S1  Secretos / credenciales en el diff
+    | seguridad | ALTO | grep de patrones sobre el diff completo de la épica vs main | TBD
+S2  Inyección SQL en los archivos tocados
+    | seguridad | ALTO | grep de sql`` / .raw( / execute( + revisión de cada interpolación | TBD
+S3  Dependencias nuevas o actualizadas
+    | seguridad | ALTO | git diff de package.json + package-lock.json (main vs épica) + npm audit | TBD
+S4  Control de acceso de las rutas admin (el cambio agrega escrituras de scope)
+    | seguridad | ALTO | lectura del montaje de middlewares + probes ANÓNIMOS a /api/admin/* | TBD
+S5  PII en logs (respondentId, clientOrgId, User.CreatedDate)
+    | seguridad | MEDIO | grep de console.* en los archivos tocados + revisión de qué imprime | TBD
+S6  Superficie del endpoint público anónimo (qué campos expone la respuesta)
+    | seguridad | MEDIO | probe anónimo + lectura del serializador de la ruta pública | TBD
+S7  OWASP Top 10 — scan de aplicabilidad de las 10 categorías
+    | seguridad | ALTO | ver owasp-top10-scan.txt | TBD
+
+--------------------------------------------------------------------------------------------------
+LO QUE ESTE PLAN NO CUBRE (declarado, no omitido)
+--------------------------------------------------------------------------------------------------
+· Merge de la rama épica a main: fuera del control de QA. Lo validado vive en la épica; main sigue
+  en 737a62b6. Es un riesgo de RELEASE que se reporta, no un defecto del código.
+· Render del modal dentro del namespace vnfp: no existe en esa org un componente de feature trigger
+  equivalente al de Auctifera. Se documenta como límite, no se finge.
+· Pruebas de carga / concurrencia sobre findActiveGeneralSurveyConflict: fuera del alcance del
+  ticket y sin entorno para generarlas de forma significativa.

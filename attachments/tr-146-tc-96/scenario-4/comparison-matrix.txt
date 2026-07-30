@@ -1,0 +1,27 @@
+TR-146 / TC-96 v2 · Escenario 4 (AC4) — Prioridad de la General y contrato requestedSurveyId del widget
+Método: probes read-only contra GET /api/features/rentals/surveys
+
+Caso                                   | Obtenido                        | AC  | ¿Objetivo? | Veredicto
+---------------------------------------|---------------------------------|-----|------------|----------
+Sin surveyId (modo featureTrigger)     | 1 survey: id 1, FEATURE          | AC4 | SI         | PASS
+                                       | (Rentals)                        |     | (correcto) |
+Con surveyId=17 (modo "any")           | 1 survey: id 17, GENERAL         | AC4 | SI         | PASS
+surveyId inválido (=abc)               | 400 {"error":"Invalid surveyId"} | AC4 | SI         | PASS
+
+LECTURA IMPORTANTE — el primer caso NO es una violación del AC4.
+La única General activa hoy (id 17) está configurada con generalTrigger=afterLogin. En
+selectEligibleSurveysForFeature el triggerMode es "featureTrigger" cuando no se pide un surveyId,
+así que la 17 queda correctamente filtrada y gana la de Rentals. El propio repo lo fija con el test
+"delivers after-login general surveys only through the general eligibility endpoint".
+
+La rama de prioridad del AC4 SÍ existe y corta antes de evaluar las feature surveys:
+    const eligibleGeneralSurvey = selectEligibleGeneralSurveys(ctx, {...})[0];
+    if (eligibleGeneralSurvey) return [eligibleGeneralSurvey];
+
+El segundo caso es el contrato que aporta AuctiferaDX #2525: el widget manda el surveyId elegido y el
+backend lo honra (triggerMode "any"), en vez de re-resolver por contexto de feature. Verificado en vivo.
+
+PENDIENTE para cerrar el AC4 al 100%: el caso "general en modo featureTrigger compitiendo contra una
+feature elegible" requiere cambiar el radio "General survey trigger" a "Show through existing feature
+triggers" en el admin — una escritura en el entorno dev compartido. Cubierto a nivel contrato por el
+test "prioritizes a global general survey for active organizations", que CAE al revertir a main.

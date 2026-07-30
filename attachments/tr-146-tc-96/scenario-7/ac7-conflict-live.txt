@@ -1,0 +1,37 @@
+TR-146 / TC-96 v2 · Escenario 7 (AC7) — La API impide dos General activas con scope solapado
+Método: POST /api/admin/surveys desde el browser con sesión de admin (Cognito) ya establecida
+Entorno: https://surveytool.dev.veevart.ai — rama epic/nps-survey-delivery-and-metrics
+Estado inicial: 9 surveys, 1 general activa (id 17, audience=everyone, generalClientOrgId=null)
+
+Caso                                              | HTTP | Respuesta                                                              | Persiste?
+--------------------------------------------------|------|------------------------------------------------------------------------|----------
+A) General ACTIVA global (everyone) vs la 17       | 409  | "An active general survey already applies to this audience (survey 17)."| NO
+B) General ACTIVA acotada a 1 org vs la 17 global  | 409  | "An active general survey already applies to this audience (survey 17)."| NO
+C) audience=organization con audienceDetails vacío | 400  | "General surveys targeting organizations require at least one           | NO
+   
+                                                   |      |  organization."                                                        |
+D) audience inválido ('segment')                   | 400  | zod: Expected 'organization' | 'specific_users' | 'everyone'            | NO
+E) General INACTIVA que solapa (active=false)      | 201  | creada con id 18 -> PERMITIDO                                          | SÍ (borrada)
+F) DELETE de la survey 18 creada en E              | 204  | -                                                                      | revertido
+
+Estado final verificado: 9 surveys, generales = [17]. El entorno queda EXACTAMENTE como se encontró.
+
+MAPEO CON LAS ASERCIONES DEL ESCENARIO 7:
+  global vs global -> 409 .................................. VERIFICADO EN VIVO (caso A)
+  global vs acotada a organizaciones -> 409 ................ VERIFICADO EN VIVO (caso B)
+  acotadas compartiendo al menos una org -> 409 ............ cubierto por el caso B y por el test
+                                                             "rejects overlapping active general survey scopes"
+  acotadas con listas disjuntas -> PERMITIDO ............... solo contrato: la 17 es global, así que en
+                                                             vivo todo solapa con ella
+  update sobre sí misma sin falso conflicto ................ solo contrato (exceptSurveyId)
+  general INACTIVA que solapa no bloquea ................... VERIFICADO EN VIVO (casos E + F)
+  audience distinto de everyone/organization -> 400 ........ VERIFICADO EN VIVO (caso D)
+
+OBSERVACIÓN DE CALIDAD (positiva): el mensaje de error nombra la survey en conflicto ("survey 17"),
+lo que hace el diagnóstico inmediato para el admin. El código anterior devolvía un texto genérico.
+
+CONSECUENCIA OPERATIVA IMPORTANTE:
+Mientras la survey 17 esté ACTIVA con audience=everyone, es IMPOSIBLE tener una segunda General
+activa en cualquier scope — porque everyone solapa con todo. Eso bloquea la estrategia de "crear una
+General de QA aislada" para los escenarios de runtime (4 live, 5 live, 6 positivo, 10, 11): no es un
+fallo del entorno, es el AC7 funcionando como se especificó.

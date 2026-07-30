@@ -1,0 +1,192 @@
+TR-146 / TC-96 v2 — IM-966 · OWASP TOP 10 (2021) — SCAN DE APLICABILIDAD
+Alcance: diff 737a62b6 (main) -> 14bde9d2 (epic/nps-survey-delivery-and-metrics) = 16 archivos,
++2061 / -416, con foco en los PRs bajo prueba #29 y #33.
+Archivos del cambio con superficie de seguridad:
+  server/src/lib/surveyRuntime.ts · server/src/lib/validation.ts
+  server/src/routes/features.ts   · server/src/routes/responses.ts · server/src/routes/surveys.ts
+Fecha: 2026-07-30
+
+Las 10 categorías se evalúan explícitamente. "No aplica" siempre lleva el motivo — no se omite
+ninguna en silencio.
+
+--------------------------------------------------------------------------------------------------
+A01 · Broken Access Control ......................................... APLICA — PASS (1 obs. Baja)
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el PR agrega escrituras de configuración de scope (quién ve qué General) y una
+frontera de autorización nueva del lado de entrega — el clientOrgId decide qué survey recibe cada
+respondent.
+
+Verificado:
+· Guarda transversal: `app.use("/api/admin", requireAdminAuth)` se monta ANTES de todos los
+  sub-routers admin. No es por-ruta, así que una ruta admin nueva no puede quedar sin proteger por
+  olvido. index.ts no fue tocado por la épica.
+· Probes ANÓNIMOS contra el deploy: GET /api/admin/{surveys,responses,organizations,settings} y
+  POST /api/admin/surveys -> los cinco 401. Un anónimo no puede crear ni leer configuración.
+· La frontera de scope FUNCIONA y se probó entre dos organizaciones REALES: el mismo respondentId
+  (005Rt00000XjqlyIAB) recibe la General acotada a flow-site-19432-dev-ed con su propio clientOrgId,
+  y NO la recibe enviando el clientOrgId de computing-power-944-dev-ed. No hay fuga cruzada.
+· El submit RE-VALIDA la eligibility en el servidor (getSurveyEligibilityVerdict) en vez de confiar
+  en lo que manda el cliente: un POST forjado para una survey que no le corresponde se rechaza.
+  Probado: 400 "clientOrgId does not match the general survey" y 400 "clientOrgId does not match an
+  active organization".
+
+Observación (Baja, compartida con A05): el endpoint público anónimo devuelve la fila completa de la
+survey, incluidos `audienceDetails` (lista de subdominios de organizaciones objetivo, campo NUEVO
+de #29) y `generalClientOrgId`. Un anónimo con UN clientOrgId válido puede leer qué otras
+organizaciones están en esa audiencia. No expone respuestas, puntajes ni identidades: es
+divulgación de cartera, no de datos de respondents. Detalle y recomendación en
+regression-results.txt § S6.
+
+--------------------------------------------------------------------------------------------------
+A02 · Cryptographic Failures ........................................ NO APLICA
+--------------------------------------------------------------------------------------------------
+El diff no toca cifrado, hashing, manejo de secretos, TLS ni almacenamiento de credenciales. La
+autenticación admin es Cognito Hosted UI y su flujo (server/src/lib/auth.ts, routes/auth.ts) no fue
+modificado por #29 ni por #33. No se persiste ningún dato sensible nuevo: los campos que agrega el
+cambio son configuración de targeting (audience, audienceDetails) y una fecha de creación de
+usuario que ya viajaba en el contrato.
+
+--------------------------------------------------------------------------------------------------
+A03 · Injection ..................................................... APLICA — PASS
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el PR agrega parsing de entrada de usuario (la lista de organizaciones se escribe
+como texto libre y se trocea) y consultas nuevas filtradas por ese valor.
+
+Verificado:
+· 0 usos de sql.raw(), .raw() o execute() en los archivos tocados.
+· Los 6 usos del tagged template `sql` de drizzle: `sql`date('now')`` (literal puro) y
+  `sql`datetime('now', ${...})`` (interpolación parametrizada por el driver).
+· El valor interpolado sale de getCooldownDays() -> toPositiveInt(): entero positivo validado o
+  null. Nunca texto crudo del usuario.
+· El resto del acceso a datos usa el query builder tipado (eq / and / gte), no concatenación.
+· detailsTokens() sobre `audienceDetails` solo separa por , ; y salto de línea, normaliza con trim
+  + lowercase y compara contra un Set en memoria — el valor NO se concatena a ninguna consulta.
+· No hay superficie de XSS del lado servidor: la API responde JSON, no HTML renderizado en servidor.
+
+--------------------------------------------------------------------------------------------------
+A04 · Insecure Design ............................................... APLICA — PASS (2 obs.)
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el PR introduce reglas de negocio de exposición — qué organización ve qué survey y
+cuántas veces — y una prevención de conflicto. Son decisiones de DISEÑO, no de implementación.
+
+Verificado a favor del diseño:
+· Prevención de conflicto por diseño: findActiveGeneralSurveyConflict() impide dos Generales
+  activas con scope solapado (409), en vez de dejar que "gane la última". Probado en vivo:
+  global vs global -> 409; global vs acotada -> 409; una general INACTIVA que solape -> permitida
+  (201), o sea el conflicto solo considera active=true. Correcto.
+· Fail-closed: sin clientOrgId, con clientOrgId vacío o con organización inexistente/inactiva, la
+  General NO se entrega. El default es no mostrar, no mostrar-por-las-dudas.
+· Validación en dos capas para el mismo invariante: el navegador bloquea guardar una General
+  acotada sin organizaciones ("Please choose at least one organization / museum for this general
+  survey.") Y la API responde 400 aunque se salte la UI. La UI es conveniencia, no el control.
+
+Observación 1 (para producto, no defecto): estado del respondent por clientOrgId. Para una General
+global, responses/impressions/dismissals se cuentan POR organización, así que el mismo usuario
+puede volver a ver la misma encuesta en otra organización. Es un cambio de semántica frente a la v1
+y está fijado por un test, o sea es intencional. Si producto no lo quiere así, es una decisión de
+diseño a revisar.
+
+Observación 2 (operativa): mientras exista UNA General activa con audience=everyone, es imposible
+crear cualquier otra General activa — everyone solapa con todo. Es el AC7 funcionando, pero implica
+que el equipo solo puede tener una campaña general global a la vez y que probar una segunda exige
+desactivar la primera. Vale documentarlo para operaciones.
+
+--------------------------------------------------------------------------------------------------
+A05 · Security Misconfiguration .......................... APLICA — PASS (hallazgo PREEXISTENTE)
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el cambio agrega endpoints y campos a la superficie pública.
+
+Verificado:
+· `app.use(cors())` en server/src/index.ts está SIN restricción de origen. Es PREEXISTENTE:
+  git diff main->épica sobre index.ts es VACÍO. No lo introduce este PR y no se le imputa. Se anota
+  para el backlog de plataforma: los endpoints públicos son anónimos por diseño (el widget corre en
+  dominios de clientes), así que CORS abierto es coherente con el diseño actual, pero la
+  contrapartida es que cualquier origen puede consultarlos.
+· Los errores no filtran stack traces al cliente en las rutas tocadas: responden {"error": "<msg>"}.
+· No se agregan variables de entorno nuevas ni flags de debug.
+· Comparte con A01 la observación Baja sobre campos de configuración expuestos en la respuesta
+  pública (regression-results.txt § S6).
+
+--------------------------------------------------------------------------------------------------
+A06 · Vulnerable and Outdated Components ................. APLICA — PASS (nada introducido)
+--------------------------------------------------------------------------------------------------
+Verificado:
+· git diff main->épica sobre package.json, package-lock.json, server/package.json y
+  client/package.json: VACÍO. Cero dependencias agregadas, quitadas o actualizadas.
+· npm audit en server/: 9 vulnerabilidades (2 high, 7 moderate).
+    drizzle-orm ..... SQL injection via improperly escaped SQL identifiers .......... high
+    path-to-regexp .. ReDoS via multiple route parameters .......................... high
+· Como el lockfile es idéntico entre main y la épica, las 9 son PREEXISTENTES. Este PR no introduce
+  ninguna. Ya reportadas en TR-085.
+· Verificación específica de la CVE de drizzle-orm: aplica a identificadores SQL mal escapados. En
+  los archivos tocados no se construye ningún identificador dinámico (ver A03), así que el cambio
+  NO amplía la exposición. Actualizar drizzle-orm es deuda del equipo, no de este PR.
+
+--------------------------------------------------------------------------------------------------
+A07 · Identification and Authentication Failures ..................... NO APLICA
+--------------------------------------------------------------------------------------------------
+El diff no toca login, sesión, cookies, MFA, rotación de tokens ni recuperación de cuenta. La
+autenticación admin sigue siendo Cognito Hosted UI con la misma implementación que en main
+(auth.ts sin cambios). El lado público es anónimo POR DISEÑO — el widget corre embebido en orgs de
+Salesforce sin sesión propia — y esa decisión es anterior a IM-966; la identidad del respondent es
+un identificador opaco de correlación (User Id de Salesforce), no una credencial.
+
+--------------------------------------------------------------------------------------------------
+A08 · Software and Data Integrity Failures ........................... APLICA — PASS
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el AC6 es literalmente un requisito de INTEGRIDAD DE ATRIBUCIÓN — la respuesta debe
+quedar contra la survey correcta con el contexto correcto. Una atribución equivocada corrompe los
+datos de NPS de forma silenciosa.
+
+Verificado:
+· El servidor re-evalúa la eligibility al momento de guardar (getSurveyEligibilityVerdict en
+  responses.ts), no confía en el payload del cliente. Un submit para una survey que ya no es
+  elegible en ese contexto se rechaza en vez de guardarse. Probado: 400 "Survey is not eligible for
+  this response context: user_created_date_missing".
+· Atribución correcta comprobada END-TO-END desde la UI real, no simulada: respuesta id 14,
+  surveyId 20 (la GENERAL, no la de Rentals id 1), respondentId 005dq00000NLWpIAAX (el User Id real
+  de Salesforce propagado por el widget), clientOrgId computing-power-944-dev-ed, score 9.
+· Repetido en la segunda org: respuesta id 15, surveyId 21, respondentId 005Rt00000XjqlyIAB,
+  clientOrgId flow-site-19432-dev-ed.
+· El userCreatedDate que viaja es el User.CreatedDate REAL leído de la org, no el reloj de la
+  corrida ni un valor inventado. Ése era exactamente el bug que #33 corrige.
+· Sin cambios en CI/CD, firmas, actualizaciones automáticas ni deserialización insegura.
+
+--------------------------------------------------------------------------------------------------
+A09 · Security Logging and Monitoring Failures ...................... APLICA — PASS
+--------------------------------------------------------------------------------------------------
+Por qué aplica: el flujo maneja identificadores de usuario (respondentId), identificadores de
+cliente (clientOrgId) y una fecha de creación de cuenta.
+
+Verificado:
+· Solo 2 console.* en los archivos tocados, NINGUNO nuevo de esta épica:
+    responses.ts:184 -> console.error("[salesforce-sync] response <id> failed:", e) — id interno.
+    features.ts:209  -> console.warn("General survey skipped", {reason, surveyId,
+                                      hasClientOrgId: <bool>, hasRespondentId: <bool>})
+· El segundo es un ejemplo de logging bien hecho: registra la PRESENCIA de los identificadores como
+  booleanos, nunca sus valores, y aun así deja diagnosticar por qué se saltó la General. No se
+  loguea userCreatedDate.
+· Los rechazos del submit devuelven un motivo accionable al cliente sin filtrar estado interno.
+
+--------------------------------------------------------------------------------------------------
+A10 · Server-Side Request Forgery (SSRF) ............................ NO APLICA
+--------------------------------------------------------------------------------------------------
+El diff no agrega ninguna petición saliente. No hay fetch/axios/http.request cuyo destino dependa
+de entrada del usuario. La única integración saliente del servicio (sync a Salesforce en
+responses.ts) apunta a un endpoint configurado por entorno, no derivado del request, y su lógica no
+fue modificada por este cambio.
+
+==================================================================================================
+RESUMEN
+==================================================================================================
+  APLICAN Y PASAN ....... A01 · A03 · A04 · A05 · A06 · A08 · A09    (7)
+  NO APLICAN ............ A02 · A07 · A10                            (3)
+  FALLAN ................ ninguna                                    (0)
+
+  Findings High/Critical .......... 0
+  Findings Medium ................. 0
+  Findings Low .................... 1  (A01/A05 — campos de configuración en la respuesta pública)
+  Vulnerabilidades introducidas ... 0  (las 9 de npm audit son preexistentes: lockfile idéntico)
+
+  => 0 defectos de seguridad levantados en Jira. La observación Baja va como recomendación al
+     equipo en el test run y en la QA Sub-task, no como bug bloqueante.
