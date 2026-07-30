@@ -1,0 +1,98 @@
+TR-146 / TC-96 · Escenario 10 — RECAPTURA DE EVIDENCIA VISUAL
+Fecha: 2026-07-30 (segunda pasada, mismo día). Org: computing-power-944-dev-ed (expira 2026-07-31).
+
+POR QUÉ EXISTE ESTE ARCHIVO
+La primera ejecución del escenario 10 cubrió el flujo end-to-end pero dejó solo 2 de las 7 capturas
+que el escenario nombra: los pasos 4 a 7 se ejecutaron por API y extracción del DOM, no por browser,
+así que quedaron documentados en texto (widget-e2e-org-real.txt) y no como imagen. Se rehízo el flujo
+completo por UI para producir la evidencia visual faltante. El veredicto NO cambia: era ya PASS por
+el contenido, lo que faltaba era la forma.
+
+SECUENCIA DE ESTA RECAPTURA
+  Baseline previo verificado ..... 9 surveys · general 17 inactiva · 8 respuestas · 0 rastros de QA
+  General de QA creada ........... id 22, DESDE EL FORMULARIO DEL ADMIN (no por API)
+                                   subject "General Veevart NPS" (featureId 8) · NPS
+                                   General NPS survey ✔ · trigger "Show through existing feature triggers"
+                                   audiencia "To an organization / museum" -> Auctifera NPS Scratch
+                                   Show after User.CreatedDate = 0 · Max dismissals 3 · Active ✔
+  Quick Save en el Rental Event .. a1pdq00000HsVMeAAN ("QA survey NPS")
+  Respuesta enviada .............. score 9 desde el modal
+  Limpieza ....................... DELETE /api/admin/surveys/22 -> 204
+  Baseline final verificado ...... 9 surveys · general 17 inactiva · 8 respuestas · 0 rastros de QA
+                                   -> IDÉNTICO al baseline previo
+
+CAPTURAS PRODUCIDAS
+  00-trigger-feature-mode.png ............ formulario del admin con la General configurada:
+        radio "Show through existing feature triggers" MARCADO, bloque "To whom are you sending this
+        survey?" en "To an organization / museum" con el chip "Auctifera NPS Scratch", delay 0.
+        En el listado de abajo se ve además la survey #17 como Inactive/General con
+        "General survey audience: All active organizations" y generalTrigger=afterLogin.
+  03-eligibility-response.png ............ respuesta REAL de
+        GET /api/features/rentals/surveys?clientOrgId=computing-power-944-dev-ed&respondentId=...
+        renderizada en el browser. Muestra id 22, isGeneralSurvey true, audience "organization",
+        audienceDetails "computing-power-944-dev-ed".
+        NOTA DE MÉTODO: el escenario pedía "📸 de DevTools → Network". El harness de automatización
+        no puede screenshotear el panel de DevTools, así que se capturó la MISMA respuesta pidiéndola
+        directamente. Contenido equivalente; el archivo se renombró para no afirmar que es DevTools.
+  04-modal-general-survey-recaptura.png .. el modal abierto sobre el Rental Event, titulado
+        "General Survey", con la pregunta de QA, la escala NPS 0-10 y Submit deshabilitado hasta
+        elegir puntaje.
+  05-post-submit.png ..................... estado inmediatamente posterior al envío: el modal se
+        cierra solo y devuelve el foco al componente de Rental Event. No hay pantalla de
+        agradecimiento — comportamiento observado, no defecto declarado.
+  06-response-attributed.png ............. Dashboard → Responses filtrado por subject
+        "General Veevart NPS": 2 respuestas, y la de 30/07/26 6:34 p.m. es la recién enviada
+        (client org computing-power-944-dev-ed, user 005dq00000NLWpIAAX, NPS 9).
+        ES LA PRUEBA VISUAL DEL AC6.
+  07-network-quicksave.txt ............... peticiones de red capturadas durante el Quick Save.
+
+URL DEL IFRAME (extraída del DOM tras el Quick Save)
+  https://surveytool.dev.veevart.ai/survey/rentals
+      ?surveyId=22
+      &clientOrgId=computing-power-944-dev-ed
+      &respondentId=005dq00000NLWpIAAX
+      &userCreatedDate=2026-07-01T15%3A58%3A58.000Z
+      &usageCount=1
+  Reproduce el mismo contrato que la primera pasada (allí surveyId=20, usageCount=3). El
+  usageCount bajó a 1 porque la survey es nueva: el contador es por survey, no global.
+  NOTA DE MÉTODO: una URL no es screenshoteable de forma legible sin el panel de DevTools; queda
+  como captura textual del atributo src del <iframe>, que es la fuente primaria de todos modos.
+
+RESPUESTA REGISTRADA
+  id ............. 16
+  surveyId ....... 22    <- la GENERAL, no la de Rentals (id 1)
+  featureId ...... 8
+  respondentId ... 005dq00000NLWpIAAX   <- User Id real de Salesforce
+  clientOrgId .... computing-power-944-dev-ed
+  score .......... 9
+  createdAt ...... 2026-07-30 18:34:38
+
+HALLAZGOS NUEVOS DE ESTA PASADA (no estaban en la primera)
+
+1. VALIDACIÓN DE UI QUE LA API NO EXIGE — "Start Date" obligatorio en el formulario.
+   El primer intento de "Create" fue rechazado en el browser con:
+       "Please choose the Start Date for this survey."
+   Sin embargo las generales 19, 20 y 21 de la primera pasada se crearon por API SIN Start Date y
+   la API las aceptó (201). O sea: la UI es MÁS estricta que la API en este campo.
+   Severidad: baja. No es un defecto funcional —el campo tiene sentido de producto— pero es una
+   asimetría de validación: un cliente que use la API directamente puede crear surveys en un estado
+   que la UI considera inválido. Se reporta como observación, no como defecto.
+
+2. COMPAT LEGACY CONFIRMADA EN VIVO — con UNA sola organización seleccionada, el formulario
+   persiste `generalClientOrgId: "computing-power-944-dev-ed"` ADEMÁS de
+   `audience: "organization"` y `audienceDetails`. Se ve literalmente en 03-eligibility-response.png.
+   El escenario 9 lo dejaba como "opcional, solo si querés dejarlo documentado" — queda confirmado.
+
+3. `generalTrigger` NO se escribe en triggerDetails cuando se elige el modo por defecto.
+   La 22 quedó con `triggerDetails: "cooldownDays=90, onePerRespondent=true"`, SIN
+   `generalTrigger=featureTrigger`. Verificado que igual se comporta como featureTrigger:
+       GET /api/features/rentals/surveys  -> [{id 22, GENERAL}]
+       GET /api/surveys/general/eligible  -> []
+   O sea la ausencia de la clave equivale a featureTrigger. Es coherente, pero significa que
+   `triggerDetails` no es una fuente confiable para saber el modo de una general: hay que asumir
+   featureTrigger cuando la clave falta. Dato útil para quien depure esto después.
+
+4. PRUEBA VISUAL DEL HALLAZGO DE SEGURIDAD BAJO (A01/A05).
+   03-eligibility-response.png es evidencia directa de lo reportado en owasp-top10-scan.txt: la
+   respuesta del endpoint público ANÓNIMO incluye `audienceDetails` y `generalClientOrgId`, o sea la
+   organización objetivo de la survey, además de `maxDismissals`, `triggerDetails` y `active`.
