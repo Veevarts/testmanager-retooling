@@ -1,0 +1,90 @@
+TR-149 / TC-110 · IM-1144 — Resultados de la regresión
+Ejecutado 2026-07-31. Ningún item quedó en TBD.
+
+TÉCNICA
+==================================================================================================
+T1 · Fan-out ............................................................................ PASS
+    illinois_2: BASE 4.706 -> POST 4.706 (delta 0)
+    tucson    : BASE    13 -> POST    13 (delta 0)
+    El riesgo real de agregar un join a una tabla SIN constraint único sobre PRODUCTID. El
+    OUTER APPLY ... TOP 1 lo evita por construcción, y se midió en dos fuentes.
+
+T2 · Pérdida de productos ................................................. PASS (con límite)
+    Anti-join en ambas fuentes: productos SIN ninguna fila en PRODUCTVENDOR = 0.
+    Como la cobertura de PRODUCTVENDOR es del 100% en las dos, estos datos NO permiten
+    distinguir OUTER APPLY de un INNER JOIN: los dos darían el mismo conteo. La garantía de
+    no-pérdida se sostiene por el OUTER (estructural) y por el fixture (T6), no por estos datos.
+    Se declara el límite en vez de sobrevender la evidencia.
+
+T3 · Resto de columnas .................................................................. PASS
+    Aliases emitidos: BASE 18 -> POST 19. Agregada 1 (la de vendor). Eliminadas 0.
+    Orden de las 18 comunes preservado. Cambio estrictamente aditivo.
+
+T4 · Contrato lockeado por IM-1005 ...................................................... PASS
+    shop-item-variant-coverage: 7/7 PASS sin cambios.
+
+T5 · Suite de query-regression .......................................................... PASS
+    41 suites pass · 389 tests pass · 14 suites (97 tests) skipped por falta de runner docker/live.
+    El PR reporta "41/41 suites": correcto, con el matiz de que son 41 DE 55.
+
+T6 · Fixture de testcontainers .......................................................... PASS
+    Ver scenario-3/fixture-behavior.txt. Requirió levantar colima (ver nota de entorno).
+
+T7 · Revert-proof ....................................................................... PASS
+    Con los 4 archivos de código en el commit base y los specs en la rama:
+        6 failed, 1 passed de 7.
+    El único que sobrevive es el invariante genérico "every emitted row key is a declared header",
+    que se cumple igual sin la columna. Los 6 específicos del cambio caen.
+
+T8 · Premisa VENDOR.ID = CONSTITUENT.ID ................................................. PASS
+    Es la premisa que sostiene la decisión de unir CONSTITUENT directamente sin pasar por VENDOR.
+        illinois_2: VENDOR 558 filas · sin CONSTITUENT correspondiente = 0
+        tucson    : VENDOR   3 filas · sin CONSTITUENT correspondiente = 0
+    Además, filas de PRODUCTVENDOR cuyo VENDORID no existe en CONSTITUENT = 0 en ambas.
+    La premisa se sostiene en las dos fuentes disponibles.
+
+    ⚠️ OBSERVACIÓN DE PRECISIÓN (Baja): el body del PR narra la cadena
+    "PRODUCTVENDOR -> VENDOR -> CONSTITUENT" y reporta "0 orphaned PRODUCTVENDOR rows against
+    VENDOR", pero el SQL **no une VENDOR en ningún momento**: va directo de PRODUCTVENDOR a
+    CONSTITUENT. La evidencia reportada es sobre una tabla que el query final no toca. El
+    resultado es equivalente porque VENDOR.ID = CONSTITUENT.ID (verificado arriba), pero la
+    descripción no refleja el código. Es un detalle de documentación del PR, no un defecto.
+
+T9 · Premisas de plataforma ............................................................. PASS
+    Verificadas contra la scratch org de Auctifera, no asumidas del body del PR:
+        Auctifera__CatalogItem__c.Auctifera__Primary_Vendor__c
+            type=reference · referenceTo=['Account'] · relationshipName=Auctifera__Primary_Vendor__r
+        Account.Auctifera__Implementation_External_ID__c
+            externalId=True · unique=True · Text(100) (External ID) (Unique Case Insensitive) · indexed
+    Las tres piezas del header existen y encajan.
+
+SEGURIDAD
+==================================================================================================
+S1 · Secretos en el diff ................................................................ PASS
+    Cero coincidencias de password/api-key/secret/token/bearer/claves privadas.
+
+S2 · Inyección SQL ...................................................................... PASS
+    El cambio es SQL ESTÁTICO puro: sin concatenación de cadenas, sin parámetros dinámicos
+    (`@`), sin `EXEC` ni `sp_executesql`. El único valor que entra al predicado es `mp.ID`, que
+    viene de la propia tabla, no de entrada externa. Superficie de inyección: ninguna.
+
+S3 · PII nueva en la salida ............................................................. PASS
+    La única columna agregada emite `VENDORID`, un identificador interno de Altru. No es nombre,
+    ni email, ni teléfono, ni dirección. El CSV no gana ningún campo personal nuevo.
+    Matiz: el vendor es una organización (por el propio guard ISORGANIZATION=1), así que ni
+    siquiera es un identificador de persona.
+
+S4 · Dependencias nuevas ................................................................ PASS
+    Cero cambios en package.json / package-lock.json. Sin superficie de supply chain añadida.
+
+S5 · Logging ............................................................................ PASS
+    0 (cero) console.* agregados en el diff.
+
+NOTA DE ENTORNO (no es un hallazgo del PR)
+==================================================================================================
+El primer intento de `npm run test:queries:docker` falló con 8 suites / 83 tests en rojo y el error
+"Could not find a working container runtime strategy". **No es un defecto del PR**: en esta máquina
+no había runtime de contenedores corriendo. Se levantó `colima` y se apuntó
+DOCKER_HOST=unix:///Users/veevart/.colima/default/docker.sock; el contenedor
+mcr.microsoft.com/mssql/server:2022-latest arrancó correctamente y la suite se re-ejecutó.
+Se deja escrito para que nadie lea el primer resultado como un fallo del cambio.

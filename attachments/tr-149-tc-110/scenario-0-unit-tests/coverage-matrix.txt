@@ -1,0 +1,97 @@
+TR-149 / TC-110 · IM-1144 — Tests del PR y matriz de cobertura
+PR MigrationToolETL #161 · base 09b9adfa → head 05dbacd
+
+TESTS QUE APORTA EL PR
+==================================================================================================
+  query-regression/catalog-item-vendor-query.spec.ts .... NUEVO, 101 líneas, 7 tests
+  query-regression/shop-discount-query-fixture.ts ....... +23/−1 (agrega la tabla PRODUCTVENDOR
+                                                          y filas sembradas al fixture de IM-1107)
+  query-regression/shop-discount-query.integration.spec.ts +31 (una assertion nueva del fallback,
+                                                          corre en testcontainers contra SQL Server)
+
+RESULTADO DE CORRERLOS
+==================================================================================================
+  npx jest catalog-item-vendor-query   ->  7/7 PASS  (no necesita docker: son aserciones sobre el
+                                            texto del SQL + ejercicio real del pipeline)
+  npm run test:queries                 ->  41 suites PASS · 389 tests PASS
+                                            (14 suites / 97 tests SKIPPED por falta de runner)
+  npm run test:queries:docker          ->  ver scenario-3 (requirió levantar colima)
+
+LOS 7 TESTS DEL SPEC NUEVO, Y QUÉ PRUEBA CADA UNO
+==================================================================================================
+  describe: catalog_item.sql — Vendor lookup contract     [aserciones sobre el TEXTO del SQL]
+    1. keeps the deterministic tie-break on the vendor apply
+         -> exige 'SELECT TOP 1 pv.VENDORID', 'pv.PRODUCTID = mp.ID' y el ORDER BY completo
+    2. only resolves vendors whose constituent migrates as an Account
+         -> exige el JOIN a CONSTITUENT con ISORGANIZATION = 1
+    3. emits the relationship header, not a plain lookup column
+         -> exige el header __r y PROHÍBE por negación `AS 'Auctifera__Primary_Vendor__c'`
+
+  describe: CatalogItemPipeline — Vendor lookup CSV contract   [ejercicio REAL del pipeline]
+    4. declares the relationship header the vendor lookup loads through
+         -> el descriptor de headers contiene la cadena y NO contiene la versión plana
+    5. carries the vendor id from the query row through to the CSV
+         -> con un row sintético, el valor llega al CSV: espera 'vendor-constituent-1'
+    6. keeps a non-organization vendor blank rather than a dangling id
+         -> con el valor en null, la fila sale null (no un id colgado)
+    7. every emitted row key is a declared header
+         -> invariante: ninguna clave emitida queda fuera del set declarado
+
+  Los tests 4-7 NO son string-matching: construyen filas y verifican la salida. Prueban
+  comportamiento en la capa de pipeline, que es donde el CSV se arma.
+
+MATRIZ AC (derivados por QA) ↔ TEST
+==================================================================================================
+AC derivado                                          | Cubierto por                               | ¿Hueco?
+-----------------------------------------------------|--------------------------------------------|--------
+1. El query emite el campo Vendor                    | tests 1,3,4 + safesql PRE/POST (esc. 1)    | no
+2. Resuelve como lookup a una Organization           | tests 2,3,4 + describe de la org (esc. 2)  | no
+3. No altera el universo de Shop Items               | — NINGÚN TEST — cubierto por QA vía safesql| **SÍ***
+4. Un vendor no-organización no da un id colgado     | tests 2,6 + fixture docker (esc. 3)        | no
+
+ * HUECO REAL: ningún test del PR verifica que el conteo de filas no cambie. Es el riesgo más
+   caro del cambio (agregar un join a una tabla sin constraint único sobre PRODUCTID puede
+   multiplicar filas) y descansa enteramente en que el autor eligió OUTER APPLY + TOP 1.
+   QA lo compensó midiendo PRE vs POST en dos fuentes reales (escenario 1): delta 0 en ambas.
+   Recomendación para el repo: agregar al fixture de testcontainers un producto con VARIAS filas
+   en PRODUCTVENDOR y assertar que el query devuelve UNA sola fila para él. Hoy el fixture siembra
+   el caso del fallback pero no el del fan-out.
+
+VEREDICTO: los tests del dev están en verde y cubren 3 de los 4 criterios derivados. El cuarto
+(no-fan-out) no tiene test y lo cubrió QA con datos reales.
+
+==================================================================================================
+HALLAZGO REFINADO TRAS CORRER EL FIXTURE — el hueco de no-fan-out es más agudo de lo que parecía
+==================================================================================================
+Al inspeccionar `shop-discount-query.integration.spec.ts` con el fixture ya corriendo se confirma
+que NINGUNA assertion, en ningún spec del repo, verifica el CONTEO de filas de catalogItems:
+
+    grep "expect(catalogItems...toHaveLength"  en todo src/**/*.spec.ts  ->  NINGUNA
+
+Los dos únicos usos de `catalogItems` en el spec son ciegos a duplicados:
+    línea 496:  catalogItems.find(...)        -> devuelve la PRIMERA coincidencia; si hubiera dos
+                                                 filas para el mismo producto, no se entera
+    línea 542:  new Set(catalogItems.map(...)) -> un Set DEDUPLICA en silencio
+
+Y hay un detalle que lo vuelve relevante: **este PR agregó al fixture un producto con DOS filas en
+PRODUCTVENDOR** (…081 org y …082 persona, ambas con PRODUCTID = SHOP_PRODUCT_ID). O sea, el fixture
+ya construye la condición exacta que dispararía el fan-out.
+
+Consecuencia concreta: si mañana alguien cambiara el `OUTER APPLY` por un `JOIN` (o quitara el
+`TOP 1`), ese producto produciría DOS filas de catalog item en el fixture y **todos los tests
+seguirían pasando en verde**. La protección contra el riesgo más caro del cambio descansa hoy
+enteramente en la revisión humana del SQL, no en la suite.
+
+El test `emits one row per logical record with unique external ids` (que suena a que cubriría esto)
+assertea longitudes de saleItems, posPurchases, clientPurchases y posDiscounts — **pero no de
+catalogItems**.
+
+Severidad: BAJA-MEDIA. No es un defecto: el código de hoy es correcto y QA lo verificó con datos
+reales (delta 0 en dos fuentes). Es un hueco de red de seguridad para el futuro.
+
+Recomendación concreta para el repo (una línea):
+    expect(catalogItems).toHaveLength(<n>);
+en el describe de referential integrity, o mejor:
+    expect(new Set(catalogItems.map(r => lower(r.Auctifera__Implementation_External_ID__c))).size)
+      .toBe(catalogItems.length);
+que falla en cuanto aparezca un duplicado por fan-out.

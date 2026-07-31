@@ -1,0 +1,75 @@
+TR-149 / TC-110 · Escenario 2 — AC2: el valor viaja como header de relación por external-ID
+Fecha: 2026-07-31
+
+LA CADENA ÚNICA
+==================================================================================================
+    Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c
+
+Se descompone en tres piezas que tienen que existir Y encajar:
+    Auctifera__Primary_Vendor__r  ->  relationshipName del lookup en CatalogItem__c
+    Account                       ->  objeto destino de la relación
+    Auctifera__Implementation_External_ID__c -> campo external-ID por el que resuelve
+
+1) LAS TRES CAPAS DEL REPO USAN LA MISMA CADENA .................................. PASS
+==================================================================================================
+    SQL       catalog_item.sql ....................... 1 ocurrencia (el alias emitido)
+    MAPPER    catalog-item.mapper.ts ................. 1 ocurrencia (la clave que lee del row)
+    PIPELINE  catalog-item.pipeline.ts .............. 2 ocurrencias (línea 39 header declarado,
+                                                       línea 86 ensamblado de la fila)
+  Si una sola de las tres difiriera, el valor se perdería en silencio: el mapper leería `undefined`
+  o el CSV declararía un header que nadie llena. Coinciden exactamente.
+
+2) NO SE EMITE LA COLUMNA DE LOOKUP PLANA ........................................ PASS
+==================================================================================================
+  Búsqueda de `Auctifera__Primary_Vendor__c` (sin `__r`) en todo `src/`, excluyendo specs:
+      única coincidencia -> catalog_item.sql línea 103, dentro de un COMENTARIO explicativo.
+  No hay ninguna columna emitida con ese nombre. El spec lo lockea además por negación:
+      expect(catalogItem).not.toMatch(/AS 'Auctifera__Primary_Vendor__c'/)
+
+3) LA PREMISA DE PLATAFORMA — VERIFICADA EN LA ORG, NO ASUMIDA ................... PASS
+==================================================================================================
+  El PR afirma que el mecanismo de carga por external-ID es real. Se comprobó contra la scratch org
+  de Auctifera (`computing-power-944-dev-ed`, namespace `Auctifera`):
+
+  a) Campo destino, vía `sf sobject describe Auctifera__CatalogItem__c`:
+        Auctifera__Primary_Vendor__c
+            type ............. reference
+            referenceTo ...... ['Account']          <- apunta a Account, como dice el PR
+            relationshipName . Auctifera__Primary_Vendor__r   <- coincide EXACTO con el header
+
+  b) Campo external-ID, vía `sf sobject describe Account`:
+        Auctifera__Implementation_External_ID__c
+            type ............. string
+            externalId ....... True                 <- el PR lo afirmaba; queda verificado
+            unique ........... True
+
+  c) Confirmación cruzada por Tooling API (FieldDefinition):
+        Auctifera__Implementation_External_ID__c | Text(100) (External ID) (Unique Case Insensitive)
+        IsIndexed = True
+
+  Las tres piezas del header existen en la org y encajan entre sí. El mecanismo no es una
+  suposición del PR.
+
+4) EL PRECEDENTE QUE CITA EL PR ES REAL .......................................... PASS
+==================================================================================================
+  `sale_item.sql` ya emite `Auctifera__Catalog_Item__r:Auctifera__Implementation_External_ID__c`
+  para el mismo objeto. El patrón no se inventa en este PR: se reutiliza uno ya establecido en el
+  repo. (Nota de forma: el precedente omite el `-Account` intermedio porque su relación apunta a un
+  objeto custom; el del vendor lo incluye porque apunta a Account. Las dos formas conviven.)
+
+5) EL SPEC LO LOCKEA ............................................................. PASS
+==================================================================================================
+  `catalog-item-vendor-query.spec.ts` -> 7/7 tests PASS (corrido aislado, sin docker):
+      ✓ keeps the deterministic tie-break on the vendor apply
+      ✓ only resolves vendors whose constituent migrates as an Account
+      ✓ emits the relationship header, not a plain lookup column
+      ✓ declares the relationship header the vendor lookup loads through
+      ✓ carries the vendor id from the query row through to the CSV
+      ✓ keeps a non-organization vendor blank rather than a dangling id
+      ✓ every emitted row key is a declared header
+
+  Los últimos cuatro NO son aserciones de texto: ejercitan el pipeline con filas sintéticas y
+  comprueban el valor que sale al CSV. Prueban comportamiento en la capa de pipeline.
+
+VEREDICTO ESCENARIO 2: PASS — contrato coherente en las tres capas y premisa de plataforma
+verificada en la org, no dada por buena.

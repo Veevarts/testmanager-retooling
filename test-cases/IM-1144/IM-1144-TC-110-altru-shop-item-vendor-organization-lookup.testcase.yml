@@ -1,0 +1,246 @@
+schemaVersion: '1.0'
+id: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+key: TC-110
+title: IM-1144 — Shop Items Vendor lookup — the catalog_item extraction resolves the latest ORGANIZATION vendor per product, emits it through the Account external-ID relationship header without inflating row count, and leaves non-organization vendors blank instead of a dangling id
+description: |
+  Cobertura QA de IM-1144 (**Campo Vendor Faltante en Query de Shop Items — Lookup a Organizations
+  No Migrado**), bajo el epic **IM-70 Altru Queries**. QA Sub-task asociada: **IM-1157**.
+  Cuenta nombrada en el ticket: **Long Island Children's Museum**.
+
+  ## Qué pide la historia
+
+  El query de **Shop Items** no incluye el campo **Vendor** (en Salesforce, un lookup a
+  Organizations), así que los Shop Items migran sin su vendor asociado. La acción pedida es agregar
+  el campo al query y mapearlo correctamente como lookup a la entidad Organization.
+
+  ## ⚠️ La historia NO trae Acceptance Criteria formales
+
+  La descripción son cuatro líneas: cuenta, síntoma y *action needed*. **No hay ACs numerados, ni
+  ejemplos concretos de producto/vendor, ni conteos esperados.** No se rechaza porque el
+  comportamiento SÍ es inferible y está descrito, pero **los criterios que se validan acá los
+  derivó QA** leyendo la descripción y el diff del PR. Dev/PM deberían confirmarlos o corregirlos.
+
+  Criterios derivados (a confirmar):
+  1. El query de Shop Items emite el campo Vendor.
+  2. El Vendor resuelve como **lookup a una Organization** en Salesforce, no como texto ni como id crudo.
+  3. Agregar el campo **no altera el universo de Shop Items** que se migra (sin fan-out, sin pérdida).
+  4. Un vendor que **no** migra como Organization no debe producir un id colgado.
+
+  ## PR bajo prueba
+
+  **MigrationToolETL [#161](https://github.com/Veevarts/MigrationToolETL/pull/161)** —
+  `fix(shop): populate Vendor lookup on Shop Items IM-1144`,
+  rama `fix/shop-item-vendor-lookup-IM-1144` → base `main`. **Estado: OPEN** (+184/−2, 7 archivos).
+
+  | Archivo | Rol en el cambio |
+  | --- | --- |
+  | `queries/shop/catalog_item.sql` | agrega el `OUTER APPLY` del vendor y la columna de salida |
+  | `domain/model/catalog-item-record.entity.ts` | agrega `primaryVendorId` |
+  | `destination/sql-server/mappers/catalog-item.mapper.ts` | lee la columna y la parsea como nullable |
+  | `application/pipelines/catalog-item.pipeline.ts` | declara el header en el CSV |
+  | `query-regression/catalog-item-vendor-query.spec.ts` | **nuevo**, lockea el contrato |
+  | `query-regression/shop-discount-query-fixture.ts` | agrega tabla `PRODUCTVENDOR` + filas sembradas |
+  | `query-regression/shop-discount-query.integration.spec.ts` | assertion del fallback en testcontainer |
+
+  ## Lo que realmente hace el cambio (leído del diff, no del body del PR)
+
+  ```sql
+  OUTER APPLY (
+      SELECT TOP 1 pv.VENDORID
+      FROM PRODUCTVENDOR pv
+      JOIN CONSTITUENT vc ON vc.ID = pv.VENDORID AND vc.ISORGANIZATION = 1
+      WHERE pv.PRODUCTID = mp.ID
+      ORDER BY pv.DATECHANGED DESC, pv.DATEADDED DESC, pv.ID
+  ) vendor_latest
+  ```
+
+  y emite `vendor_latest.VENDORID` bajo el alias
+  `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c`.
+
+  Tres decisiones de diseño que hay que verificar, no dar por buenas:
+  - **`OUTER APPLY` + `TOP 1`** en vez de un `JOIN`: preserva el conteo de filas aunque
+    `PRODUCTVENDOR` no tenga constraint único por `PRODUCTID`. Es lo que evita el fan-out.
+  - **Guard `ISORGANIZATION = 1`**: cambia la semántica de *"último vendor"* a
+    *"último vendor que sea ORGANIZACIÓN"*. Un producto cuyo vendor más reciente es una persona
+    **cae al vendor-organización anterior**, no a NULL.
+  - **Header de relación** en vez de columna de lookup plana: el campo destino
+    `Auctifera__Primary_Vendor__c` es `Lookup(Account)` con `externalId=false`, así que no puede
+    resolver un id crudo de Altru; se carga por el external-ID de la relación.
+
+  ## Riesgos abiertos
+
+  - **⚠️ NO existe perfil safesql de Long Island Children's Museum.** Los perfiles disponibles son
+    `aspen`, `illinois_2`, `tucson` y `tucson_backup3`. **Los números que afirma el PR (7.007 filas
+    in → 7.007 out, 100% de cobertura) NO se pueden re-derivar contra la fuente que nombra el
+    ticket.** Es el riesgo principal de esta review: sin ese perfil, la verificación en datos reales
+    se hace sobre otra fuente Altru (comportamiento, no las cifras del ticket) y las cifras quedan
+    como *reportadas por dev, no verificadas por QA*.
+  - **El PR está OPEN, no merged.** Se valida comportamiento sobre la rama; el merge es un paso
+    aparte.
+  - **Discrepancia entre el body del PR y el SQL.** El body narra la cadena
+    `PRODUCTVENDOR → VENDOR → CONSTITUENT` y reporta *"0 orphaned PRODUCTVENDOR rows against
+    VENDOR"*, pero **el query NO une `VENDOR` en ningún momento**: va directo de `PRODUCTVENDOR` a
+    `CONSTITUENT` por `pv.VENDORID = vc.ID`. Funcionalmente puede ser equivalente si
+    `VENDOR.ID = CONSTITUENT.ID`, pero la evidencia reportada es sobre una tabla que el query final
+    no toca. Hay que verificar la premisa, no asumirla.
+  - **Cambio de semántica no pedido por el ticket.** El ticket dice "agregar el campo Vendor"; el PR
+    entrega "último vendor que sea organización". Está documentado en el comentario del SQL y es una
+    decisión defendible, pero **es una interpretación de producto** que conviene que PM confirme:
+    ¿es correcto que un producto cuyo último vendor es una persona muestre un vendor anterior en vez
+    de quedar vacío?
+  - **El campo destino vive en otro repo** (`AuctiferaDX`: `CatalogItem__c.Primary_Vendor__c`). Hay
+    que confirmar que existe, que es `Lookup(Account)` y que
+    `Account.Implementation_External_ID__c` tiene `externalId=true` — el PR lo afirma; QA lo verifica.
+  - **El propio test plan del PR deja dos ítems sin marcar**, ambos aguas abajo del query: el mapeo
+    del bulk-load y un spot-check en sandbox tras una carga. No son ejecutables desde el repo.
+type: integration
+priority: high
+status: active
+preconditions:
+- 'Clone de `MigrationToolETL` con la rama `fix/shop-item-vendor-lookup-IM-1144` y su commit base en `main`, para correr suites y revert-proof'
+- 'Node + Docker levantados: el PR toca el fixture de testcontainers y el propio PR reporta `npm run test:queries:docker` como el paso de CI que hay que reproducir'
+- '⚠️ Perfil safesql de **Long Island Children''s Museum** — HOY NO EXISTE. Sin él no se pueden re-derivar las cifras del PR contra la fuente del ticket. Si no se consigue, se usa otra fuente Altru con `PRODUCTVENDOR` (`tucson` / `illinois_2` / `aspen`) para validar COMPORTAMIENTO y se declara que las cifras quedan sin verificar'
+- 'Acceso de lectura a `AuctiferaDX` (o a una org con el paquete) para confirmar que `CatalogItem__c.Primary_Vendor__c` existe, es `Lookup(Account)` y que `Account.Implementation_External_ID__c` es `externalId=true, unique=true`'
+format: gherkin
+scenarios:
+- title: 'IM-1144 AC1 + AC3 — The catalog_item extraction emits a Vendor column for Shop Items and adding it does not change the set of migrated products'
+  tags:
+  - happy-path
+  - im-1144
+  - im-1157
+  - im-70
+  - ac-1
+  - ac-3
+  - altru
+  - migration
+  - shop-items
+  - catalog-item
+  - safesql
+  - long-island
+  - pr-161
+  given:
+  - el query `catalog_item.sql` en el commit base, que NO emite ninguna columna de vendor
+  - la misma fuente Altru consultada con el query de la rama del PR
+  when:
+  - se corre el query PRE y POST con la MISMA fuente y se comparan conteo de filas y cobertura de la columna nueva
+  then:
+  - "PRE: no existe ninguna columna de vendor en la salida — el campo está **ausente** del query, no simplemente vacío"
+  - "POST: aparece la columna `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c` con valores resueltos"
+  - "**el conteo de filas NO cambia entre PRE y POST**: el `OUTER APPLY ... TOP 1` no puede multiplicar filas aunque un producto tenga varias filas en `PRODUCTVENDOR`. Es la aserción que protege contra fan-out y hay que medirla, no razonarla"
+  - "se mide la **cobertura real** de la columna (cuántos productos quedan con vendor y cuántos en NULL) y se contrasta contra el universo de `PRODUCTVENDOR` de esa fuente"
+  - "⚠️ **CIFRAS DEL PR A RE-DERIVAR:** el PR afirma 7.007 filas in → 7.007 out y 100% de cobertura sobre Long Island. **No se toman por buenas.** Si no hay perfil de Long Island, se corre contra otra fuente Altru y se reporta explícitamente que las cifras del ticket quedaron sin verificar, con el número real de la fuente usada"
+  - "verificar también que los productos SIN fila en `PRODUCTVENDOR` salen con la columna en NULL y siguen apareciendo en el resultado (el `OUTER` del APPLY hace su trabajo)"
+- title: 'IM-1144 AC2 — The vendor value travels as an Account external-ID relationship header through all three layers, never as a plain lookup column or a raw Altru id'
+  tags:
+  - happy-path
+  - im-1144
+  - im-1157
+  - im-70
+  - ac-2
+  - contract
+  - external-id
+  - csv-header
+  - salesforce
+  - auctifera-dx
+  - pr-161
+  given:
+  - "el campo destino `Auctifera__Primary_Vendor__c` (`CatalogItem__c.Primary_Vendor__c` en AuctiferaDX), que es `Lookup(Account)` con `externalId=false`"
+  when:
+  - se inspecciona el alias del SQL, la clave del mapper y el header declarado en el pipeline, y se corre la suite que lockea ese contrato
+  then:
+  - "las **tres capas** usan exactamente la misma cadena `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c`: alias en el SQL, clave leída por el mapper y header declarado en el descriptor del pipeline. Si una sola difiere, el valor se pierde en silencio"
+  - "**NO** se emite una columna `Auctifera__Primary_Vendor__c` a secas — el spec lo lockea por negación (`not.toMatch(/AS 'Auctifera__Primary_Vendor__c'/)`), y hay que confirmar que esa aserción existe y pasa"
+  - "el valor emitido es el `VENDORID` de Altru viajando por el external-ID de la relación, **no** un Salesforce Id ni un nombre de cuenta"
+  - "**verificar la premisa en la org, no asumirla:** que `Account.Implementation_External_ID__c` existe con `externalId=true` y `unique=true`. Todo el mecanismo de carga depende de eso y el PR lo afirma sin evidencia adjunta"
+  - "confirmar que el precedente que cita el PR es real: `sale_item.sql` ya emite `Auctifera__Catalog_Item__r:Auctifera__Implementation_External_ID__c` para el mismo objeto — o sea que el patrón no se inventa acá"
+  - "`every emitted row key is a declared header`: ninguna clave de fila queda fuera del set de headers declarados"
+- title: 'IM-1144 AC4 — The vendor apply picks deterministically and skips vendors that do not migrate as Organizations, falling back to an older qualifying vendor instead of emitting a dangling id'
+  tags:
+  - edge-case
+  - negative
+  - im-1144
+  - im-1157
+  - im-70
+  - ac-4
+  - determinism
+  - isorganization
+  - data-integrity
+  - pr-161
+  given:
+  - "un producto con VARIAS filas en `PRODUCTVENDOR` (la tabla no tiene constraint único por `PRODUCTID`)"
+  - "entre ellas, una fila más reciente cuyo vendor es una **persona** y una más antigua cuyo vendor es una **organización**"
+  when:
+  - se resuelve el vendor de ese producto, y por separado se corre el fixture de testcontainers que siembra exactamente ese caso
+  then:
+  - "el desempate es **determinista**: `ORDER BY pv.DATECHANGED DESC, pv.DATEADDED DESC, pv.ID`. Con tres niveles la elección no depende del orden físico de las filas — verificar que el tercer nivel (`pv.ID`) está presente, porque es el que hace la elección reproducible cuando las dos fechas empatan"
+  - "el guard `ISORGANIZATION = 1` descarta al vendor persona y el producto **cae al vendor-organización más antiguo**, NO queda en NULL y NO emite el id de la persona"
+  - "ese fallback es exactamente lo que afirma la assertion agregada en `shop-discount-query.integration.spec.ts` — hay que verla pasar contra el fixture, que es la única forma de probar este caso sin datos reales que lo contengan"
+  - "un producto cuyas filas de `PRODUCTVENDOR` son TODAS de personas queda con la columna en **NULL** (blanco), no con un id colgado. El spec del pipeline lo lockea: `keeps a non-organization vendor blank rather than a dangling id`"
+  - "⚠️ **A CONFIRMAR CON PM (cambio de semántica):** el ticket pide *el campo Vendor*; el PR entrega *el último vendor que sea organización*. Que un producto muestre un vendor anterior en lugar de vacío es una decisión de producto, no un detalle técnico. Está documentada en el comentario del SQL, pero nadie del lado de negocio la aprobó explícitamente"
+  - "verificar la premisa del body del PR de que `VENDOR.ID = CONSTITUENT.ID`: **el query NO une `VENDOR`**, va directo a `CONSTITUENT`. Si esa igualdad no se sostiene en alguna fuente, el guard estaría filtrando contra la entidad equivocada"
+- title: 'IM-1144 — Repo suites, the locked IM-1005 contract and the rest of the catalog_item output survive the change'
+  tags:
+  - regression
+  - im-1144
+  - im-1157
+  - im-70
+  - gates
+  - revert-proof
+  - no-regression
+  - pr-161
+  given:
+  - "clone con la rama del PR y su commit base en `main`"
+  when:
+  - se corren las suites del repo sobre la rama, se reproduce el paso de docker del CI, y luego se revierte sólo el código dejando los tests nuevos en su lugar
+  then:
+  - "`npm run test:queries` pasa completo — el PR reporta **41/41 suites**; re-derivar el número, no copiarlo"
+  - "`npm run test:queries:docker` (el paso EXACTO del CI, que es donde vive el fixture nuevo) pasa — el PR reporta **8/8 suites, 83/83 tests**"
+  - "`shop-item-variant-coverage-query.spec.ts`, el contrato que lockeó **IM-1005**, sigue pasando SIN cambios: el cambio no puede haber tocado la cobertura de variantes de ese ticket"
+  - "**revert-proof:** revirtiendo `catalog_item.sql` (y el mapper/pipeline) al commit base y dejando los tests nuevos, los specs de vendor **FALLAN**. Si pasaran igual, no estarían ejercitando nada"
+  - "el RESTO de las columnas de `catalog_item.sql` (opciones, tipo, categoría, totales, métodos de venta) sale idéntico entre PRE y POST: la única diferencia debe ser la columna nueva. Comparar la lista de columnas y una muestra de filas por PK"
+  - "`tsc --noEmit` y `lint:check` limpios, o su omisión documentada con razón concreta"
+- title: 'IM-1144 — Downstream verification the query cannot prove on its own: bulk-load field mapping and a post-load spot-check in the org'
+  tags:
+  - manual
+  - handoff
+  - im-1144
+  - im-1157
+  - im-70
+  - salesforce
+  - bulk-load
+  - out-of-repo
+  - pr-161
+  given:
+  - "el propio test plan del PR deja DOS ítems sin marcar, y los dos caen fuera de lo que el repo puede probar"
+  when:
+  - se intenta cerrar esos dos ítems desde la ejecución de QA
+  then:
+  - "**PENDIENTE 1 — mapeo del bulk-load.** Confirmar que la herramienta de carga resuelve el header `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c` contra Account ANTES de la próxima carga de Long Island. El query puede estar perfecto y el valor perderse acá"
+  - "**PENDIENTE 2 — spot-check post-carga.** Tomar unos Shop Items ya migrados en un sandbox y confirmar que el lookup de Vendor apunta a la Organization Account correcta"
+  - "ninguno de los dos es ejecutable desde el repo ni desde safesql: **el primero depende de la config del bulk-load y el segundo de que exista una carga real posterior al merge**"
+  - "estos dos quedan `not-run` con esta razón concreta y explícita, nunca marcados como PASS por inferencia"
+tags:
+- im-1144
+- im-1157
+- im-70
+- altru
+- migration
+- shop-items
+- catalog-item
+- vendor
+- organization-lookup
+- external-id
+- productvendor
+- isorganization
+- data-integrity
+- salesforce
+- auctifera-dx
+- long-island
+- safesql
+- pr-161
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-31T00:25:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-31T00:25:00Z'

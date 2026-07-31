@@ -1,0 +1,69 @@
+TR-149 / TC-110 · Escenario 4 — Suites, contrato lockeado de IM-1005 y revert-proof
+Repo: MigrationToolETL · base 09b9adfa → head 05dbacd · Fecha: 2026-07-31
+
+1) SUITE DE QUERY-REGRESSION SOBRE LA RAMA ....................................... PASS
+==================================================================================================
+    npm run test:queries
+        Test Suites: 41 passed, 14 skipped, 41 of 55 total
+        Tests:       389 passed, 97 skipped, 486 total
+
+  El PR reporta "41/41 suites". Re-derivado: es correcto — 41 suites pasan. El matiz que el PR no
+  menciona es que son **41 de 55**, con 14 suites (97 tests) SKIPPED: son las que exigen docker o
+  conexión viva, y se auto-saltan cuando esos runners no están. No es un problema del PR; conviene
+  saberlo para no leer "41/41" como "todo el repo".
+
+2) CONTRATO LOCKEADO POR IM-1005 ................................................. PASS
+==================================================================================================
+    npx jest shop-item-variant-coverage  ->  7/7 PASS, sin cambios
+        ✓ does not filter variants by ISACTIVE (sale items reference inactive ones)
+        ✓ keeps inactive variants unsellable via the availability flags
+        ✓ bypasses stock on inactive variants
+        ✓ gates product bypass on active NON-PRIMARY variants
+        ✓ bypasses stock only when unbacked sales exist
+        ✓ sale_item.sql joins variants without an ISACTIVE condition
+        ✓ stock_replenishment_order.sql keeps its ISACTIVE filter
+  El cambio de vendor no tocó la cobertura de variantes que fijó IM-1005.
+
+3) EL RESTO DE LA SALIDA ES IDÉNTICA ............................................. PASS
+==================================================================================================
+  Comparación del set de aliases emitidos (`AS '...'`) entre las dos versiones del SQL:
+        BASE  : 18 columnas
+        POST  : 19 columnas
+        agregadas  : ['Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c']
+        eliminadas : ninguna
+        orden de las 18 comunes : PRESERVADO
+  Y a nivel de datos (escenario 1): el conteo de filas no se movió en ninguna de las dos fuentes.
+  El cambio es estrictamente aditivo: una columna nueva, cero efectos sobre lo existente.
+
+4) REVERT-PROOF .................................................................. PASS
+==================================================================================================
+  Método: revertir al commit base SÓLO los 4 archivos de código
+      queries/shop/catalog_item.sql · mappers/catalog-item.mapper.ts
+      domain/model/catalog-item-record.entity.ts · application/pipelines/catalog-item.pipeline.ts
+  dejando los specs nuevos en la versión de la rama.
+
+      Resultado: Tests: 6 failed, 1 passed, 7 total
+
+      ✕ keeps the deterministic tie-break on the vendor apply
+      ✕ only resolves vendors whose constituent migrates as an Account
+      ✕ emits the relationship header, not a plain lookup column
+      ✕ declares the relationship header the vendor lookup loads through
+      ✕ carries the vendor id from the query row through to the CSV
+      ✕ keeps a non-organization vendor blank rather than a dangling id
+      ✓ every emitted row key is a declared header      <- sobrevive, y está bien que sobreviva
+
+  El único que sigue pasando es un INVARIANTE GENÉRICO ("toda clave emitida es un header
+  declarado"), que se cumple igual sin la columna de vendor. Los 6 específicos del cambio caen.
+  O sea: los tests del PR ejercitan de verdad el código nuevo, no pasarían solos.
+
+  Restauración verificada: `git checkout HEAD -- <los 4 archivos>` -> 7/7 PASS de nuevo.
+
+5) GATES DEL REPO
+==================================================================================================
+  `tsc --noEmit` y `lint:check` los reporta el PR como limpios. No se re-corrieron acá porque el
+  cambio de TS es de 13 líneas (un campo en la entity, su getter, la lectura en el mapper y el
+  header en el pipeline) y la suite de jest ya compila ese código vía ts-jest al ejecutarlo: si
+  hubiera un error de tipos, los 389 tests no habrían corrido. Se declara como no re-verificado
+  de forma independiente.
+
+VEREDICTO ESCENARIO 4: PASS

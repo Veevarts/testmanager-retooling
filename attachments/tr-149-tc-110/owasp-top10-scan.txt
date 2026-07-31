@@ -1,0 +1,84 @@
+TR-149 / TC-110 · IM-1144 — OWASP Top 10 (2021) · scan de aplicabilidad
+Alcance: PR MigrationToolETL #161 (base 09b9adfa → head 05dbacd), +184/−2 en 7 archivos.
+Naturaleza del cambio: un OUTER APPLY en un query de extracción SQL + el campo correspondiente en
+entity/mapper/pipeline + specs. Es un extractor de datos que produce CSVs; no expone endpoints.
+Ejecutado al cierre, antes de escribir el test run. Ningún item queda en TBD.
+
+A01 · Broken Access Control ................................ N/A
+  Justificación: el cambio no introduce ni modifica control de acceso. No hay endpoints, ni roles,
+  ni autorización en el diff. El extractor corre como un job con credenciales de la fuente ya
+  existentes; no se tocó cómo se obtienen ni qué permisos usan.
+
+A02 · Cryptographic Failures ............................... N/A
+  Justificación: cero criptografía en el diff. No se agregan secretos, ni cifrado, ni hashing, ni
+  manejo de certificados. Las opciones de conexión (encrypt/trustServerCertificate) viven en los
+  perfiles de safesql y no fueron modificadas por este PR.
+
+A03 · Injection ............................................ APLICA · PASS
+  Por qué aplica: el cambio ES SQL. Es la categoría central a descartar.
+  Verificación: el `OUTER APPLY` agregado es SQL **estático**. No hay concatenación de cadenas, ni
+  parámetros dinámicos (`@`), ni `EXEC` / `sp_executesql`, ni interpolación desde TypeScript. El
+  único valor que entra al predicado es `mp.ID`, correlacionado desde la propia tabla del FROM, no
+  entrada externa. El lado TypeScript sólo LEE una columna del row por nombre y la parsea con
+  `parseNullableString`; no construye SQL.
+  Superficie de inyección añadida: ninguna. Veredicto: PASS.
+
+A04 · Insecure Design ...................................... APLICA · PASS con observación
+  Por qué aplica: la decisión de diseño (qué vendor elegir y qué hacer con los que no califican)
+  determina qué dato termina en Salesforce.
+  Verificación: el diseño es fail-safe en el sentido correcto — un vendor que NO migra como Account
+  resuelve a NULL en vez de emitir un id que apuntaría a nada (id colgado). El `TOP 1` con
+  `ORDER BY` de tres niveles hace la elección determinista y reproducible. El `OUTER` preserva las
+  filas.
+  Observación (no defecto, ya reportada en el bundle): el guard `ISORGANIZATION = 1` convierte
+  "último vendor" en "último vendor que sea organización". Un producto cuyo vendor más reciente es
+  una persona muestra un vendor ANTERIOR en vez de quedar vacío. Es una decisión de producto
+  documentada en el comentario del SQL, pero no aprobada explícitamente por negocio.
+  Veredicto: PASS.
+
+A05 · Security Misconfiguration ............................ N/A
+  Justificación: no se cambian configuraciones de despliegue, permisos, variables de entorno ni
+  parámetros de conexión. El único archivo de configuración tocado es un fixture de tests
+  (`shop-discount-query-fixture.ts`), que sólo corre en testcontainers.
+
+A06 · Vulnerable and Outdated Components ................... APLICA · PASS
+  Por qué aplica: hay que descartar que la funcionalidad nueva haya traído librerías.
+  Verificación: diff de `package.json` y `package-lock.json` -> CERO dependencias agregadas,
+  eliminadas o actualizadas. Sin superficie nueva de supply chain.
+
+A07 · Identification and Authentication Failures ........... N/A
+  Justificación: el diff no toca autenticación, sesiones, tokens ni identidad. El extractor usa la
+  conexión a la fuente que ya existía.
+
+A08 · Software and Data Integrity Failures ................. APLICA · PASS
+  Por qué aplica: el cambio agrega un dato que va a poblar un lookup en Salesforce; un valor mal
+  formado corrompería integridad referencial en el destino.
+  Verificación: precisamente el guard `ISORGANIZATION = 1` existe para eso — evita emitir un id de
+  un constituyente que NO migra como Account, que produciría un lookup roto. Y el header de
+  relación por external-ID (verificado pieza por pieza contra la org: relationshipName correcto,
+  objeto destino Account, campo con externalId=true y unique=true) garantiza que el valor resuelve
+  por un identificador único e indexado en vez de por un id crudo que la plataforma rechazaría.
+  El spec `keeps a non-organization vendor blank rather than a dangling id` lockea justamente esto.
+  Veredicto: PASS — el cambio MEJORA la integridad referencial en vez de arriesgarla.
+
+A09 · Security Logging and Monitoring Failures ............. APLICA · PASS
+  Por qué aplica: hay que verificar que no se registren datos sensibles al procesar filas.
+  Verificación: 0 (cero) `console.*` agregados en el diff. El pipeline no loguea el valor del
+  vendor ni ninguna fila.
+
+A10 · Server-Side Request Forgery (SSRF) ................... N/A
+  Justificación: el código no hace peticiones salientes a URLs. Es un extractor SQL que escribe
+  CSVs; no hay cliente HTTP en el diff.
+
+RESUMEN
+==================================================================================================
+  Aplicables : 5  (A03, A04, A06, A08, A09)
+  PASS       : 5
+  FAIL       : 0
+  N/A        : 5  (A01, A02, A05, A07, A10) — cada uno con justificación arriba
+  Bloqueantes: 0
+
+  NINGÚN item Aplicable quedó en FAIL -> no se abre defecto de seguridad.
+  A destacar: A08 no sólo pasa, sino que el guard de organización y el header por external-ID son
+  precisamente controles de integridad referencial. El cambio deja el destino más consistente que
+  antes, donde el campo simplemente no viajaba.

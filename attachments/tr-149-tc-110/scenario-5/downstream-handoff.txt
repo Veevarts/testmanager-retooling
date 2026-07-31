@@ -1,0 +1,57 @@
+TR-149 / TC-110 · Escenario 5 — Verificación aguas abajo que el query no puede probar
+Estado: SKIPPED — fuera del alcance de QA (no 'pendiente de ejecutar')
+
+El propio test plan del PR #161 deja DOS ítems sin marcar. Los dos exigen una CARGA REAL en un
+entorno productivo.
+
+POR QUÉ 'SKIPPED' Y NO 'NOT-RUN'
+==================================================================================================
+**QA no valida en producción.** El alcance de esta review son entornos de prueba: el clon del repo,
+el fixture de testcontainers, las fuentes safesql de lectura y una scratch org. Estos dos ítems
+quedan del otro lado de esa frontera, así que no son trabajo pendiente de QA sino verificación de
+despliegue, propiedad del equipo que corre la migración. `skipped` = deliberadamente fuera de
+alcance; `not-run` habría implicado que QA todavía los debe.
+
+PENDIENTE 1 — Mapeo del bulk-load contra Account
+==================================================================================================
+  Lo que pide el PR: "Confirm the bulk-load tool's field mapping resolves
+  `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c` correctly against
+  Account, before the next Long Island load".
+
+  Por qué NO es ejecutable desde acá:
+    · el header es correcto en las TRES piezas y las tres existen en la org (escenario 2), pero
+      quien las une en tiempo de carga es la herramienta de bulk-load, no el repo;
+    · esa herramienta se configura fuera de MigrationToolETL y no se ejecuta contra una fuente sin
+      una migración real en curso.
+  Qué haría falta: correr una carga (aunque sea de unas pocas filas) con el CSV que produce este
+  pipeline y confirmar que el lookup queda poblado en vez de rechazado.
+  Riesgo si se salta: el query puede estar perfecto y el valor perderse igual en la carga. Es el
+  único eslabón entre "el CSV trae el dato" y "el Shop Item tiene su vendor".
+
+PENDIENTE 2 — Spot-check de Shop Items migrados en un sandbox
+==================================================================================================
+  Lo que pide el PR: "Spot-check a few migrated Shop Items in a sandbox load to confirm the Vendor
+  lookup resolves to the correct Organization Account".
+
+  Por qué NO es ejecutable desde acá:
+    · exige una carga REAL posterior al merge; hoy el PR está OPEN y no hay Shop Items migrados con
+      la columna nueva en ninguna org;
+    · la scratch org de Auctifera disponible (`computing-power-944-dev-ed`) tiene el esquema pero
+      no los datos migrados de Long Island, y **expira el 2026-07-31**.
+  Qué haría falta: tras la carga, abrir unos Shop Items y confirmar que Primary Vendor apunta a la
+  Organization Account correcta. Evidencia a capturar: captura del registro + la query SOQL que
+  lo confirme.
+
+LO QUE SÍ SE MITIGÓ DESDE ACÁ
+==================================================================================================
+El riesgo de que el header no resuelva en la carga se redujo todo lo que se podía sin cargar:
+se verificaron EN LA ORG las tres piezas que lo componen (escenario 2) en vez de darlas por buenas
+del body del PR —`relationshipName` del lookup, objeto destino `Account`, y el campo external-ID con
+`externalId=true, unique=true`—. Si el header estuviera mal formado, se habría visto ahí.
+Lo que queda es la EJECUCIÓN de la carga, que no es de QA.
+
+NOTA SOBRE EL ALCANCE
+==================================================================================================
+Estos dos ítems NO son un hueco de esta review: son verificación de despliegue que el propio dev
+identificó y dejó anotada. Se registran para que no se pierdan, no como reproche.
+Ninguno se marca PASS por inferencia.

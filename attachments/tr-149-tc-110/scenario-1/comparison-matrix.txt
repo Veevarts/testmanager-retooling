@@ -1,0 +1,91 @@
+TR-149 / TC-110 · Escenario 1 — AC1 + AC3: el query emite Vendor y NO cambia el universo de productos
+PR MigrationToolETL #161 · base 09b9adfa → head 05dbacd · Fecha: 2026-07-31
+
+MÉTODO
+==================================================================================================
+Se extrajeron LAS DOS versiones de `catalog_item.sql` (base y rama) desde git y se envolvió cada una
+en un wrapper AGREGADO (`, final AS ( <query original> ) SELECT COUNT(*)...`) para correr el query
+REAL sin extraer una sola fila de cliente. Sólo salen números.
+
+⚠️ NOTA DE MÉTODO (transparencia): el guard de safesql rechazó el query por "write keywords". La
+única coincidencia era la palabra **"create" dentro de un comentario** del propio SQL
+(`-- ...so for now we need create a custom one`). Se eliminaron los comentarios `--` antes de
+enviar; el SQL sigue siendo un SELECT puro. **NO se usó `--allow-writes`**: el guard de sólo-lectura
+quedó intacto.
+
+⚠️ FUENTE: el ticket nombra **Long Island Children's Museum**, para el que **NO existe perfil
+safesql**. Por indicación del usuario ("revisa en fuentes disponibles") se corrió contra las dos
+fuentes Altru disponibles que tienen las tablas necesarias: `illinois_2` y `tucson`.
+(`aspen` no conecta: el túnel a localhost:41434 expira a los 20 s.)
+
+MATRIZ DE COMPARACIÓN
+==================================================================================================
+Fuente      | Métrica                    | BASE (pre) | POST (rama) | Delta | AC | ¿Objetivo? | Veredicto
+------------|----------------------------|------------|-------------|-------|----|-----------  |----------
+illinois_2  | filas del query            |    4.706   |    4.706    |   0   | AC3| SÍ         | PASS
+illinois_2  | columna de vendor presente |     NO     |     SÍ      |  +1   | AC1| SÍ         | PASS
+illinois_2  | vendor no nulo             |    n/a     |    4.706    |   —   | AC1| SÍ (100%)  | PASS
+illinois_2  | vendor nulo                |    n/a     |        0    |   —   | AC1| SÍ         | PASS
+illinois_2  | vendors distintos          |    n/a     |      522    |   —   | AC2| SÍ         | PASS
+tucson      | filas del query            |       13   |       13    |   0   | AC3| SÍ         | PASS
+tucson      | columna de vendor presente |     NO     |     SÍ      |  +1   | AC1| SÍ         | PASS
+tucson      | vendor no nulo             |    n/a     |       13    |   —   | AC1| SÍ (100%)  | PASS
+tucson      | vendor nulo                |    n/a     |        0    |   —   | AC1| SÍ         | PASS
+tucson      | vendors distintos          |    n/a     |        1    |   —   | AC2| SÍ         | PASS
+
+CONTROLES INDEPENDIENTES (para que los números no se lean solos)
+==================================================================================================
+  illinois_2 : MERCHANDISEPRODUCT = 4.706 · PRODUCT = 4.706 · PRODUCTVENDOR = 4.706 filas
+               PRODUCTVENDOR distinct products = 4.706 · distinct vendors = 522
+  tucson     : MERCHANDISEPRODUCT = 13 · PRODUCT = 13 · PRODUCTVENDOR = 13 filas
+               PRODUCTVENDOR distinct products = 13 · distinct vendors = 1
+
+  Los `distinct_vendors` de la salida del query (522 y 1) COINCIDEN con los distinct vendors de
+  PRODUCTVENDOR medidos por separado. No es una cifra que el query se invente.
+  El conteo de filas del query coincide con MERCHANDISEPRODUCT en ambas fuentes: el query no
+  filtraba productos antes y sigue sin filtrarlos.
+
+AC1 — ¿el campo estaba realmente AUSENTE, no sólo vacío?
+==================================================================================================
+  Menciones de "Primary_Vendor" en catalog_item.sql:
+      BASE: 0        POST: 2  (el alias emitido + el comentario explicativo)
+  Columnas emitidas (aliases `AS '...'`):
+      BASE: 18 columnas      POST: 19 columnas
+      agregadas : ['Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c']
+      eliminadas: ninguna
+      orden de las 18 comunes: PRESERVADO
+  Confirma la afirmación del PR de que el campo estaba ausente del query por completo, y que el
+  cambio es ESTRICTAMENTE aditivo.
+
+AC3 — sin fan-out y sin pérdida
+==================================================================================================
+  El conteo de filas es IDÉNTICO entre BASE y POST en las dos fuentes. Ese es el riesgo real de
+  agregar un join a una tabla sin constraint único (`PRODUCTVENDOR` no lo tiene sobre `PRODUCTID`),
+  y el `OUTER APPLY ... TOP 1` lo evita por construcción. Medido, no razonado.
+
+⚠️ LÍMITE DE LO QUE ESTOS DATOS PUEDEN PROBAR — hay que declararlo
+==================================================================================================
+  Se midió explícitamente la forma de los datos en AMBAS fuentes:
+
+      productos con MÁS de una fila en PRODUCTVENDOR ....... 0   (illinois_2)   0 (tucson)
+      filas cuyo vendor es una PERSONA (ISORGANIZATION=0) .. 0   (illinois_2)   0 (tucson)
+      productos SIN ninguna fila en PRODUCTVENDOR .......... 0   (illinois_2)   0 (tucson)
+      productos sin vendor-organización que califique ...... 0   (illinois_2)   0 (tucson)
+
+  Consecuencias honestas:
+  1. Como NINGÚN producto tiene más de una fila de vendor, el **desempate** (`TOP 1` + `ORDER BY`)
+     NO se ejercita con datos reales. Es consistente con lo que el propio PR dice
+     ("real data is currently 1:1"), pero significa que el determinismo NO está probado en vivo.
+  2. Como NINGÚN vendor es persona, el **guard `ISORGANIZATION = 1`** tampoco se ejercita: no hay
+     ninguna fila que el guard tenga que descartar.
+  3. Como NINGÚN producto carece de fila de vendor, estos datos **no distinguen `OUTER APPLY` de un
+     `INNER JOIN`**: con cobertura 100% los dos darían el mismo conteo. La garantía de no-pérdida
+     está probada estructuralmente (el `OUTER`) pero no discriminada por los datos.
+
+  Los tres puntos quedan para el fixture de testcontainers (escenario 3), que es el único lugar
+  donde se pueden sembrar esos casos. Se declara; no se finge.
+
+VEREDICTO ESCENARIO 1: PASS en las dos fuentes disponibles, con el alcance declarado arriba.
+  Las cifras del PR (7.007 → 7.007, 100%) NO se re-derivaron: son de Long Island, sin perfil.
+  Lo que sí se reprodujo de forma independiente es la FORMA del resultado (sin fan-out, cobertura
+  completa donde hay datos) en dos fuentes distintas.

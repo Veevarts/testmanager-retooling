@@ -1,0 +1,429 @@
+schemaVersion: "1.0"
+
+id: tr-1eb46aeb-435b-491c-be80-ff9563581f03
+key: TR-149
+title: "TR-149 · IM-1144 · TC-110 · Shop Items Vendor lookup — 4/5 PASS · 1 skipped (fuera de alcance: exige carga en producción) · 0 defectos · sin fan-out en 2 fuentes reales (4.706→4.706 y 13→13) · guard ISORGANIZATION probado contra SQL Server real · premisas de plataforma verificadas en la org · HALLAZGO: ningún test protege el conteo de catalogItems contra fan-out"
+
+description: |
+  QA de IM-1144 (**Campo Vendor Faltante en Query de Shop Items — Lookup a Organizations No
+  Migrado**), bajo el epic **IM-70 Altru Queries**. QA Sub-task: **IM-1157**.
+  Cuenta nombrada en el ticket: **Long Island Children's Museum**.
+
+  **PR bajo prueba:** MigrationToolETL [#161](https://github.com/Veevarts/MigrationToolETL/pull/161)
+  — `fix/shop-item-vendor-lookup-IM-1144` → `main`. **Estado: OPEN** (+184/−2, 7 archivos).
+  Base `09b9adfa` → head `05dbacd`.
+
+  Clasificación: **Mixed** con dominante **SQL-only** — un `OUTER APPLY` nuevo en
+  `catalog_item.sql` más el campo correspondiente en entity / mapper / pipeline (13 líneas de TS) y
+  tres archivos de test.
+
+  ## ⚠️ La historia no trae Acceptance Criteria formales
+
+  La descripción son cuatro líneas: cuenta, síntoma y *action needed*. **Los cuatro criterios que se
+  validan acá los derivó QA** leyendo la descripción y el diff, y quedaron escritos en el TC y en la
+  QA Sub-task para que dev/PM los confirmen o corrijan.
+
+  ## ⚠️ La fuente del ticket no es accesible — se corrió contra las disponibles
+
+  **No existe perfil safesql de Long Island Children's Museum.** Por indicación explícita del
+  usuario (*"revisa en fuentes disponibles"*) se validó contra las dos fuentes Altru que sí están y
+  tienen las tablas necesarias: **`illinois_2`** (4.706 productos) y **`tucson`** (13 productos).
+  `aspen` no conecta (el túnel a `localhost:41434` expira a los 20 s).
+
+  **Consecuencia que hay que leer con precisión:** las cifras que el PR reporta (7.007 filas in →
+  7.007 out, 100% de cobertura) **NO se re-derivaron**, porque son de Long Island. Lo que sí se
+  reprodujo de forma independiente es la **forma** del resultado —sin fan-out, cobertura completa
+  donde hay datos— en **dos fuentes distintas**. Las cifras del ticket quedan como *reportadas por
+  dev, no verificadas por QA*.
+
+  ## Método
+
+  1. **PRE vs POST del query REAL**: se extrajeron las dos versiones de `catalog_item.sql` desde git
+     y se envolvió cada una en un wrapper **agregado** (`, final AS (<query>) SELECT COUNT(*)…`)
+     para correr el query completo sin extraer una sola fila de cliente.
+  2. **Sondeo de la forma de los datos** antes de concluir nada, para saber qué se puede y qué no se
+     puede probar con las fuentes disponibles.
+  3. **Fixture de testcontainers** contra SQL Server real para los casos que los datos reales no
+     contienen.
+  4. **Revert-proof** revirtiendo los 4 archivos de código y dejando los specs.
+  5. **Premisas de plataforma verificadas en la org**, no dadas por buenas del body del PR.
+
+  ## Resultado
+
+  **4/5 escenarios PASS · 1 skipped · 0 defectos · 0 hallazgos de seguridad.**
+  Los cuatro criterios derivados quedan cubiertos.
+
+  El escenario 5 queda **`skipped`, no `not-run`**: son los dos ítems que el propio PR dejó sin
+  marcar (mapeo del bulk-load y spot-check post-carga) y ambos exigen una **carga real en un entorno
+  productivo**. **QA no valida en producción** — el alcance de esta review son entornos de prueba —
+  así que no son trabajo pendiente de QA sino verificación de despliegue, propiedad del equipo que
+  corre la migración. Se dejan documentados para que no se pierdan.
+
+  Se registran **3 observaciones** no bloqueantes (detalle en las notas de cada escenario), de las
+  cuales la más accionable es un **hueco de cobertura**: ningún test del repo protege el conteo de
+  filas de `catalogItems` contra un fan-out futuro, justo cuando este PR agregó al fixture el
+  producto con dos filas de `PRODUCTVENDOR` que sería el disparador.
+
+testCaseIds:
+  - 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+
+environment:
+  name: "MigrationToolETL @ fix/shop-item-vendor-lookup-IM-1144 (head 05dbacd, base 09b9adfa) · jest + ts-jest · testcontainers sobre colima con mcr.microsoft.com/mssql/server:2022-latest · safesql (bastion + keychain) contra los perfiles illinois_2 y tucson · scratch org Auctifera computing-power-944-dev-ed (namespace Auctifera) para verificar el esquema destino"
+  url: "https://github.com/Veevarts/MigrationToolETL/pull/161"
+  buildVersion: >-
+    Mixed con dominante SQL-only: un OUTER APPLY correlacionado nuevo en catalog_item.sql (+16/−1)
+    más 13 líneas de TypeScript que propagan el campo por entity → mapper → pipeline, y 3 archivos
+    de test (+155). Evidencia primaria: PRE vs POST del query real agregado en 2 fuentes Altru,
+    fixture de testcontainers contra SQL Server real, revert-proof, y describe de la org para las
+    premisas de plataforma.
+  notes: |
+    ## Solution understood
+
+    `catalog_item.sql` nunca unía `PRODUCTVENDOR`, así que los Shop Items migraban sin vendor — y no
+    "vacío": el campo estaba **ausente del query, de la entity, del mapper y de los headers del
+    CSV**. Verificado: 0 menciones de `Primary_Vendor` en la versión base, 18 columnas emitidas
+    contra 19 en la rama.
+
+    El PR agrega un `OUTER APPLY` correlacionado:
+
+    ```sql
+    OUTER APPLY (
+        SELECT TOP 1 pv.VENDORID
+        FROM PRODUCTVENDOR pv
+        JOIN CONSTITUENT vc ON vc.ID = pv.VENDORID AND vc.ISORGANIZATION = 1
+        WHERE pv.PRODUCTID = mp.ID
+        ORDER BY pv.DATECHANGED DESC, pv.DATEADDED DESC, pv.ID
+    ) vendor_latest
+    ```
+
+    Tres decisiones, cada una resolviendo un problema distinto:
+
+    **`OUTER APPLY` + `TOP 1` en vez de un JOIN.** `PRODUCTVENDOR` no tiene constraint único sobre
+    `PRODUCTID`, así que un JOIN podría multiplicar filas. El APPLY con TOP 1 devuelve como mucho
+    una fila por producto, y el `OUTER` preserva los productos sin vendor. Es la decisión que evita
+    el riesgo más caro del cambio.
+
+    **El guard `ISORGANIZATION = 1` DENTRO de la subconsulta.** Sólo los constituyentes que son
+    organización migran como Account (`account_organizations.sql` filtra igual), así que un vendor
+    persona no tendría Account a la cual apuntar. Ponerlo dentro del correlacionado —y no como
+    post-filtro— cambia el resultado: el candidato persona nunca entra al conjunto, y el `TOP 1` cae
+    al vendor-organización **anterior** en vez de devolver NULL. Eso convierte la semántica de
+    "último vendor" en "último vendor que sea organización", que es más de lo que el ticket pedía.
+
+    **El header de relación en vez de una columna de lookup plana.** El campo destino
+    `Auctifera__Primary_Vendor__c` es `Lookup(Account)`: no puede resolver un id crudo de Altru. El
+    valor se emite como
+    `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c`, o sea
+    relationshipName + objeto destino + campo external-ID, reutilizando el patrón que `sale_item.sql`
+    ya usaba para el mismo objeto.
+
+    ## Inferred technical tests
+
+    | Test inferido | Qué prueba | ¿Ejecutable aquí? | Resultado |
+    |---|---|---|---|
+    | Query real PRE vs POST, agregado | AC1 + AC3: emite la columna y no infla filas | SÍ (2 fuentes) | delta 0 · 100% cobertura |
+    | Sondeo de la forma de los datos | qué edge cases contienen las fuentes | SÍ | 0 multi-vendor · 0 personas · 0 sin vendor |
+    | Anti-join VENDOR vs CONSTITUENT | la premisa que sostiene el diseño | SÍ | 0 huérfanos en ambas |
+    | Diff del set de columnas emitidas | AC3: cambio estrictamente aditivo | SÍ | 18 → 19, +1, −0 |
+    | Contrato de 3 capas (SQL/mapper/pipeline) | AC2 | SÍ | misma cadena en las tres |
+    | `sf sobject describe` del destino | AC2: la premisa de plataforma | SÍ (org Auctifera) | verificada |
+    | Fixture de testcontainers | AC4: guard + fallback | SÍ (tras levantar colima) | 8/8 suites, 83/83 |
+    | Revert-proof | que los specs ejercitan el cambio | SÍ | 6/7 caen |
+    | Mapeo del bulk-load | que el header resuelva en la carga | **NO** — fuera del repo | not-run |
+    | Spot-check post-carga | el lookup poblado en la org | **NO** — necesita carga real | not-run |
+
+    ## Observaciones registradas (ninguna bloqueante)
+
+    1. **[Baja-Media · hueco de cobertura] Ningún test protege el conteo de `catalogItems`.**
+       `grep "expect(catalogItems...toHaveLength"` en todo `src/**/*.spec.ts` no devuelve nada. Los
+       dos usos de `catalogItems` en el integration spec son ciegos a duplicados: `.find()` toma la
+       primera coincidencia y `new Set(.map())` deduplica en silencio. Y este PR **agregó al fixture
+       justamente un producto con dos filas de `PRODUCTVENDOR`**, que es el disparador exacto del
+       fan-out. Si mañana alguien cambiara el `OUTER APPLY` por un `JOIN`, ese producto daría dos
+       filas y **toda la suite seguiría en verde**. No es un defecto —el código de hoy es correcto y
+       QA lo midió con datos reales— pero la red de seguridad no existe. Recomendación de una línea:
+       `expect(new Set(catalogItems.map(r => lower(r.Auctifera__Implementation_External_ID__c))).size).toBe(catalogItems.length)`.
+
+    2. **[Baja · precisión del PR] El body describe una cadena que el SQL no recorre.** El PR narra
+       `PRODUCTVENDOR → VENDOR → CONSTITUENT` y reporta *"0 orphaned PRODUCTVENDOR rows against
+       VENDOR"*, pero el query **no une `VENDOR` en ningún momento**: va directo de `PRODUCTVENDOR` a
+       `CONSTITUENT`. El resultado es equivalente porque la premisa `VENDOR.ID = CONSTITUENT.ID` se
+       sostiene (verificado: 0 filas de `VENDOR` sin `CONSTITUENT` en ambas fuentes), pero la
+       evidencia que el PR presenta es sobre una tabla que el query final no toca.
+
+    3. **[Baja · alcance] El desempate puro no está probado por comportamiento.** El fixture siembra
+       una organización y una persona, lo que ejercita el guard y el fallback. No siembra **dos
+       vendors-organización compitiendo por fecha**, ni un empate exacto que obligue a usar el tercer
+       nivel del `ORDER BY` (`pv.ID`). Ese tercer nivel está verificado sólo a nivel de texto. Riesgo
+       real bajo, pero es la diferencia entre "determinista por contrato" y "determinista probado".
+
+    ## Nota de método — dos cosas que casi se leen mal
+
+    **El primer rojo del paso docker NO era del PR.** `npm run test:queries:docker` dio 8 suites y 83
+    tests en rojo con *"Could not find a working container runtime strategy"*: esta máquina no tenía
+    runtime de contenedores. Se levantó `colima`, se apuntó `DOCKER_HOST` al socket, y la suite pasó
+    **8/8 y 83/83**, exactamente como reporta el PR. Un lector apurado del primer log habría abierto
+    un defecto inexistente.
+
+    **El guard de safesql rechazó el query por "write keywords".** La única coincidencia era la
+    palabra **"create" dentro de un comentario** del propio SQL. Se quitaron los comentarios `--`
+    antes de enviar; el SQL sigue siendo un `SELECT` puro. **No se usó `--allow-writes`**: el guard
+    de sólo-lectura quedó intacto.
+
+status: completed
+executedBy: codex
+startedAt: "2026-07-31T00:35:00Z"
+completedAt: "2026-07-31T01:55:00Z"
+
+summary:
+  total: 5
+  passed: 4
+  failed: 0
+  blocked: 0
+  skipped: 1
+  notRun: 0
+  passRate: 80
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "IM-1144 AC1 + AC3 — The catalog_item extraction emits a Vendor column for Shop Items and adding it does not change the set of migrated products"
+    testCaseId: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+    testCaseKey: TC-110
+    status: passed
+    executedAt: "2026-07-31T01:15:00Z"
+    duration: 30
+    actual: |
+      Se corrió el query **real** PRE vs POST contra dos fuentes Altru, envolviéndolo en un wrapper
+      agregado para no extraer ninguna fila de cliente.
+
+      | Fuente | Métrica | BASE | POST | Delta | ¿Objetivo? |
+      |---|---|---|---|---|---|
+      | illinois_2 | filas del query | 4.706 | **4.706** | **0** | SÍ |
+      | illinois_2 | vendor no nulo | n/a | 4.706 (100%) | — | SÍ |
+      | illinois_2 | vendors distintos | n/a | 522 | — | SÍ |
+      | tucson | filas del query | 13 | **13** | **0** | SÍ |
+      | tucson | vendor no nulo | n/a | 13 (100%) | — | SÍ |
+      | tucson | vendors distintos | n/a | 1 | — | SÍ |
+
+      **Controles independientes** para que los números no se lean solos: `MERCHANDISEPRODUCT` = 4.706
+      en illinois_2 y 13 en tucson (coincide con el conteo del query, o sea el query no filtraba
+      productos antes y sigue sin filtrarlos); y los `distinct_vendors` de la salida (522 y 1)
+      **coinciden** con los distinct vendors medidos por separado sobre `PRODUCTVENDOR`.
+
+      **AC1 — el campo estaba AUSENTE, no vacío.** Menciones de `Primary_Vendor` en el SQL: BASE 0,
+      POST 2. Set de columnas emitidas: BASE 18 → POST 19, **una agregada, ninguna eliminada, orden
+      de las 18 comunes preservado**. Cambio estrictamente aditivo.
+
+      **AC3 — sin fan-out.** Delta 0 en las dos fuentes. Ése es el riesgo real de agregar un join a
+      una tabla sin constraint único sobre `PRODUCTID`, y se midió, no se razonó.
+
+      ⚠️ **Las cifras del PR (7.007 → 7.007) NO se re-derivaron**: son de Long Island, que no tiene
+      perfil safesql. Lo reproducido es la *forma* del resultado en dos fuentes distintas.
+    notes: "AC1 + AC3. PASS en las dos fuentes disponibles. Las cifras del ticket quedan como reportadas por dev, no verificadas por QA, por falta del perfil de Long Island."
+    stepResults: []
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-149-tc-110/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "IM-1144 AC2 — The vendor value travels as an Account external-ID relationship header through all three layers, never as a plain lookup column or a raw Altru id"
+    testCaseId: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+    testCaseKey: TC-110
+    status: passed
+    executedAt: "2026-07-31T01:20:00Z"
+    duration: 20
+    actual: |
+      **Las tres capas usan la misma cadena.** `Auctifera__Primary_Vendor__r:Account-Auctifera__Implementation_External_ID__c`
+      aparece en el SQL (1 vez, el alias emitido), en el mapper (1 vez, la clave que lee del row) y
+      en el pipeline (2 veces: header declarado en la línea 39 y ensamblado de la fila en la 86). Si
+      una sola difiriera, el valor se perdería en silencio.
+
+      **No se emite la columna plana.** Buscando `Auctifera__Primary_Vendor__c` (sin `__r`) en todo
+      `src/` excluyendo specs, la única coincidencia está **dentro de un comentario** del SQL. El
+      spec lo lockea además por negación.
+
+      **La premisa de plataforma, verificada EN LA ORG y no dada por buena del body del PR** — contra
+      la scratch org de Auctifera:
+
+      - `Auctifera__CatalogItem__c.Auctifera__Primary_Vendor__c` → `type=reference`,
+        `referenceTo=['Account']`, `relationshipName=Auctifera__Primary_Vendor__r` — coincide exacto
+        con la primera pieza del header.
+      - `Account.Auctifera__Implementation_External_ID__c` → `externalId=True`, `unique=True`;
+        confirmado por Tooling API como `Text(100) (External ID) (Unique Case Insensitive)`, indexado.
+
+      Las tres piezas del header existen en la org y encajan entre sí.
+
+      **El precedente que cita el PR es real:** `sale_item.sql` ya emite
+      `Auctifera__Catalog_Item__r:Auctifera__Implementation_External_ID__c` para el mismo objeto.
+
+      **El spec lo lockea:** `catalog-item-vendor-query.spec.ts` → **7/7 PASS**. Los últimos cuatro
+      tests no son string-matching: construyen filas y verifican el valor que sale al CSV.
+    notes: "AC2. La premisa del external-ID se verificó describiendo la org, que es lo que el TC pedía explícitamente en vez de confiar en el body del PR."
+    stepResults: []
+    attachments:
+      - name: three-layer-contract.txt
+        path: attachments/tr-149-tc-110/scenario-2/three-layer-contract.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "IM-1144 AC4 — The vendor apply picks deterministically and skips vendors that do not migrate as Organizations, falling back to an older qualifying vendor instead of emitting a dangling id"
+    testCaseId: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+    testCaseKey: TC-110
+    status: passed
+    executedAt: "2026-07-31T01:45:00Z"
+    duration: 35
+    actual: |
+      **Primero, por qué esto NO se puede probar con datos reales.** Se midió la forma de los datos
+      en las dos fuentes: **0** productos con más de una fila en `PRODUCTVENDOR`, **0** filas cuyo
+      vendor sea una persona, **0** productos sin fila de vendor. Con esa forma, el desempate nunca
+      se ejercita, el guard nunca descarta nada, y el `OUTER` no se distingue de un `INNER`. Es
+      coherente con lo que el propio PR admite (*"real data is currently 1:1"*).
+
+      **El fixture siembra exactamente el caso difícil.** Dos filas de `PRODUCTVENDOR` para el MISMO
+      producto: la de la organización (`ISORGANIZATION = 1`) fechada 2025-01-01, y la de la persona
+      (`ISORGANIZATION = 0`) fechada 2025-02-01 — o sea **la persona es la más reciente**.
+
+      Esa construcción es la que discrimina de verdad: si el guard estuviera aplicado como
+      post-filtro, el `TOP 1` tomaría primero la fila de la persona por ser la más nueva y luego la
+      descartaría → el resultado sería NULL, o peor, el id de la persona. Al estar el JOIN a
+      `CONSTITUENT` **dentro** de la subconsulta correlacionada, la persona nunca entra al conjunto
+      candidato y el `TOP 1` cae al vendor-organización más viejo.
+
+      **Resultado — corriendo el `catalog_item.sql` REAL contra un SQL Server REAL en contenedor:**
+
+      ```
+      npm run test:queries:docker   (el paso EXACTO del CI)
+          Test Suites: 8 passed, 8 total
+          Tests:       83 passed, 83 total
+
+      catalog_item.sql — Vendor lookup (IM-1144)
+        ✓ resolves the latest ORGANIZATION vendor, skipping a newer person vendor
+      ```
+
+      Coincide exactamente con lo que reporta el PR (8/8, 83/83).
+
+      ⚠️ **El primer intento fue un FALSO NEGATIVO y conviene dejarlo escrito:** dio 8 suites y 83
+      tests en rojo con *"Could not find a working container runtime strategy"* — esta máquina no
+      tenía runtime de contenedores. Se levantó `colima` y apuntó `DOCKER_HOST` al socket; entonces
+      pasó todo. No era un defecto del PR.
+
+      **Lo que sigue sin probarse, y se declara:** el fixture no siembra dos vendors-organización
+      compitiendo por fecha ni un empate exacto que obligue a usar el tercer nivel del `ORDER BY`
+      (`pv.ID`). Ese nivel está verificado sólo por contrato de texto. Riesgo bajo, pero es la
+      diferencia entre determinista-por-contrato y determinista-probado.
+    notes: "AC4. Guard y fallback probados con comportamiento real contra SQL Server. El desempate por pv.ID ante empate exacto de fechas queda cubierto sólo por contrato; se declara."
+    stepResults: []
+    attachments:
+      - name: fixture-behavior.txt
+        path: attachments/tr-149-tc-110/scenario-3/fixture-behavior.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "IM-1144 — Repo suites, the locked IM-1005 contract and the rest of the catalog_item output survive the change"
+    testCaseId: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+    testCaseKey: TC-110
+    status: passed
+    executedAt: "2026-07-31T01:30:00Z"
+    duration: 25
+    actual: |
+      **Suite de query-regression:** `npm run test:queries` → **41 suites pass · 389 tests pass**,
+      con 14 suites (97 tests) skipped por falta de runner docker/live. El PR reporta "41/41 suites":
+      es correcto, con el matiz —que el PR no menciona— de que son **41 de 55**.
+
+      **Contrato lockeado por IM-1005:** `shop-item-variant-coverage` → **7/7 PASS sin cambios**. El
+      cambio de vendor no tocó la cobertura de variantes que fijó ese ticket.
+
+      **El resto de la salida es idéntica:** aliases emitidos BASE 18 → POST 19; agregada 1,
+      eliminada 0, orden de las comunes preservado. Y a nivel de datos, el conteo de filas no se
+      movió en ninguna de las dos fuentes. Cambio estrictamente aditivo.
+
+      **Revert-proof:** revirtiendo al commit base los 4 archivos de código
+      (`catalog_item.sql`, `catalog-item.mapper.ts`, `catalog-item-record.entity.ts`,
+      `catalog-item.pipeline.ts`) y dejando los specs en la rama → **6 failed, 1 passed de 7**.
+
+      El único que sobrevive es un **invariante genérico** (*every emitted row key is a declared
+      header*), que se cumple igual sin la columna de vendor — y está bien que sobreviva. Los 6
+      específicos del cambio caen. Los tests del PR ejercitan de verdad el código nuevo.
+
+      Restauración verificada: `git checkout HEAD -- <los 4>` → 7/7 PASS otra vez.
+
+      **Gates:** `tsc --noEmit` y `lint:check` los reporta el PR como limpios; no se re-corrieron
+      acá. El cambio de TS son 13 líneas y jest las compila vía ts-jest al ejecutarlas, así que un
+      error de tipos habría impedido correr los 389 tests. Se declara como no re-verificado de forma
+      independiente.
+    notes: "Revert-proof 6/7. El único test que sobrevive al revert es un invariante genérico, no una laguna del spec."
+    stepResults: []
+    attachments:
+      - name: regression-and-revert-proof.txt
+        path: attachments/tr-149-tc-110/scenario-4/regression-and-revert-proof.txt
+        mimeType: text/plain
+      - name: coverage-matrix.txt
+        path: attachments/tr-149-tc-110/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+      - name: regression-plan.txt
+        path: attachments/tr-149-tc-110/regression-plan.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-149-tc-110/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-149-tc-110/owasp-top10-scan.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: "IM-1144 — Downstream verification the query cannot prove on its own: bulk-load field mapping and a post-load spot-check in the org"
+    testCaseId: 61ffa05e-889f-4a79-8260-5f44c7a8ce23
+    testCaseKey: TC-110
+    status: skipped
+    duration: 0
+    actual: |
+      **SKIPPED — fuera del alcance de QA, no pendiente de QA.** Son los dos ítems que el propio test
+      plan del PR dejó sin marcar, y los dos exigen una **carga real en un entorno productivo**.
+      **QA no valida en producción**: el alcance de esta review son entornos de prueba. Por eso se
+      marcan `skipped` (deliberadamente fuera de alcance) y no `not-run` (pendiente de ejecutar).
+
+      **Ítem 1 — mapeo del bulk-load.** El header es correcto en las tres capas y sus tres piezas
+      existen en la org (escenario 2: `relationshipName`, objeto destino y campo external-ID
+      verificados por describe). Lo que no se puede cerrar desde acá es que la herramienta de
+      bulk-load las una en tiempo de carga: se configura fuera de MigrationToolETL y no corre sin una
+      migración real. Es el último eslabón entre "el CSV trae el dato" y "el Shop Item tiene su
+      vendor".
+
+      **Ítem 2 — spot-check post-carga.** Exige una carga real posterior al merge; hoy el PR está
+      OPEN y no hay Shop Items migrados con la columna nueva en ninguna org. La scratch org de
+      Auctifera disponible tiene el esquema pero no los datos de Long Island, y expiraba el
+      2026-07-31.
+
+      **Mitigación de lo que sí estaba a nuestro alcance:** el riesgo de que el header no resuelva se
+      redujo verificando en la org las tres piezas que lo componen (escenario 2), en vez de asumirlas
+      del body del PR. Lo que queda es la ejecución de la carga, que es propiedad del equipo de
+      migración.
+    notes: "SKIPPED por alcance, no por omisión: exige carga en producción y QA no valida ahí. Es verificación de despliegue, propiedad del equipo que corre la migración. Ninguno se marca PASS por inferencia."
+    stepResults: []
+    attachments:
+      - name: downstream-handoff.txt
+        path: attachments/tr-149-tc-110/scenario-5/downstream-handoff.txt
+        mimeType: text/plain
+
+defects: []
+
+history:
+  - action: "started"
+    timestamp: "2026-07-31T00:35:00Z"
+    user: "codex"
+    from: planned
+    to: in-progress
+    reason: "Arranca la ejecución de TC-110 contra el PR MigrationToolETL #161, usando las fuentes safesql disponibles por indicación del usuario."
+  - action: "completed"
+    timestamp: "2026-07-31T01:55:00Z"
+    user: "codex"
+    from: in-progress
+    to: completed
+    reason: "4/5 PASS · 1 skipped · 0 defectos. Los 4 criterios derivados cubiertos: sin fan-out medido en 2 fuentes, contrato de 3 capas y premisas de plataforma verificadas en la org, guard y fallback probados contra SQL Server real. El escenario 5 queda skipped por alcance (exige carga en producción; QA valida en entornos de prueba). 3 observaciones no bloqueantes, la principal un hueco de cobertura sobre el conteo de catalogItems."
+
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-31T00:35:00Z'
+  updatedBy: codex
+  updatedAt: '2026-07-31T01:55:00Z'
