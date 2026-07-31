@@ -1,0 +1,48 @@
+TR-148 / TC-109 · Escenario 2 — AC2 Start Date futuro no elegible · AC3 cumplido sí elegible
+Método: override de fecha del endpoint admin (`?today=`), que permite mover el reloj de la
+eligibility sin esperar al calendario ni alterar ninguna survey.
+
+SUJETO DE PRUEBA
+--------------------------------------------------------------------------------------------------
+  survey 1 · featureId 1 ("Rentals") · active · triggerDate = 2026-07-30
+  respondent aislado `qa-tc109-startdate-A1` · usageCount=10 (para que las demás reglas pasen)
+  No se modificó la survey: sólo se consultó con distintas fechas.
+
+BARRIDO SOBRE EL LÍMITE ................................................................. PASS
+--------------------------------------------------------------------------------------------------
+      today        | ¿survey 1 elegible? | lectura
+      -------------|---------------------|--------------------------------------------
+      2026-07-25   |        NO           | 5 días antes del Start Date
+      2026-07-29   |        NO           | el día ANTERIOR — el corte es acá
+      2026-07-30   |        SÍ           | EL DÍA del Start Date (el gate es INCLUSIVO)
+      2026-07-31   |        SÍ           | día siguiente
+      2026-08-05   |        SÍ           | una semana después
+
+  El corte es exacto y el día del Start Date cuenta como válido. AC2 (fecha futura -> nunca
+  elegible) y AC3 (fecha cumplida + condición de interacciones -> elegible) quedan verificados
+  sobre el mismo sujeto, en el mismo barrido.
+
+EL GATE ES DURO Y ANTERIOR (verificado en el código, surveyRuntime.ts 203-205)
+--------------------------------------------------------------------------------------------------
+      if (survey.triggerDate && survey.triggerDate.trim().length > 0 && ctx.today < survey.triggerDate) {
+        return { ok: false, reason: "start_date_not_reached" };
+      }
+  Se evalúa ANTES de los chequeos de triggerType, frecuencia, dismissals y espaciado. O sea: por más
+  que todas las otras reglas pasen, la fecha manda primero. Es lo que el AC2 pide ("no se devuelve
+  como elegible sin importar que el resto pase").
+
+FAIL-CLOSED
+--------------------------------------------------------------------------------------------------
+  Hay un segundo camino de Start Date por triggerDetails (`startdate`/`start`, línea 229) con la
+  misma semántica. Ante una fecha ausente y triggerType="date", el runtime devuelve
+  `trigger_date_missing` -> no entrega. Ante fecha inválida no parseable, `toSurveyDeliveryContext`
+  cae al día de hoy del servidor en vez de aceptar basura. En ningún caso entrega por defecto.
+
+RESPALDO DE SUITE (escenario 11)
+--------------------------------------------------------------------------------------------------
+  Caen al revertir:  ✖ blocks immediate surveys before Start Date
+                     ✖ evaluateSurveyEligibility — start date and interactions
+                     ✖ shows immediate surveys on the first eligible interaction once Start Date
+                       is reached  (test nuevo del PR #30)
+
+VEREDICTO ESCENARIO 2: PASS (AC2 y AC3)

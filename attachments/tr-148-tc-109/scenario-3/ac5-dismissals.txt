@@ -1,0 +1,72 @@
+TR-148 / TC-109 · Escenario 3 — AC5 Max dismissals per period
+Entorno: https://surveytool.dev.veevart.ai · Survey de prueba id 27 (subject "Test QA", desechable)
+Fecha: 2026-07-30
+
+CONFIGURACIÓN DEL SUJETO DE PRUEBA
+--------------------------------------------------------------------------------------------------
+  survey 27 · featureId 9 ("Test QA", slug `qa`) · active
+  maxDismissals = 2 · cooldownDays = 90 · triesBetweenShows = 0
+  Se eligió el subject "Test QA" porque era el ÚNICO sin survey asociada — así no se tocó ninguna
+  survey existente. (El servidor impone una survey por subject: intentar crear una segunda en
+  "Accounting" devolvió 409 "A survey already exists for this subject".)
+
+MITAD 1 — EL LÍMITE (ejercitada EN VIVO) ................................................ PASS
+--------------------------------------------------------------------------------------------------
+  Todas las llamadas de dismissal se hicieron ANÓNIMAS, sin sesión de admin, de modo que la misma
+  secuencia sirve de evidencia para el AC15.
+
+    Paso                                   | HTTP | ¿survey 27 elegible después?
+    ---------------------------------------|------|-----------------------------
+    estado inicial (0 dismissals)          |  —   | SÍ
+    POST /api/features/qa/dismissals  #1   | 201  | SÍ   (1 < 2, todavía no llega al límite)
+    POST /api/features/qa/dismissals  #2   | 201  | NO   (2 >= 2, LÍMITE ALCANZADO)
+
+  Diagnóstico del servidor en el estado final (endpoint respondent-state):
+      limits   : { maxDismissals: 2, maxShowsPerDay: null, cooldownDays: 90 }
+      counters : { dismissalCount: 2, dismissalCountAllTime: 2, responseCount: 0 }
+      eligible : false
+      reason   : "max_dismissals_reached"      <- razón exacta, no una inferencia
+
+  El AC pide "deja de aparecer al alcanzar el límite": se cumple, y el servidor lo nombra.
+
+MITAD 2 — EL RESET DE PERÍODO (NO ejercitada en vivo) ....... CUBIERTA POR CÓDIGO + SUITE, DECLARADA
+--------------------------------------------------------------------------------------------------
+  ⚠️ ESTO NO SE FINGE. El reset depende del paso del tiempo real y NO es observable en una ventana
+  de ejecución. Lo que sí se verificó es el MECANISMO, leyendo el código:
+
+  server/src/routes/features.ts (155-169) — el conteo de dismissals está acotado a la ventana:
+      const cooldownDays = getCooldownDays(survey);
+      ...where(and(...respondentDismissalConditions(survey, ctx),
+             ...(cooldownDays != null
+                 ? [gte(surveyDismissals.dismissedAt, sql`datetime('now', ${`-${cooldownDays} days`})`)]
+                 : [])))
+  Es decir: sólo cuentan los dismissals de los últimos N días; los más viejos salen de la ventana y
+  el respondent vuelve a ser elegible. Con cooldown sin configurar, el conteo es all-time.
+
+  MATIZ QUE VALE LA PENA QUE PRODUCTO SEPA: el reset está implementado como **ventana deslizante**
+  (últimos N días respecto de ahora), NO como un corte de período calendario. El AC dice "until the
+  next period resets the dismissal window" y eso podría leerse como un límite fijo de período. El
+  comportamiento entregado satisface la intención (el respondent se recupera pasados N días), pero
+  no hay un instante único de "inicio de período" compartido por todos los respondents: cada uno se
+  recupera N días después de SU propio dismissal. No es un defecto, es una decisión de diseño que
+  conviene dejar explícita.
+
+  Por qué NO se pudo forzar: el override de fecha (`?today=`) del endpoint admin SÍ mueve el reloj
+  de la eligibility, pero la ventana de dismissals usa `datetime('now')` de SQLite, que el override
+  no toca. Se verificó leyendo el código (features.ts:164) — no es una suposición.
+
+  Respaldo de suite: el test `blocks once the per-survey Max shows per day is reached` y el rollup
+  `evaluateSurveyEligibility — daily show limits` CAEN en el revert-proof (ver escenario 11).
+
+DEFAULT CON CONSECUENCIAS (verificado en el código, surveyRuntime.ts:254)
+--------------------------------------------------------------------------------------------------
+      if (survey.isGeneralSurvey && survey.maxDismissals == null && dismissalCount > 0)
+          return { ok: false, reason: "max_dismissals_reached" };
+  Para una GENERAL, dejar el campo vacío significa que UN SOLO dismissal la oculta. El texto de
+  ayuda del formulario lo declara ("For General Surveys, leaving this blank means one dismissal
+  hides it"), así que está documentado en la UI. Se deja anotado porque es un default con
+  consecuencias, no un detalle.
+
+VEREDICTO AC5: PASS con alcance declarado
+  Límite: verificado en vivo con razón exacta. Reset: verificado a nivel de código y suite,
+  NO ejercitado en vivo por dependencia del calendario. Se declara, no se finge.

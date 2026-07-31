@@ -1,0 +1,98 @@
+TR-148 / TC-109 · IM-1099 — Resultados de la regresión
+Ejecutado 2026-07-30. Ningún item quedó en TBD.
+
+TÉCNICA
+==================================================================================================
+T1 · Entrega de surveys de FEATURE sigue viva ........................................... PASS
+    feature 'rentals'      -> 1 survey elegible
+    feature 'fundraising'  -> 1 survey elegible
+    feature 'test'         -> 1 survey elegible
+    feature 'test-tin'     -> 1 survey elegible
+    Los cambios de display rules NO rompieron la entrega por feature trigger, que es el camino
+    que ya estaba en producción antes de esta épica.
+
+T2 · Separación de modos ................................................................ PASS
+    Mismo contexto (org Auctifera + identidad real), dos endpoints:
+        /api/surveys/general/eligible      -> [26]   la General after-login SÍ
+        /api/features/general-veevart/...  -> []     por feature trigger NO
+    La contracara exacta del test "delivers after-login general surveys only through the general
+    eligibility endpoint", verificada desde el lado del consumidor.
+
+T3 · Render público por id .............................................................. PASS
+    GET /api/surveys/1 -> 200 · /12 -> 200 · /13 -> 200
+
+T4 · Endpoint público de eligibility general ............................................ PASS
+    200 sin ninguna sesión.
+
+T5 · Contrato apiBoundary de IM-963 ..................................................... PASS
+    El test "public/admin API boundary" pasa sobre la épica. Sin regresión del comportamiento
+    feature-specific que esa historia lockeó.
+
+T6 · Suites completas ................................................................... PASS
+    server 85/85 · client 8/8 · total 93 tests, 0 fallos. Idéntico a TR-146.
+
+T7 · Revert-proof ....................................................................... PASS
+    Con server/src en el commit base y los tests en la épica: 71 pass / 14 FAIL.
+    De los 14, 8 corresponden a ACs de esta historia (detalle en scenario-11).
+
+T8 · Tracking anónimo ................................................................... PASS
+    POST /api/features/qa/dismissals   (anónimo) -> 201, dos veces
+    POST /api/features/qa/impressions  (anónimo, respondent elegible) -> 201 {"ok":true}
+    El 400 que devolvió el primer intento de impression NO es un fallo: era un respondent que ya
+    había agotado los dismissals, y el servidor responde
+    "surveyId is not eligible for this feature context". Se verificó con un respondent fresco
+    para distinguir "roto" de "rechaza correctamente lo no elegible".
+
+T9 · Export CSV respeta filtros ......................................................... PASS
+    Detalle completo en scenario-9/ac13-ac14-csv-export.txt. 7 combinaciones, todas coherentes.
+
+SEGURIDAD
+==================================================================================================
+S1 · Secretos en el diff ................................................................ PASS
+    Las 3 coincidencias del grep son FALSOS POSITIVOS: la palabra "token" dentro del identificador
+    `detailsTokens` (una función que parsea la lista de organizaciones de audiencia). Se revisaron
+    una por una. Cero credenciales, cero claves, cero .env.
+
+S2 · Inyección SQL ...................................................................... PASS
+    Cero coincidencias de SQL construido por concatenación. Todo el acceso a datos pasa por drizzle
+    con parámetros ligados. El único `sql``` interpolado del diff es
+    `datetime('now', ${`-${cooldownDays} days`})`, donde cooldownDays viene de `toPositiveInt()`
+    — es un entero validado, no entrada libre del usuario.
+
+S3 · Superficie de rutas nuevas ......................................................... PASS
+    UN solo endpoint público nuevo en toda la épica:
+        surveysPublicRouter.get("/general/eligible")   <- público POR DISEÑO, lo exige el AC15
+    El export CSV nuevo cuelga de `responsesAdminRouter`, o sea DETRÁS de requireAdminAuth.
+    Ninguna ruta admin quedó expuesta.
+
+S4 · Lockdown admin para anónimos ....................................................... PASS
+    7 probes anónimos, los 7 devuelven 401:
+        /api/admin/surveys · /api/admin/responses · /api/admin/responses/export.csv (NUEVO)
+        /api/admin/organizations · /api/admin/analytics · /api/admin/settings · /api/admin/features
+    Lo importante: el endpoint NUEVO de esta historia (export.csv, que expone TODAS las respuestas
+    con respondentId y clientOrgId) está correctamente protegido. Era el riesgo real de los PRs
+    #34 y quedó cerrado.
+
+S5 · console.log introducidos ........................................................... PASS
+    **0 (cero) console.* nuevos** en los seis PRs de survey-tool.
+    Contraste que vale la pena dejar escrito: la historia hermana IM-968 fue RECHAZADA en TR-147
+    justamente por agregar 20 console.log, uno de ellos filtrando la URL de eligibility con
+    contexto de usuario. Este conjunto de PRs no repite ese problema.
+
+S6 · Dependencias nuevas ................................................................ PASS
+    Cero cambios en los tres package.json. Sin superficie de supply chain añadida.
+
+S7 · Exposición de datos en el endpoint público ......... HALLAZGO BAJO — SIGUE ABIERTO (de TR-146)
+    El endpoint público `/api/surveys/general/eligible` devuelve a un ANÓNIMO el objeto survey
+    completo: 29 campos, incluidos
+        audience            = 'organization'
+        audienceDetails     = 'computing-power-944-dev-ed'      <- lista de orgs objetivo
+        generalClientOrgId  = 'computing-power-944-dev-ed'
+        triggerDetails      = 'cooldownDays=90, onePerRespondent=true, generalTrigger=afterLogin,
+                               loginDelaySeconds=20'            <- reglas internas de entrega
+        accountCreatedDelayDays, maxDismissals, maxImpressions
+    Quien conozca un clientOrgId puede enumerar a qué organizaciones se está encuestando y con qué
+    reglas. No hay PII ni credenciales; es metadata de configuración.
+    Severidad: BAJA. Ya se levantó en TR-146; esta corrida sólo CONFIRMA que sigue vigente y que
+    esta historia no lo empeoró (tampoco lo arregló). No se abre defecto nuevo: se referencia.
+    Mitigación sugerida: servir al público sólo los campos que el widget necesita para renderizar.

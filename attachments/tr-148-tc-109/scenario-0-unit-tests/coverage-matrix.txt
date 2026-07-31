@@ -1,0 +1,76 @@
+TR-148 / TC-109 · IM-1099 — Tests de los PRs y matriz de cobertura AC ↔ test
+Rama epic/nps-survey-delivery-and-metrics · base 737a62b6 · head 14bde9d2
+
+ARCHIVOS DE TEST TOCADOS POR LOS 6 PRs
+==================================================================================================
+  server/src/routes/apiBoundary.test.ts        +14 tests
+  server/src/lib/surveyRuntime.test.ts         + 6 tests
+  client/src/components/SurveyWidget.test.ts   + 4 tests
+  client/src/lib/surveyDisplayRules.test.ts    + 3 tests
+                                               -----------
+                                               +27 tests nuevos
+
+RESULTADO DE CORRERLOS SOBRE LA RAMA
+==================================================================================================
+  server  85 tests · 85 pass · 0 fail   (11 suites)
+  client   8 tests ·  8 pass · 0 fail   ( 3 suites)
+  TOTAL   93 tests · 0 fallos            <- el dev NO dejó tests rojos
+
+MATRIZ AC ↔ TEST
+==================================================================================================
+AC   | Comportamiento                                  | Test(s) que lo cubren                                              | ¿Hueco?
+-----|--------------------------------------------------|--------------------------------------------------------------------|--------
+AC1  | Form ofrece Start Date + interacciones, sin la    | persists display rule settings from admin survey creation           | UI: sí*
+     | opción vieja de counter-equals                    | serializes display rules without persisting no-window zero values   |
+AC2  | Start Date futuro -> no elegible                  | blocks immediate surveys before Start Date                          | no
+AC3  | Start Date cumplido + interacción -> elegible     | shows immediate surveys on the first eligible interaction once      | no
+     |                                                   |   Start Date is reached                                             |
+     |                                                   | requires the configured interaction count after Start Date          |
+AC4  | One time deshabilita/oculta lo incompatible       | validates display-rule integer fields with their expected bounds    | UI: sí*
+AC5  | Max dismissals por período + reset                | blocks once the per-survey Max shows per day is reached             | reset: sí**
+AC6  | Tries between shows espacia los prompts           | uses triesBetweenShows to space repeated prompts after the first    | no
+     |                                                   |   eligible interaction                                              |
+     |                                                   | spaces repeated prompts from the configured interaction threshold   |
+AC7  | General "To everyone" a toda org ACTIVA           | prioritizes a global general survey for active organizations        | no
+     |                                                   | does not deliver a global general survey for inactive organizations |
+AC8  | API after-login devuelve sólo si todo pasa        | delivers after-login general surveys only through the general       | no
+     |                                                   |   eligibility endpoint                                              |
+AC9  | Modal tras el login en Giftshop y Fundraising     | — NINGUNO —                                                         | **SÍ***
+AC10 | No elegible -> no se muestra nada                 | keeps global general survey respondent state scoped by organization | no
+     |                                                   | validates global general survey response eligibility context        |
+AC11 | userCreatedDate viaja al submit                   | prefers the canonical userCreatedDate over legacy aliases           | no
+     |                                                   | resolves supported aliases for response submission context          |
+     |                                                   | serializes supported aliases as userCreatedDate in the response     |
+     |                                                   | returns undefined when no creation date context is provided         |
+AC12 | Fecha ISO válida, nunca 2026-7-1                  | — NINGUNO en survey-tool —                                          | **SÍ***
+AC13 | CSV respeta los filtros activos                   | exports governed response CSV with subject metadata and dashboard   | no
+AC14 | CSV con metadata, contexto, scores y columnas     |   filters  (un solo test cubre ambos ACs)                            | no
+     |   legibles por pregunta                           |                                                                     |
+AC15 | Rutas públicas siguen sin auth admin              | does not let public render mode without surveyId bypass audience    | no
+     |                                                   |   eligibility                                                       |
+     |                                                   | renders the requested surveyId through public eligibility even with |
+     |                                                   |   general survey priority                                           |
+
+HUECOS DE COBERTURA — Y CÓMO LOS COMPENSÓ QA
+==================================================================================================
+ *  AC1 y AC4 son de FORMULARIO. Los tests cubren la serialización de las reglas, no lo que el
+    admin ve en pantalla. Es un hueco esperable (no hay runner de componentes React acá).
+    -> QA lo compensó inspeccionando el DOM del formulario real: se verificó por AUSENCIA que la
+       opción counter-equals no está entre los radios, y que el input incompatible se oculta al
+       elegir One time. Evidencia: scenario-1/.
+
+ ** AC5 mitad "reset de período": ningún test simula el paso de 30/90/180/365 días. El test que
+    existe cubre el LÍMITE, no el RESET.
+    -> QA verificó el límite en vivo (razón exacta max_dismissals_reached) y el mecanismo del reset
+       leyendo el predicado SQL. El reset en sí NO se ejercitó y se DECLARA. Evidencia: scenario-3/.
+
+*** AC9 y AC12 NO tienen ningún test en survey-tool, y no podrían tenerlo: viven en los paquetes
+    Salesforce (AuctiferaDX #2527/#2536, NFPFundraising #2135). El runner de jest de NFPFundraising
+    tampoco ejecuta componentes Aura, así que el launcher no es testeable por unidad ahí.
+    -> QA los cubrió FUNCIONALMENTE en vivo: AC9 mitad Giftshop en esta corrida (escenario 7) y
+       mitad Fundraising en TR-147; AC12 observando la fecha real en la URL del iframe y simulando
+       la regex del normalizador con casos límite (escenario 8).
+
+VEREDICTO: tests del dev en VERDE, sin huecos que dejen un AC sin evidencia. Los 3 huecos reales
+son de superficie (UI, tiempo, Salesforce) y los tres quedaron cubiertos por evidencia funcional
+de QA, no por suposición.

@@ -1,0 +1,399 @@
+schemaVersion: '1.0'
+id: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+key: TC-109
+title: IM-1099 — Survey display rules UX and after-login General Survey delivery — Start Date gating, one-time and frequency controls, dismissal and spacing limits, after-login launchers in both Salesforce packages, userCreatedDate propagation with valid ISO formatting, and filtered CSV response export
+description: |
+  Cobertura QA de IM-1099 (**Refine survey display rules UX**), bajo el epic
+  IM-970 NPS Survey Tool delivery. QA Sub-task asociada: **IM-1156**.
+
+  ## Qué es esta historia
+
+  Es la historia **paraguas** del trabajo de display rules y entrega after-login del epic. Tiene
+  **15 ACs** y abarca tres frentes: (a) la UX y el runtime de las reglas de aparición en el
+  survey-tool, (b) la entrega *after-login* de la General Survey hacia los dos paquetes de
+  Salesforce, y (c) el export CSV de respuestas.
+
+  ## PRs bajo prueba — mapeo AC ↔ PR derivado por QA
+
+  Todos merged sobre ramas **épicas**, ninguno en `main`.
+
+  | PR | Merge | Tag del título | ACs |
+  | --- | --- | --- | --- |
+  | survey-tool **#30** `feat: refine survey display timing UX` | `60e1058c` | IM-965 | AC1, AC2, AC3 |
+  | survey-tool **#31** `fix: refine survey display rule controls` | `8c1e78b1` | **IM-1099** | AC4, AC5, AC6 |
+  | survey-tool **#29** `fix: improve general survey audience and frequency UX` | `7f55b912` | — | AC7 |
+  | survey-tool **#32** `feat: add general survey login trigger` | `338f6b1c` | **IM-1099** | AC8, AC10 |
+  | survey-tool **#33** `fix: include user created date in general survey responses` | `36e6a0e5` | **IM-1099** | AC11 |
+  | survey-tool **#34** `feat: export survey responses csv` | `14bde9d2` | **IM-1099** | AC13, AC14 |
+  | AuctiferaDX **#2527** `feat: add after-login NPS survey trigger` | — | **IM-1099** | AC9 (Giftshop) |
+  | AuctiferaDX **#2536** `feat(nps): add after-login survey launcher` | — | **IM-1099** | AC9 (Giftshop) |
+  | NFPFundraising **#2135** `feat(nps): integrate nps survey widget…` | `215bab6a` | REN-394 | AC9 (Fundraising), AC12 |
+
+  El PR #30 lleva el tag **IM-965** y no IM-1099, pero implementa los AC1–AC3 de esta historia; el
+  #2135 lleva **REN-394**. El mapeo lo derivó QA leyendo los diffs y queda acá para que dev lo
+  confirme o lo corrija.
+
+  ## Qué ya está validado y NO hay que repetir
+
+  Buena parte de esta historia ya se ejecutó al validar dos historias hermanas del mismo epic. El
+  ejecutor debe **reutilizar esa evidencia** en vez de rehacerla:
+
+  - **TR-146** (IM-966 / TC-96, 11/11 PASS) — cubre el **AC7** (General `To everyone` evaluada para
+    cualquier organización ACTIVA, con el gate `isActiveClientOrg` y el caso
+    `general_client_org_inactive`) y el **AC11** por el lado del servicio (el submit re-evalúa la
+    eligibility y exige `userCreatedDate`; 400 `user_created_date_missing`). También dejó medido el
+    blast radius: **6 subjects** sirven la General.
+  - **TR-147** (IM-968 / TC-108, 6/9 PASS) — cubre la **mitad NFPFundraising del AC9**: login real
+    en la app Fundraising, modal renderizado tras el delay, respuesta atribuida. Y dejó verificado el
+    contrato del launcher (`clientOrgId`, `respondentId`, `userCreatedDate` reales).
+
+  **El delta real de esta historia**, o sea lo que NADIE validó todavía:
+  - Las **display rules** completas (AC1–AC6): Start Date, opciones por interacciones, desaparición
+    de la opción vieja, one-time deshabilitando controles incompatibles, max dismissals por período
+    con reset, y tries between shows. En TR-146 solo se observó que sus tests CAEN al revertir —
+    nunca se ejercitaron funcionalmente.
+  - La **mitad Auctifera Giftshop del AC9** (#2527 / #2536).
+  - El **formato de fecha** del AC12 (que no se produzcan valores inválidos tipo `2026-7-1`).
+  - El **export CSV** completo (AC13, AC14) — sin tocar en ninguna corrida previa.
+  - El **AC15**: que las rutas públicas sigan funcionando sin autenticación de admin.
+
+  ## Riesgos abiertos
+
+  - **⚠️ Nada de esto está en `main`.** Los seis PRs de survey-tool viven en
+    `epic/nps-survey-delivery-and-metrics`; los de AuctiferaDX en su rama épica; el de
+    NFPFundraising en `epic/nps-survey-delivery`, con `main` **diverged** (1 ahead / 9 behind).
+    Ya se reportó en IM-966 y en IM-968. QA valida comportamiento; el merge es un paso de release
+    aparte y fuera del control de este test case.
+  - **La historia hermana IM-968 está en `Rechazado`** (TR-147): el PR de NFPFundraising agrega 20
+    `console.log` y no justifica la duplicación. Ese rechazo NO bloquea esta historia —los ACs son
+    distintos— pero el AC9 comparte código con ese PR, así que si el dev lo corrige hay que
+    re-verificar la mitad Fundraising.
+  - **AC1 y AC4 son de UI pura**: se validan mirando el formulario, no por API. Requieren acceso al
+    admin del survey-tool.
+  - **AC5 y AC6 dependen del paso del tiempo o de muchas interacciones** (períodos de dismissal,
+    espaciado entre shows). Puede que no sean observables en vivo dentro de una ventana razonable;
+    en ese caso se cubren a nivel de suite y se declara explícitamente, nunca se fingen.
+  - **AC9 nombra "Auctifera Giftshop"**: hay que confirmar en qué app/utility bar concreta está
+    montado el launcher de Auctifera antes de ejecutar. La org de Auctifera (`nps_2`) **expira el
+    2026-07-31**, así que esa mitad hay que correrla ya o queda `not-run`.
+  - **Configurar cualquiera de estos escenarios exige escribir en el entorno dev COMPARTIDO** del
+    survey-tool. Por el AC7 de IM-966, mientras exista una General activa con audiencia global no se
+    puede crear otra activa (409). Requiere ventana autorizada y restauración verificada.
+  - **El AC12 se origina en un fix de `RosterDateSelector`** que viaja en el PR de NFPFundraising y
+    que, estrictamente, no es de dominio NPS. Se verifica como parte de esta historia porque el AC lo
+    pide, pero conviene que producto confirme que ese es el alcance esperado.
+type: integration
+priority: medium
+status: active
+preconditions:
+- '`https://surveytool.dev.veevart.ai` desplegado desde `epic/nps-survey-delivery-and-metrics` (head `14bde9d2`) — NO desde `main`'
+- 'Admin del survey-tool accesible con Google `@veevart.com` (Cognito Hosted UI), necesario para los ACs de formulario y para el export CSV'
+- 'Clone de `survey-tool` con la rama épica y los commits base de cada PR, para la suite del repo y el revert-proof'
+- 'Scratch org Auctifera `nps_2` (`computing-power-944-dev-ed`) autenticada — **EXPIRA 2026-07-31**, es el reloj que manda para la mitad Giftshop del AC9'
+- 'Scratch org NFPFundraising `vnfp_pkg` (`flow-site-19432-dev-ed`) autenticada — expira 2026-08-14. Ya registrada como organization ACTIVA (id 7) en el survey-tool'
+- 'Al menos DOS organizations activas en el survey-tool para los ACs de audiencia — ya existen: `computing-power-944-dev-ed` y `flow-site-19432-dev-ed`'
+- 'Identidades REALES de ambas orgs, leídas de cada org y nunca inventadas. Las usadas en corridas previas: Auctifera `005dq00000NLWpIAAX` / `2026-07-01T15:58:58.000Z`; VNFP `005Rt00000XjqlyIAB` / `2026-07-15T10:04:17.000Z`'
+- 'La General preexistente (id 17) quedó INACTIVA al cerrar TR-146 por decisión del dueño del entorno; `attachments/tr-146-tc-96/scenario-5/RESTORE-survey-17.json` permite restaurarla'
+- 'Respuestas ya existentes en el entorno dev (8 al cerrar TR-147) para poder ejercitar el export CSV con filtros sin tener que generar datos nuevos'
+format: gherkin
+scenarios:
+- title: 'IM-1099 AC1 + AC4 — The "When to show" form offers Start Date and interaction-based options, the legacy counter-equals-a-specific-use option is gone, and selecting one-time disables the contradictory frequency inputs'
+  tags:
+  - happy-path
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-1
+  - ac-4
+  - functional-ui
+  - admin-ui
+  - display-rules
+  - survey-tool
+  - pr-30
+  - pr-31
+  given:
+  - un admin autenticado en `https://surveytool.dev.veevart.ai/admin/surveys`
+  - el formulario de creación o edición de una survey abierto
+  when:
+  - se inspecciona el bloque **`When to show it`** y luego se cambia **`Repeat window`** a **`One time`**
+  then:
+  - "el bloque presenta **`Start Date`** y las opciones por interacciones — los dos radios observados en corridas previas son `Immediately on the first eligible interaction` y `After N interactions`"
+  - "**la opción vieja de *contador igual a un número específico de usos* YA NO APARECE** — ésta es la mitad del AC1 que hay que verificar por ausencia, no por presencia, así que hay que mirarla explícitamente"
+  - "al elegir **`One time`** en `Repeat window`, los controles de frecuencia incompatibles quedan **deshabilitados u ocultos**: no se puede configurar a la vez *una sola vez* y *una ventana de repetición*"
+  - "el texto de ayuda del propio control lo explica: *One time means answered respondents never see it again. Other windows reset dismissal limits at the next period.*"
+  - "OJO al probar: **`Start Date` es obligatorio en la UI** aunque la API lo acepte vacío. Si el botón `Create` no responde, es por eso — ya se observó dos veces en TR-146 y TR-147"
+- title: IM-1099 AC2 + AC3 — A survey with a future Start Date is never eligible, and once the Start Date has passed it becomes eligible as soon as the interaction condition is met and the remaining rules allow it
+  tags:
+  - happy-path
+  - negative
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-2
+  - ac-3
+  - start-date
+  - eligibility
+  - display-rules
+  - pr-30
+  given:
+  - una survey configurada con un **`Start Date` futuro**
+  when:
+  - se evalúa la eligibility antes de esa fecha, y luego se repite con una survey cuyo `Start Date` ya pasó y cuya condición de interacciones se cumple
+  then:
+  - "con `Start Date` futuro la survey **NO se devuelve como elegible**, sin importar que el resto de las reglas pasen — la fecha es un gate duro y anterior"
+  - "con `Start Date` ya cumplido y la condición de interacciones satisfecha, la survey **sí se devuelve**, siempre que las reglas de frecuencia y audiencia también pasen"
+  - "el gate es **fail-closed**: ante una fecha ausente o inválida no se entrega la survey"
+  - "revert-proof: revirtiendo el código de display rules al commit base, el test *blocks immediate surveys before Start Date* **FALLA** — ya se observó cayendo en el revert-proof de TR-146, acá hay que confirmarlo con el comportamiento en vivo"
+- title: 'IM-1099 AC5 — Max dismissals per period stops the survey once the limit is reached, and the next period resets the dismissal window'
+  tags:
+  - edge-case
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-5
+  - dismissals
+  - display-rules
+  - pr-31
+  given:
+  - una survey con **`Max dismissals per period`** configurado y una ventana de repetición conocida
+  when:
+  - un respondent descarta la survey hasta alcanzar el límite dentro del período vigente
+  then:
+  - "alcanzado el límite, la survey **deja de aparecer** para ese respondent"
+  - "al iniciar el siguiente período, la ventana de dismissals **se resetea** y la survey vuelve a ser elegible"
+  - "para una General Survey, dejar el campo vacío significa que **un solo dismissal la oculta** — así lo declara el texto de ayuda del formulario, y es un default con consecuencias, no un detalle"
+  - "**LÍMITE PRÁCTICO A DECLARAR:** el reset de período depende del paso del tiempo real (30/90/180/365 días según `Repeat window`). Si no es observable dentro de la ventana de ejecución, se cubre a nivel de suite —el test *blocks once the per-survey Max shows per day is reached* y sus vecinos— y **se declara explícitamente como no ejercitado en vivo**, nunca se finge"
+- title: 'IM-1099 AC6 — Tries between shows spaces repeated prompts according to the configured interaction interval'
+  tags:
+  - edge-case
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-6
+  - spacing
+  - display-rules
+  - pr-31
+  given:
+  - una survey con **`Tries between shows`** configurado en un valor mayor que 0
+  - la survey ya apareció al menos una vez para ese respondent
+  when:
+  - el respondent acumula nuevas interacciones elegibles
+  then:
+  - "los prompts repetidos quedan **espaciados según el intervalo configurado**: con el valor en 3, aparece en la primera interacción elegible y luego cada 3"
+  - "con el valor en **0** aparece en **cada** interacción elegible — así lo describe el texto de ayuda del control"
+  - "el espaciado se cuenta por respondent, y para una General **global** el estado se cuenta por `clientOrgId` (semántica confirmada en TR-146 y ya elevada a producto)"
+  - "revert-proof: los tests *uses triesBetweenShows to space repeated prompts after the first eligible interaction* y *spaces repeated prompts from the configured interaction threshold* **CAEN** al revertir — se observaron cayendo en TR-146"
+- title: 'IM-1099 AC7 — A General Survey targeted "To everyone" applies to any ACTIVE organization without needing one survey per org'
+  tags:
+  - happy-path
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-7
+  - audience-everyone
+  - org-scoping
+  - reuses-tr146
+  - pr-29
+  given:
+  - una General Survey con audiencia **`To everyone`**
+  - al menos dos organizations en el survey-tool, una activa y otra no
+  when:
+  - se evalúa la eligibility para respondents de distintas organizaciones
+  then:
+  - "la survey aplica a **cualquier organización ACTIVA** sin necesidad de listarla y sin crear una survey por org"
+  - "una organización inactiva o inexistente **no la recibe** — el gate lo implementa `isActiveClientOrg()` y el runtime devuelve `general_client_org_inactive`"
+  - "un `clientOrgId` ausente o vacío tampoco es elegible"
+  - "en el listado del admin la survey se muestra como **`General survey audience: All active organizations`**"
+  - "**REUTILIZAR TR-146**, escenarios 3 y 9: este AC ya está verificado en vivo y en UI. Basta con re-confirmar que el comportamiento sigue vigente y referenciar esa evidencia — no rehacer la batería completa"
+- title: 'IM-1099 AC8 + AC10 — The after-login eligibility API returns the General Survey only when every delivery rule passes, and returns nothing when the respondent already answered, is out of audience scope, or exceeded the display limits'
+  tags:
+  - happy-path
+  - negative
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-8
+  - ac-10
+  - after-login
+  - eligibility
+  - api-boundary
+  - pr-32
+  given:
+  - una General Survey configurada para entrega **after-login**
+  when:
+  - Salesforce consulta la eligibility con contexto de organización, respondent y `userCreatedDate`, en escenarios elegibles y no elegibles
+  then:
+  - "la API devuelve la General **solo cuando TODAS las reglas de entrega pasan** — audiencia, organización activa, delay por antigüedad de usuario, frecuencia y límites"
+  - "cuando el respondent **ya respondió**, está **fuera del scope de audiencia** o **superó los límites de display**, la respuesta es vacía y no se muestra nada"
+  - "la separación de modos se sostiene: una General en modo after-login **no** se sirve por el endpoint de feature trigger, y viceversa"
+  - "un contexto incompleto (sin `clientOrgId`, sin `userCreatedDate`) resuelve **fail-closed**: lista vacía, no error 5xx — *no elegible* es un caso normal"
+  - "**REUTILIZAR TR-147**, escenarios 1 y 3: los seis casos ya se ejecutaron en vivo contra este endpoint con la identidad real de la org de VNFP. Ampliar solo con lo que falte"
+- title: 'IM-1099 AC9 — An eligible Salesforce user who logs into Auctifera Giftshop OR NFPFundraising is shown the selected General Survey once the configured login delay elapses'
+  tags:
+  - happy-path
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-9
+  - after-login
+  - functional-ui
+  - evidence-ui
+  - screenshots
+  - salesforce
+  - auctifera-dx
+  - nfpfundraising
+  - pr-2527
+  - pr-2536
+  - pr-2135
+  given:
+  - "⚠️ EL AC NOMBRA **DOS** PAQUETES y hay que cubrir los dos: **Auctifera Giftshop** y **NFPFundraising**. Son launchers distintos, en PRs distintos"
+  - "la mitad **NFPFundraising ya está cubierta por TR-147** (escenarios 2 y 9): login real, modal renderizado tras `loginDelaySeconds`, respuesta atribuida. **NO rehacerla** — referenciarla"
+  - "PASO 0 (liberar el scope) — por el AC7 de IM-966, mientras exista una General ACTIVA con audiencia global no se puede crear otra activa: la API responde **409**. Anotá la configuración de la vigente, desactivala, y recién ahí creá la de prueba"
+  - "PASO 0b (crear la General) — **Add survey** → marcá `General NPS survey`; en `General survey trigger` elegí **`Show after login`**; en `To whom are you sending this survey?` elegí la organización de Auctifera; `Show after User.CreatedDate` en 0; completá `Start Date`; dejá `Active` marcado"
+  - "PASO 0c — **confirmá primero en qué app/utility bar de Auctifera está montado el launcher.** El AC dice *Giftshop*; en la org hay una `Auctifera__Veevart_Giftshop_UtilityBar`. Verificalo con una query de metadata antes de navegar a ciegas"
+  when:
+  - "1. Entrá a la org de Auctifera (`computing-power-944-dev-ed`) con un login REAL, no reusando sesión, y abrí la app de **Giftshop**. 📸 `01-giftshop-app.png`"
+  - "2. Esperá el delay configurado y dejá que aparezca la survey. 📸 `02-modal-after-login-giftshop.png`"
+  - "3. Respondé y enviala. Verificá la atribución en **Dashboard → Responses**. 📸 `03-response-attributed.png`"
+  then:
+  - "PASO 2 — el modal aparece **después del login**, sin haber tocado ningún botón de feature. Si no aparece, revisá primero que el PASO 0b haya quedado en `Show after login` y que la organización esté activa"
+  - "PASO 3 — la respuesta queda atribuida a la **General Survey**, con el `client org` y el `user` reales de la org de Auctifera"
+  - "la URL del iframe lleva `surveyId`, `clientOrgId`, `respondentId` y `userCreatedDate` — mismo contrato que ya se observó en el lado NFPFundraising"
+  - "**⏳ RELOJ:** la org de Auctifera **expira el 2026-07-31**. Si expira antes de ejecutar, esta mitad queda `not-run` con esa razón concreta y verificada, nunca fingida como PASS"
+  - "PASO 4 (limpieza, obligatorio) — borrá la General de prueba, restaurá la que hubieras desactivado y dejá constancia del estado final: total de surveys, generales que quedan y 0 respuestas de QA"
+- title: 'IM-1099 AC11 + AC12 — userCreatedDate travels through eligibility AND response submission so both validations agree, and the date Salesforce provides is formatted as a valid ISO value, never as 2026-7-1'
+  tags:
+  - happy-path
+  - edge-case
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-11
+  - ac-12
+  - user-created-date
+  - date-formatting
+  - reuses-tr146
+  - pr-33
+  - pr-2135
+  given:
+  - una General Survey abierta desde Salesforce, con el contexto del usuario propagado por el launcher
+  when:
+  - el respondent envía la respuesta, y por separado se inspecciona cómo se formatea la fecha que Salesforce entrega
+  then:
+  - "el `userCreatedDate` viaja en el contexto de la respuesta, de modo que **la validación del submit coincide con la de la eligibility** — sin eso la respuesta se rechaza DESPUÉS de que el modal ya se abrió, que era exactamente el bug que #33 corrige"
+  - "un submit sin `userCreatedDate` sobre una General se rechaza con **400** *`Survey is not eligible for this response context: user_created_date_missing`*"
+  - "**REUTILIZAR TR-146** escenario 6: los tres rechazos del submit y las 3 aserciones de la suite del cliente ya están verificados"
+  - "**AC12 — el delta real:** la fecha se entrega como un valor ISO válido y **NUNCA como `2026-7-1`** (mes y día sin cero a la izquierda), que es el valor que Lightning rechaza. En TR-147 se observó el `userCreatedDate` real viajando bien formateado (`2026-07-15T10:04:17.000Z`), pero el caso límite —un día o mes de un dígito— **no se ejercitó**: hay que forzarlo"
+  - "el fix vive en `RosterDateSelector` del PR de NFPFundraising y normaliza `YYYY-M-D` a `YYYY-MM-DD` solo para valores date-like, sin reescribir los ya válidos. Verificar que no altere fechas correctas"
+- title: 'IM-1099 AC13 + AC14 — CSV export honours the active dashboard filters and includes response metadata, survey and respondent/org context, score fields and one readable column per survey question and answer'
+  tags:
+  - happy-path
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-13
+  - ac-14
+  - csv-export
+  - dashboard
+  - functional-ui
+  - not-covered-before
+  - pr-34
+  given:
+  - un admin en **Dashboard → Responses** con respuestas existentes en el entorno
+  - "los filtros del dashboard disponibles: `From` / `To`, `Subject`, `Product`, `Metric`, `Quality`, `Export` y `Client org`"
+  when:
+  - se aplican filtros activos y se pulsa **`Export CSV`**
+  then:
+  - "el CSV incluye **exactamente las filas que coinciden con los filtros aplicados** — no el total sin filtrar. Probar al menos con un filtro por `Subject` y otro por `Client org`, y contrastar el conteo del CSV contra el que muestra la pantalla (*N responses · showing 1-N*)"
+  - "el CSV incluye **metadata de la respuesta** (fecha, identificadores), **contexto de la survey** (subject, producto, versión), **contexto de respondent y organización** (`client org`, `user`) y los **campos de puntaje** (NPS y CSAT)"
+  - "hay **una columna legible por cada pregunta y su respuesta** — no un blob JSON ni claves internas: el AC pide columnas *readable*, y eso hay que juzgarlo abriendo el archivo"
+  - "el selector **`Export: standard`** y la opción `Show optional columns` afectan el set de columnas de forma coherente con lo que ofrecen"
+  - "las respuestas marcadas como **excluidas del export** (`Export: Excluded`) se respetan según el filtro elegido"
+  - "**ESTE AC NO SE TOCÓ EN NINGUNA CORRIDA PREVIA** — es territorio nuevo, no hay evidencia que reutilizar"
+- title: 'IM-1099 AC15 — The existing public survey and widget routes keep working without admin authentication after the display-rule changes'
+  tags:
+  - regression
+  - im-1099
+  - im-1156
+  - im-970
+  - ac-15
+  - public-api
+  - anonymous
+  - no-regression
+  - pr-30
+  - pr-31
+  - pr-32
+  given:
+  - los cambios de display rules aplicados en la rama épica
+  when:
+  - se ejercitan las rutas públicas **sin ninguna sesión de admin**
+  then:
+  - "el **render** de la survey pública responde sin autenticación"
+  - "la **eligibility** responde sin autenticación, tanto por el endpoint de feature como por el de generales"
+  - "el **submit** de la respuesta funciona sin autenticación"
+  - "el **tracking de dismissals** e impresiones sigue funcionando sin autenticación"
+  - "las rutas **admin** siguen protegidas: probes anónimos a `/api/admin/*` deben devolver **401** — verificado en TR-146 con 5 probes; re-confirmar que el cambio no abrió ninguna"
+  - "contracara del AC: que sea anónimo por diseño no significa que exponga de más. En TR-146 se levantó un hallazgo **Bajo** — el endpoint público devuelve `audienceDetails` y `generalClientOrgId`, o sea la lista de organizaciones objetivo. Re-verificar si sigue vigente y si producto decidió algo al respecto"
+- title: 'IM-1099 — Repo suites and revert-proof across the six survey-tool PRs of the epic branch'
+  tags:
+  - regression
+  - im-1099
+  - im-1156
+  - im-970
+  - gates
+  - revert-proof
+  - api-boundary
+  - pr-29
+  - pr-30
+  - pr-31
+  - pr-32
+  - pr-33
+  - pr-34
+  given:
+  - "clone de `survey-tool` con la rama `epic/nps-survey-delivery-and-metrics` (head `14bde9d2`) y el commit base `737a62b6`"
+  when:
+  - se corren AMBAS suites (`server/` y `client/`) sobre la épica y luego se revierte el código de `server/src` al commit base dejando los tests en la épica
+  then:
+  - "ambas suites pasan completas sobre la épica — en TR-146 fueron **85 (server) + 8 (client) = 93 tests, 0 fallos**"
+  - "al revertir, caen **14** tests. **De esos, los que pertenecen a ESTA historia son los 5 de display rules y export**: *blocks immediate surveys before Start Date* (AC2/AC3) · *uses triesBetweenShows to space repeated prompts after the first eligible interaction* (AC6) · *spaces repeated prompts from the configured interaction threshold* (AC6) · *blocks once the per-survey Max shows per day is reached* (AC5) · *exports governed response CSV with subject metadata and dashboard filters* (AC13/AC14)"
+  - "los otros 9 que caen pertenecen a IM-966 y se validaron en TR-146 — **no se le imputan a esta historia**, pero confirman que la suite cubre de verdad toda la rama"
+  - "el contrato que IM-963 lockeó en `apiBoundary` sigue verde: sin regresión del comportamiento feature-specific"
+  - "los gates del repo (lint, build) quedan limpios, o su omisión se documenta con razón concreta"
+tags:
+- im-1099
+- im-1156
+- im-970
+- survey-tool
+- nps
+- display-rules
+- start-date
+- one-time
+- max-dismissals
+- tries-between-shows
+- after-login
+- general-survey
+- user-created-date
+- date-formatting
+- csv-export
+- dashboard
+- public-api
+- salesforce
+- auctifera-dx
+- nfpfundraising
+- functional-ui
+- umbrella-story
+- pr-29
+- pr-30
+- pr-31
+- pr-32
+- pr-33
+- pr-34
+- pr-2527
+- pr-2536
+- pr-2135
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-07-30T20:30:00Z'
+  lastModifiedBy: codex
+  lastModifiedAt: '2026-07-30T20:30:00Z'

@@ -1,0 +1,116 @@
+TR-148 / TC-109 · Escenario 7 — AC9 mitad AUCTIFERA GIFTSHOP, ejecución EN VIVO
+Ventana de escritura autorizada por el usuario. Org: computing-power-944-dev-ed (scratch Auctifera
+`nps_2`, namespace `Auctifera`, EXPIRA 2026-07-31 — este era el reloj que mandaba)
+Entorno: https://surveytool.dev.veevart.ai   ·   Fecha: 2026-07-30
+
+PASO 0c — DÓNDE ESTÁ MONTADO EL LAUNCHER (verificado por metadata, no a ciegas)
+--------------------------------------------------------------------------------------------------
+Se recuperaron las FlexiPage de utility bar de la org y se buscó el componente:
+
+    FlexiPage                          ¿NpsAfterLoginLauncherBackground?
+    Veevart_Giftshop_UtilityBar   ....  ✔ PRESENTE   <-- el que exige el AC
+    Veevart_Ticketing_UtilityBar  ....  ✔ PRESENTE
+    Veevart_Engage_UtilityBar     ....  ✔ PRESENTE
+    Rentals_UtilityBar            ....  ✔ PRESENTE
+
+  El launcher NO está solo en Giftshop: está en las CUATRO utility bars de Veevart. Es más
+  cobertura de la que el AC pide, no menos. Queda anotado porque cambia el alcance real del
+  cambio: cualquier usuario que entre a cualquiera de esas cuatro apps puede recibir la General.
+
+  ⚠️ MISMO DRIFT QUE EN VNFP (TR-147): el LWC `npsAfterLoginLauncher` sigue desplegado en la org
+  pero NO está montado en ninguna flexipage — fue reemplazado por el bundle Aura. No se observó
+  doble disparo. Metadata obsoleta a limpiar en la org; no es defecto del PR.
+
+PASO 0 / 0b — LIBERAR EL SCOPE Y CREAR LA GENERAL DE PRUEBA
+--------------------------------------------------------------------------------------------------
+  Estado ANTES (leído del entorno, no supuesto):
+      11 surveys · generales = [17 inactiva, 24 inactiva, 25 ACTIVA] · 10 respuestas · 3 orgs activas
+      La General 25 la creó el DEV hoy 20:52:09 y tiene su propia respuesta (id 19, 20:53:17).
+      Config completa respaldada en RESTORE-survey-25.json ANTES de tocar nada.
+
+  Por la regla de scopes solapados del AC7 de IM-966 no se puede tener dos generales activas de
+  alcance global -> se desactivó la 25 (PUT active:false, resto de la config intacta y verificada).
+
+  General de QA creada — id 26, acotada SOLO a la org de Auctifera:
+      audience=organization · audienceDetails=computing-power-944-dev-ed
+      generalClientOrgId=computing-power-944-dev-ed
+      triggerDetails: "cooldownDays=90, onePerRespondent=true, generalTrigger=afterLogin,
+                       loginDelaySeconds=20"
+      accountCreatedDelayDays=0 · Start Date 2026-07-30 · active=true
+
+  AISLAMIENTO VERIFICADO antes de navegar (esto es lo que hace la prueba honesta):
+      Auctifera  005dq00000NLWpIAAX -> [26]   elegible
+      VNFP       005Rt00000XjqlyIAB -> []     NO la recibe (scope por organización respetado)
+      endpoint de FEATURE, mismo contexto Auctifera -> []   separación de modos sostenida (AC8)
+
+EJECUCIÓN — LOGIN REAL EN LA APP DE GIFTSHOP
+--------------------------------------------------------------------------------------------------
+  ⚠️ Primer intento fallido y por qué importa: navegar a /lightning/app/Veevart_Giftshop devolvió
+  el toast "The app you're trying to view is invalid or inaccessible. We're taking you to your
+  default app instead" y cayó en **Veevart Ticketing App**. El modal SÍ apareció ahí, pero eso no
+  es la evidencia que pide el AC. Causa: la org tiene namespace `Auctifera`, así que la URL
+  correcta es /lightning/app/**Auctifera__**Veevart_Giftshop. No era falta de permisos: la query a
+  AppMenuItem confirma Veevart Giftshop con IsAccessible=true / IsVisible=true.
+  Captura del intento fallido: ac9-02-modal-fired-but-in-ticketing-app.png
+
+  Segundo intento, ya en la app correcta (nav confirma "Veevart Giftshop" con sus tabs: Home,
+  Tasks, Chatter, Accounts, Contacts, POS Purchases, Client Purchases, Shop...):
+
+  t ≈ 0 s   -> SIN modal.  📸 ac9-01-giftshop-t0-sin-modal.png
+              Esto es lo que prueba que el delay es real y no que el modal salga siempre.
+  t ≈ 30 s  -> modal presente.  📸 ac9-02-modal-after-login-giftshop.png
+
+  Nota de método: el guard de una-vez-por-sesión ya se había consumido en el intento fallido.
+  Lightning lo persiste en su capa LSS (IndexedDB), no en localStorage plano, así que se limpió
+  el storage del origen por completo para forzar una sesión genuinamente nueva. Sin eso el
+  segundo intento habría dado un falso negativo.
+
+CONTRATO OBSERVADO EN VIVO — URL del iframe que construyó el launcher
+--------------------------------------------------------------------------------------------------
+  https://surveytool.dev.veevart.ai/survey/8
+      ?surveyId=26
+      &clientOrgId=computing-power-944-dev-ed
+      &respondentId=005dq00000NLWpIAAX
+      &userCreatedDate=2026-07-01T15%3A58%3A58.000Z
+      &usageCount=0
+
+  Viajan los cuatro elementos que el AC exige. El respondentId y el userCreatedDate son los REALES
+  de la org (verificados con SOQL contra User: Id 005dq00000NLWpIAAX, CreatedDate
+  2026-07-01T15:58:58.000+0000), no valores inventados ni el reloj de la corrida.
+
+  >>> Y ADEMÁS ES EVIDENCIA DEL AC12: la fecha viaja como `2026-07-01T15:58:58.000Z`, con mes y día
+      con cero a la izquierda. NO se produce el `2026-7-1` que Lightning rechaza.
+
+MODAL RENDERIZADO — contenido observado
+--------------------------------------------------------------------------------------------------
+  Título ......... "General Survey"
+  Pregunta ....... "QA TC-109 General AFTER-LOGIN Giftshop (TR-148) — borrar al terminar"
+  Escala ......... NPS 0–10, extremos "Not at all likely" / "Extremely likely"
+  Submit ......... DESHABILITADO hasta elegir puntaje (verificado en el árbol de accesibilidad)
+  Contexto ....... se renderiza sobre la app de Giftshop, no sobre una pantalla suelta
+
+ATRIBUCIÓN DE LA RESPUESTA (score 9 enviado desde el modal)
+--------------------------------------------------------------------------------------------------
+  id ............. 20
+  surveyId ....... 26      <- la General QA after-login, no una survey de feature
+  featureId ...... 8
+  score .......... 9
+  clientOrgId .... computing-power-944-dev-ed     <- org REAL de Auctifera
+  respondentId ... 005dq00000NLWpIAAX             <- User Id REAL, propagado por el launcher
+  createdAt ...... 2026-07-30 23:40:31
+  context ........ {"trigger":"standalone","triggerFeatureId":8,"triggerFeatureSlug":"general-veevart"}
+                   ^^ "standalone" confirma que llegó por el camino after-login y NO por un
+                      disparador de feature.
+  📸 ac9-03-score-9-selected-submit-enabled.png · ac9-04-post-submit-giftshop.png
+  📸 ac9-05-response-attributed-dashboard.png
+
+AC10 EN SECUENCIA REAL (bonus, no fabricado)
+--------------------------------------------------------------------------------------------------
+  Inmediatamente después de enviar, la MISMA consulta que devolvía [26] devuelve []:
+      GET /api/surveys/general/eligible?...respondentId=005dq00000NLWpIAAX -> []
+  El caso "ya respondió -> no se muestra nada" del AC10 queda verificado en vivo, en secuencia,
+  no por contrato.
+
+VEREDICTO AC9 (mitad Giftshop): PASS
+  La mitad NFPFundraising ya estaba cubierta por TR-147 (login real, modal, atribución). Con esta
+  corrida el AC9 queda cubierto en los DOS paquetes que nombra.

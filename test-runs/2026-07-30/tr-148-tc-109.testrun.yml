@@ -1,0 +1,771 @@
+schemaVersion: "1.0"
+
+id: tr-1d5824f9-632b-44d6-bde6-e36fa7711608
+key: TR-148
+title: "TR-148 · IM-1099 · TC-109 · Display rules UX y entrega after-login de la General — 11/11 PASS · 0 defectos · los 15 ACs cubiertos · AC9 CERRADO EN LOS DOS PAQUETES (Giftshop en vivo acá + Fundraising reusado de TR-147) · 93 tests del repo + revert-proof 14 FAIL (8 de esta historia) · OWASP 7 aplicables 0 FAIL · 0 console.log nuevos · RIESGO DE RELEASE: nada está en main"
+
+description: |
+  QA de IM-1099 (**Refine survey display rules UX**), epic IM-970 NPS Survey Tool delivery.
+  QA Sub-task: **IM-1156**. Es la historia **paraguas** del epic: **15 ACs** sobre tres frentes —
+  la UX y el runtime de las reglas de aparición, la entrega *after-login* de la General hacia los
+  dos paquetes de Salesforce, y el export CSV de respuestas.
+
+  Clasificación: **Mixed** — backend/service (Node/TS + Express + SQLite/drizzle), UI de admin
+  (React), y dos paquetes Salesforce (Aura/LWC en los namespaces `Auctifera` y `vnfp`).
+
+  ## Nueve PRs en tres repos — el mapeo lo derivó QA
+
+  | PR | Merge | Tag del título | ACs |
+  | --- | --- | --- | --- |
+  | survey-tool **#30** | `60e1058c` | IM-965 | AC1, AC2, AC3 |
+  | survey-tool **#31** | `8c1e78b1` | IM-1099 | AC4, AC5, AC6 |
+  | survey-tool **#29** | `7f55b912` | — | AC7 |
+  | survey-tool **#32** | `338f6b1c` | IM-1099 | AC8, AC10 |
+  | survey-tool **#33** | `36e6a0e5` | IM-1099 | AC11 |
+  | survey-tool **#34** | `14bde9d2` | IM-1099 | AC13, AC14 |
+  | AuctiferaDX **#2527** / **#2536** | — | IM-1099 | AC9 (Giftshop) |
+  | NFPFundraising **#2135** | `215bab6a` | REN-394 | AC9 (Fundraising), AC12 |
+
+  `git log 737a62b6..14bde9d2` devuelve **exactamente esos seis** commits de survey-tool, ni uno
+  más ni uno menos: el mapeo derivado en el bundle queda confirmado contra el repo. Dos PRs no
+  vienen etiquetados con IM-1099 (**#30** dice IM-965, **#2135** dice REN-394) — **dev debería
+  confirmar o corregir ese mapeo**.
+
+  ## ⚠️ HALLAZGO DE TOPOLOGÍA — riesgo de release, no defecto de código
+
+  **Nada de esto está en `main`.** Los seis PRs de survey-tool viven en
+  `epic/nps-survey-delivery-and-metrics`; los de AuctiferaDX en su rama épica; el de NFPFundraising
+  en `epic/nps-survey-delivery`. Ya se reportó en TR-146 y TR-147 y **sigue igual**. QA valida
+  comportamiento sobre la épica, que es lo que corre el deploy dev; el merge a `main` es un paso de
+  release pendiente y fuera del control de este test run.
+
+  ## Qué se reutilizó y qué era el delta real
+
+  Se reutilizó evidencia en vez de rehacerla:
+  - **TR-146** (IM-966/TC-96, 11/11 PASS) → **AC7** completo y **AC11** por el lado del servicio.
+  - **TR-147** (IM-968/TC-108, 6/9 PASS) → la **mitad NFPFundraising del AC9** y el contrato del launcher.
+
+  El **delta real** de esta historia —lo que nadie había ejercitado— eran las display rules
+  completas (AC1–AC6, de las que TR-146 sólo había visto que sus tests caen al revertir), la mitad
+  **Auctifera Giftshop** del AC9, el formato de fecha del AC12, **todo el export CSV** (AC13/AC14,
+  cero evidencia previa) y el AC15. **Los cinco quedaron cubiertos en esta corrida.**
+
+  ## Método
+
+  1. **Suites completas del repo**: `server/` 85/85 + `client/` 8/8 = **93 tests, 0 fallos**.
+  2. **Revert-proof**: `server/src` al commit base dejando los tests en la épica →
+     **71 pass / 14 FAIL**. De los 14, **8 mapean a ACs de esta historia** (los 5 que el TC predijo,
+     más el de after-login y dos rollups). Los otros 6 son de IM-966 y no se le imputan.
+  3. **Probes read-only en vivo** con un lever clave: el endpoint admin acepta **override de fecha**
+     (`?today=`), lo que permitió barrer el gate de Start Date a ambos lados del límite **sin
+     esperar al calendario ni modificar ninguna survey**.
+  4. **Ventana de escritura autorizada** por el dueño del entorno para lo que no se puede observar
+     de otra forma: la General after-login del AC9 y el espaciado del AC6.
+  5. **Login REAL en la org de Auctifera** → app de Giftshop → modal → respuesta enviada y atribuida.
+  6. **Verificación independiente**: los 7 conteos del CSV se re-derivaron del listado de respuestas
+     antes de contrastarlos contra el archivo; no se tomó por buena ninguna cifra de pantalla.
+
+  ## Resultado
+
+  **11/11 PASS · 0 defectos · 0 hallazgos de seguridad High/Critical.** Los 15 ACs quedan cubiertos.
+  Se registran **6 observaciones** (4 de severidad Baja, 2 informativas), ninguna bloqueante,
+  detalladas en las notas de cada escenario y en `regression-results.txt`.
+
+  Dato que conviene contrastar con la historia hermana: estos seis PRs agregan **0 (cero)
+  `console.log`**. IM-968 fue rechazada en TR-147 justamente por agregar 20, uno de ellos filtrando
+  la URL de eligibility con contexto de usuario. Este conjunto no repite el problema.
+
+  ## ⚠️ Estado del entorno al cerrar — NO es "como estaba"
+
+  El dueño del entorno pidió durante la corrida: *"no borres la survey de QA, dejalas ahi como
+  prueba, recupera la del test anterior y deja ambas solo las inactivas"*. Se cumplió al pie de la
+  letra: **no se borró nada** y **las 4 generales quedaron inactivas**, incluida la del dev (id 25)
+  que estaba activa al empezar. Es una decisión del dueño del entorno, **no un fallo de
+  restauración**. Detalle completo en `estado-final-entorno.txt`.
+
+testCaseIds:
+  - ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+
+environment:
+  name: "survey-tool @ epic/nps-survey-delivery-and-metrics head 14bde9d2 (base 737a62b6) desplegado en https://surveytool.dev.veevart.ai · node test runner (tsx --test) para server/ y client/ · scratch org Auctifera nps_2 = computing-power-944-dev-ed namespace Auctifera (EXPIRA 2026-07-31) · scratch org NFPFundraising vnfp_pkg = flow-site-19432-dev-ed (expira 2026-08-14) · admin del survey-tool vía Cognito Hosted UI (Google @veevart.com)"
+  url: "https://github.com/Veevarts/survey-tool/pull/34"
+  buildVersion: >-
+    Mixed (backend/service Node+TS+Express con SQLite/drizzle + UI de admin React + launchers
+    Salesforce Aura/LWC en dos namespaces). Seis PRs de survey-tool entre 737a62b6 y 14bde9d2,
+    confirmados uno a uno con git log. Superficie funcional: server/src/lib/surveyRuntime.ts ·
+    routes/features.ts · routes/responses.ts · routes/surveys.ts · client/src/pages/SurveysPage.tsx.
+    Evidencia primaria: 93 tests del repo + revert-proof + barrido de eligibility con override de
+    fecha + ventana de escritura autorizada + login real en la app de Giftshop + export CSV
+    contrastado contra conteos re-derivados.
+  notes: |
+    ## Solution understood
+
+    La historia rediseña **cuándo** puede aparecer una encuesta y **por dónde** se entrega.
+
+    **Display rules (#30, #31).** Se introduce `Start Date` como gate duro y ANTERIOR a todo lo
+    demás: `surveyRuntime.ts:203` corta con `start_date_not_reached` antes de evaluar triggerType,
+    frecuencia, dismissals o espaciado — por más que el resto de las reglas pasen, la fecha manda
+    primero. El disparo se reduce a dos opciones (inmediato tras el Start Date, o tras N
+    interacciones): la vieja `counter_equals` desaparece del formulario, que sólo puede escribir
+    `triggerType: form.triggerType === "counter" ? "counter" : null`, aunque el runtime la conserva
+    para no romper las 4 surveys legacy que ya la tienen. Se suman `triesBetweenShows` (espaciado:
+    aparece en la primera interacción elegible y luego cada N) y `maxDismissals` acotado a la
+    ventana de cooldown — el conteo de dismissals filtra por
+    `dismissedAt >= datetime('now', '-N days')`, de modo que el respondent se recupera pasados N
+    días en vez de quedar bloqueado para siempre.
+
+    **Entrega after-login (#32).** Aparece el endpoint público `/api/surveys/general/eligible` y el
+    modo `generalTrigger=afterLogin` con `loginDelaySeconds`. La separación de modos es el corazón
+    del cambio: una General en modo after-login **no** se sirve por el endpoint de feature trigger,
+    y viceversa. Del lado Salesforce, los launchers (`NpsAfterLoginLauncherBackground`) consultan
+    esa eligibility al entrar a la app y, si hay resultado, montan el iframe pasando `clientOrgId`,
+    `respondentId` y `userCreatedDate` reales, con un guard de una-vez-por-sesión scopeado por
+    org+respondent.
+
+    **Contexto de fecha (#33).** El `userCreatedDate` pasa a viajar también en el submit, así que la
+    validación de la respuesta coincide con la de la eligibility. Sin eso la respuesta se rechazaba
+    DESPUÉS de que el modal ya se había abierto — ese era el bug.
+
+    **Export CSV (#34).** `GET /api/admin/responses/export.csv` detrás de `requireAdminAuth`,
+    reutilizando las mismas condiciones de filtro del dashboard (`buildResponseConditions`) y
+    aplicando gobernanza: `exportIncluded=false` siempre fuera; `strict` sólo aprobadas; `standard`
+    excluye spam y rechazadas. Genera 34 columnas, con una columna por pregunta personalizada
+    usando el texto de la pregunta como cabecera.
+
+    ## Inferred technical tests
+
+    | Test inferido | Qué prueba | ¿Ejecutable aquí? | Resultado |
+    |---|---|---|---|
+    | Suites server + client sobre la épica | que la rama no perdió cobertura | SÍ | 93/93 PASS |
+    | Revert-proof con el código base | que los tests ejercitan el código nuevo | SÍ | 14 FAIL, 8 de esta historia |
+    | Barrido de eligibility con `?today=` | AC2/AC3, el gate de Start Date a ambos lados | SÍ (lever admin) | corte exacto, PASS |
+    | Barrido de `usageCount` | AC6, el patrón de espaciado real | SÍ (survey QA) | 1,4,7,10 — PASS |
+    | Secuencia de dismissals | AC5, el límite | SÍ (survey QA) | `max_dismissals_reached` — PASS |
+    | Reset de período de dismissals | AC5, la otra mitad | **NO** — depende del calendario real | declarado, cubierto por código+suite |
+    | Export CSV con 7 filtros | AC13/AC14 | SÍ | los 7 conteos correctos |
+    | Probes anónimos públicos vs admin | AC15 | SÍ | 200 públicas / 401 admin (7) |
+    | Login real en Giftshop | AC9 mitad Auctifera | SÍ (ventana autorizada) | modal + respuesta 20 — PASS |
+    | Login real en Fundraising | AC9 mitad VNFP | reusado de TR-147 | PASS |
+    | Simulación de `normalizeDateForInput` | AC12, casos límite de formato | SÍ | `2026-7-1` → `2026-07-01` |
+
+    ## Observaciones registradas (ninguna bloqueante)
+
+    1. **[Baja] Cabeceras duplicadas en el CSV.** Tres columnas de preguntas personalizadas comparten
+       la cabecera idéntica *"Which of these would you like to see added? (select all that apply)"*.
+       La clave de dedup es `${survey.id}:${question.id}` (distingue bien), pero la cabecera escrita
+       es sólo `question.questionText`. Al abrirlo en una hoja de cálculo no se sabe a qué módulo
+       pertenece cada una. Sugerencia: prefijar con el subject.
+    2. **[Baja] El AC12 apunta a un fix de otro dominio.** `normalizeDateForInput` normaliza
+       `exhibitionStartDate`/`exhibitionEndDate` para inputs de fecha del Roster, **no** el
+       `userCreatedDate` del NPS. El resultado que el AC exige SÍ se cumple (verificado en vivo en
+       los dos paquetes), pero por construcción —`User.CreatedDate` ya sale ISO de Apex/Aura— y no
+       por ese fix. Conviene que producto/dev confirmen el alcance esperado del AC12.
+    3. **[Baja] El servidor acepta fechas mal formadas.** Un submit con `userCreatedDate: "2026-7-1"`
+       devolvió 201. `calendarDaysBetween` hace `new Date("2026-7-1")`, que V8 parsea como hora
+       local, pero el parseo de cadenas no-ISO es dependiente de la implementación según la spec.
+       Hoy no rompe nada porque ambos launchers mandan ISO; es riesgo latente.
+    4. **[Baja] Exposición de metadata en el endpoint público — YA ABIERTA desde TR-146.**
+       `/api/surveys/general/eligible` devuelve a un anónimo 29 campos, incluidos `audienceDetails`
+       y `generalClientOrgId` (qué organizaciones son el objetivo) y `triggerDetails` (las reglas
+       internas). No hay PII ni credenciales. Esta historia no lo empeoró ni lo arregló. **No se
+       abre defecto nuevo: se referencia el de TR-146.**
+    5. **[Informativa] El launcher está en CUATRO utility bars, no sólo en Giftshop.** Verificado por
+       metadata en la org: `NpsAfterLoginLauncherBackground` está montado en
+       `Veevart_Giftshop_UtilityBar`, `Veevart_Ticketing_UtilityBar`, `Veevart_Engage_UtilityBar` y
+       `Rentals_UtilityBar`. Es MÁS cobertura de la que el AC pide, pero cambia el alcance real del
+       cambio y conviene que producto lo sepa.
+    6. **[Informativa] Drift de metadata en la org de Auctifera.** El LWC `npsAfterLoginLauncher`
+       sigue desplegado pero no está montado en ninguna flexipage (fue reemplazado por el bundle
+       Aura). No se observó doble disparo. **Es el mismo drift que TR-147 encontró en la org de
+       VNFP** — o sea, se repite en los dos paquetes. Metadata obsoleta a limpiar, no defecto del PR.
+
+status: completed
+executedBy: codex
+startedAt: "2026-07-30T22:45:00Z"
+completedAt: "2026-07-31T00:05:00Z"
+
+summary:
+  total: 11
+  passed: 11
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: 'IM-1099 AC1 + AC4 — The "When to show" form offers Start Date and interaction-based options, the legacy counter-equals-a-specific-use option is gone, and selecting one-time disables the contradictory frequency inputs'
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:05:00Z"
+    duration: 20
+    actual: |
+      **AC1 — lo que el bloque ofrece.** El formulario real presenta `When to show it` con `Start Date`
+      y exactamente DOS radios de disparo: *Immediately on the first eligible interaction* (por
+      defecto) y *After N interactions*.
+
+      **AC1 — la mitad que se verifica por AUSENCIA.** La opción vieja de *contador igual a un número
+      específico de usos* NO aparece en el formulario: `counterEqualsInFormScope = false`, medido
+      sobre el DOM acotado ESTRICTAMENTE al `<form>`. El matiz importa y por poco genera un falso
+      positivo: la cadena *"exactly at N interactions"* SÍ existe en la página, pero en el LISTADO
+      de surveys que queda detrás del modal — es el formateador de surveys legacy
+      (`SurveysPage.tsx:525`). Buscando en toda la página daba positivo; acotando al formulario se
+      confirma la ausencia real. Respaldo en el código: el form sólo puede escribir
+      `triggerType: form.triggerType === "counter" ? "counter" : null`. `counter_equals` sobrevive
+      sólo para leer las 4 surveys legacy del entorno (ids 2, 3, 4, 5). Opción retirada de la UI,
+      compatibilidad preservada.
+
+      **AC4.** Primero lo que NO ocurre, para no reportarlo mal: al elegir `One time`, los tres inputs
+      numéricos (Max dismissals, Tries between shows, Max shows per day) NO quedan `disabled`. Eso no
+      es un fallo, porque no son incompatibles con "una sola vez" — el propio texto de ayuda explica
+      cómo se reinterpretan (*"With One time or a 0-day custom window, the limit is all-time"*).
+
+      El control realmente incompatible es la LONGITUD de la ventana de repetición, y ese SÍ se
+      oculta. Barrido observado: `Custom` → el input de días se renderiza; `One time` → NO;
+      `Quarterly` → NO; de vuelta a `One time` → NO. Además, elegir `One time` fuerza
+      `onePerRespondent: true` y LIMPIA `cooldownDays`. Es imposible configurar a la vez "una sola
+      vez" y "una ventana de repetición", que es lo que el AC pide evitar.
+    notes: "AC1 + AC4. Lo más valioso acá fue acotar el DOM al formulario: buscar en toda la página habría reportado como presente una opción que en realidad sólo aparece en el listado de surveys legacy."
+    stepResults: []
+    attachments:
+      - name: ac1-ac4-when-to-show-form.txt
+        path: attachments/tr-148-tc-109/scenario-1/ac1-ac4-when-to-show-form.txt
+        mimeType: text/plain
+      - name: tc109-ac1-ac4-when-to-show-form.png
+        path: attachments/tr-148-tc-109/scenario-1/tc109-ac1-ac4-when-to-show-form.png
+        mimeType: image/png
+
+  - scenarioIndex: 2
+    scenarioTitle: "IM-1099 AC2 + AC3 — A survey with a future Start Date is never eligible, and once the Start Date has passed it becomes eligible as soon as the interaction condition is met and the remaining rules allow it"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:10:00Z"
+    duration: 15
+    actual: |
+      Barrido sobre el límite usando el **override de fecha del endpoint admin** (`?today=`), que
+      permite mover el reloj de la eligibility sin esperar al calendario y **sin modificar ninguna
+      survey**. Sujeto: survey 1 (Rentals, activa, `triggerDate = 2026-07-30`), respondent aislado,
+      `usageCount=10` para que las demás reglas pasen.
+
+      | today | ¿elegible? | lectura |
+      |---|---|---|
+      | 2026-07-25 | NO | 5 días antes |
+      | 2026-07-29 | NO | el día ANTERIOR — el corte es acá |
+      | **2026-07-30** | **SÍ** | EL DÍA del Start Date (el gate es INCLUSIVO) |
+      | 2026-07-31 | SÍ | día siguiente |
+      | 2026-08-05 | SÍ | una semana después |
+
+      Corte exacto, y el día del Start Date cuenta como válido. **AC2** (fecha futura → nunca
+      elegible) y **AC3** (fecha cumplida + condición de interacciones → elegible) verificados sobre
+      el mismo sujeto en el mismo barrido.
+
+      **El gate es duro y ANTERIOR** (`surveyRuntime.ts:203-205`): se evalúa antes de triggerType,
+      frecuencia, dismissals y espaciado. Por más que todo lo demás pase, la fecha manda primero —
+      que es literalmente lo que el AC2 exige. **Fail-closed** confirmado: con `triggerType="date"`
+      y sin fecha devuelve `trigger_date_missing`; ante una fecha no parseable
+      `toSurveyDeliveryContext` cae al día del servidor en vez de aceptar basura. En ningún caso
+      entrega por defecto.
+
+      Revert-proof: caen *blocks immediate surveys before Start Date*, el rollup
+      *evaluateSurveyEligibility — start date and interactions* y el test nuevo del PR #30
+      *shows immediate surveys on the first eligible interaction once Start Date is reached*.
+    notes: "AC2 + AC3. El override de fecha del endpoint admin fue el lever que permitió probar esto en vivo en vez de dejarlo a la suite."
+    stepResults: []
+    attachments:
+      - name: ac2-ac3-start-date-gate.txt
+        path: attachments/tr-148-tc-109/scenario-2/ac2-ac3-start-date-gate.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 3
+    scenarioTitle: "IM-1099 AC5 — Max dismissals per period stops the survey once the limit is reached, and the next period resets the dismissal window"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:45:00Z"
+    duration: 20
+    actual: |
+      **Mitad 1 — el límite: ejercitada EN VIVO.** Sujeto: survey 27 (`maxDismissals=2`,
+      `cooldownDays=90`), creada sobre el subject *Test QA*, el único sin survey asociada (el
+      servidor impone una survey por subject: intentar una segunda en Accounting devolvió 409).
+      Todas las llamadas de dismissal se hicieron **anónimas**, así que la misma secuencia sirve de
+      evidencia del AC15:
+
+      | Paso | HTTP | ¿elegible después? |
+      |---|---|---|
+      | estado inicial (0 dismissals) | — | SÍ |
+      | POST dismissals #1 | 201 | SÍ (1 < 2) |
+      | POST dismissals #2 | 201 | **NO — límite alcanzado** |
+
+      El servidor nombra la razón exacta, no hay que inferirla:
+      `eligible:false · reason: "max_dismissals_reached"`, con
+      `counters: {dismissalCount: 2, dismissalCountAllTime: 2}`.
+
+      **Mitad 2 — el reset de período: NO ejercitada en vivo, y se declara.** Depende del paso del
+      tiempo real (30/90/180/365 días) y no es observable en una ventana de ejecución. Lo que sí se
+      verificó es el MECANISMO, leyendo el código (`features.ts:155-169`): el conteo filtra por
+      `dismissedAt >= datetime('now', '-N days')`, así que los dismissals viejos salen de la ventana
+      y el respondent vuelve a ser elegible; sin cooldown configurado el conteo es all-time.
+
+      **Matiz para producto:** el reset está implementado como **ventana deslizante** (últimos N días
+      respecto de ahora), no como corte de período calendario. El AC dice *"until the next period
+      resets the dismissal window"*, que podría leerse como un período fijo. El comportamiento
+      satisface la intención —el respondent se recupera pasados N días— pero no hay un instante de
+      "inicio de período" común: cada uno se recupera N días después de SU propio dismissal. No es
+      defecto; es una decisión de diseño que conviene dejar explícita.
+
+      Por qué no se pudo forzar: el override `?today=` mueve el reloj de la eligibility pero la
+      ventana de dismissals usa `datetime('now')` de SQLite, que el override no toca. Verificado
+      leyendo `features.ts:164`, no supuesto.
+
+      **Default con consecuencias** (`surveyRuntime.ts:254`): para una General, dejar `maxDismissals`
+      vacío hace que UN solo dismissal la oculte. Está declarado en el texto de ayuda del formulario.
+    notes: "AC5. PASS con alcance declarado: el límite se verificó en vivo con razón exacta; el reset se cubre por código y suite y se DECLARA como no ejercitado, no se finge."
+    stepResults: []
+    attachments:
+      - name: ac5-dismissals.txt
+        path: attachments/tr-148-tc-109/scenario-3/ac5-dismissals.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: "IM-1099 AC6 — Tries between shows spaces repeated prompts according to the configured interaction interval"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:40:00Z"
+    duration: 15
+    actual: |
+      Barrido directo de `usageCount` contra la eligibility, sobre la survey QA 27. El patrón se
+      **observa**, no se infiere del código.
+
+      **Con `triesBetweenShows = 3`:**
+
+      | usageCount | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+      |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+      | elegible | NO | **SÍ** | NO | NO | **SÍ** | NO | NO | **SÍ** | NO | NO | **SÍ** | NO | NO |
+
+      Aparece en la PRIMERA interacción elegible y luego cada 3, sostenido sin desviarse a lo largo
+      de 13 valores consecutivos. En `usageCount = 0` no se entrega porque está por debajo de la
+      primera interacción elegible (`trigger_counter_not_reached`).
+
+      **Con `triesBetweenShows = 0`:** elegible en 0, 1, 2, 3, 4, 5 y 6 — o sea en CADA interacción
+      elegible. El caso límite documentado se comporta como promete el texto de ayuda: *"0 means
+      every eligible interaction. 3 means the first eligible interaction, then every 3 eligible
+      interactions."*
+
+      La fórmula del runtime (`surveyRuntime.ts:239-247`) predice elegibles en
+      `usageCount ≡ 1 (mod 3)` = 1, 4, 7, 10 — que es exactamente lo medido, punto por punto.
+
+      Revert-proof: caen los dos tests del AC6 (*uses triesBetweenShows to space repeated prompts...*
+      y *spaces repeated prompts from the configured interaction threshold*).
+    notes: "AC6. Ejercitado EN VIVO, no sólo por suite: 13 valores consecutivos de usageCount más el caso límite de 0."
+    stepResults: []
+    attachments:
+      - name: ac6-tries-between-shows.txt
+        path: attachments/tr-148-tc-109/scenario-4/ac6-tries-between-shows.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 5
+    scenarioTitle: 'IM-1099 AC7 — A General Survey targeted "To everyone" applies to any ACTIVE organization without needing one survey per org'
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:35:00Z"
+    duration: 10
+    actual: |
+      **Evidencia REUTILIZADA de TR-146** (IM-966/TC-96, escenarios 3 y 9, 11/11 PASS), donde ya se
+      verificó en vivo y en UI: la General *To everyone* aplica a cualquier organización ACTIVA sin
+      listarla; una org inactiva o inexistente no la recibe (`general_client_org_inactive` vía
+      `isActiveClientOrg()`); un `clientOrgId` vacío tampoco (`general_client_org_missing`); el
+      listado del admin la muestra como *"General survey audience: All active organizations"*; blast
+      radius medido en 6 subjects. **No se rehízo esa batería.**
+
+      **Re-confirmación de vigencia sobre la rama actual (head 14bde9d2):**
+
+      1. La General 25 del dev (`audience='everyone'`, sin `generalClientOrgId`) se sirvió a la org
+         de Auctifera y a un respondent cualquiera de esa org → alcance global operativo.
+      2. La **otra mitad del AC7**, medida en ESTA corrida con la General 26 acotada por organización
+         (`audience='organization'`, `audienceDetails='computing-power-944-dev-ed'`):
+         org Auctifera → `[26]`; org VNFP → `[]`. Una General acotada **no se filtra a otra org**.
+         Poder elegir entre "todas" y "estas" queda verificado acá, no sólo reutilizado.
+      3. Las 3 organizations del entorno están activas, así que el caso "org inactiva" no era
+         reproducible sin desactivar una org compartida. Queda cubierto por TR-146 (que sí lo
+         ejercitó) y por la suite (*does not deliver a global general survey for inactive
+         organizations*, que cae al revertir).
+    notes: "AC7. PASS por reutilización de TR-146 + re-confirmación de vigencia; la mitad de scoping por organización se midió nueva en esta corrida."
+    stepResults: []
+    attachments:
+      - name: ac7-audience-everyone.txt
+        path: attachments/tr-148-tc-109/scenario-5/ac7-audience-everyone.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 6
+    scenarioTitle: "IM-1099 AC8 + AC10 — The after-login eligibility API returns the General Survey only when every delivery rule passes, and returns nothing when the respondent already answered, is out of audience scope, or exceeded the display limits"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:42:00Z"
+    duration: 20
+    actual: |
+      **Reutiliza TR-147** (escenarios 1 y 3): los seis casos negativos ya ejecutados en vivo con la
+      identidad real de VNFP, más el contrato del launcher. **Ampliado** con lo medido acá sobre la
+      org de Auctifera con su identidad real `005dq00000NLWpIAAX`:
+
+      | Caso | Resultado | ¿Objetivo? | Veredicto |
+      |---|---|---|---|
+      | todas las reglas pasan | `[26]` | SÍ | PASS |
+      | MISMO contexto contra el endpoint de FEATURE trigger | `[]` | SÍ | PASS |
+      | org fuera del scope de audiencia (VNFP vs General acotada a Auctifera) | `[]` | SÍ | PASS |
+      | Start Date no alcanzado (escenario 2) | `[]` | SÍ | PASS |
+      | límite de dismissals alcanzado (escenario 3) | `[]` | SÍ | PASS |
+      | espaciado no cumplido (escenario 4) | `[]` | SÍ | PASS |
+
+      La **separación de modos** es lo que hace este AC no trivial, y quedó verificada desde el lado
+      del consumidor: la General after-login no se sirve por feature trigger, y el endpoint de
+      feature no la devuelve aunque el contexto sea idéntico.
+
+      **AC10 en secuencia real, no por contrato.** Antes de responder, la eligibility devolvía `[26]`;
+      se envió la respuesta desde el modal del launcher en Giftshop (response id 20); inmediatamente
+      después, la MISMA consulta devuelve `[]`.
+
+      El diagnóstico del servidor nombra la razón: sobre la identidad real,
+      `surveyId 25 → already_answered` y `surveyId 26 → already_answered` tras responder; sobre un
+      respondent fresco de la misma org, `eligible: true`. Que la diferencia fuera la IDENTIDAD y no
+      la org ni la fecha se aisló con 4 sondas (real+fecha real / real+fecha vieja / fresco+fecha
+      real / VNFP real) antes de concluirlo.
+
+      **Fail-closed** confirmado: los contextos incompletos devuelven 200 con lista vacía, nunca 5xx.
+      "No elegible" es una respuesta normal, no un error.
+    notes: "AC8 + AC10. El caso 'ya respondió' se ejecutó en secuencia real inmediatamente después del submit del modal, no simulado."
+    stepResults: []
+    attachments:
+      - name: ac8-ac10-after-login-api.txt
+        path: attachments/tr-148-tc-109/scenario-6/ac8-ac10-after-login-api.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 7
+    scenarioTitle: "IM-1099 AC9 — An eligible Salesforce user who logs into Auctifera Giftshop OR NFPFundraising is shown the selected General Survey once the configured login delay elapses"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:40:31Z"
+    duration: 45
+    actual: |
+      **El AC nombra DOS paquetes y con esta corrida quedan cubiertos los dos.** La mitad
+      NFPFundraising ya estaba verificada en TR-147 (login real, modal tras el delay, respuesta
+      atribuida) y **no se rehízo**. Acá se cerró la mitad **Auctifera Giftshop**, que era el delta
+      real y tenía reloj: la org expira el 2026-07-31.
+
+      **PASO 0c — dónde está montado el launcher, verificado por metadata y no a ciegas.** Se
+      recuperaron las FlexiPage de la org: `NpsAfterLoginLauncherBackground` está montado en
+      **las cuatro** utility bars de Veevart (Giftshop, Ticketing, Engage, Rentals). Más cobertura de
+      la que el AC pide; queda anotado porque cambia el alcance real del cambio.
+
+      **PASO 0/0b.** Baseline leído del entorno: 11 surveys, generales [17 inact, 24 inact, **25
+      ACTIVA**], 10 respuestas. La 25 la creó el dev hoy 20:52:09 y tiene su propia respuesta (id 19,
+      20:53:17). Config respaldada en `RESTORE-survey-25.json` **antes** de tocar nada. Por la regla
+      de scopes solapados (AC7 de IM-966) se desactivó la 25 y se creó la General QA **26**, acotada
+      SOLO a la org de Auctifera, con `generalTrigger=afterLogin, loginDelaySeconds=20`.
+
+      **Aislamiento verificado ANTES de navegar** — esto es lo que hace la prueba honesta:
+      Auctifera → `[26]`; VNFP → `[]`; endpoint de feature con el mismo contexto → `[]`.
+
+      **⚠️ Primer intento fallido, y por qué importa.** Navegar a `/lightning/app/Veevart_Giftshop`
+      devolvió *"The app you're trying to view is invalid or inaccessible. We're taking you to your
+      default app instead"* y cayó en **Veevart Ticketing App**. El modal SÍ apareció ahí, pero eso
+      no es la evidencia que pide el AC. Causa: la org tiene namespace `Auctifera`, así que la URL
+      correcta lleva el prefijo: `/lightning/app/Auctifera__Veevart_Giftshop`. **No era falta de
+      permisos** — la query a `AppMenuItem` confirma *Veevart Giftshop* con `IsAccessible=true`.
+
+      **Segundo intento, ya en la app correcta** (nav confirma "Veevart Giftshop" con sus tabs: Home,
+      Tasks, Chatter, Accounts, Contacts, POS Purchases, Client Purchases, Shop):
+
+      - **t ≈ 0 s → SIN modal.** Esto es lo que prueba que el delay es real y no que el modal salga
+        siempre.
+      - **t ≈ 30 s → modal presente.**
+
+      Nota de método: el guard de una-vez-por-sesión ya se había consumido en el intento fallido.
+      Lightning lo persiste en su capa LSS (IndexedDB), no en localStorage plano, así que se limpió
+      el storage del origen para forzar una sesión genuinamente nueva. **Sin eso el segundo intento
+      habría dado un falso negativo.**
+
+      **Contrato observado en vivo** — URL del iframe construida por el launcher:
+      `/survey/8?surveyId=26&clientOrgId=computing-power-944-dev-ed&respondentId=005dq00000NLWpIAAX&userCreatedDate=2026-07-01T15%3A58%3A58.000Z&usageCount=0`
+      Viajan los cuatro elementos que el AC exige, y el `respondentId`/`userCreatedDate` son los
+      REALES de la org (contrastados con SOQL contra `User`), no valores inventados.
+
+      **Modal:** título *"General Survey"*, escala NPS 0–10 con extremos *Not at all likely* /
+      *Extremely likely*, **Submit deshabilitado hasta elegir puntaje**, renderizado sobre la app de
+      Giftshop.
+
+      **Atribución (score 9):** response **id 20** · `surveyId 26` · `featureId 8` ·
+      `clientOrgId computing-power-944-dev-ed` · `respondentId 005dq00000NLWpIAAX` ·
+      `context: {"trigger":"standalone",...}` — *standalone* confirma que llegó por el camino
+      after-login y NO por un disparador de feature.
+    notes: "AC9 CERRADO EN LOS DOS PAQUETES. El primer intento cayó en la app equivocada por el prefijo de namespace; se detectó por el toast y se corrigió en vez de dar por buena la evidencia del app incorrecto."
+    stepResults: []
+    attachments:
+      - name: ac9-giftshop-live.txt
+        path: attachments/tr-148-tc-109/scenario-7/ac9-giftshop-live.txt
+        mimeType: text/plain
+      - name: RESTORE-survey-25.json
+        path: attachments/tr-148-tc-109/scenario-7/RESTORE-survey-25.json
+        mimeType: application/json
+      - name: ac9-01-giftshop-t0-sin-modal.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-01-giftshop-t0-sin-modal.png
+        mimeType: image/png
+      - name: ac9-02-modal-after-login-giftshop.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-02-modal-after-login-giftshop.png
+        mimeType: image/png
+      - name: ac9-03-score-9-selected-submit-enabled.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-03-score-9-selected-submit-enabled.png
+        mimeType: image/png
+      - name: ac9-04-post-submit-giftshop.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-04-post-submit-giftshop.png
+        mimeType: image/png
+      - name: ac9-05-response-attributed-dashboard.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-05-response-attributed-dashboard.png
+        mimeType: image/png
+      - name: ac9-02-modal-fired-but-in-ticketing-app.png
+        path: attachments/tr-148-tc-109/scenario-7/ac9-02-modal-fired-but-in-ticketing-app.png
+        mimeType: image/png
+
+  - scenarioIndex: 8
+    scenarioTitle: "IM-1099 AC11 + AC12 — userCreatedDate travels through eligibility AND response submission so both validations agree, and the date Salesforce provides is formatted as a valid ISO value, never as 2026-7-1"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:46:00Z"
+    duration: 20
+    actual: |
+      **AC11 — el contexto viaja y el submit valida igual que la eligibility.** Tres submits reales
+      contra la General 26:
+
+      | Caso | HTTP | Cuerpo |
+      |---|---|---|
+      | submit SIN `userCreatedDate` | **400** | `Survey is not eligible for this response context: user_created_date_missing` |
+      | submit CON `userCreatedDate` válido | 201 | response id 21 |
+      | submit desde el modal real del launcher | 201 | response id 20 (escenario 7) |
+
+      El rechazo trae la razón exacta que el AC pide. Sin este contexto la respuesta se rechazaría
+      DESPUÉS de abrir el modal — el bug que #33 corrige. Los tres rechazos y las aserciones de la
+      suite del cliente ya estaban verificados en TR-146 escenario 6; acá se re-confirmó el caso
+      principal en vivo contra la General de esta corrida.
+
+      **AC12 — el resultado que el AC exige, observado en vivo.** La URL construida por el launcher
+      lleva `userCreatedDate=2026-07-01T15:58:58.000Z`: mes y día **con cero a la izquierda**. NO se
+      produce el `2026-7-1` que el AC nombra. Contrastado contra el dato real de la org
+      (`User.CreatedDate = 2026-07-01T15:58:58.000+0000`). TR-147 observó lo mismo del lado
+      NFPFundraising. **Los dos paquetes entregan la fecha bien formateada.**
+
+      **El fix al que el AC está mapeado**, `normalizeDateForInput` (RosterDateSelectorHelper.js),
+      simulado con casos límite: `2026-7-1 → 2026-07-01` · `2026-1-15 → 2026-01-15` ·
+      `2026-11-5 → 2026-11-05` · `2026-07-01 → 2026-07-01` (ya válido, **no se altera**) ·
+      `2026-12-31 → 2026-12-31` (no se altera) · vacío → se devuelve tal cual ·
+      `not-a-date` / `07/01/2026` → cae a `reformatDate` sin corromperlos. Normaliza sólo valores
+      date-like y no reescribe los correctos, que es lo que el TC pedía verificar.
+
+      **⚠️ Discrepancia de alcance (no es fallo funcional):** `normalizeDateForInput` se aplica sobre
+      `exhibitionStartDate`/`exhibitionEndDate` vía `normalizeBoundaryDates` — dominio
+      Roster/Exhibition, para que un `lightning:input type=date` no reciba un valor que rechaza.
+      **No toca el camino del `userCreatedDate` del NPS.** Ese llega bien formateado porque sale de
+      `User.CreatedDate` serializado por Apex/Aura, que ya emite ISO-8601. Conclusión honesta: el
+      resultado observable del AC12 se cumple y está verificado en los dos paquetes, pero el cambio
+      de código al que el AC aparece mapeado resuelve un problema de fechas DISTINTO. Conviene que
+      producto/dev confirmen el alcance esperado.
+
+      **Hallazgo menor (Baja):** un submit con `userCreatedDate: "2026-7-1"` fue ACEPTADO (201,
+      response 22). El servidor no valida el formato; `calendarDaysBetween` hace
+      `new Date("2026-7-1")`, que V8 parsea como hora local, pero el parseo de cadenas no-ISO es
+      dependiente de la implementación según la spec. Hoy no rompe nada porque ambos launchers mandan
+      ISO; queda como riesgo latente.
+    notes: "AC11 + AC12 PASS. Se reporta que el fix al que el AC12 está mapeado (RosterDateSelector) atiende un dominio distinto del userCreatedDate: el AC se satisface por construcción, no por ese cambio."
+    stepResults: []
+    attachments:
+      - name: ac11-ac12-usercreateddate.txt
+        path: attachments/tr-148-tc-109/scenario-8/ac11-ac12-usercreateddate.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 9
+    scenarioTitle: "IM-1099 AC13 + AC14 — CSV export honours the active dashboard filters and includes response metadata, survey and respondent/org context, score fields and one readable column per survey question and answer"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:20:00Z"
+    duration: 25
+    actual: |
+      **Territorio nuevo: este AC no se había tocado en ninguna corrida previa.**
+
+      **AC13 — los filtros se respetan.** Los siete conteos se **re-derivaron de forma independiente**
+      del listado de respuestas y recién después se contrastaron contra el CSV; no se tomó por buena
+      la cifra de la pantalla. Baseline: 10 respuestas.
+
+      | Filtro | filas CSV | esperado | ✓ |
+      |---|---|---|---|
+      | (ninguno) | 10 | las 10 | ✓ |
+      | `clientOrgId=computing-power-944-dev-ed` | 4 | ids 8,10,18,19 | ✓ |
+      | `clientOrgId=flow-site-19432-dev-ed` | 1 | sólo la id 12 | ✓ |
+      | `governance=strict` | 0 | ninguna está `approved` | ✓ |
+      | `surveyType=nps` | 10 | todas son NPS | ✓ |
+      | `surveyType=csat` | 0 | no hay ninguna CSAT | ✓ |
+      | `from=2026-07-01&to=2026-07-31` | 5 | ids 8,10,12,18,19 | ✓ |
+
+      Cabeceras correctas: `Content-Type: text/csv; charset=utf-8` y
+      `Content-Disposition: attachment; filename="responses-standard.csv"` (con `strict` pasa a
+      `responses-strict.csv`). Gobernanza verificada por lectura: `exportIncluded=false` siempre
+      fuera; `strict` sólo aprobadas; `standard` excluye spam y rechazadas — o sea, "Export:
+      Excluded" se respeta.
+
+      **AC14 — 34 columnas**, cubriendo las cuatro familias que el AC exige: metadata de la respuesta
+      (`response_id`, `created_at`, `version`, `quality_status`, `export_included`, `quality_notes`);
+      contexto de la survey (`survey_id`, `survey_type`, `feature_id/name/slug`, `product_owner`,
+      `main_question`); contexto respondent/org (`client_org_id`, `respondent_id`); y puntajes
+      (`score`, `company_recommend_score`). Las columnas legibles por pregunta y respuesta están
+      pareadas (`main_question`/`main_answer`, `score_reason_*`, `follow_up_*`,
+      `company_recommend_*`) más una columna por pregunta personalizada **usando el texto de la
+      pregunta como cabecera**. Fila real inspeccionada abriendo el archivo: se lee sin descifrar
+      nada, sin blob JSON ni claves internas; el escapado de comillas y comas funciona.
+
+      **⚠️ Hallazgo (Baja) — cabeceras duplicadas.** De las 6 columnas de preguntas personalizadas,
+      TRES comparten cabecera idéntica: *"Which of these would you like to see added? (select all
+      that apply)"*. La clave de dedup es `${survey.id}:${question.id}` —que sí distingue las
+      columnas— pero la cabecera escrita es sólo `question.questionText`, y tres surveys distintas
+      usan literalmente la misma pregunta de seguimiento. Al abrirlo en una hoja de cálculo no se
+      sabe a qué módulo pertenece cada una sin cruzar contra `survey_id` fila por fila. Las columnas
+      SON legibles (el AC se cumple) pero son ambiguas entre sí. Sugerencia: prefijar con el subject.
+
+      Revert-proof: *exports governed response CSV with subject metadata and dashboard filters* cae
+      al revertir.
+    notes: "AC13 + AC14 PASS con un hallazgo Bajo de legibilidad (3 cabeceras idénticas en las preguntas personalizadas). Los 7 conteos se verificaron de forma independiente."
+    stepResults: []
+    attachments:
+      - name: ac13-ac14-csv-export.txt
+        path: attachments/tr-148-tc-109/scenario-9/ac13-ac14-csv-export.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 10
+    scenarioTitle: "IM-1099 AC15 — The existing public survey and widget routes keep working without admin authentication after the display-rule changes"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T23:50:00Z"
+    duration: 15
+    actual: |
+      Todas las llamadas **sin sesión de admin** (curl plano, sin cookies).
+
+      **Lo que debe seguir funcionando anónimo:** `GET /api/surveys/general/eligible` → 200 ·
+      `GET /api/features/general-veevart/surveys` → 200 · `GET /api/surveys/{25,1,12,13}` → 200 ·
+      `POST /api/features/qa/dismissals` (x2) → 201 · `POST /api/features/qa/impressions` → 201
+      `{"ok":true}` · `POST /api/responses` (con `userCreatedDate`) → 201. Los cuatro
+      comportamientos que el AC nombra —render, eligibility, submit y tracking de dismissals— siguen
+      vivos; se sumó el tracking de impressions por pertenecer a la misma familia.
+
+      **⚠️ Matiz metodológico que evitó un falso defecto:** el primer POST de impression devolvió
+      **400**. No es que el endpoint esté roto: ese respondent ya había agotado sus dismissals y el
+      servidor responde `"surveyId is not eligible for this feature context"`. Se re-probó con un
+      respondent fresco y devolvió 201. O sea, el endpoint **rechaza correctamente** registrar una
+      impresión de una survey que no corresponde mostrar. Se verificó en vez de asumir.
+
+      **Lo que debe seguir cerrado:** 7 probes anónimos contra `/api/admin/*`, los 7 devuelven
+      **401** — `surveys`, `responses`, **`responses/export.csv`**, `organizations`, `analytics`,
+      `settings`, `features`. El dato que más importa: el export CSV es el endpoint NUEVO que expone
+      TODAS las respuestas con `respondentId` y `clientOrgId`, y está correctamente detrás de
+      `requireAdminAuth`. Los cambios no abrieron ninguna ruta admin. (TR-146 verificó 5 probes; acá
+      se ampliaron a 7 para incluir el nuevo.)
+
+      **Contracara del AC — hallazgo Bajo, YA ABIERTO desde TR-146 y sigue vigente.** El endpoint
+      público devuelve a un anónimo el objeto survey completo: 29 campos, incluidos
+      `audienceDetails` y `generalClientOrgId` (qué organizaciones son el objetivo) y
+      `triggerDetails` (las reglas internas de entrega). Quien conozca un `clientOrgId` puede
+      enumerar a qué organizaciones se está encuestando y con qué reglas. No hay PII ni credenciales.
+      Esta historia **no lo empeoró ni lo arregló**. No se abre defecto nuevo: se referencia el de
+      TR-146. Mitigación sugerida: servir al público sólo los campos que el widget necesita.
+    notes: "AC15 PASS. El endpoint nuevo (export.csv) quedó del lado correcto de la puerta. El 400 de impressions se investigó antes de reportarlo y resultó ser el comportamiento correcto."
+    stepResults: []
+    attachments:
+      - name: ac15-public-routes.txt
+        path: attachments/tr-148-tc-109/scenario-10/ac15-public-routes.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-148-tc-109/regression-results.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 11
+    scenarioTitle: "IM-1099 — Repo suites and revert-proof across the six survey-tool PRs of the epic branch"
+    testCaseId: ff9e52bd-404d-4fee-bd10-6b4cd0d076bc
+    testCaseKey: TC-109
+    status: passed
+    executedAt: "2026-07-30T22:55:00Z"
+    duration: 20
+    actual: |
+      **Los seis PRs, confirmados contra el repo.** `git log 737a62b6..14bde9d2` devuelve exactamente
+      #34, #33, #32, #31, #30 y #29 — ni uno más ni uno menos. El mapeo AC↔PR derivado en el bundle
+      queda validado contra el repositorio, no asumido.
+
+      **Suites completas sobre la épica:** `server/` **85 tests · 85 pass · 0 fail** (11 suites) ·
+      `client/` **8 tests · 8 pass · 0 fail** (3 suites) = **93 tests, 0 fallos**. Idéntico al total
+      medido en TR-146: la rama no perdió cobertura al sumar #32, #33 y #34 encima.
+
+      **Revert-proof:** con `server/src` en el commit base y los tests en la épica →
+      **85 tests · 71 pass · 14 FAIL**. Los 14 fallos confirman que los tests ejercitan el código
+      nuevo y no pasarían solos.
+
+      **De los 14, los que pertenecen a ESTA historia (8):**
+      `blocks immediate surveys before Start Date` (AC2/AC3) ·
+      `evaluateSurveyEligibility — start date and interactions` (AC2/AC3) ·
+      `blocks once the per-survey Max shows per day is reached` (AC5) ·
+      `evaluateSurveyEligibility — daily show limits` (AC5) ·
+      `uses triesBetweenShows to space repeated prompts after the first eligible interaction` (AC6) ·
+      `spaces repeated prompts from the configured interaction threshold` (AC6) ·
+      `delivers after-login general surveys only through the general eligibility endpoint` (AC8) ·
+      `exports governed response CSV with subject metadata and dashboard filters` (AC13/AC14).
+
+      El TC predijo 5 tests para esta historia: **caen esos 5**, más el de after-login y dos rollups
+      de suite. Ninguno de los predichos dejó de caer.
+
+      **Los 6 restantes pertenecen a IM-966** (generales acotadas por organización, scopes solapados
+      400≠409, user-age delay, estado por organización, prioridad de la general, render por
+      surveyId). Ya validados en TR-146; **no se le imputan a esta historia**, pero confirman que la
+      suite cubre toda la rama.
+
+      **Tests nuevos aportados por los PRs:** +27 (apiBoundary +14, surveyRuntime +6, SurveyWidget +4,
+      surveyDisplayRules +3). El dev **no dejó tests rojos**.
+
+      **Restauración verificada:** `git checkout 14bde9d2 -- server/src` → 85 pass · 0 fail. El clon
+      queda en el head de la épica sin residuos del revert.
+    notes: "Los 6 PRs confirmados con git log coinciden exactamente con el mapeo del bundle. Revert-proof 14 FAIL, 8 imputables a IM-1099."
+    stepResults: []
+    attachments:
+      - name: suites-and-revert-proof.txt
+        path: attachments/tr-148-tc-109/scenario-11/suites-and-revert-proof.txt
+        mimeType: text/plain
+      - name: coverage-matrix.txt
+        path: attachments/tr-148-tc-109/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+      - name: regression-plan.txt
+        path: attachments/tr-148-tc-109/regression-plan.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-148-tc-109/owasp-top10-scan.txt
+        mimeType: text/plain
+      - name: estado-final-entorno.txt
+        path: attachments/tr-148-tc-109/estado-final-entorno.txt
+        mimeType: text/plain
+
+defects: []
+
+history:
+  - action: "started"
+    timestamp: "2026-07-30T22:45:00Z"
+    user: "codex"
+    from: planned
+    to: in-progress
+    reason: "Arranca la ejecución de TC-109 sobre los 9 PRs de IM-1099."
+  - action: "completed"
+    timestamp: "2026-07-31T00:05:00Z"
+    user: "codex"
+    from: in-progress
+    to: completed
+    reason: "11/11 PASS · 0 defectos · los 15 ACs cubiertos. AC9 cerrado en los dos paquetes: mitad Giftshop en vivo en esta corrida (org expira 2026-07-31) y mitad Fundraising reutilizada de TR-147. 6 observaciones no bloqueantes registradas."

@@ -1,0 +1,54 @@
+TR-148 / TC-109 · Escenario 4 — AC6 Tries between shows
+Entorno: https://surveytool.dev.veevart.ai · Survey de prueba id 27 · respondent `qa-tc109-ac6-spacing`
+Fecha: 2026-07-30
+
+MÉTODO
+--------------------------------------------------------------------------------------------------
+Se creó la survey 27 sobre el subject "Test QA" (el único sin survey) y se barrió `usageCount`
+contra el endpoint de eligibility, midiendo en qué interacciones la survey se entrega. El barrido
+es la prueba directa del AC: no se infiere del código, se observa el patrón.
+
+RESULTADO CON triesBetweenShows = 3 .................................................... PASS
+--------------------------------------------------------------------------------------------------
+    usageCount :  0    1    2    3    4    5    6    7    8    9   10   11   12
+    elegible   :  NO  SÍ   NO   NO  SÍ   NO   NO  SÍ   NO   NO  SÍ   NO   NO
+                      ^^            ^^            ^^            ^^
+                   primera        cada 3        cada 3        cada 3
+
+  Exactamente lo que promete el texto de ayuda del control:
+      "0 means every eligible interaction. 3 means the first eligible interaction, then every 3
+       eligible interactions."
+  Aparece en la PRIMERA interacción elegible y luego cada 3. El patrón se sostiene sin desviarse a
+  lo largo de 13 valores consecutivos.
+
+  En usageCount = 0 no se entrega: está por debajo de la primera interacción elegible
+  (`interactionsSinceFirstShow < 0` -> `trigger_counter_not_reached`).
+
+RESULTADO CON triesBetweenShows = 0 .................................................... PASS
+--------------------------------------------------------------------------------------------------
+    usageCount :  0    1    2    3    4    5    6
+    elegible   : SÍ   SÍ   SÍ   SÍ   SÍ   SÍ   SÍ
+
+  Con 0, aparece en CADA interacción elegible. El caso límite documentado se comporta como dice.
+
+FÓRMULA VERIFICADA (surveyRuntime.ts 239-247)
+--------------------------------------------------------------------------------------------------
+    firstEligibleInteraction = triggerType === "counter" ? triggerCounter : 1
+    interactionsSinceFirstShow = usageCount - firstEligibleInteraction
+    si < 0                                  -> trigger_counter_not_reached
+    si % triesBetweenShows !== 0             -> tries_between_shows_not_reached
+  El barrido observado coincide punto por punto con la fórmula. Con triesBetweenShows=3 y
+  firstEligible=1, los elegibles son usageCount ≡ 1 (mod 3) = 1, 4, 7, 10. Es lo medido.
+
+SEMÁNTICA POR RESPONDENT
+--------------------------------------------------------------------------------------------------
+  El espaciado se cuenta por respondent. Para una General GLOBAL el estado se cuenta por
+  `clientOrgId` — semántica ya confirmada y elevada a producto en TR-146; no se re-litiga acá.
+
+RESPALDO DE SUITE (escenario 11)
+--------------------------------------------------------------------------------------------------
+  Ambos tests del AC6 CAEN al revertir:
+      ✖ uses triesBetweenShows to space repeated prompts after the first eligible interaction
+      ✖ spaces repeated prompts from the configured interaction threshold
+
+VEREDICTO AC6: PASS — ejercitado en vivo, no sólo por suite.

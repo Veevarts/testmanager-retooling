@@ -1,0 +1,74 @@
+TR-148 / TC-109 · Escenario 8 — AC11 userCreatedDate en el submit · AC12 formato de fecha
+Fecha: 2026-07-30
+
+AC11 — EL CONTEXTO VIAJA Y EL SUBMIT VALIDA IGUAL QUE LA ELIGIBILITY ..................... PASS
+--------------------------------------------------------------------------------------------------
+Probado EN VIVO contra la General 26, con tres submits reales:
+
+  Caso                                                    | HTTP | Cuerpo
+  --------------------------------------------------------|------|--------------------------------
+  submit SIN userCreatedDate                              | 400  | "Survey is not eligible for this
+                                                          |      |  response context:
+                                                          |      |  user_created_date_missing"
+  submit CON userCreatedDate válido (respondent nuevo)    | 201  | response id 21 creada
+  submit desde el modal real del launcher (Giftshop)      | 201  | response id 20 (escenario 7)
+
+  El rechazo trae la razón EXACTA que el AC pide. Sin este contexto la respuesta se rechazaría
+  DESPUÉS de que el modal ya se abrió — que es precisamente el bug que el PR #33 corrige: la
+  validación del submit ahora coincide con la de la eligibility.
+
+  REUTILIZADO DE TR-146 (escenario 6): los tres rechazos del submit y las 3 aserciones de la suite
+  del cliente ya estaban verificados ahí. Acá se re-confirmó el caso principal en vivo contra la
+  General de esta corrida, no se rehizo la batería.
+
+AC12 — FORMATO DE FECHA ................................................. PASS con DISCREPANCIA DE ALCANCE
+--------------------------------------------------------------------------------------------------
+1) LO QUE EL AC PIDE, OBSERVADO EN VIVO — la fecha que llega a Survey Tool es ISO válido:
+
+   URL real construida por el launcher en la org de Auctifera (escenario 7):
+       ...&userCreatedDate=2026-07-01T15%3A58%3A58.000Z
+   Decodificado: `2026-07-01T15:58:58.000Z` — mes y día CON cero a la izquierda.
+   NO se produce el `2026-7-1` que el AC nombra como valor inválido.
+   Contrastado contra el dato real de la org (SOQL User.CreatedDate = 2026-07-01T15:58:58.000+0000).
+   TR-147 observó lo mismo por el lado de NFPFundraising (2026-07-15T10:04:17.000Z).
+   => Los DOS paquetes entregan la fecha bien formateada.
+
+2) EL FIX AL QUE EL AC ESTÁ MAPEADO — `normalizeDateForInput` en RosterDateSelectorHelper.js
+   (PR NFPFundraising #2135). Se simuló su regex exacta con los casos límite:
+
+       entrada                      ->  salida
+       "2026-7-1"                   ->  2026-07-01     <- el valor que el AC nombra, corregido
+       "2026-1-15"                  ->  2026-01-15
+       "2026-11-5"                  ->  2026-11-05
+       "2026-07-01"                 ->  2026-07-01     <- ya válido, NO se altera
+       "2026-12-31"                 ->  2026-12-31     <- ya válido, NO se altera
+       "2026-07-01T15:58:58.000Z"   ->  2026-07-01
+       ""                           ->  se devuelve tal cual (guard de falsy)
+       "not-a-date" / "07/01/2026"  ->  cae a reformatDate (no lo corrompe)
+
+   Normaliza `YYYY-M-D` a `YYYY-MM-DD` sólo para valores date-like y NO reescribe los ya válidos,
+   que es exactamente lo que el TC pedía verificar.
+
+3) ⚠️ DISCREPANCIA DE ALCANCE QUE HAY QUE REPORTAR (no es un fallo funcional):
+   `normalizeDateForInput` se aplica sobre `exhibitionStartDate` / `exhibitionEndDate` vía
+   `normalizeBoundaryDates` — o sea el dominio Roster/Exhibition, para que un `lightning:input`
+   type=date no reciba un valor que rechaza. **No toca el camino del `userCreatedDate` del NPS.**
+   El `userCreatedDate` llega bien formateado por otra razón: sale de `User.CreatedDate`
+   serializado por Apex/Aura, que ya emite ISO-8601 completo.
+
+   Conclusión honesta: el RESULTADO observable que el AC12 exige se cumple y está verificado en
+   vivo en los dos paquetes. Pero el cambio de código al que el AC aparece mapeado resuelve un
+   problema de fechas DISTINTO (inputs de exhibición), no el del userCreatedDate. Conviene que
+   producto/dev confirmen si el AC12 quería cubrir el fix de RosterDateSelector (que viaja en el
+   mismo PR pero no es de dominio NPS) o el formateo del userCreatedDate — porque hoy el AC se
+   satisface por construcción, no por ese fix.
+
+4) HALLAZGO MENOR — tolerancia del servidor a fechas mal formadas:
+   Un submit contra la General 26 con `userCreatedDate: "2026-7-1"` fue ACEPTADO (201, response 22).
+   El servidor no valida el formato: `calendarDaysBetween` hace `new Date("2026-7-1")`, que V8
+   parsea como hora local. Funciona, pero el parseo de cadenas NO-ISO es dependiente de la
+   implementación según la spec de ECMAScript. Hoy no rompe nada porque los dos launchers mandan
+   ISO; queda como riesgo latente si algún día otro consumidor manda `YYYY-M-D`.
+   Severidad: Baja. No bloquea el AC.
+
+VEREDICTO ESCENARIO 8: PASS (AC11 y AC12), con la discrepancia de alcance del AC12 reportada.

@@ -1,0 +1,66 @@
+TR-148 / TC-109 · Escenario 1 — AC1 bloque "When to show it" · AC4 One time deshabilita lo incompatible
+Formulario real de https://surveytool.dev.veevart.ai/admin/surveys (botón "Add survey")
+Captura: tc109-ac1-ac4-when-to-show-form.png
+
+AC1 — LO QUE EL BLOQUE OFRECE ........................................................... PASS
+--------------------------------------------------------------------------------------------------
+  Bloque "When to show it" .... PRESENTE
+  Campo "Start Date" .......... PRESENTE
+  Radios de disparo (los ÚNICOS dos que ofrece el formulario):
+      ( ) Immediately on the first eligible interaction     <- seleccionado por defecto
+      ( ) After [N] interactions                            <- habilita el input de N al elegirlo
+
+AC1 — LA MITAD QUE HAY QUE VERIFICAR POR AUSENCIA ....................................... PASS
+--------------------------------------------------------------------------------------------------
+  La opción vieja de *contador igual a un número específico de usos* NO APARECE en el formulario.
+  Verificado con el DOM acotado ESTRICTAMENTE al <form>, no a la página entera:
+      counterEqualsInFormScope = false
+  El matiz importa: la cadena "exactly at N interactions" SÍ existe en la página, pero en el
+  LISTADO de surveys que queda detrás del modal — es el formateador que describe surveys legacy
+  (SurveysPage.tsx:525). Buscar en toda la página daba un falso positivo; acotando al formulario
+  se confirma la ausencia real.
+
+  Respaldo en el código: el formulario sólo puede escribir dos valores —
+      triggerType: form.triggerType === "counter" ? "counter" : null      (líneas 404 y 450)
+  `counter_equals` sobrevive únicamente en la unión de tipos y en el formateador de lectura, para
+  no romper las surveys legacy que ya lo tienen (en el entorno hay 4: ids 2, 3, 4, 5).
+  O sea: opción retirada de la UI, compatibilidad hacia atrás preservada. Es el comportamiento
+  correcto, no un descuido.
+
+AC4 — ONE TIME Y LOS CONTROLES INCOMPATIBLES ............................................ PASS
+--------------------------------------------------------------------------------------------------
+  Primero lo que NO ocurre, para no reportarlo mal: al elegir "One time", los tres inputs numéricos
+  (Max dismissals per period, Tries between shows, Max shows per day) NO quedan deshabilitados.
+      maxDismissals.disabled = false · triesBetween.disabled = false · maxShowsDay.disabled = false
+
+  Eso NO es un fallo del AC, porque esos tres no son incompatibles con "una sola vez": una survey
+  puede mostrarse varias veces hasta que la respondan. El propio texto de ayuda explica cómo se
+  reinterpretan bajo One time:
+      "Stops showing after this many closes in the current repeat window. With One time or a 0-day
+       custom window, the limit is all-time."
+
+  El control REALMENTE incompatible es la LONGITUD de la ventana de repetición, y ese SÍ se oculta.
+  Barrido observado sobre el mismo formulario:
+
+      Repeat window   | ¿se renderiza el input de días de la ventana?
+      ----------------|-----------------------------------------------
+      Custom          | SÍ   (placeholder "0 = no repeat window")
+      One time        | NO
+      Quarterly (90)  | NO
+      One time        | NO
+
+  Y al elegir One time el código además fuerza `onePerRespondent: true` y LIMPIA `cooldownDays`
+  (SurveysPage.tsx:907-916). O sea: es imposible configurar a la vez "una sola vez" y "una ventana
+  de repetición" — que es exactamente lo que el AC pide evitar.
+
+  Texto de ayuda del control, verificado literal:
+      "One time means answered respondents never see it again. Other windows reset dismissal limits
+       at the next period."
+
+NOTA DE EJECUCIÓN CONFIRMADA
+--------------------------------------------------------------------------------------------------
+  `Start Date` es OBLIGATORIO en la UI aunque la API lo acepte vacío: SurveysPage.tsx:348 corta con
+  "Please choose the Start Date for this survey." Ya se había observado en TR-146 y TR-147; queda
+  re-confirmado en el código.
+
+VEREDICTO ESCENARIO 1: PASS (AC1 y AC4)

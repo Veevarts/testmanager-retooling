@@ -1,0 +1,85 @@
+TR-148 / TC-109 · Escenario 9 — AC13 el CSV respeta los filtros · AC14 columnas del CSV
+Endpoint: GET /api/admin/responses/export.csv (detrás de requireAdminAuth)
+Fecha: 2026-07-30 · ESTE AC NO SE HABÍA TOCADO EN NINGUNA CORRIDA PREVIA — territorio nuevo.
+
+AC13 — LOS FILTROS SE RESPETAN .......................................................... PASS
+--------------------------------------------------------------------------------------------------
+Baseline del entorno al momento de la prueba: 10 respuestas (ids 1,2,3,4,5,8,10,12,18,19).
+
+  Filtro aplicado                        | filas CSV | esperado y por qué                    | ✓
+  ---------------------------------------|-----------|---------------------------------------|---
+  (ninguno)                              |    10     | las 10 respuestas                     | ✓
+  clientOrgId=computing-power-944-dev-ed |     4     | ids 8,10,18,19 son de la org Auctifera| ✓
+  clientOrgId=flow-site-19432-dev-ed     |     1     | sólo la id 12 es de VNFP              | ✓
+  governance=strict                      |     0     | ninguna está 'approved' (todas        | ✓
+                                         |           |   'pending')                          |
+  surveyType=nps                         |    10     | todas las surveys del entorno son NPS | ✓
+  surveyType=csat                        |     0     | no hay ninguna CSAT                   | ✓
+  from=2026-07-01&to=2026-07-31          |     5     | ids 8,10,12,18,19 se crearon en julio | ✓
+
+  Los siete conteos se derivaron de forma INDEPENDIENTE a partir del listado de respuestas y
+  después se contrastaron contra el CSV; no se tomó por buena la cifra que devuelve la pantalla.
+  El CSV entrega exactamente las filas que casan con el filtro, no el total sin filtrar.
+
+  Cabeceras HTTP correctas:
+      Content-Type:        text/csv; charset=utf-8
+      Content-Disposition: attachment; filename="responses-standard.csv"
+                           (con governance=strict pasa a "responses-strict.csv")
+
+  Gobernanza de exportación (responses.ts 233-238), verificada por lectura:
+      exportIncluded=false        -> SIEMPRE excluida    (respeta "Export: Excluded")
+      governance=strict           -> sólo qualityStatus 'approved'
+      governance=standard (def.)  -> excluye 'spam' y 'rejected'
+
+AC14 — CONTENIDO Y LEGIBILIDAD DE LAS COLUMNAS .......................... PASS con hallazgo (Bajo)
+--------------------------------------------------------------------------------------------------
+  34 columnas. Cubre las cuatro familias que el AC exige:
+
+  Metadata de la respuesta ...... response_id · created_at · version · quality_status ·
+                                  export_included · quality_notes
+  Contexto de la survey ......... survey_id · survey_type · feature_id · feature_name ·
+                                  feature_slug · product_owner · main_question
+  Contexto respondent/org ....... client_org_id · respondent_id
+  Campos de puntaje ............. score · company_recommend_score
+
+  Columnas legibles por pregunta y respuesta (lo que el AC pide como "readable"):
+      main_question / main_answer
+      score_reason_question / score_reason_answer
+      follow_up_question / follow_up_answer
+      company_recommend_question / company_recommend_answer
+      company_recommend_reason_question / company_recommend_reason_answer
+      + una columna por cada pregunta personalizada, USANDO EL TEXTO DE LA PREGUNTA como cabecera
+
+  Fila real de ejemplo (verificada abriendo el archivo, no asumida):
+      1,5,nps,3,Ticketing,ticketing,ticketing,"How likely are you to recommend our Ticketing
+      Module based on your overall experience using it?",5,,,,,"How likely are you to recommend
+      Veevart to a fellow Museum?",5,...,enterprise-inspiration-2408-dev-ed...,005Nq00000duMlmIAE,
+      ,pending,yes,,2026-05-11 21:25:20
+  Se lee sin descifrar nada: no hay blob JSON ni claves internas. El escapado de comillas y comas
+  funciona (`esc()` dobla las comillas y encierra el campo cuando hace falta).
+
+  ⚠️ HALLAZGO (Bajo) — CABECERAS DUPLICADAS EN LAS PREGUNTAS PERSONALIZADAS
+  De las 6 columnas de preguntas personalizadas, TRES comparten cabecera idéntica:
+      "What additional functionalities...added to the Ticketing Module?"
+      "Which of these would you like to see added? (select all that apply)"   <-- 1
+      "What additional functionalities...added to the Payments Module?"
+      "Which of these would you like to see added? (select all that apply)"   <-- 2  IDÉNTICA
+      "What additional functionalities...added to the Rentals Module?"
+      "Which of these would you like to see added? (select all that apply)"   <-- 3  IDÉNTICA
+
+  Causa (responses.ts 246-253): la clave de deduplicación es `${survey.id}:${question.id}`, que sí
+  distingue las columnas, pero la CABECERA que se escribe es sólo `question.questionText`. Como tres
+  surveys distintas usan literalmente la misma pregunta de seguimiento, el archivo queda con tres
+  cabeceras iguales.
+
+  Impacto: al abrirlo en una hoja de cálculo no se puede saber a qué módulo pertenece cada una sin
+  cruzar contra survey_id fila por fila. Las columnas SON legibles (el AC se cumple), pero son
+  AMBIGUAS entre sí. Sugerencia: prefijar con el subject, p.ej.
+  "Ticketing — Which of these would you like to see added?".
+  Severidad: BAJA. No invalida el AC14 ni bloquea la historia.
+
+RESPALDO DE SUITE (escenario 11)
+--------------------------------------------------------------------------------------------------
+  ✖ exports governed response CSV with subject metadata and dashboard filters  -> CAE al revertir.
+
+VEREDICTO ESCENARIO 9: PASS (AC13 y AC14), con un hallazgo Bajo de legibilidad reportado.

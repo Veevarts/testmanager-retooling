@@ -1,0 +1,101 @@
+TR-148 / TC-109 · IM-1099 — OWASP Top 10 (2021) · scan de aplicabilidad
+Alcance: los 6 PRs de survey-tool (737a62b6..14bde9d2) + los launchers Salesforce (#2527/#2536/#2135)
+Ejecutado 2026-07-30, al cierre de la ejecución y ANTES de escribir el test run.
+Ningún item queda en TBD.
+
+A01 · Broken Access Control ................................ APLICA · PASS
+  Por qué aplica: la historia agrega un endpoint público nuevo (general/eligible) y un export de
+  TODAS las respuestas (export.csv). Es el riesgo central de este cambio.
+  Verificación: 7 probes anónimos contra /api/admin/* -> los 7 devuelven 401, incluido el
+  export.csv NUEVO. El export cuelga de responsesAdminRouter, detrás de requireAdminAuth.
+  Las rutas públicas responden 200 sin sesión, que es el comportamiento que el AC15 exige.
+  Además: la General acotada por organización NO se sirve a otra org — se probó que la org de VNFP
+  recibe [] mientras la de Auctifera recibe [26]. El scoping por organización se respeta.
+  Veredicto: PASS. El endpoint que expone datos de respuestas quedó del lado correcto de la puerta.
+
+A02 · Cryptographic Failures ............................... N/A
+  Justificación: el diff no introduce ni modifica criptografía, hashing, ni manejo de secretos.
+  La sesión admin sigue siendo la de Cognito ya existente (IM-961..964), fuera del alcance de esta
+  historia. Cero cambios en TLS/almacenamiento cifrado.
+
+A03 · Injection ............................................ APLICA · PASS
+  Por qué aplica: se agregan filtros de export que construyen condiciones de consulta a partir de
+  query params controlados por el cliente (clientOrgId, from, to, surveyType, productOwner,
+  governance).
+  Verificación: todo pasa por drizzle con parámetros ligados (eq/and/or/gte). Cero concatenación de
+  SQL en el diff. El único sql`` interpolado es
+  `datetime('now', ${`-${cooldownDays} days`})`, donde cooldownDays sale de `toPositiveInt()`
+  — entero validado, no cadena libre. `governance` y `surveyType` se comparan contra literales
+  ("strict"/"nps"/"csat"), no se inyectan.
+  El CSV escapa comillas y separadores con `esc()` (dobla comillas y encierra si hay , " o \n).
+  Veredicto: PASS.
+
+A04 · Insecure Design ...................................... APLICA · PASS con observación
+  Por qué aplica: la historia ES un rediseño de reglas de entrega; un diseño flojo se traduce en
+  encuestas que aparecen cuando no deben.
+  Verificación: el gate por Start Date es fail-closed y anterior a las demás reglas (verificado en
+  vivo, corte exacto 07-29 NO / 07-30 SÍ). El contexto incompleto resuelve a lista vacía, no a
+  error 5xx. La regla de scopes solapados (409) impide dos generales globales activas a la vez.
+  Observación (no defecto): el default de `maxDismissals` vacío en una General hace que UN dismissal
+  la oculte para siempre dentro de la ventana. Está documentado en el texto de ayuda del formulario,
+  así que es una decisión declarada, no un descuido.
+  Veredicto: PASS.
+
+A05 · Security Misconfiguration ............................ APLICA · PASS
+  Por qué aplica: se montan endpoints nuevos y componentes nuevos en utility bars de dos paquetes
+  gestionados.
+  Verificación: no se agregaron `app.use` nuevos en index.ts; el export cuelga del router admin ya
+  protegido. En la org de Auctifera se verificó por metadata en qué flexipages está montado el
+  launcher: las cuatro utility bars de Veevart (Giftshop, Ticketing, Engage, Rentals).
+  Observación de higiene: el LWC `npsAfterLoginLauncher` sigue desplegado en la org pero NO montado
+  en ninguna flexipage (mismo drift que TR-147 observó en VNFP). No se disparó dos veces. Es
+  metadata obsoleta a limpiar, no un defecto del PR.
+  Veredicto: PASS.
+
+A06 · Vulnerable and Outdated Components ................... APLICA · PASS
+  Por qué aplica: hay que descartar que la funcionalidad nueva (export CSV) haya traído librerías.
+  Verificación: diff de los tres package.json -> CERO dependencias agregadas o actualizadas. El CSV
+  se genera con string building propio, sin librería de terceros. Sin superficie nueva.
+  Veredicto: PASS.
+
+A07 · Identification and Authentication Failures ........... APLICA · PASS
+  Por qué aplica: el flujo after-login propaga identidad de Salesforce (respondentId) hacia un
+  servicio externo.
+  Verificación: el respondentId observado en vivo es el User Id REAL de la org
+  (005dq00000NLWpIAAX), contrastado con SOQL contra User — no un valor inventado ni adivinable por
+  el cliente del widget. La autenticación admin no se tocó. El guard de una-vez-por-sesión está
+  scopeado por org+respondent, no global.
+  Matiz honesto: el endpoint de eligibility es público y acepta cualquier respondentId; no
+  autentica que quien pregunta SEA ese respondent. Es aceptable para el caso de uso (no devuelve
+  datos personales, sólo si corresponde mostrar una encuesta), y es preexistente al cambio.
+  Veredicto: PASS.
+
+A08 · Software and Data Integrity Failures ................. N/A
+  Justificación: el diff no incorpora deserialización de datos no confiables, ni actualizaciones
+  automáticas, ni pipelines CI/CD nuevos, ni carga dinámica de código desde origen externo. El
+  iframe apunta a un host fijo propio (surveytool.dev.veevart.ai).
+
+A09 · Security Logging and Monitoring Failures ............. APLICA · PASS
+  Por qué aplica: hay que verificar que no se registren datos sensibles en consola.
+  Verificación: 0 (cero) console.* agregados en los seis PRs de survey-tool. Contraste relevante:
+  la historia hermana IM-968 fue rechazada en TR-147 por agregar 20 console.log, uno de ellos
+  filtrando la URL de eligibility con contexto de usuario. Este conjunto no repite el problema.
+  Veredicto: PASS.
+
+A10 · Server-Side Request Forgery (SSRF) ................... N/A
+  Justificación: el servidor no hace peticiones salientes a URLs controladas por el usuario. El
+  único destino externo es el iframe que construye el CLIENTE hacia un host fijo y propio; no hay
+  fetch del lado servidor tomando una URL de entrada.
+
+RESUMEN
+==================================================================================================
+  Aplicables : 7  (A01, A03, A04, A05, A06, A07, A09)
+  PASS       : 7
+  FAIL       : 0
+  N/A        : 3  (A02, A08, A10) — cada uno con justificación arriba
+  Bloqueantes: 0
+
+  NINGÚN item Aplicable quedó en FAIL -> no se abre defecto de seguridad por OWASP.
+  El único hallazgo de seguridad de la corrida (exposición de metadata de configuración en el
+  endpoint público) es de severidad BAJA, ya estaba abierto desde TR-146, y se referencia en
+  regression-results.txt (S7) en lugar de duplicarlo como defecto nuevo.

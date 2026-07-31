@@ -1,0 +1,58 @@
+TR-148 / TC-109 · Escenario 10 — AC15 las rutas públicas siguen sin autenticación admin
+TODAS las llamadas de esta sección se hicieron SIN sesión de admin (curl plano, sin cookies).
+
+LO QUE DEBE SEGUIR FUNCIONANDO ANÓNIMO ................................................. PASS
+--------------------------------------------------------------------------------------------------
+  Ruta                                                            | HTTP | resultado
+  ----------------------------------------------------------------|------|------------------------
+  GET /api/surveys/general/eligible?...                           | 200  | responde la lista
+  GET /api/features/general-veevart/surveys?...                   | 200  | responde la lista
+  GET /api/surveys/25                                             | 200  | render público por id
+  GET /api/surveys/1 · /12 · /13                                  | 200  | render público por id
+  POST /api/features/qa/dismissals            (x2)                | 201  | tracking de dismissals
+  POST /api/features/qa/impressions  (respondent elegible)        | 201  | {"ok":true}
+  POST /api/responses                (con userCreatedDate)        | 201  | submit de la respuesta
+
+  Los cuatro comportamientos que el AC15 nombra —render, eligibility, submit y tracking de
+  dismissals— siguen vivos sin autenticación. Se agregó el tracking de IMPRESSIONS al set porque
+  pertenece a la misma familia.
+
+  ⚠️ Matiz metodológico que evita un falso defecto: el PRIMER POST de impression devolvió 400. No
+  es que el endpoint esté roto: ese respondent ya había agotado sus dismissals, y el servidor
+  responde "surveyId is not eligible for this feature context". Se re-probó con un respondent
+  fresco y devolvió 201. Es decir, el endpoint rechaza correctamente registrar una impresión de una
+  survey que no corresponde mostrar. Se verificó en vez de asumir.
+
+LO QUE DEBE SEGUIR CERRADO ............................................................. PASS
+--------------------------------------------------------------------------------------------------
+  7 probes anónimos contra /api/admin/*, los 7 devuelven 401:
+      /api/admin/surveys .................. 401
+      /api/admin/responses ................ 401
+      /api/admin/responses/export.csv ..... 401   <-- ENDPOINT NUEVO DE ESTA HISTORIA
+      /api/admin/organizations ............ 401
+      /api/admin/analytics ................ 401
+      /api/admin/settings ................. 401
+      /api/admin/features ................. 401
+
+  El dato que más importa: el export CSV es el endpoint nuevo que expone TODAS las respuestas con
+  respondentId y clientOrgId. Está correctamente detrás de requireAdminAuth. Los cambios de display
+  rules no abrieron ninguna ruta admin. (TR-146 verificó 5 probes; acá se ampliaron a 7 para
+  incluir el nuevo.)
+
+CONTRACARA DEL AC — SER ANÓNIMO NO ES EXCUSA PARA EXPONER DE MÁS .......... HALLAZGO BAJO, ABIERTO
+--------------------------------------------------------------------------------------------------
+  TR-146 levantó un hallazgo Bajo: el endpoint público devuelve el objeto survey COMPLETO. Se
+  re-verificó y SIGUE VIGENTE. Un anónimo recibe 29 campos, entre ellos:
+      audience            = 'organization'
+      audienceDetails     = 'computing-power-944-dev-ed'    <- qué organizaciones son el objetivo
+      generalClientOrgId  = 'computing-power-944-dev-ed'
+      triggerDetails      = 'cooldownDays=90, onePerRespondent=true, generalTrigger=afterLogin,
+                             loginDelaySeconds=20'          <- las reglas internas de entrega
+      accountCreatedDelayDays, maxDismissals, maxImpressions
+
+  Quien conozca un clientOrgId puede enumerar a qué organizaciones se está encuestando y con qué
+  reglas. No hay PII ni credenciales — es metadata de configuración.
+  Estado: esta historia NO lo empeoró y tampoco lo arregló. NO se abre defecto nuevo; se referencia
+  el de TR-146. Mitigación sugerida: servir al público sólo los campos que el widget necesita.
+
+VEREDICTO ESCENARIO 10: PASS — sin regresión en las rutas públicas y sin apertura de rutas admin.
