@@ -1,0 +1,56 @@
+IM-1148 / TC-139 · ESCENARIO 3 — el write-off conserva su fecha real de posteo
+==============================================================================
+
+El riesgo que se prueba
+-----------------------
+Un write-off lleva npe01__Paid__c = 0 PERO tiene una fecha de settlement real y propia.
+Si el fallback se hubiera anclado en el flag `npe01__Paid__c = 0` en vez de en la ausencia
+de fecha, habria sobrescrito en silencio las 51 fechas genuinas de write-off de Long Island
+con la fecha de la cuota. El PR nombra el caso: cuota programada 2009-09-04, write-off
+posteado 2011-07-05 — 1-2 anos de separacion.
+
+Prueba por construccion (mas fuerte que un muestreo)
+----------------------------------------------------
+  269: COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate AS DATE)) AS npe01__Payment_Date__c
+
+  COALESCE devuelve su primer argumento no-nulo. Cuando wo.WriteOffDate tiene valor,
+  el segundo operando NUNCA se evalua como resultado. Es estructuralmente IMPOSIBLE que
+  esta expresion sobrescriba una fecha de write-off presente.
+  El disparador es, literalmente, `wo.WriteOffDate IS NULL`. No el flag paid.
+
+Cast dentro y no fuera del COALESCE
+------------------------------------
+  CALCULATEDDATE es `date`; InstallmentDate es `datetime`; datetime gana precedencia.
+  Un cast externo — CAST(COALESCE(wo.WriteOffDate, wo.InstallmentDate) AS DATE) — habria
+  promovido toda la expresion a datetime primero y reventaria con fechas anteriores a 1753.
+  El PR lo hace bien: castea el operando de fallback, no la expresion completa.
+
+Revert-proof del assert que lo protege
+---------------------------------------
+  El test 3 ('falls back to the scheduled date on every branch that has an actual date')
+  FALLA contra la query pre-fix. Ver scenario-5/revert-proof.log.
+  => el contrato no es decorativo.
+
+Medicion sobre datos reales (perfil safesql `tucson`)
+------------------------------------------------------
+  write-off con payment_date != scheduled_date : PRE 517  ->  POST 517  (SIN CAMBIO)
+  write-off con payment_date NULL              : PRE   0  ->  POST   0  (sin cambio)
+
+  Las 517 filas de write-off de Tucson conservan una fecha de pago DISTINTA de su fecha
+  programada, antes y despues del cambio. Si el fallback se hubiera anclado en
+  `npe01__Paid__c = 0`, este contador habria COLAPSADO A 0 al reescribir las 517 fechas
+  genuinas con la fecha de la cuota. No se movio ni una fila.
+
+  => La prueba por construccion queda ademas MEDIDA sobre 517 write-offs reales, 10x la
+     muestra de 51 que nombra el ticket. Ver scenario-4/comparison-matrix.txt.
+
+  `write-off con payment NULL = 0` en ambos lados confirma que el COALESCE de esta rama es
+  tenant-safety y no una reparacion: igual que Long Island, Tucson no tiene CALCULATEDDATE
+  nulos. El operando de fallback nunca llega a usarse en esta fuente.
+
+Lo que sigue sin re-derivarse
+------------------------------
+  La cifra de 51 write-offs es propia de Long Island y no hay perfil de esa cuenta.
+  El comportamiento esta probado; el numero del ticket no.
+
+VEREDICTO: PASS (por construccion + revert-proof + medido sobre 517 write-offs reales)

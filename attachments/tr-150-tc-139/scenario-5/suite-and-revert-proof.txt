@@ -1,0 +1,66 @@
+IM-1148 / TC-139 · ESCENARIO 5 — suite, revert-proof y asimetria del lado Charge
+================================================================================
+
+1) Suite query-regression sobre la rama del PR (5bc198d)
+--------------------------------------------------------
+  Test Suites: 14 skipped, 40 passed, 40 of 54 total
+  Tests:       101 skipped, 386 passed, 487 total
+  => 386 passed CONFIRMA exactamente la cifra que reporta el PR. Re-derivada, no copiada.
+
+2) Suite COMPLETA del repo (radio de impacto)
+----------------------------------------------
+  Test Suites: 1 failed, 14 skipped, 46 passed, 47 of 61 total
+  Tests:       10 failed, 101 skipped, 408 passed, 519 total
+  El unico suite en rojo es donation-transaction-recurring.spec.ts, que falla por
+  `getContainerRuntimeClient` (docker). NO lo toca este PR. Ver seccion 5.
+  => 0 fallos atribuibles al PR.
+
+  lint:check -> limpio
+  build      -> limpio
+  (ambos confirman lo que reporta el PR)
+
+3) REVERT-PROOF (mutation check)
+---------------------------------
+  Procedimiento: se restaura opportunity_payments.sql al commit base (09b9adf) dejando
+  los tests de la rama del PR, y se corre pledge-payment-query.
+
+  ✕ casts every scheduled-date branch to DATE
+  ✕ casts every payment-date branch to DATE and never emits a blank
+  ✕ falls back to the scheduled date on every branch that has an actual date
+  ✕ sources the unpaid payment date from the same expression as its scheduled date
+  ✓ (los 4 asserts preexistentes siguen pasando)
+
+  Tests: 4 failed, 4 passed, 8 total
+  => los 4 asserts nuevos FALLAN contra la query anterior. El contrato es real.
+  SQL restaurado a la version del PR tras la prueba (verificado con git diff --quiet).
+
+  ⚠️ PRECISION: el PR dice "Three assertions". Son CUATRO. Subcuenta su cobertura.
+
+4) Asimetria deliberada con el lado Charge — INTACTA
+-----------------------------------------------------
+  queries/charge/pledge_payments_unpaid_charges.sql:181
+      NULL AS Auctifera__Tech_Payment_Date__c
+  Sigue emitiendo NULL para las mismas cuotas, para que su formula
+  Auctifera__Payment_Date__c quede vacia. El PR NO toca este archivo. Asimetria preservada.
+
+  queries/fund-assignment/fund_assignment_payments.sql
+      192: CAST(pa.PostedDate AS DATE) AS Auctifera__Posted_Date__c
+      221: CAST(wo.PostedDate AS DATE) AS Auctifera__Posted_Date__c
+      250: NULL                        AS Auctifera__Posted_Date__c   <- rama unpaid, sin fallback
+  Ya aplicaba el cast (por eso opportunity-payment era el outlier) y deliberadamente NO
+  aplica la regla de fallback: sus splits sin postear no tienen fecha de posteo que reclamar.
+  El PR NO toca este archivo. Comportamiento sin cambios.
+
+5) HALLAZGO — el spec nuevo del PR nunca se ejecuto
+----------------------------------------------------
+  pledge-unpaid-charge-query.integration.spec.ts (NUEVO, 101 lineas, 13 tests) esta detras de
+      const shouldRunDocker = process.env.RUN_DOCKER_SQL_QUERY_TESTS === '1';
+
+  · Sin esa variable queda entre los 101 tests skipped. La corrida de 386 que el PR cita
+    como validacion NO lo ejecuto.
+  · Con RUN_DOCKER_SQL_QUERY_TESTS=1 en este entorno tampoco corre: falla en el arranque
+    del contenedor, no en una asercion. Ver docker-environment.txt.
+  => 101 lineas de test nuevas sin evidencia de ejecucion ni del dev ni de QA.
+     No es un defecto del cambio de SQL; es cobertura declarada pero no demostrada.
+
+VEREDICTO: PASS (con el hallazgo del spec no ejecutado, no bloqueante)

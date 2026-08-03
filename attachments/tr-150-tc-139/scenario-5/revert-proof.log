@@ -1,0 +1,389 @@
+
+> MigrationToolETL@0.0.1 test
+> jest --runInBand pledge-payment-query
+
+(node:12150) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts
+  pledge payment identity queries
+    ✓ uses pledge-scoped payment and write-off external ids for OppPayments (2 ms)
+    ✓ uses split-scoped fund assignment ids and aligned technical payment ids
+    IM-1148 OppPayment date columns are pure dates
+      ✕ casts every scheduled-date branch to DATE (1 ms)
+      ✕ casts every payment-date branch to DATE and never emits a blank (1 ms)
+      ✕ falls back to the scheduled date on every branch that has an actual date
+      ✕ sources the unpaid payment date from the same expression as its scheduled date (1 ms)
+    IM-558 pledge-root designation lineage
+      ✓ derives ExportDesignationID from the payment source line item with installment-split fallback (1 ms)
+      ✓ aggregates ExportDesignationID so the (InstallmentSplitID, PaymentRevenueID) grain cannot split
+
+  ● pledge payment identity queries › IM-1148 OppPayment date columns are pure dates › casts every scheduled-date branch to DATE
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)/i
+    Received string:  "	pa.InstallmentDate AS npe01__Scheduled_Date__c"
+
+      67 |       expect(scheduledDateProjections).toHaveLength(3);
+      68 |       scheduledDateProjections!.forEach((projection) => {
+    > 69 |         expect(projection).toMatch(/CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)/i);
+         |                            ^
+      70 |       });
+      71 |     });
+      72 |
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:69:28
+          at Array.forEach (<anonymous>)
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:68:33)
+
+  ● pledge payment identity queries › IM-1148 OppPayment date columns are pure dates › casts every payment-date branch to DATE and never emits a blank
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /^(CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)|COALESCE\(\s*\w+\.\w+\s*,\s*CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)\s*\))$/i
+    Received string:  "pa.PaymentDate"
+
+      82 |         // inside a larger expression must not be enough to satisfy this.
+      83 |         const expression = projection.trim().replace(/\s+AS\s+\w+$/i, '');
+    > 84 |         expect(expression).toMatch(
+         |                            ^
+      85 |           /^(CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)|COALESCE\(\s*\w+\.\w+\s*,\s*CAST\(\s*\w+\.\w+\s+AS\s+DATE\s*\)\s*\))$/i,
+      86 |         );
+      87 |       });
+
+      at data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:84:28
+          at Array.forEach (<anonymous>)
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:80:31)
+
+  ● pledge payment identity queries › IM-1148 OppPayment date columns are pure dates › falls back to the scheduled date on every branch that has an actual date
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "COALESCE(pa.PaymentDate, CAST(pa.InstallmentDate AS DATE)) AS npe01__Payment_Date__c"
+    Received string:    "DECLARE @useDateFrom BIT = IIF(@hasDateFilterFrom = 1, 1, 0);
+    DECLARE @useDateTo BIT = IIF(@hasDateFilterTo = 1, 1, 0);
+    DECLARE @filterDateFrom DATE = CAST(@dateFilterFrom AS DATE);
+    DECLARE @filterDateTo DATE = CAST(@dateFilterTo AS DATE);·
+    -- Formerly donation_pledge_payments.sql (renamed in IM-619 because matching-gift claims share this flow).
+    -- Pledge payments and write-offs (include unpaid installments).
+    -- Matching-gift claims share the pledge payment model in Altru (INSTALLMENTSPLIT-based),
+    -- so they are included here to link their payments to the matching-gift opportunity
+    -- created by donation_transaction.sql and avoid duplicate opportunities for the payments.
+    WITH Pledges AS (
+    SELECT
+    	ft.ID AS PledgeID,
+    	ft.CALCULATEDUSERDEFINEDID AS PledgeRevenueIdLegacy
+    FROM
+    	FINANCIALTRANSACTION ft
+    WHERE
+    	ft.[TYPE] = 'Pledge'
+    	-- Match the ISACTIVE = 1 filter used by donation_update_matching_gift.sql so a
+    	-- soft-deleted MG claim cannot emit OppPayment rows for an Opportunity that
+    	-- the update-phase query never creates.
+    	OR EXISTS (SELECT 1 FROM REVENUEMATCHINGGIFT rmg WHERE rmg.ID = ft.ID AND rmg.ISACTIVE = 1)
+    ),
+    PledgePaymentIds AS (
+    SELECT
+        PledgeID,
+        PaymentRevenueID AS PaymentID,
+        CONCAT(CAST(PledgeID AS VARCHAR(36)), '-', CAST(PaymentRevenueID AS VARCHAR(36))) AS PledgePaymentExternalId
+    FROM (
+        SELECT DISTINCT
+            isplt.PLEDGEID,
+            payFt.ID AS PaymentRevenueID
+        FROM INSTALLMENTSPLITPAYMENT isp
+        JOIN INSTALLMENTSPLIT isplt
+          ON isplt.ID = isp.INSTALLMENTSPLITID
+        JOIN FINANCIALTRANSACTIONLINEITEM payLi
+          ON payLi.ID = isp.PAYMENTID
+         AND payLi.[TYPE] = 'Standard'
+        JOIN FINANCIALTRANSACTION payFt
+          ON payFt.ID = payLi.FINANCIALTRANSACTIONID
+    ) payment_ids
+    ),
+    PledgeWriteOffIds AS (
+    SELECT
+        PLEDGEID,
+        WriteOffID,
+        CONCAT(CAST(PLEDGEID AS VARCHAR(36)), '-', CAST(WriteOffID AS VARCHAR(36))) AS PledgeWriteOffExternalId
+    FROM (
+        SELECT DISTINCT
+            isplt.PLEDGEID,
+            wFt.ID AS WriteOffID
+        FROM INSTALLMENTSPLITWRITEOFF isw
+        JOIN INSTALLMENTSPLIT isplt
+          ON isplt.ID = isw.INSTALLMENTSPLITID
+        JOIN FINANCIALTRANSACTION wFt
+          ON wFt.ID = isw.WRITEOFFID
+    ) writeoff_ids
+    ),
+    Installments AS (
+    SELECT DISTINCT
+    	ins.ID AS InstallmentID,
+    	isplt.PLEDGEID AS PledgeID,
+    	ins.DATE AS InstallmentDate,
+    	ins.TRANSACTIONAMOUNT AS InstallmentAmount,
+    	ins.[SEQUENCE] AS InstallmentSequence
+    FROM INSTALLMENT ins
+    JOIN INSTALLMENTSPLIT isplt
+      ON isplt.INSTALLMENTID = ins.ID
+    WHERE isplt.PLEDGEID IS NOT NULL
+    ),
+    PaymentPerInstallment AS (
+    SELECT
+    	isplt.PLEDGEID,
+    	isplt.INSTALLMENTID,
+    	payFt.ID AS PaymentRevenueID,
+    	SUM(isp.AMOUNT) AS AppliedAmount,
+    	MIN(payFt.CALCULATEDDATE) AS PaymentDate,
+    	MAX(payFt.CALCULATEDUSERDEFINEDID) AS PaymentRevenueIdLegacy,
+    	MAX(payFt.DESCRIPTION) AS PaymentDescription,
+    	MAX(rpm.PAYMENTMETHOD) AS PaymentMethod,
+    	MAX(ccp.CREDITCARDPARTIALNUMBER) AS CardLast4,
+    	MAX(chk.CHECKNUMBER) AS CheckNumber,
+    	MIN(ins.DATE) AS InstallmentDate
+    FROM INSTALLMENTSPLITPAYMENT isp
+    JOIN INSTALLMENTSPLIT isplt
+      ON isplt.ID = isp.INSTALLMENTSPLITID
+    JOIN INSTALLMENT ins
+      ON ins.ID = isplt.INSTALLMENTID
+    JOIN FINANCIALTRANSACTIONLINEITEM payLi
+      ON payLi.ID = isp.PAYMENTID
+     AND payLi.[TYPE] = 'Standard'
+    JOIN FINANCIALTRANSACTION payFt
+      ON payFt.ID = payLi.FINANCIALTRANSACTIONID
+    LEFT JOIN REVENUEPAYMENTMETHOD rpm
+      ON rpm.REVENUEID = payFt.ID
+    LEFT JOIN CREDITCARDPAYMENTMETHODDETAIL ccp
+      ON ccp.ID = rpm.ID
+    LEFT JOIN CHECKPAYMENTMETHODDETAIL chk
+      ON chk.ID = rpm.ID
+    GROUP BY
+    	isplt.PLEDGEID,
+    	isplt.INSTALLMENTID,
+    	payFt.ID
+    ),
+    PaymentAgg AS (
+    SELECT
+        PLEDGEID,
+        PaymentRevenueID AS PaymentID,
+        SUM(AppliedAmount) AS AppliedAmount,
+        MIN(PaymentDate) AS PaymentDate,
+        MAX(PaymentRevenueIdLegacy) AS PaymentRevenueIdLegacy,
+        MAX(PaymentDescription) AS PaymentDescription,
+        MAX(PaymentMethod) AS PaymentMethod,
+        MAX(CardLast4) AS CardLast4,
+        MAX(CheckNumber) AS CheckNumber,
+        MIN(InstallmentDate) AS InstallmentDate
+    FROM PaymentPerInstallment
+    GROUP BY
+        PLEDGEID,
+        PaymentRevenueID
+    ),
+    PaymentTotals AS (
+    SELECT
+        PLEDGEID,
+        INSTALLMENTID,
+        SUM(AppliedAmount) AS TotalApplied
+    FROM
+        PaymentPerInstallment
+    GROUP BY
+        PLEDGEID,
+        INSTALLMENTID
+    ),
+    WriteOffPerInstallment AS (
+    SELECT
+    	isplt.PLEDGEID,
+    	isplt.INSTALLMENTID,
+    	wFt.ID AS WriteOffID,
+    	MIN(wFt.CALCULATEDDATE) AS WriteOffDate,
+    	SUM(isw.AMOUNT) AS WrittenOffAmount,
+    	MIN(ins.DATE) AS InstallmentDate
+    FROM
+    	INSTALLMENTSPLITWRITEOFF isw
+    JOIN INSTALLMENTSPLIT isplt
+            ON
+    	isplt.ID = isw.INSTALLMENTSPLITID
+    JOIN INSTALLMENT ins
+            ON
+    	ins.ID = isplt.INSTALLMENTID
+    JOIN FINANCIALTRANSACTION wFt
+            ON
+    	wFt.ID = isw.WRITEOFFID
+    GROUP BY
+    	isplt.PLEDGEID,
+    	isplt.INSTALLMENTID,
+    	wFT.ID
+    ),
+    WriteOffAgg AS (
+    SELECT
+    	PLEDGEID,
+    	WriteOffID,
+    	MIN(WriteOffDate) AS WriteOffDate,
+    	SUM(WrittenOffAmount) AS WrittenOffAmount,
+    	MIN(InstallmentDate) AS InstallmentDate
+    FROM
+    	WriteOffPerInstallment
+    GROUP BY
+    	PLEDGEID,
+    	WriteOffID
+    ),
+    WriteOffTotals AS (
+    SELECT
+        PLEDGEID,
+        INSTALLMENTID,
+        SUM(WrittenOffAmount) AS TotalWrittenOff
+    FROM
+        WriteOffPerInstallment
+    GROUP BY
+        PLEDGEID,
+        INSTALLMENTID
+    )
+    SELECT *
+    FROM (
+    -- Paid installments (per payment)
+    SELECT
+    	paymentIds.PledgePaymentExternalId AS Implementation_External_ID__c,
+    	pa.PaymentRevenueIdLegacy AS Revenue_ID_legacy__c,
+    	pa.PLEDGEID AS npe01__Opportunity__c,
+    	1 AS npe01__Paid__c,
+    	pa.InstallmentDate AS npe01__Scheduled_Date__c,
+    	pa.PaymentDate AS npe01__Payment_Date__c,
+    	pa.AppliedAmount AS npe01__Payment_Amount__c,
+    	pa.AppliedAmount AS vnfp__Amount_Paid__c,
+    	pa.PaymentMethod AS npe01__Payment_Method__c,
+    	0 AS npe01__Written_Off__c,
+    	pa.CheckNumber AS npe01__Check_Reference_Number__c,
+    	NULL AS npsp__Card_Expiration_Month__c,
+    	NULL AS npsp__Card_Expiration_Year__c,
+    	pa.CardLast4 AS npsp__Card_Last_4__c,
+    	NULL AS npsp__Card_Network__c,
+    	NULL AS npsp__ACH_Last_4__c,
+    	NULL AS npsp__ACH_Code__c,
+    	pa.PaymentDescription AS vnfp__Description__c
+    FROM
+    	PaymentAgg pa
+    JOIN Pledges p
+        ON p.PledgeID = pa.PLEDGEID
+    JOIN PledgePaymentIds paymentIds
+        ON paymentIds.PledgeID = pa.PLEDGEID
+        AND paymentIds.PaymentID = pa.PaymentID
+    UNION ALL
+    -- Write-offs
+    SELECT
+    	writeoffIds.PledgeWriteOffExternalId AS Implementation_External_ID__c,
+    	NULL AS Revenue_ID_legacy__c,
+    	wo.PLEDGEID AS npe01__Opportunity__c,
+    	0 AS npe01__Paid__c,
+    	wo.InstallmentDate AS npe01__Scheduled_Date__c,
+    	wo.WriteOffDate AS npe01__Payment_Date__c,
+    	wo.WrittenOffAmount AS npe01__Payment_Amount__c,
+    	0 AS vnfp__Amount_Paid__c,
+    	NULL AS npe01__Payment_Method__c,
+    	1 AS npe01__Written_Off__c,
+    	NULL AS npe01__Check_Reference_Number__c,·
+    	NULL AS npsp__Card_Expiration_Month__c,
+    	NULL AS npsp__Card_Expiration_Year__c,
+    	NULL AS npsp__Card_Last_4__c,
+    	NULL AS npsp__Card_Network__c,
+    	NULL AS npsp__ACH_Last_4__c,
+    	NULL AS npsp__ACH_Code__c,
+    	NULL AS vnfp__Description__c
+    FROM
+    	WriteOffAgg wo
+    JOIN Pledges pledges
+        ON
+    	pledges.PledgeID = wo.PLEDGEID
+    JOIN PledgeWriteOffIds writeoffIds
+        ON writeoffIds.PLEDGEID = wo.PLEDGEID
+        AND writeoffIds.WriteOffID = wo.WriteOffID
+    UNION ALL
+    -- Unpaid installments (no payments, no write-offs)
+    SELECT
+    	CONCAT(
+            CAST(ins.PledgeID AS VARCHAR(36)),
+            '-',
+            CAST(ins.InstallmentID AS VARCHAR(36))
+        ) AS Implementation_External_ID__c,
+    	NULL AS Revenue_ID_legacy__c,
+    	ins.PledgeID AS npe01__Opportunity__c,
+    	0 AS npe01__Paid__c,
+    	ins.InstallmentDate AS npe01__Scheduled_Date__c,
+    	NULL AS npe01__Payment_Date__c,
+    	ins.InstallmentAmount
+            - COALESCE(pt.TotalApplied, 0)
+            - COALESCE(wt.TotalWrittenOff, 0) AS npe01__Payment_Amount__c,
+    	0 AS vnfp__Amount_Paid__c,
+    	NULL AS npe01__Payment_Method__c,
+    	0 AS npe01__Written_Off__c,
+    	NULL AS npe01__Check_Reference_Number__c,
+    	NULL AS npsp__Card_Expiration_Month__c,
+    	NULL AS npsp__Card_Expiration_Year__c,
+    	NULL AS npsp__Card_Last_4__c,
+    	NULL AS npsp__Card_Network__c,
+    	NULL AS npsp__ACH_Last_4__c,
+    	NULL AS npsp__ACH_Code__c,
+    	NULL AS vnfp__Description__c
+    FROM
+    	Installments ins
+    JOIN Pledges pledges
+        ON
+    	pledges.PledgeID = ins.PledgeID
+    LEFT JOIN PaymentTotals pt
+        ON
+    	pt.PLEDGEID = ins.PledgeID
+    	AND pt.INSTALLMENTID = ins.InstallmentID
+    LEFT JOIN WriteOffTotals wt
+        ON
+    	wt.PLEDGEID = ins.PledgeID
+    	AND wt.INSTALLMENTID = ins.InstallmentID
+    WHERE
+    	ins.InstallmentAmount
+            - COALESCE(pt.TotalApplied, 0)
+            - COALESCE(wt.TotalWrittenOff, 0) > 0
+    ) q
+    WHERE
+    	(
+    		@useDateFrom = 0
+    		OR CAST(COALESCE(q.npe01__Payment_Date__c, q.npe01__Scheduled_Date__c) AS DATE) >= @filterDateFrom
+    	)
+    	AND (
+    		@useDateTo = 0
+    		OR CAST(COALESCE(q.npe01__Payment_Date__c, q.npe01__Scheduled_Date__c) AS DATE) <= @filterDateTo
+    	)
+    ORDER BY
+    	q.npe01__Opportunity__c,
+    	q.npe01__Scheduled_Date__c;
+    "
+
+      103 |       // outranks `date`, so an outer-only cast would promote the expression and throw
+      104 |       // on a pre-1753 date.
+    > 105 |       expect(query).toContain(
+          |                     ^
+      106 |         'COALESCE(pa.PaymentDate, CAST(pa.InstallmentDate AS DATE)) AS npe01__Payment_Date__c',
+      107 |       );
+      108 |       expect(query).toContain(
+
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:105:21)
+
+  ● pledge payment identity queries › IM-1148 OppPayment date columns are pure dates › sources the unpaid payment date from the same expression as its scheduled date
+
+    expect(received).not.toBeNull()
+
+    Received: null
+
+      128 |         /(\w+\.\w+)\s*AS\s+DATE\s*\)\s*AS\s+npe01__Payment_Date__c/i,
+      129 |       );
+    > 130 |       expect(scheduled).not.toBeNull();
+          |                             ^
+      131 |       expect(payment).not.toBeNull();
+      132 |       expect(payment![1]).toBe(scheduled![1]);
+      133 |     });
+
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/pledge-payment-query.spec.ts:130:29)
+
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 4 passed, 8 total
+Snapshots:   0 total
+Time:        0.346 s, estimated 1 s
+Ran all test suites matching pledge-payment-query.

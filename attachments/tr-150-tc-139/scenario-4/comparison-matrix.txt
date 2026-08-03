@@ -1,0 +1,68 @@
+IM-1148 / TC-139 · ESCENARIO 4 — reconciliacion agregada PRE vs POST
+=====================================================================
+Fuente : perfil safesql `tucson` (SQL Server Altru real, solo lectura)
+Metodo : la query REAL del PR envuelta en agregados — se reusan sus CTEs y sus 3 ramas,
+         y se reemplaza el `SELECT *` de nivel superior por conteos. Salida 100% numerica:
+         cero filas de cliente en el artefacto.
+Ventana: sin filtro de fecha (@hasDateFilterFrom = 0, @hasDateFilterTo = 0), los mismos
+         valores centinela que usan los extractores. Universo completo.
+
+Metrica                              | PRE (base) | POST (PR) | Delta       | AC  | Objetivo cumplido
+-------------------------------------|------------|-----------|-------------|-----|------------------
+Grano de filas emitidas              | 2326       | 2326      | sin cambio  | AC4 | SI
+  rama paid                          | 1703       | 1703      | sin cambio  | AC4 | SI
+  rama write-off                     | 517        | 517       | sin cambio  | AC4 | SI
+  rama unpaid                        | 106        | 106       | sin cambio  | AC4 | SI
+npe01__Scheduled_Date__c NULL        | 0          | 0         | sin cambio  | AC4 | SI
+npe01__Payment_Date__c NULL          | 106        | 0         | 106 -> 0    | AC4 | SI  <<<<
+  de los cuales, rama unpaid         | 106        | 0         | 106 -> 0    | AC2 | SI
+  de los cuales, rama write-off      | 0          | 0         | sin cambio  | AC3 | SI
+write-off con payment != scheduled   | 517        | 517       | sin cambio  | AC3 | SI  <<<<
+
+Las dos lineas que importan
+---------------------------
+1) `npe01__Payment_Date__c NULL: 106 -> 0`
+   Es LA asercion del ticket, medida sobre datos reales. Y el desglose la explica: los 106
+   blancos son EXACTAMENTE las 106 filas de la rama unpaid — ni una sola de las ramas paid o
+   write-off tenia el campo vacio. Reproduce en Tucson la misma estructura que el PR reporta
+   para Long Island (102 blancos = 102 unpaid). El dato original no estaba roto; simplemente
+   Altru no guarda fecha de pago para una cuota abierta.
+
+2) `write-off con payment != scheduled: 517 -> 517 (sin cambio)`
+   Esta es la prueba de no-regresion mas importante del PR. Las 517 filas de write-off de
+   Tucson conservan una fecha de pago DISTINTA de su fecha programada, antes y despues.
+   Si el fallback se hubiera anclado en `npe01__Paid__c = 0` en vez de en la ausencia de
+   fecha, este contador habria COLAPSADO A 0 al sobrescribir las 517 fechas genuinas con la
+   fecha de la cuota. No se movio ni una fila.
+   => El escenario 3 deja de ser solo una prueba por construccion: queda MEDIDO sobre 517
+      write-offs reales, 10x la muestra de 51 que nombra el ticket.
+
+Otros controles
+---------------
+· Grano estable: el arreglo toca proyecciones de columna, no el conjunto de filas. Confirmado.
+· `write-off con payment NULL = 0` en ambos lados: confirma que el COALESCE de la rama
+  write-off es tenant-safety y no una reparacion — igual que reporta el PR para Long Island,
+  Tucson tampoco tiene CALCULATEDDATE nulos.
+
+Alcance de esta evidencia
+-------------------------
+  VERIFICADO  : el COMPORTAMIENTO completo del cambio, sobre una fuente Altru real con las
+                tres ramas pobladas (1703 / 517 / 106).
+  SIN VERIFICAR: las CIFRAS ESPECIFICAS de Long Island (1.354 / 1.201 / 51 / 102). No existe
+                perfil safesql de esa cuenta. Los numeros del ticket siguen sin re-derivarse
+                contra su propia fuente y conviene correrlos antes de la carga.
+
+sha de las queries ejecutadas
+-----------------------------
+  PRE  : 53731e195411   (reconcile-PRE.sql)
+  POST : 2ce1cfd14378   (reconcile-POST.sql)
+
+Perfiles probados
+-----------------
+  tucson          -> OK, usado para esta medicion
+  aspen           -> Failed to connect to localhost:41434 in 20000ms
+  illinois_2      -> Failed to connect to localhost:41435 in 20000ms
+  tucson_backup3  -> perfil mal configurado (Cannot read properties of undefined 'identityFile')
+  long island     -> no existe perfil
+
+VEREDICTO: PASS (comportamiento verificado; cifras propias de Long Island sin re-derivar)

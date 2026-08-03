@@ -1,0 +1,40 @@
+IM-1148 / TC-139 · ESCENARIO 1 — tipo declarado de las columnas de fecha
+========================================================================
+Metodo : sys.dm_exec_describe_first_result_set(N'<query>', N'<params>', 0)
+         Devuelve nombre y tipo de cada columna de salida SIN leer una sola fila.
+Fuente : perfil safesql `tucson` (SQL Server Altru real)
+Params : @hasDateFilterFrom BIT, @hasDateFilterTo BIT, @dateFilterFrom DATETIME2, @dateFilterTo DATETIME2
+Salida : 100% numerica agregada — cero filas de cliente en el artefacto
+
+Columna                      | Metrica         | PRE (base) | POST (PR) | Delta      | AC  | Objetivo cumplido
+-----------------------------|-----------------|------------|-----------|------------|-----|------------------
+npe01__Scheduled_Date__c     | tipo = date     | 0          | 1         | 0 -> 1     | AC1 | SI
+npe01__Scheduled_Date__c     | tipo = datetime | 1          | 0         | 1 -> 0     | AC1 | SI
+npe01__Payment_Date__c       | tipo = date     | 1          | 1         | sin cambio | AC1 | SI (esperado)
+npe01__Payment_Date__c       | tipo = datetime | 0          | 0         | sin cambio | AC1 | SI (esperado)
+(control) columnas de salida | total           | 18         | 18        | sin cambio | —   | SI
+
+Lectura
+-------
+· PRE reproduce el problema del ticket: Scheduled Date sale `datetime`, que es de donde
+  viene el "0:00" que reporto el cliente.
+· POST lo corrige: sale `date`.
+· Payment Date es `date` en AMBOS lados. Esta asimetria es la que prueba que el diagnostico
+  del PR es correcto: el sintoma aparecio SOLO en Schedule Date porque CALCULATEDDATE ya
+  era `date` y solo INSTALLMENT.DATE era `datetime`.
+· Medido de forma INDEPENDIENTE del dev: el usó Long Island, QA usó Tucson. Misma conclusion.
+
+sha de las queries ejecutadas
+-----------------------------
+  PRE  : 9925448ef239   (typecheck-PRE.sql)
+  POST : c803eaec8c9a   (typecheck-POST.sql)
+
+Verificacion estructural complementaria (opportunity_payments.sql en la rama del PR)
+------------------------------------------------------------------------------------
+  230: CAST(pa.InstallmentDate  AS DATE) AS npe01__Scheduled_Date__c
+  264: CAST(wo.InstallmentDate  AS DATE) AS npe01__Scheduled_Date__c
+  301: CAST(ins.InstallmentDate AS DATE) AS npe01__Scheduled_Date__c
+  => las 3 ramas casteadas. Basta una sin castear para que la precedencia de tipos
+     arrastre toda la columna de vuelta a `datetime`.
+
+VEREDICTO: PASS

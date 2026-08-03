@@ -1,0 +1,267 @@
+schemaVersion: '1.0'
+id: c11cd855-6fde-44b4-86bf-7d43c4d2b666
+key: TC-139
+title: IM-1148 — Opportunity Payments date contract — every UNION ALL branch projects a SQL date instead of a datetime, npe01__Payment_Date__c is never blank, and the write-off branch keeps its own settlement date instead of being overwritten by the installment date
+description: |
+  Cobertura QA de IM-1148 (**Opportunity Payments — Schedule Date con Formato de Hora Incorrecto y
+  Payment Date con Registros en Blanco**), bajo el epic **IM-70 Altru Queries**. QA Sub-task
+  asociada: **IM-1163**. Cuenta nombrada en el ticket: **Long Island Children's Museum**.
+  Prioridad de la historia: **Crítica**.
+
+  ## Qué pide la historia
+
+  Dos problemas en el query de **Opportunity Payments**:
+
+  1. **Schedule Date con formato de hora incorrecto** — el campo `Schedule Date` (mandatorio) trae
+     todos sus registros con valores de hora, por ejemplo `0:00`, en lugar de una fecha. Hay que
+     revisar si ese formato está generando un error en la migración, ya que al ser mandatorio
+     podría bloquear la carga completa del objeto.
+  2. **Payment Date con registros en blanco** — hay registros sin valor. Hay que revisar cuáles
+     están afectados y por qué, porque impacta la validación financiera y los reportes de pagos.
+
+  ## ⚠️ La historia NO trae Acceptance Criteria formales
+
+  La descripción son dos problemas en prosa y dos *action needed*. **No hay ACs numerados, ni ids
+  de registro concretos, ni conteos esperados.** No se rechaza porque el comportamiento SÍ es
+  inferible y está descrito, pero **los criterios que se validan acá los derivó QA** leyendo la
+  descripción y el diff del PR. Dev/PM deberían confirmarlos o corregirlos.
+
+  Criterios derivados (a confirmar):
+  1. `npe01__Scheduled_Date__c` sale como fecha pura, sin componente de hora, en TODAS las branches.
+  2. `npe01__Payment_Date__c` no queda en blanco en ningún registro emitido.
+  3. Cerrar el blanco NO puede destruir fechas de settlement que sí existen.
+  4. El universo de filas migradas no cambia por el arreglo.
+
+  ## PR bajo prueba
+
+  **MigrationToolETL [#162](https://github.com/Veevarts/MigrationToolETL/pull/162)** —
+  `fix(opportunity-payment): emit pure dates and never blank the payment date IM-1148`,
+  rama `fix/opportunity-payment-dates-IM-1148` → base `main`. **Estado: OPEN** (+308/−6, 5 archivos).
+
+  | Archivo | Rol en el cambio |
+  | --- | --- |
+  | `queries/opportunity-payment/opportunity_payments.sql` | los `CAST(... AS DATE)` y la regla de fallback en las 3 branches |
+  | `query-regression/pledge-payment-query.spec.ts` | **3 asserts nuevos** que lockean el contrato de fechas |
+  | `query-regression/pledge-unpaid-charge-query.integration.spec.ts` | **nuevo**, protege la asimetría deliberada del lado Charge |
+  | `query-regression/query-chain-verifier.ts` | 2 líneas de soporte |
+  | `docs/altru-model-context.md` | documenta la regla de tipos y la nueva semántica |
+
+  ## Lo que realmente hace el cambio (leído del diff, no del body del PR)
+
+  **Problema 1 — la causa es precedencia de tipos, no formato.** `INSTALLMENT.DATE` está declarado
+  `datetime` en Altru; `FINANCIALTRANSACTION.CALCULATEDDATE` ya es `date`. Al proyectar
+  `INSTALLMENT.DATE` sin cast dentro de un `UNION ALL`, SQL Server resuelve **toda la columna de
+  salida** a `datetime` por precedencia — por eso el `0:00` apareció solo en Schedule Date. El fix
+  agrega `CAST(... AS DATE)` en las tres branches.
+
+  **Problema 2 — el dato original NO estaba roto.** Los 102 blancos eran todos installments
+  *unpaid*: Altru simplemente no guarda fecha de pago para una cuota abierta. **Producto decidió**
+  que el campo lleve la fecha programada en vez de quedar vacío. La regla queda uniforme:
+
+  > `npe01__Payment_Date__c` = la fecha de settlement real, o la fecha programada cuando no existe
+  > una fecha real.
+
+  | Branch | Filas (Long Island) | Expresión emitida |
+  | --- | --- | --- |
+  | Paid | 1.201 | `COALESCE(pa.PaymentDate, CAST(pa.InstallmentDate AS DATE))` |
+  | Write-off | 51 | `COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate AS DATE))` |
+  | Unpaid | 102 | `CAST(ins.InstallmentDate AS DATE)` |
+
+  Tres decisiones de diseño que hay que verificar, no dar por buenas:
+
+  1. **El disparador del fallback es la fecha faltante, NO `npe01__Paid__c = 0`.** Los write-offs
+     llevan `npe01__Paid__c = 0` pero SÍ tienen fecha real de posteo. Si el fallback se hubiera
+     anclado en el flag, habría sobrescrito 51 fechas genuinas — en Long Island esas fechas están
+     1–2 años después de la cuota que liquidan (programada `2009-09-04` → write-off `2011-07-05`).
+  2. **El cast va DENTRO del `COALESCE`, no afuera.** `CALCULATEDDATE` es `date` e `InstallmentDate`
+     es `datetime`; un cast externo dejaría que `datetime` gane precedencia primero y reventaría
+     con fechas anteriores a 1753.
+  3. **La branch unpaid lee la MISMA expresión** (`ins.InstallmentDate`) para su scheduled date y
+     su payment date, para que las dos columnas no puedan divergir.
+
+  ## Cambio de semántica que hay que comunicar
+
+  Un `npe01__Payment_Date__c` poblado **ya no implica que el dinero se cobró**. `npe01__Paid__c` es
+  el único marcador. El lado Charge mantiene la convención OPUESTA a propósito:
+  `pledge_payments_unpaid_charges.sql` sigue emitiendo `Auctifera__Tech_Payment_Date__c` en NULL
+  para las mismas cuotas, para que su fórmula `Auctifera__Payment_Date__c` quede vacía.
+
+  ## Riesgos abiertos
+
+  - **La historia no trae ACs formales** — el mapeo criterio ↔ escenario lo derivó QA del PR.
+  - **El propio dev NO pudo re-verificar la reconciliación post-cambio.** El túnel safesql a Long
+    Island dejó de levantar (`Failed to connect to 127.0.0.1:41434 in 20000ms`, cuatro intentos).
+    Confirmar que los 102 blancos bajan a 0 quedó pendiente y es exactamente el escenario 4 — puede
+    quedar bloqueado por acceso.
+  - **Cambio de semántica decidido por producto**: hay que confirmar que Implementations y quien
+    construya reportes financieros saben que payment date poblado ≠ cobrado.
+  - **Hallazgo fuera de alcance reportado por el dev, NO arreglado acá**: tres headers CSV que este
+    pipeline emite no existen en los objetos target en ninguna org revisada
+    (`Implementation_External_ID__c` → `vnfp__Implementation_External_ID__c`,
+    `Revenue_ID_legacy__c` → `vnfp__Revenue_ID_Legacy__c`,
+    `npsp__Do_Not_Automatically_Create_Payments__c` → `npe01__Do_Not_Automatically_Create_Payment__c`).
+    El tercero es el preocupante: si el nombre nunca matchea, el flag nunca aterriza y NPSP
+    auto-crea un payment por cada pledge Opportunity. **Necesita ticket propio.**
+  - **PR OPEN contra `main`, no mergeado.** Nada de esto está entregado todavía.
+  - Las cifras del PR (386 tests, 1.354 filas, 1.201/51/102, 1.192/1.192 a medianoche) son del dev:
+    **se re-derivan, no se toman por buenas.**
+type: integration
+priority: critical
+status: active
+preconditions:
+- 'Clone de `MigrationToolETL` con la rama `fix/opportunity-payment-dates-IM-1148` y su commit base en `main`, para correr la suite y la prueba de reversión'
+- 'Node instalado; la suite relevante es `npm test -- --runInBand query-regression` (no requiere Docker: los 3 asserts nuevos son de contrato sobre el texto del SQL)'
+- '⚠️ Perfil safesql de **Long Island Children''s Museum** — el propio PR reporta que el túnel dejó de levantar a mitad del trabajo. Sin él no se puede re-derivar la reconciliación agregada contra la fuente del ticket. Si no se consigue, se corre contra otra fuente Altru con pledges/installments para validar COMPORTAMIENTO y se declara explícitamente que las cifras de Long Island quedan sin verificar'
+- 'Las bases de cliente son de SOLO LECTURA: toda verificación de fuente va por safesql en modo agregado (conteos/sumas), sin exportar filas de cliente a ningún artefacto'
+format: gherkin
+scenarios:
+- title: 'IM-1148 AC1 — Every UNION ALL branch projects npe01__Scheduled_Date__c as a SQL date, so the mandatory field stops carrying a 0:00 time component'
+  tags:
+  - happy-path
+  - im-1148
+  - im-1163
+  - im-70
+  - ac-1
+  - altru
+  - migration
+  - opportunity-payment
+  - date-cast
+  - type-precedence
+  - safesql
+  - pr-162
+  given:
+  - el query `opportunity_payments.sql` en el commit base, que proyecta `INSTALLMENT.DATE` sin cast en las tres branches del `UNION ALL`
+  - el mismo query en la rama del PR, con `CAST(... AS DATE)` en cada branch
+  when:
+  - se inspecciona el tipo declarado de las columnas de salida PRE y POST con `sys.dm_exec_describe_first_result_set`, que devuelve nombre y tipo sin leer una sola fila
+  then:
+  - "PRE: `npe01__Scheduled_Date__c` resuelve a **`datetime`** — la causa raíz del `0:00` que reportó el cliente"
+  - "POST: resuelve a **`date`**"
+  - "`npe01__Payment_Date__c` resuelve a `date` en AMBOS lados: ya venía de `CALCULATEDDATE` que es `date`, y por eso el síntoma apareció SOLO en Schedule Date. Confirmar esta asimetría es lo que prueba que el diagnóstico del PR es correcto"
+  - "verificar que **ninguna** branch quedó sin castear: basta un arm sin cast para que la precedencia de tipos vuelva a arrastrar toda la columna a `datetime`"
+  - "verificar que el cast va DENTRO del `COALESCE` y no afuera — un cast externo deja que `datetime` gane precedencia y revienta con fechas anteriores a 1753"
+  - "⚠️ **CIFRA DEL PR A RE-DERIVAR:** el PR afirma que el cast es *lossless* porque Long Island tiene 1.192/1.192 installment dates exactamente a las 00:00:00. **No se toma por buena.** Si hay perfil, se re-corre el conteo de valores con hora distinta de medianoche; si no, se declara sin verificar"
+- title: 'IM-1148 AC2 — npe01__Payment_Date__c is never blank: all three branches emit a date and the unpaid branch shares its source expression with the scheduled date'
+  tags:
+  - happy-path
+  - im-1148
+  - im-1163
+  - im-70
+  - ac-2
+  - altru
+  - migration
+  - opportunity-payment
+  - payment-date
+  - contract
+  - pr-162
+  given:
+  - las tres branches del `UNION ALL` — paid, write-off y unpaid
+  - "la regla que fijó producto: el payment date es la fecha de settlement real, o la fecha programada cuando no existe una real"
+  when:
+  - se revisa la proyección de `npe01__Payment_Date__c` en cada branch y se corre el assert de contrato de la suite
+  then:
+  - "las tres branches emiten una fecha y **ninguna proyecta un `NULL` pelado** — antes la branch unpaid emitía literalmente `NULL AS npe01__Payment_Date__c`"
+  - "la branch unpaid usa `CAST(ins.InstallmentDate AS DATE)`, es decir **la misma expresión fuente** que su propio `npe01__Scheduled_Date__c`, de modo que las dos columnas no puedan divergir"
+  - "las branches paid y write-off envuelven la suya en `COALESCE(<fecha real>, CAST(<fecha de cuota> AS DATE))` — esto es tenant-safety, no una reparación: `CALCULATEDDATE` es nullable en Altru aunque Long Island tenga 0 filas así"
+  - "el predicado de filtrado por ventana (`COALESCE(q.npe01__Payment_Date__c, q.npe01__Scheduled_Date__c)`) queda como modo de falla, no como lógica viva: con el invariante de nunca-blanco nunca alcanza su segundo argumento"
+  - "confirmar que el invariante lo sostiene la suite de regresión y NO ese predicado, porque un `NULL >= @filterDateFrom` es UNKNOWN y haría desaparecer la fila en silencio de toda extracción con ventana"
+- title: 'IM-1148 AC3 — The write-off branch keeps its own posting date: the fallback triggers on a missing date, never on npe01__Paid__c = 0'
+  tags:
+  - edge-case
+  - im-1148
+  - im-1163
+  - im-70
+  - ac-3
+  - regression
+  - altru
+  - migration
+  - opportunity-payment
+  - write-off
+  - data-integrity
+  - long-island
+  - pr-162
+  given:
+  - las 51 filas de write-off de Long Island, que llevan `npe01__Paid__c = 0` pero SÍ tienen una fecha real de posteo del write-off
+  - "el caso concreto que nombra el PR: cuota programada `2009-09-04` liquidada por write-off el `2011-07-05` — 1–2 años de separación"
+  when:
+  - se emite `npe01__Payment_Date__c` para la branch de write-off y se compara contra la fecha de la cuota
+  then:
+  - "la branch usa `COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate AS DATE))` y **conserva la fecha real de write-off**, no la de la cuota"
+  - "el disparador del fallback es **la ausencia de fecha**, no el flag `npe01__Paid__c`. Anclarlo en el flag habría sobrescrito en silencio las 51 fechas genuinas"
+  - "medir cuántas filas de write-off quedan con `npe01__Payment_Date__c` distinto de `npe01__Scheduled_Date__c`: si ese conteo colapsa a 0, el fallback se disparó de más y hay regresión"
+  - "verificar que el assert de la suite que protege esto falla al revertir la query al estado pre-fix (mutation check), no solo que pasa en verde"
+- title: 'IM-1148 AC4 — Source reconciliation against Long Island: row grain holds and the 102 blank payment dates drop to zero'
+  tags:
+  - regression-evidence
+  - im-1148
+  - im-1163
+  - im-70
+  - ac-4
+  - altru
+  - safesql
+  - long-island
+  - aggregate-only
+  - pending-creds
+  - pr-162
+  given:
+  - el perfil safesql de Long Island Children's Museum, en modo agregado y de solo lectura
+  - "las cifras que reporta el PR: grano de 1.354 filas = 1.201 paid + 51 write-off + 102 unpaid"
+  when:
+  - se corre la reconciliación agregada PRE y POST con la misma fuente, emitiendo solo conteos y sumas
+  then:
+  - "el grano de filas **no cambia** entre PRE y POST: el arreglo toca proyecciones de columnas, no el conjunto de filas. Cualquier variación es un defecto"
+  - "el desglose por branch se mantiene en 1.201 / 51 / 102"
+  - "`npe01__Scheduled_Date__c` nunca es NULL, ni antes ni después"
+  - "**los 102 `npe01__Payment_Date__c` en blanco bajan a 0** — esta es la aserción que el ticket pide y la que el dev NO pudo re-correr"
+  - "⚠️ **ESTO ES EXACTAMENTE LO QUE QUEDÓ SIN VERIFICAR EN EL PR.** El túnel safesql a Long Island dejó de levantar (`Failed to connect to 127.0.0.1:41434 in 20000ms`, cuatro intentos). Si el perfil sigue caído, este escenario se marca como bloqueado por acceso, NO se da por pasado, y se declara explícitamente en el test run"
+  - "las bases de cliente son de solo lectura: se emiten únicamente columnas numéricas/fecha agregadas, nunca filas de cliente en el artefacto"
+- title: 'IM-1148 AC5 — The regression suite pins the contract, the new assertions fail against the pre-fix query, and the deliberate Charge-side asymmetry survives'
+  tags:
+  - regression
+  - im-1148
+  - im-1163
+  - im-70
+  - ac-5
+  - revert-proof
+  - query-regression
+  - charge
+  - contract
+  - pr-162
+  given:
+  - la suite `query-regression` sobre la rama del PR
+  - los 3 asserts nuevos de `pledge-payment-query.spec.ts` y el spec nuevo `pledge-unpaid-charge-query.integration.spec.ts`
+  when:
+  - se corre `npm test -- --runInBand query-regression` sobre la rama y luego se revierte `opportunity_payments.sql` al estado base para la prueba de reversión
+  then:
+  - "la suite pasa completa sobre la rama del PR"
+  - "⚠️ **CIFRA DEL PR A RE-DERIVAR:** el PR afirma 386 tests en verde. Se cuenta el número real de la corrida, no se copia el del body"
+  - "al revertir la query al estado pre-fix, los 3 asserts nuevos **FALLAN** — si pasan igual, no están lockeando nada y el contrato es decorativo"
+  - "`pledge_payments_unpaid_charges.sql` sigue emitiendo `Auctifera__Tech_Payment_Date__c` en NULL para las mismas cuotas: la asimetría con el lado Charge es deliberada y no debe haberse contagiado"
+  - "`fund_assignment_payments.sql`, que comparte los mismos CTEs, no cambió de comportamiento — ya aplicaba el cast y deliberadamente NO aplica la regla de fallback, porque sus splits sin postear no tienen fecha de posteo que reclamar"
+  - "correr la suite completa del repo para medir el radio de impacto, no solo el subconjunto que el PR nombra"
+tags:
+- im-1148
+- im-1163
+- im-70
+- altru
+- migration
+- opportunity-payment
+- npsp
+- oppayment
+- date-cast
+- type-precedence
+- payment-date
+- scheduled-date
+- write-off
+- pledge
+- installment
+- data-integrity
+- long-island
+- safesql
+- pr-162
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-03T14:30:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-03T14:30:00Z'

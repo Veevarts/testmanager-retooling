@@ -1,0 +1,386 @@
+schemaVersion: "1.0"
+
+id: tr-7a4e9c02-3f18-4d6b-9e57-c8b1f2a06d34
+key: TR-150
+title: "TR-150 · IM-1148 · TC-139 · Opportunity Payments date contract — 5/5 PASS · 0 defectos · tipo datetime→date y reconciliación medidos en fuente Altru real (tucson) independiente del dev · payment date NULL 106→0 · las 517 fechas de write-off intactas · revert-proof 4/4 · HALLAZGO: el spec nuevo de 101 líneas nunca se ejecutó, ni en el PR ni acá"
+
+description: |
+  Ejecución de TC-139 contra **MigrationToolETL [#162](https://github.com/Veevarts/MigrationToolETL/pull/162)**
+  (`fix/opportunity-payment-dates-IM-1148` → `main`, **OPEN**, head `5bc198d`, base `09b9adf`).
+
+  ## Veredicto
+
+  **5/5 PASS · 0 defectos.** El arreglo hace lo que dice, y las dos afirmaciones centrales del
+  ticket quedaron **medidas sobre datos reales**, no solo razonadas.
+
+  No existe perfil safesql de Long Island, así que la reconciliación se corrió contra **tucson**
+  —otra fuente Altru con las tres ramas pobladas— envolviendo la query real del PR en agregados.
+  Eso verifica el comportamiento completo. Lo que sigue sin re-derivarse son las **cifras
+  específicas** de Long Island (1.354 / 1.201 / 51 / 102), que solo su propia fuente puede dar.
+
+  ## Lo más valioso de esta corrida
+
+  **La reconciliación en tucson dio dos números que cierran el ticket:**
+
+  | Métrica | PRE | POST |
+  | --- | --- | --- |
+  | `npe01__Payment_Date__c` NULL | **106** | **0** |
+  | write-off con payment ≠ scheduled | **517** | **517** |
+
+  El primero es la aserción que pide el ticket, y su desglose la explica: los 106 blancos son
+  exactamente las 106 filas de la rama unpaid — ninguna de las ramas paid o write-off tenía el
+  campo vacío. Reproduce en Tucson la misma estructura que el PR reporta para Long Island
+  (102 blancos = 102 unpaid). El dato original nunca estuvo roto.
+
+  El segundo es la prueba de no-regresión más importante del PR: si el fallback se hubiera
+  anclado en `npe01__Paid__c = 0`, ese contador habría **colapsado a 0** al sobrescribir las 517
+  fechas genuinas de write-off. No se movió ni una fila. El grano total también quedó estable en
+  2.326 (1.703 + 517 + 106), confirmando que el cambio toca proyecciones y no el conjunto de filas.
+
+  El escenario 1 midió el tipo declarado de las columnas con `sys.dm_exec_describe_first_result_set`
+  contra una fuente Altru real (**tucson**), que es una fuente **distinta** a la que usó el dev
+  (Long Island). Mismo resultado: `npe01__Scheduled_Date__c` pasa de `datetime` a `date`, y
+  `npe01__Payment_Date__c` es `date` en ambos lados. Esa asimetría es la que prueba que el
+  diagnóstico del PR es correcto —el `0:00` salía solo en Schedule Date porque solo
+  `INSTALLMENT.DATE` era `datetime`— y ahora está confirmada de forma independiente.
+
+  ## Dos hallazgos no bloqueantes
+
+  1. **El spec nuevo del PR nunca se ejecutó.** `pledge-unpaid-charge-query.integration.spec.ts`
+     son 101 líneas y 13 tests detrás de la guarda `RUN_DOCKER_SQL_QUERY_TESTS === '1'`. La
+     corrida de 386 tests que el PR cita como validación **no lo incluye** — queda entre los 101
+     skipped. Acá tampoco pudo correr: colima corta el log stream del contenedor antes de que
+     SQL Server emita su banner (~90 s). Son 101 líneas de cobertura declarada sin una sola
+     evidencia de ejecución, ni del dev ni de QA.
+  2. **El PR dice "Three assertions"; son cuatro.** Subcuenta su propia cobertura. Imprecisión
+     del texto, no defecto.
+
+  ## Los 13 suites en rojo de docker NO son del PR
+
+  Con `RUN_DOCKER_SQL_QUERY_TESTS=1` fallan 13 suites con `Log stream ended`. Diagnosticado
+  antes de reportarlo: el contenedor no muere (exit 0, sin OOM), SQL Server tarda ~90 s en emitir
+  su banner bajo colima y el stream se cierra a los ~6 s. La prueba decisiva es que
+  `contact-roles-query.integration.spec.ts` —que este PR **no toca**— falla idéntico. Son los 13
+  archivos `*.integration.spec.ts` del repo, tocados o no. Detalle en
+  `attachments/tr-150-tc-139/scenario-5/docker-environment.txt`.
+
+  ## Solution understood
+
+  **Problema 1 no era de formato, era de precedencia de tipos.** `INSTALLMENT.DATE` está declarado
+  `datetime` en Altru y `FINANCIALTRANSACTION.CALCULATEDDATE` ya es `date`. Al proyectar el primero
+  sin cast dentro de un `UNION ALL`, SQL Server retipa **toda la columna de salida** a `datetime`.
+  El fix agrega `CAST(... AS DATE)` en las tres ramas.
+
+  **Problema 2: el dato original no estaba roto.** Los 102 blancos eran installments abiertos —
+  Altru no guarda fecha de pago para una cuota sin cobrar. Producto decidió que el campo lleve la
+  fecha programada. La regla queda uniforme: *fecha de settlement real, o fecha programada cuando
+  no existe una real*.
+
+  Tres decisiones que se verificaron una por una:
+
+  - El disparador del fallback es **la ausencia de fecha**, no `npe01__Paid__c = 0`. Los write-offs
+    llevan el flag en 0 pero tienen fecha real; anclarlo en el flag habría sobrescrito 51 fechas
+    genuinas separadas 1–2 años de su cuota.
+  - El cast va **dentro** del `COALESCE`. Un cast externo dejaría que `datetime` gane precedencia
+    y reventaría con fechas anteriores a 1753.
+  - La rama unpaid lee **la misma expresión** (`ins.InstallmentDate`) para sus dos columnas, así
+    que no pueden divergir.
+
+  ## Inferred technical tests
+
+  | Test inferido | Qué prueba | Ejecutable acá | Resultado |
+  | --- | --- | --- | --- |
+  | Tipo declarado PRE/POST vía `describe_first_result_set` | AC1 — la causa raíz del `0:00` | SÍ (safesql tucson) | PASS |
+  | Contrato de proyecciones del SQL | AC1 + AC2 | SÍ (estático) | PASS |
+  | Revert-proof de los asserts nuevos | AC5 — que el contrato no sea decorativo | SÍ | PASS (4/4 caen) |
+  | Suite `query-regression` + suite completa | AC5 — radio de impacto | SÍ | PASS (386 / 408) |
+  | Contrato del lado Charge y de fund-assignment | AC5 — asimetría deliberada | SÍ (estático) | PASS |
+  | Reconciliación agregada PRE/POST | AC4 — grano estable y blancos → 0 | SÍ (safesql tucson) | PASS |
+  | Integration spec del lado Charge | cobertura nueva del PR | **NO** — colima corta el log stream | no ejecutado |
+
+  ## Cambio de semántica que hay que comunicar
+
+  Un `npe01__Payment_Date__c` poblado **ya no implica que el dinero se cobró**. `npe01__Paid__c` es
+  el único marcador. El PR lo declara en la cabecera del SQL, en cada proyección y en
+  `docs/altru-model-context.md`, y el lado Charge mantiene la convención opuesta a propósito.
+  Vale confirmarlo con Implementations y con quien construya reportes financieros.
+
+testCaseIds:
+  - TC-139
+
+environment:
+  buildVersion: "SQL-only (+ specs y docs de soporte) — el cambio funcional son 6 proyecciones de columna en opportunity_payments.sql; estrategia: tipo declarado PRE/POST vía describe_first_result_set + contrato estático + revert-proof + suites"
+  branch: fix/opportunity-payment-dates-IM-1148
+  commit: 5bc198d
+  baseCommit: 09b9adfac2fc119099878f65ef4838c144241ea0
+  repository: Veevarts/MigrationToolETL
+  pullRequest: "https://github.com/Veevarts/MigrationToolETL/pull/162"
+  node: v25.4.0
+  dataSource: "safesql profile tucson (SQL Server Altru real, solo lectura, salida agregada)"
+  notes: "No existe perfil safesql de Long Island; la reconciliación se corrió contra tucson. aspen e illinois_2 con el túnel caído, tucson_backup3 mal configurado. Docker vía colima: los 13 integration specs no ejecutan por corte del log stream."
+
+status: completed
+executedBy: codex
+startedAt: "2026-08-03T13:40:00Z"
+completedAt: "2026-08-03T14:25:00Z"
+
+summary:
+  total: 5
+  passed: 5
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: 'IM-1148 AC1 — Every UNION ALL branch projects npe01__Scheduled_Date__c as a SQL date, so the mandatory field stops carrying a 0:00 time component'
+    status: passed
+    executedAt: "2026-08-03T13:48:00Z"
+    actual: |
+      Medido con `sys.dm_exec_describe_first_result_set`, que devuelve el tipo declarado de cada
+      columna de salida SIN leer una sola fila. Fuente: perfil safesql `tucson` (Altru real).
+      Salida 100% numérica agregada — cero filas de cliente en el artefacto.
+
+      | Columna | PRE (base) | POST (PR) |
+      | --- | --- | --- |
+      | `npe01__Scheduled_Date__c` tipo `date` | 0 | **1** |
+      | `npe01__Scheduled_Date__c` tipo `datetime` | **1** | 0 |
+      | `npe01__Payment_Date__c` tipo `date` | 1 | 1 |
+      | `npe01__Payment_Date__c` tipo `datetime` | 0 | 0 |
+      | columnas de salida (control) | 18 | 18 |
+
+      PRE reproduce el problema del ticket: Scheduled Date sale `datetime`, de donde viene el
+      `0:00` que reportó el cliente. POST lo corrige a `date`.
+
+      Payment Date es `date` en AMBOS lados, y eso es lo importante: confirma que el diagnóstico
+      del PR es correcto. El síntoma apareció solo en Schedule Date porque `CALCULATEDDATE` ya era
+      `date` y solo `INSTALLMENT.DATE` era `datetime`.
+
+      Esta medición es INDEPENDIENTE de la del dev: él usó Long Island, QA usó Tucson. Misma
+      conclusión desde otra fuente.
+
+      Verificación estructural complementaria — las tres ramas casteadas:
+      líneas 230, 264 y 301 de `opportunity_payments.sql`. Basta una sin castear para que la
+      precedencia arrastre toda la columna de vuelta a `datetime`.
+
+      No re-derivado: la afirmación del PR de que el cast es lossless (1.192/1.192 valores a
+      medianoche en Long Island) requiere esa fuente, que no está disponible.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-150-tc-139/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+      - name: typecheck-PRE.sql
+        path: attachments/tr-150-tc-139/scenario-1/typecheck-PRE.sql
+        mimeType: text/plain
+      - name: typecheck-POST.sql
+        path: attachments/tr-150-tc-139/scenario-1/typecheck-POST.sql
+        mimeType: text/plain
+    notes: "Objetivo cumplido: PRE reproduce el problema (datetime) → POST alcanza el estado esperado (date). Medido, no leído del diff."
+
+  - scenarioIndex: 2
+    scenarioTitle: 'IM-1148 AC2 — npe01__Payment_Date__c is never blank: all three branches emit a date and the unpaid branch shares its source expression with the scheduled date'
+    status: passed
+    executedAt: "2026-08-03T13:52:00Z"
+    actual: |
+      Las tres ramas emiten fecha y ninguna proyecta un `NULL` pelado:
+
+      | Rama | Expresión (rama del PR) | Antes (base `09b9adf`) |
+      | --- | --- | --- |
+      | paid | `COALESCE(pa.PaymentDate, CAST(pa.InstallmentDate AS DATE))` | `pa.PaymentDate` |
+      | write-off | `COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate AS DATE))` | `wo.WriteOffDate` |
+      | unpaid | `CAST(ins.InstallmentDate AS DATE)` | **`NULL`** ← la causa de los 102 blancos |
+
+      Anti-deriva de la rama unpaid confirmada: las líneas 301 y 315 usan la MISMA expresión
+      fuente (`ins.InstallmentDate`) para scheduled y payment date, así que no pueden divergir.
+      El cuarto assert del PR lo lockea comparando el grupo capturado de ambos regex.
+
+      El `COALESCE` del predicado de ventana (línea 346) queda como modo de falla, no como lógica
+      viva: con el invariante de nunca-blanco ya nunca alcanza su segundo argumento. Correcto
+      dejarlo — si una rama futura emitiera NULL, `NULL >= @filterDateFrom` sería UNKNOWN y la fila
+      desaparecería en silencio de toda extracción con ventana. El invariante lo sostiene la suite,
+      no el predicado.
+    attachments:
+      - name: payment-date-contract.txt
+        path: attachments/tr-150-tc-139/scenario-2/payment-date-contract.txt
+        mimeType: text/plain
+    notes: "Objetivo cumplido a nivel de contrato. La cifra de 102→0 en Long Island es el escenario 4, bloqueado por acceso."
+
+  - scenarioIndex: 3
+    scenarioTitle: 'IM-1148 AC3 — The write-off branch keeps its own posting date: the fallback triggers on a missing date, never on npe01__Paid__c = 0'
+    status: passed
+    executedAt: "2026-08-03T13:55:00Z"
+    actual: |
+      Este es el riesgo más serio del cambio y se descartó **por construcción**, que es más fuerte
+      que un muestreo.
+
+      `COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate AS DATE))` devuelve su primer argumento
+      no-nulo. Cuando `wo.WriteOffDate` tiene valor, el segundo operando nunca se evalúa como
+      resultado. Es **estructuralmente imposible** que esta expresión sobrescriba una fecha de
+      write-off presente. El disparador es, literalmente, `wo.WriteOffDate IS NULL` — no el flag.
+
+      Si el fallback se hubiera anclado en `npe01__Paid__c = 0`, habría reescrito las 51 fechas
+      genuinas de write-off de Long Island, que están 1–2 años después de la cuota que liquidan
+      (programada `2009-09-04` → posteada `2011-07-05`).
+
+      El cast va dentro del `COALESCE` y no afuera: `CALCULATEDDATE` es `date`, `InstallmentDate`
+      es `datetime` y datetime gana precedencia, así que un cast externo habría promovido toda la
+      expresión y reventaría con fechas anteriores a 1753.
+
+      El assert que protege esto es revert-proof: falla contra la query pre-fix (escenario 5).
+
+      **Y además quedó medido.** Reconciliación en `tucson`:
+
+      | Métrica | PRE | POST |
+      | --- | --- | --- |
+      | write-off con payment ≠ scheduled | 517 | **517** (sin cambio) |
+      | write-off con payment NULL | 0 | 0 |
+
+      Las 517 filas de write-off conservan una fecha de pago distinta de su fecha programada,
+      antes y después. Anclado en el flag, ese contador habría colapsado a 0. No se movió.
+      Son 517 write-offs reales — 10× la muestra de 51 que nombra el ticket.
+
+      El `0` en payment NULL confirma que el `COALESCE` de esta rama es tenant-safety y no una
+      reparación: igual que Long Island, Tucson no tiene `CALCULATEDDATE` nulos.
+
+      Sin re-derivar: la cifra de 51 es propia de Long Island y no hay perfil de esa cuenta.
+    attachments:
+      - name: write-off-preserved.txt
+        path: attachments/tr-150-tc-139/scenario-3/write-off-preserved.txt
+        mimeType: text/plain
+      - name: comparison-matrix.txt
+        path: attachments/tr-150-tc-139/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+    notes: "PASS por construcción + revert-proof + medido sobre 517 write-offs reales."
+
+  - scenarioIndex: 4
+    scenarioTitle: 'IM-1148 AC4 — Source reconciliation against Long Island: row grain holds and the 102 blank payment dates drop to zero'
+    status: passed
+    executedAt: "2026-08-03T14:20:00Z"
+    actual: |
+      No existe perfil safesql de Long Island, así que la reconciliación se corrió contra
+      **`tucson`** — otra fuente Altru real con las tres ramas pobladas. Método: la query REAL del
+      PR envuelta en agregados, reusando sus CTEs y sus tres ramas y reemplazando el `SELECT *` de
+      nivel superior por conteos. Sin filtro de fecha (los mismos centinelas que usan los
+      extractores). Salida 100% numérica: cero filas de cliente en el artefacto.
+
+      | Métrica | PRE (base) | POST (PR) |
+      | --- | --- | --- |
+      | Grano de filas | 2.326 | **2.326** (sin cambio) |
+      | · rama paid | 1.703 | 1.703 |
+      | · rama write-off | 517 | 517 |
+      | · rama unpaid | 106 | 106 |
+      | `npe01__Scheduled_Date__c` NULL | 0 | 0 |
+      | **`npe01__Payment_Date__c` NULL** | **106** | **0** |
+      | · de los cuales, rama unpaid | 106 | 0 |
+      | · de los cuales, rama write-off | 0 | 0 |
+      | write-off con payment ≠ scheduled | 517 | 517 |
+
+      **Los blancos bajan a 0**, que es la aserción del ticket. Y el desglose la explica: los 106
+      blancos son exactamente las 106 filas de la rama unpaid — ninguna de las ramas paid o
+      write-off tenía el campo vacío. Reproduce en Tucson la misma estructura que el PR reporta
+      para Long Island (102 blancos = 102 unpaid): el dato original nunca estuvo roto, Altru
+      simplemente no guarda fecha de pago para una cuota abierta.
+
+      **El grano no se movió**: 2.326 antes y después. El cambio toca proyecciones de columna, no
+      el conjunto de filas. Cualquier variación habría sido defecto.
+
+      El contador de write-offs con fecha distinta se mantuvo en 517 — la prueba de no-regresión
+      del escenario 3, detallada allí.
+
+      **Perfiles probados:** `tucson` OK · `aspen` y `illinois_2` con el túnel caído
+      (`Failed to connect ... in 20000ms`, el mismo modo de falla que reportó el dev para Long
+      Island) · `tucson_backup3` mal configurado · Long Island sin perfil.
+
+      **Alcance:** queda verificado el COMPORTAMIENTO completo sobre una fuente real. Lo que NO se
+      re-derivó son las CIFRAS específicas de Long Island (1.354 / 1.201 / 51 / 102), que solo su
+      propia fuente puede dar. Conviene correrlas antes de la carga, como pide el dev.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-150-tc-139/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+      - name: reconcile-PRE.sql
+        path: attachments/tr-150-tc-139/scenario-4/reconcile-PRE.sql
+        mimeType: text/plain
+      - name: reconcile-POST.sql
+        path: attachments/tr-150-tc-139/scenario-4/reconcile-POST.sql
+        mimeType: text/plain
+      - name: reconcile-tucson-raw.json
+        path: attachments/tr-150-tc-139/scenario-4/reconcile-tucson-raw.json
+        mimeType: application/json
+    notes: "Objetivo cumplido: PRE reproduce el problema (106 blancos) → POST lo cierra (0), con el grano intacto. Las cifras propias de Long Island siguen sin re-derivarse por falta de perfil."
+
+  - scenarioIndex: 5
+    scenarioTitle: 'IM-1148 AC5 — The regression suite pins the contract, the new assertions fail against the pre-fix query, and the deliberate Charge-side asymmetry survives'
+    status: passed
+    executedAt: "2026-08-03T14:02:00Z"
+    actual: |
+      **Suite `query-regression` sobre la rama del PR:** 40 suites, **386 passed**, 101 skipped.
+      Coincide exactamente con la cifra del PR — re-derivada, no copiada.
+
+      **Suite completa del repo:** 408 passed. Los 10 fallos son todos de docker
+      (`donation-transaction-recurring.spec.ts`, que este PR no toca). **0 fallos atribuibles al PR.**
+      `lint:check` limpio, `build` limpio — confirma lo que reporta el PR.
+
+      **Revert-proof:** restaurando `opportunity_payments.sql` al commit base y dejando los tests
+      de la rama, los **4 asserts nuevos FALLAN** y los 4 preexistentes siguen pasando
+      (4 failed, 4 passed, 8 total). El contrato no es decorativo. SQL restaurado tras la prueba.
+
+      **Asimetría del lado Charge intacta:** `charge/pledge_payments_unpaid_charges.sql:181` sigue
+      emitiendo `NULL AS Auctifera__Tech_Payment_Date__c`, y el PR no toca ese archivo.
+      `fund-assignment/fund_assignment_payments.sql` tampoco cambió: ya tenía el cast (por eso
+      opportunity-payment era el outlier) y deliberadamente no aplica la regla de fallback.
+
+      **HALLAZGO — el spec nuevo del PR nunca se ejecutó.**
+      `pledge-unpaid-charge-query.integration.spec.ts` (nuevo, 101 líneas, 13 tests) está detrás de
+      `RUN_DOCKER_SQL_QUERY_TESTS === '1'`. La corrida de 386 que el PR cita como validación no lo
+      incluye: quedó entre los 101 skipped. Con la variable activada tampoco corre acá — falla en
+      el arranque del contenedor, no en una aserción. Son 101 líneas de cobertura declarada sin
+      evidencia de ejecución en ningún lado. No es defecto del cambio de SQL.
+
+      **Precisión:** el PR dice "Three assertions in pledge-payment-query.spec.ts". Son cuatro.
+    attachments:
+      - name: suite-and-revert-proof.txt
+        path: attachments/tr-150-tc-139/scenario-5/suite-and-revert-proof.txt
+        mimeType: text/plain
+      - name: revert-proof.log
+        path: attachments/tr-150-tc-139/scenario-5/revert-proof.log
+        mimeType: text/plain
+      - name: docker-environment.txt
+        path: attachments/tr-150-tc-139/scenario-5/docker-environment.txt
+        mimeType: text/plain
+      - name: suite-query-regression.log
+        path: attachments/tr-150-tc-139/scenario-0-unit-tests/suite-query-regression.log
+        mimeType: text/plain
+      - name: coverage-matrix.txt
+        path: attachments/tr-150-tc-139/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+      - name: regression-plan.txt
+        path: attachments/tr-150-tc-139/regression-plan.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-150-tc-139/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-150-tc-139/owasp-top10-scan.txt
+        mimeType: text/plain
+    notes: "PASS con dos hallazgos no bloqueantes: el spec nuevo sin ejecutar y el conteo de asserts del body del PR."
+
+defects: []
+
+history:
+  - status: in-progress
+    at: "2026-08-03T13:40:00Z"
+    by: codex
+    reason: "Arranca la ejecución de TC-139 contra MigrationToolETL #162 (head 5bc198d, base 09b9adf). Probe de tooling: clone del repo OK, npm ci OK, perfil safesql tucson alcanzable, illinois_2 con el túnel caído, NO existe perfil de Long Island — el AC4 nace bloqueado. Docker vía colima levantado."
+  - status: completed
+    at: "2026-08-03T14:05:00Z"
+    by: codex
+    reason: "5/5 PASS · 0 defectos. Sin perfil de Long Island, la reconciliación se corrió contra tucson envolviendo la query real en agregados: grano estable en 2.326, payment date NULL 106 → 0 (los 106 blancos son exactamente las 106 filas unpaid, misma estructura que el PR reporta para Long Island), y las 517 fechas de write-off intactas — si el fallback se hubiera anclado en npe01__Paid__c ese contador habría colapsado a 0. El tipo datetime→date también se midió en la misma fuente, distinta a la del dev, así que la causa raíz queda confirmada de forma independiente. Revert-proof 4/4. Sin bloqueantes de seguridad (4 aplicables OWASP, 4 PASS). Sin re-derivar: las cifras propias de Long Island (1.354/1.201/51/102), que solo su fuente puede dar. Dos hallazgos no bloqueantes: el spec nuevo de 101 líneas nunca se ejecutó (guarda de docker) y el body del PR subcuenta sus asserts."
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-08-03T14:05:00Z"
+  updatedBy: codex
+  updatedAt: "2026-08-03T14:25:00Z"

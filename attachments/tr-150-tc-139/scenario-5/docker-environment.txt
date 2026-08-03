@@ -1,0 +1,48 @@
+IM-1148 / TC-139 · diagnostico del fallo de docker — ES DEL ENTORNO, NO DEL PR
+==============================================================================
+Se documenta explicitamente para que nadie lea el log en rojo como un defecto del PR.
+
+Sintoma
+-------
+  RUN_DOCKER_SQL_QUERY_TESTS=1 npm test -- --runInBand query-regression
+      Test Suites: 13 failed, 1 skipped, 40 passed, 53 of 54 total
+      Tests:       100 failed, 1 skipped, 386 passed, 487 total
+  Todos los fallos con el mismo mensaje:
+      "Log stream ended and message /.*Started.*/ was not received"
+
+Diagnostico
+-----------
+  Entorno: colima (macOS Virtualization.Framework, x86_64, 4 CPUs, 6 GiB) — docker OK,
+  imagen mcr.microsoft.com/mssql/server:2022-latest ya descargada (2.31 GB).
+
+  Arranque manual del contenedor, midiendo cuando aparece el banner:
+      t=15s  estado=running  lineas_log=3    'Started'=0
+      t=30s  estado=running  lineas_log=3    'Started'=0
+      t=45s  estado=running  lineas_log=36   'Started'=0
+      t=60s  estado=running  lineas_log=87   'Started'=0
+      t=90s  estado=running  lineas_log=253  'Started'=3
+  status=running exit=0 oom=false
+
+  => El contenedor NO muere (exit 0, sin OOM). SQL Server tarda ~90 s en emitir su banner
+     bajo colima. Los specs fallan a los ~6 s con "Log stream ended": el stream de logs se
+     cierra prematuramente a traves del socket de colima, antes de que el mensaje aparezca.
+     Es una incompatibilidad conocida testcontainers + colima, no un problema del codigo.
+
+PRUEBA DECISIVA de que no es del PR
+------------------------------------
+  Archivos que toca el PR #162:
+      docs/altru-model-context.md
+      queries/opportunity-payment/opportunity_payments.sql
+      query-regression/pledge-payment-query.spec.ts
+      query-regression/pledge-unpaid-charge-query.integration.spec.ts
+      query-regression/query-chain-verifier.ts
+
+  Entre los suites que fallaron esta contact-roles-query.integration.spec.ts, que el PR
+  NO toca, con el error IDENTICO. Los 13 suites en rojo son exactamente los 13 archivos
+  *.integration.spec.ts del repo — todos los que necesitan testcontainers, tocados o no.
+  => El fallo es del entorno. Cero fallos atribuibles al PR.
+
+Consecuencia para la cobertura
+------------------------------
+  El spec nuevo del PR no pudo ejecutarse aqui. Queda como pendiente en un entorno con
+  Docker Desktop nativo o CI, donde el log stream no se corta.

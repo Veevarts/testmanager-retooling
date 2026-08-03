@@ -1,0 +1,37 @@
+IM-1148 / TC-139 · ESCENARIO 2 — npe01__Payment_Date__c nunca queda en blanco
+=============================================================================
+
+Proyecciones en la rama del PR (opportunity_payments.sql)
+---------------------------------------------------------
+  237: COALESCE(pa.PaymentDate,  CAST(pa.InstallmentDate  AS DATE)) AS npe01__Payment_Date__c   <- paid
+  269: COALESCE(wo.WriteOffDate, CAST(wo.InstallmentDate  AS DATE)) AS npe01__Payment_Date__c   <- write-off
+  315: CAST(ins.InstallmentDate AS DATE)                            AS npe01__Payment_Date__c   <- unpaid
+
+Estado anterior (commit base 09b9adf)
+--------------------------------------
+  190: pa.PaymentDate  AS npe01__Payment_Date__c
+  218: wo.WriteOffDate AS npe01__Payment_Date__c
+  251: NULL            AS npe01__Payment_Date__c     <-- LA CAUSA de los 102 blancos
+
+Rama       | Emite fecha | Proyecta NULL pelado | Fuente
+-----------|-------------|----------------------|------------------------------------------
+paid       | SI          | NO                   | COALESCE(fecha real, fecha de cuota)
+write-off  | SI          | NO                   | COALESCE(fecha real, fecha de cuota)
+unpaid     | SI          | NO                   | CAST(ins.InstallmentDate AS DATE)
+
+Anti-deriva de la rama unpaid
+------------------------------
+  301: CAST(ins.InstallmentDate AS DATE) AS npe01__Scheduled_Date__c
+  315: CAST(ins.InstallmentDate AS DATE) AS npe01__Payment_Date__c
+  => MISMA expresion fuente (`ins.InstallmentDate`) para las dos columnas. No pueden divergir.
+     El test 4 del PR lo lockea comparando el grupo capturado de ambos regex.
+
+El COALESCE del predicado de ventana
+-------------------------------------
+  346: CAST(COALESCE(q.npe01__Payment_Date__c, q.npe01__Scheduled_Date__c) AS DATE) >= @filterDateFrom
+  Con el invariante de nunca-blanco, este COALESCE ya nunca alcanza su segundo argumento.
+  Queda como modo de falla, no como logica viva: si una rama futura emitiera NULL,
+  `NULL >= @filterDateFrom` seria UNKNOWN y la fila desapareceria en silencio de toda
+  extraccion con ventana. Correcto dejarlo. El invariante lo sostiene la suite, no el predicado.
+
+VEREDICTO: PASS
