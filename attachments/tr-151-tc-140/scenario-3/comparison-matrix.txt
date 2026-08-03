@@ -1,0 +1,55 @@
+IM-1160 / TC-140 — PRE vs POST reconciliation on the Altru source (profile: tucson)
+safesql, read-only, aggregate-only output. No customer rows left the database.
+PRE  = merge-base 0b8e9ce (membership_transactions.sql before the PR)
+POST = PR head 1672500 (feat/pos-purchase-membership-no-order-IM-1160)
+Measured 2026-08-03.
+
+Source/Test                         | Metric                | PRE (pre-fix) | Post-fix | Delta   | AC / Objective | Objective met? | Verdict
+------------------------------------|-----------------------|---------------|----------|---------|----------------|----------------|--------
+membership_transactions.sql         | total_opportunities   | 98950         | 98950    | 0       | grain contract | YES            | PASS
+membership_transactions.sql         | pos_null              | 79327         | 0        | -79327  | AC1 Objective  | YES            | PASS
+membership_transactions.sql         | pos_synthetic         | 0             | 79327    | +79327  | AC1 / AC2      | YES            | PASS
+membership_transactions.sql         | pos_real              | 19623         | 19623    | 0       | AC3 no-regress | YES            | PASS
+membership_transactions.sql         | distinct_pos_values   | 19387         | 98714    | +79327  | AC3 uniqueness | YES            | PASS
+sales_order_only_membership2.sql    | emitted_rows          | n/a (new)     | 79327    | n/a     | AC1 grain      | YES            | PASS
+sales_order_only_membership2.sql    | distinct_keys         | n/a (new)     | 79327    | n/a     | AC3 no dupes   | YES            | PASS
+sales_order_only_membership2.sql    | prefixed_rows         | n/a (new)     | 79327    | n/a     | AC1 key format | YES            | PASS
+sales_order_only_membership2.sql    | null_keys             | n/a (new)     | 0        | n/a     | AC1 grain      | YES            | PASS
+sales_order_only_membership.sql     | sibling_rows          | 19387         | 19387    | 0       | AC3 partition  | YES            | PASS
+sales_order_only_membership.sql     | sibling_distinct_keys | 19387         | 19387    | 0       | AC3 no dupes   | YES            | PASS
+sales_order_only_membership.sql     | sibling_synthetic_prefixed | 0        | 0        | 0       | AC3 no overlap | YES            | PASS
+
+CROSS-FILE IDENTITIES THAT MUST HOLD (all verified):
+
+  1. Referential closure of the synthetic side (AC2 — the lookup must not dangle)
+     new query distinct_keys (79327) == POST pos_synthetic (79327)          -> EXACT MATCH
+     Every synthetic POS Purchase the Opportunity references is actually emitted,
+     and every emitted synthetic purchase is referenced by exactly one Opportunity.
+
+  2. Complete and exclusive partition (AC3 — the two queries must not overlap)
+     POST pos_synthetic + POST pos_real = 79327 + 19623 = 98950 = total_opportunities
+     POST pos_null = 0
+     -> Every membership Opportunity is owned by exactly one of the two queries.
+
+  3. The blanks were exactly the orderless memberships (confirms the ticket diagnosis)
+     PRE pos_null (79327) == new query distinct_keys (79327)                -> EXACT MATCH
+     The 79327 empty POS lookups were not a linkage bug on a subset; they were
+     precisely the set of memberships that resolve no SALESORDER at all.
+
+  4. Referential closure of the order-backed side (AC3 — no regression)
+     PRE distinct_pos_values (19387) == sibling_rows (19387)                -> EXACT MATCH
+     19623 order-backed Opportunities reference 19387 distinct sales orders
+     (multiple membership transactions can share one order); the sibling query
+     emits exactly those 19387. Unchanged PRE vs POST.
+
+TICKET vs PR FIGURE CONFLICT — RESOLVED IN FAVOUR OF THE PR
+  Ticket "Real-data grain validation" says Tucson = 79288 (measured 2026-07-30).
+  PR body says Tucson = 79327 (measured 2026-07-31).
+  QA measured 2026-08-03: 79327. The PR is correct; the ticket figure is stale by 39 rows.
+  Documentation nit on the ticket, not a defect in the code.
+
+NOT MEASURED HERE
+  Long Island Children's Museum and High Desert have no safesql profile on this machine
+  (available: aspen, illinois_2, tucson, tucson_backup3). Their figures (51482 / 139382)
+  remain unverified by QA. Tucson is one of the three tenants the ticket names, and it is
+  the one whose figure was in dispute, so it is the highest-value single profile available.

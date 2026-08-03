@@ -1,0 +1,27 @@
+IM-1160 / TC-140 scenario 5 (AC4) — end-to-end wiring, verified by inspection on PR head 1672500
+
+Step | Artifact                                   | Evidence
+-----|--------------------------------------------|----------------------------------------------------------
+ 1   | migration-object.enum.ts:53                | POS_PURCHASE_MEMBERSHIP_NO_ORDER = 'pos-purchase-membership-no-order'
+ 2   | pos-purchase-membership-no-order.specification.ts | objectType bound to MigrationObject.POS_PURCHASE_MEMBERSHIP_NO_ORDER; factory createDefault(filters)
+ 3   | pos-purchase-membership-no-order.extractor.ts:29  | readonly objectType = MigrationObject.POS_PURCHASE_MEMBERSHIP_NO_ORDER
+     |                                     :32    | private readonly queryFile = 'sales_order_only_membership2.sql'
+     |                                     :90-97 | buildQuery() joins queries/pos-purchase/<queryFile> and readFile()s it
+ 4   | extractor.registry.ts:54                   | import PosPurchaseMembershipNoOrderExtractor
+     |                        :154                | new PosPurchaseMembershipNoOrderExtractor() registered alongside the other POS extractors
+ 5   | data-migration.module.ts:53                | import PosPurchaseMembershipNoOrderPipeline
+     |                         :190               | declared as a provider
+     |                         :273               | injected into the factory
+     |                         :354, :436         | RETURNED in the pipelines array  <-- the step that actually makes it run
+ 6   | package.json                               | pos-purchase-membership-no-order-query.integration.spec.ts added to test:queries:docker (1 occurrence)
+
+All six links present. Step 5 is the one that matters most: a pipeline registered as a provider
+but not returned in the array is inert, and nothing else in the chain would reveal that. It is
+returned in two places (354 and 436).
+
+CAVEAT — what this scenario does and does not prove.
+It proves the object is wired so that a run WILL pick it up. It does not prove rows landed in a
+target org, because that requires an actual Migration App run against an org, which QA did not
+perform here (no org in scope for this PR, which is source-side only). The source-side proof that
+the rows exist is scenario 1/3: the query emits 79327 rows on tucson. The AC's phrase "actually
+exported" is therefore covered at the query + wiring level, not at the org level.

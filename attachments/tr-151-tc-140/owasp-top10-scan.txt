@@ -1,0 +1,21 @@
+IM-1160 / TC-140 — OWASP Top 10 (2021) applicability scan
+PR: MigrationToolETL #163 — a read-only SQL extraction query plus its NestJS pipeline wiring.
+Surface: one new .sql file, one modified .sql projection, 3 new TS classes, 3 registration edits.
+No HTTP endpoint, no authentication path, no authorization decision, no user-supplied input,
+no serialization boundary and no new dependency is introduced by this diff.
+
+ID   Category                            | Applicable | Check method                                              | Verdict
+-----|------------------------------------|------------|-----------------------------------------------------------|--------
+A01  Broken Access Control               | N/A        | No endpoint/route/guard/permission touched; the extractor runs inside an already-authenticated migration run and adds no caller-facing surface. | N/A
+A02  Cryptographic Failures              | N/A        | No crypto, hashing, signing, TLS config or key handling in the diff. The only generated value is a throwaway container password used by tests. | N/A
+A03  Injection                           | Applicable | Diff grepped for concatenated SQL with interpolation; extractor reviewed line by line. Query text is read from a file with readFile(); date filters travel as bound parameters through mergeFilters -> executeQueryAsStream. No string building from input. | PASS
+A04  Insecure Design                     | Applicable | Reviewed the synthetic-key design for collision and forgeability: key = fixed prefix + the Opportunity's own external id; a real SALESORDER.ID is a uniqueidentifier, so the two namespaces cannot intersect. Measured 0 prefixed keys in the sibling query output. Partition predicate makes double-emission structurally impossible. | PASS
+A05  Security Misconfiguration           | N/A        | No config, IaC, CORS, header, or environment default changed. package.json edit is a test-script path list. | N/A
+A06  Vulnerable & Outdated Components    | Applicable | package.json / package-lock.json diffed for dependency additions and version bumps. Zero changes. | PASS
+A07  Identification & Authentication     | N/A        | No login, session, token, or credential-verification code in the diff. | N/A
+A08  Software & Data Integrity Failures  | Applicable | The change writes synthetic records into the target org's data set, so integrity of the emitted grain was verified against source: 1:1 Opportunity-to-key, 0 duplicates, 0 dangling references, order-backed set unchanged (see scenario-3/comparison-matrix.txt). No untrusted deserialization, no unsigned update channel, no CI/CD pipeline change. | PASS
+A09  Security Logging & Monitoring       | N/A        | No logging, audit, or alerting code touched. | N/A
+A10  Server-Side Request Forgery         | N/A        | No outbound HTTP/URL fetch introduced; the extractor talks only to the already-configured SQL Server pool. | N/A
+
+SUMMARY: 4 applicable · 4 PASS · 0 FAIL · 6 N/A · 0 High/Critical blockers.
+No defect raised from this scan.

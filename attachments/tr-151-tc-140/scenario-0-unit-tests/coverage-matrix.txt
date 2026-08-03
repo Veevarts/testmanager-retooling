@@ -1,0 +1,38 @@
+IM-1160 / TC-140 — dev test coverage vs the ticket's 6 Acceptance Criteria
+
+Test files added by PR #163:
+  pos-purchase-membership-no-order-query.spec.ts              20 tests  (contract, no Docker)
+  pos-purchase-membership-no-order-query.integration.spec.ts  15 tests  (Dockerized SQL Server)
+  membership-program-linkage-query-fixture.ts                 shared fixture, extended
+
+AC  | Covered by dev tests?            | Which                                                        | QA compensation
+----|----------------------------------|--------------------------------------------------------------|------------------------------
+AC1 | PARTIAL (contract only)          | prefix + derivation asserts; rank guard "AS PurchaseRank" /   | safesql grain on tucson:
+    |                                  | "om.PurchaseRank = 1" asserted as TEXT, not as behaviour.     | 79327 rows = 79327 distinct
+    |                                  | Behavioural proof lives in the 15 Docker tests (not runnable).| keys, 0 null. (scenario-1/3)
+AC2 | YES (contract) + Docker          | "uses the same synthetic prefix on both sides",               | QA re-derived the byte
+    |                                  | "derives the key from the same expression on both sides"      | equality independently.
+AC3 | PARTIAL (contract only)          | "does not emit the synthetic key from the real sales-order    | safesql partition proof:
+    |                                  | query", "excludes rows that resolve a real sales order"        | synthetic+real=total, null=0,
+    |                                  | - all static text asserts.                                    | sibling prefix count 0.
+AC4 | NO                               | No test asserts the enum/registry/module wiring.               | QA verified all 6 links by
+    |                                  |                                                               | inspection (scenario-5).
+AC5 | YES (strong)                     | 4 cast-guard tests incl. "leaves no uncast uniqueidentifier   | QA mutation-tested all five
+    |                                  | POS projection behind"                                        | casts individually.
+AC6 | YES                              | 8 shared-CTE byte-equality tests + add-on aggregate test       | QA proved non-vacuity by
+    |                                  |                                                               | injecting semantic drift.
+
+GAPS QA HAD TO COMPENSATE FOR
+  1. AC4 has no automated coverage at all. A future refactor that drops the pipeline from the
+     returned array in data-migration.module.ts would silently stop exporting the object and no
+     test in this repo would fail. Worth a regression test; reported as an observation, not a
+     defect (the AC is met today).
+  2. AC1 and AC3's behavioural halves live entirely in the 15 Dockerized tests, which cannot run
+     in this environment. QA replaced them with real-source measurement on tucson, which is
+     arguably stronger evidence than the seeded fixtures would have been.
+
+RE-DERIVED FIGURES (never copied from the PR body)
+  PR claims "393 passed, 41 suites" for query-regression  -> QA measured 393 passed, 41 suites. MATCH.
+  PR claims 20 contract tests                             -> QA measured 20 passed.             MATCH.
+  PR claims 15 integration tests                          -> QA measured 15 present, 15 unrunnable here.
+  PR claims "78 passed, 8 suites" for test:queries:docker -> NOT VERIFIABLE (no container runtime).

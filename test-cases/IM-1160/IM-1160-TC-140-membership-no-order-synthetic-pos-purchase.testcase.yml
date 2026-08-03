@@ -1,0 +1,349 @@
+schemaVersion: '1.0'
+id: 2c135887-4d8d-427a-93eb-27b014228993
+key: TC-140
+title: IM-1160 — Membership POS Purchase for orderless memberships — a synthetic purchase is minted per membership Opportunity that resolves no SALESORDER, both SQL files derive the identical key, the two queries partition the space instead of overlapping, and every COALESCE/UNION ALL branch stays CAST to NVARCHAR
+description: |
+  Cobertura QA de IM-1160 (**Mint POS Purchases for membership Opportunities with no sales
+  order**), bajo el epic **IM-70 Altru Queries**. QA Sub-task asociada: **IM-1164**. Cuenta
+  nombrada en el ticket: **Long Island Children's Museum** — con el alcance explícito de que
+  *afecta a todos los tenants Altru*. Prioridad de la historia: **Medium**.
+
+  ## Qué pide la historia
+
+  Las Opportunities de membresía exportaban `vnfp__POS_Purchase__c` **vacío** cada vez que Altru
+  no tenía un `SALESORDER` para la membresía. Altru solo registra sales order para membresías
+  vendidas por el módulo Daily Sales / POS, así que el hueco cubre:
+
+  - membresías cargadas en back office — cheques por correo, batch gift entry, comps
+  - **toda** membresía anterior a que el tenant adoptara POS
+
+  El ticket documenta que esto es un **hueco de política, no un bug de linkage**: no hay sales
+  order alcanzable por *ninguna* transacción financiera candidata para esas filas, verificado en
+  Long Island, Tucson y High Desert. El primer `SALESORDER` de Long Island aparece en **2011**;
+  **49.865 de sus 49.900** membresías orderless con monto distinto de cero son anteriores a 2012.
+  Las 35 restantes son back office: 22 sin orden del mismo día, 8 con orden del mismo día por una
+  compra no relacionada, y 5 con orden del mismo día sobre la misma membresía **ya poseída por una
+  transacción hermana** (enlazarla mis-parentearía la Opportunity).
+
+  El monto **no** es el discriminador — un cheque de $65 por correo no tiene sales order por la
+  misma razón que un comp de $0. El canal de venta sí lo es.
+
+  La solución replica el patrón que ya usan los pledges en `sales_order_only_pledge.sql`: mintear
+  un POS Purchase sintético anclado en la transacción financiera cuando no hay linkage de orden.
+
+  ## Acceptance Criteria del ticket (6, formales)
+
+  1. `sales_order_only_membership2.sql` emite un POS Purchase por Opportunity de membresía que no
+     resuelve sales order, con llave `membership-no-order-pos-<opportunity external id>`.
+  2. `membership_transactions.sql` construye la llave idéntica como rama final del `COALESCE` de
+     `vnfp__POS_Purchase__c`.
+  3. Sin solape con `sales_order_only_membership.sql`, y sin llaves duplicadas.
+  4. El nuevo objeto de migración queda cableado punta a punta (enum, specification, pipeline,
+     extractor, registry, module) para que los POS Purchases referenciados se exporten de verdad.
+  5. Cada rama del `COALESCE` y la rama order-backed del `UNION ALL` van `CAST` a `NVARCHAR` — el
+     trap IM-770 de AGENTS.md.
+  6. La cobertura de regresión prueba que la guarda de cast es load-bearing y que el contrato de
+     grano se sostiene.
+
+  ## PR bajo prueba
+
+  **MigrationToolETL [#163](https://github.com/Veevarts/MigrationToolETL/pull/163)** —
+  `feat(queries): mint POS Purchases for memberships without a sales order IM-1160`,
+  rama `feat/pos-purchase-membership-no-order-IM-1160` → base `main`.
+  **Estado: OPEN** (+1457/−5, 14 archivos).
+
+  | Archivo | Rol en el cambio |
+  | --- | --- |
+  | `queries/pos-purchase/sales_order_only_membership2.sql` | **nuevo** — mintea el POS Purchase sintético |
+  | `queries/opportunity-membership/membership_transactions.sql` | 4a rama del `COALESCE` + los `CAST` en ambas ramas del `UNION ALL` |
+  | `pos-purchase-membership-no-order.{pipeline,specification,extractor}.ts` | **nuevos** — el objeto de migración |
+  | `migration-object.enum.ts`, `extractor.registry.ts`, `data-migration.module.ts` | cableado |
+  | `package.json` | registra el spec nuevo en `test:queries:docker` |
+  | `query-regression/pos-purchase-membership-no-order-query.spec.ts` | **nuevo**, 20 tests de contrato |
+  | `query-regression/pos-purchase-membership-no-order-query.integration.spec.ts` | **nuevo**, 15 tests dockerizados |
+  | `query-regression/membership-program-linkage-query-fixture.ts` | fixture **compartido** modificado |
+  | `README.md`, `docs/altru-model-context.md` | documentan el contrato de dos archivos |
+
+  ## Lo que realmente hace el cambio (leído del diff, no del body del PR)
+
+  **La llave sintética** se deriva igual en los dos archivos:
+
+  ```sql
+  CONCAT('membership-no-order-pos-',
+         CAST(COALESCE(rgi.RecurringInstallmentID, mt.ID) AS NVARCHAR(36)))
+  ```
+
+  Es el **grano de external id de la propia Opportunity**, prefijado. El prefijo garantiza que la
+  llave nunca colisione con un `SALESORDER.ID` real (un `uniqueidentifier`) y deja las filas
+  sintéticas filtrables en la org target.
+
+  **La partición** la impone un solo predicado en la query nueva:
+
+  ```sql
+  AND COALESCE(so.ID, revenue_so.ID, payment_so.ID) IS NULL
+  ```
+
+  Es decir, la query nueva es el **complemento exacto** de `sales_order_only_membership.sql`:
+  todos los demás `sales_order_only_*.sql` exigen un `SALESORDER` resuelto; esta exige su ausencia.
+  El grano lo cierra `WHERE om.PurchaseRank = 1` sobre un `ROW_NUMBER()` particionado por la
+  expresión de external id de la Opportunity.
+
+  **La guarda de tipos** es lo más frágil del cambio. `uniqueidentifier` gana precedencia sobre
+  `nvarchar` en SQL Server, así que basta **una** rama sin castear —en el `COALESCE` o en el
+  `UNION ALL`— para que la llave string sintética se coaccione de vuelta y la query **reviente a
+  mitad de stream** en la primera fila orderless. Por eso el PR también castea la rama order-backed
+  (`CAST(obm.SalesOrderID AS NVARCHAR(100))`), que por sí sola no necesitaría fallback.
+
+  **`Auctifera__Status__c` es derivado**, no un `'Sold'` plano (esto entró en el segundo commit,
+  tras la review): fully refunded → `Refunded`; installment `STATUSCODE` 0 → `Pending`, 2 → `Sold`,
+  1/3/4 → `Canceled`; sin installment → `Sold`. La intención es que un purchase sintético nunca
+  declare una venta completada que la Opportunity contradice.
+
+  ## Riesgos abiertos
+
+  - **Volumen — es el riesgo dominante.** Esto mintea placeholders para ventas que nunca ocurrieron
+    en una caja registradora: ~51.500 (Long Island), ~79.300 (Tucson), ~131.000 (High Desert) según
+    el ticket. Es deliberado y está documentado, pero **es la primera vez que se inyectan cientos
+    de miles de registros sintéticos a la org target por este pipeline**.
+  - **⚠️ Las cifras del ticket y las del PR NO coinciden.** El ticket dice Tucson **79.288** y High
+    Desert **~131.000**; el PR body dice Tucson **79.327** y High Desert **139.382**. Son ~39 y
+    ~8.400 filas de diferencia. Puede ser drift de fecha entre mediciones (ticket 2026-07-30, PR
+    2026-07-31), pero **no se asume**: se re-deriva o se declara sin verificar. Ninguna cifra del
+    PR se toma por buena.
+  - **`fund_assignment_memberships.sql` queda desalineado a propósito** — el propio ticket lo deja
+    como *follow-up to decide*: seguirá resolviendo solo sales orders reales, así que su
+    `vnfp__Opportunity_POS_Purchase__c` quedará NULL mientras la Opportunity carga un POS Purchase
+    sintético. No es referencia colgante, pero los dos se contradicen. **Decisión de producto
+    pendiente**, no defecto — pero hay que medir a cuántas filas afecta.
+  - **El spec de integración nuevo (15 tests) probablemente NO corre localmente.** Está detrás de
+    `RUN_DOCKER_SQL_QUERY_TESTS=1` y en la sesión previa de este repo la suite dockerizada falló
+    entera por incompatibilidad testcontainers/colima (`Log stream ended and message /.*Started.*/
+    was not received`) — ambiental, no del PR. Si vuelve a pasar, se declara explícitamente y no se
+    marca como pasado.
+  - **Fixture compartido modificado** — `membership-program-linkage-query-fixture.ts` lo consume
+    también `membership-program-linkage-query.integration.spec.ts`. Radio de impacto a medir.
+  - **Timeout sin margen, reportado por el propio dev**: en Long Island la query corre en ~75s
+    contra un `requestTimeout` de 120s (`sql-server.adapter.ts:99`). High Desert corre en ~40s con
+    2,7x las filas, así que es un problema de plan de Long Island (el CTE compartido
+    `ResolvedMembershipFinancialTransactions` une por un `OR` que mata el index seek), no un
+    acantilado de volumen. No lo introduce este PR, pero el margen es delgado.
+  - **PR OPEN contra `main`, no mergeado.** Nada de esto está entregado todavía.
+  - Las cifras del PR (20 + 15 tests, 393 query-regression, 78 docker, 1:1 en tres tenants,
+    checksums de High Desert) son del dev: **se re-derivan, no se toman por buenas.**
+type: integration
+priority: medium
+status: active
+preconditions:
+- 'Clone de `MigrationToolETL` con la rama `feat/pos-purchase-membership-no-order-IM-1160` y su commit base en `main`, para correr la suite y la prueba de reversión'
+- 'Node instalado; la suite de contrato es `npm test -- --runInBand query-regression` y NO requiere Docker: los 20 tests nuevos son asserts sobre el texto de los dos archivos SQL'
+- 'Docker/colima disponible para `npm run test:queries:docker` (15 tests de integración nuevos). Si el runtime no levanta, se declara ambiental y esos tests quedan sin correr — no se marcan como pasados'
+- 'Perfil safesql de al menos un tenant Altru con membresías (Long Island, Tucson o High Desert) para re-derivar el grano 1:1 y el conteo de orderless. Sin perfil, los escenarios de evidencia real quedan bloqueados por acceso y se declara explícitamente'
+- 'Las bases de cliente son de SOLO LECTURA: toda verificación de fuente va por safesql en modo agregado (conteos/sumas/checksums), sin exportar filas de cliente a ningún artefacto'
+format: gherkin
+scenarios:
+- title: 'IM-1160 AC1 — sales_order_only_membership2.sql mints exactly one POS Purchase per orderless membership Opportunity, keyed membership-no-order-pos-<opportunity external id>, with a status that never contradicts the Opportunity'
+  tags:
+  - happy-path
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-1
+  - altru
+  - migration
+  - pos-purchase
+  - membership
+  - synthetic-key
+  - safesql
+  - pr-163
+  given:
+  - la query nueva `queries/pos-purchase/sales_order_only_membership2.sql`, que espeja la rama de membership-transaction de `membership_transactions.sql` (misma resolución y ranking de transacción financiera, mismo manejo de cuotas recurrentes, misma matemática de monto — membership + donation + add-on − discount, misma compuerta de anclaje IM-621, mismo fallback de membresía vitalicia IM-950)
+  - un tenant Altru con membresías orderless — back office o anteriores a la adopción de POS
+  when:
+  - se ejecuta la query y se inspecciona la llave emitida, el grano y el estado derivado
+  then:
+  - "cada fila emitida lleva `Auctifera__External_ID__c` con el prefijo literal `membership-no-order-pos-` seguido de `COALESCE(rgi.RecurringInstallmentID, mt.ID)` — es decir, **el grano de external id de la propia Opportunity**, no un id inventado ni el id del sales order"
+  - "el prefijo hace la llave **imposible de colisionar** con un `SALESORDER.ID` real, que es un `uniqueidentifier`: verificar que el prefijo está en el SQL ejecutable y no solo en el comentario de cabecera (el propio PR reporta que su primer test era vacuo por esto — `stripComments` no removía `/* ... */` y el assert matcheaba el header)"
+  - "se emite **exactamente una** fila por Opportunity: lo garantiza `WHERE om.PurchaseRank = 1` sobre un `ROW_NUMBER()` particionado por la misma expresión de external id"
+  - "`Auctifera__Source__c` sale en blanco a propósito — no existe `SALESMETHODTYPE` fuera de la caja registradora — y el monto y el cliente/hogar resueltos viajan en la fila, espejando `sales_order_only_pledge.sql`"
+  - "`Auctifera__Status__c` es **derivado**, no un `'Sold'` plano: fully refunded → `Refunded`; `STATUSCODE` 0 → `Pending`, 2 → `Sold`, 1/3/4 → `Canceled`; sin installment → `Sold`. Verificar que un purchase sintético nunca declara una venta completada que el `StageName` de la Opportunity contradice"
+  - "verificar la compuerta que cerró la review: `MembershipLineItems` ahora lleva el mismo `INNER JOIN FINANCIALTRANSACTION` que la query de Opportunity, de modo que un line item huérfano de su transacción padre **no pueda** mintear un POS Purchase que ninguna Opportunity referencia"
+- title: 'IM-1160 AC2 — membership_transactions.sql builds the identical key as the final COALESCE branch, so the Opportunity lookup resolves 1:1 against the exported purchase and order-backed rows keep their real SALESORDER.ID'
+  tags:
+  - happy-path
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-2
+  - altru
+  - migration
+  - opportunity-membership
+  - contract
+  - two-file-key
+  - pr-163
+  given:
+  - "`membership_transactions.sql`, donde `vnfp__POS_Purchase__c` pasó de `COALESCE(so.ID, revenue_so.ID, payment_so.ID)` a un `COALESCE` de cuatro ramas"
+  - la query nueva que emite la llave sintética del otro lado del contrato
+  when:
+  - se comparan las dos expresiones de derivación de llave, archivo contra archivo, y se corre el assert de acuerdo de llaves de la suite
+  then:
+  - "la cuarta rama del `COALESCE` es exactamente `CONCAT('membership-no-order-pos-', CAST(COALESCE(rgi.RecurringInstallmentID, mt.ID) AS NVARCHAR(36)))` — **carácter por carácter la misma derivación** que emite la query nueva. Si divergen, el lookup queda colgando"
+  - "el orden de las ramas importa: la sintética es la **última**, así que una membresía que sí resuelve sales order por cualquiera de los tres caminos reales conserva su `SALESORDER.ID` y nunca recibe llave sintética"
+  - "la rama order-backed del `UNION ALL` (`obm.SalesOrderID`) sigue exportando el id real, solo que ahora casteado — verificar que el valor **no cambió**, únicamente su tipo declarado"
+  - "⚠️ **hallazgo del propio ticket a confirmar en la corrida:** los fallbacks `revenue_so` / `payment_so` resuelven **cero** filas en los tres tenants; todo link POS real viene del camino directo `SALESORDERITEMMEMBERSHIP`. Si eso se sostiene, las ramas 2 y 3 del `COALESCE` son código muerto — no es defecto de este PR, pero vale reportarlo"
+  - "el spec de integración debe probar que **toda** Opportunity con lookup POS resuelve contra un purchase exportado, sin duplicados y sin referencias colgantes"
+- title: 'IM-1160 AC3 — The two membership POS queries partition the space instead of overlapping: zero intersection, zero duplicate keys, and the per-tenant counts hold when re-derived from source'
+  tags:
+  - regression-evidence
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-3
+  - altru
+  - safesql
+  - aggregate-only
+  - long-island
+  - tucson
+  - high-desert
+  - grain
+  - pending-creds
+  - pr-163
+  given:
+  - "el único predicado que impone la partición: `AND COALESCE(so.ID, revenue_so.ID, payment_so.ID) IS NULL` en la query nueva"
+  - "la compuerta invertida — todos los demás `sales_order_only_*.sql` exigen un `SALESORDER` resuelto; esta exige su **ausencia**, así que `sales_order_only_membership.sql` es su complemento exacto"
+  - perfil safesql de un tenant Altru, en modo agregado y de solo lectura
+  when:
+  - se corre la reconciliación agregada sobre la fuente emitiendo solo conteos, distinct y checksums — nunca filas de cliente
+  then:
+  - "la intersección entre los conjuntos de llaves de las dos queries es **cero**: ninguna compra lógica se mintea dos veces"
+  - "el conteo de llaves distintas iguala el conteo de Opportunities orderless — **1:1, sin duplicados**"
+  - "cero Opportunities de membresía quedan con `vnfp__POS_Purchase__c` vacío después del cambio"
+  - "⚠️ **CIFRAS EN CONFLICTO — SE RE-DERIVAN, NO SE COPIAN.** El ticket dice Tucson **79.288** y High Desert **~131.000**; el PR body dice Tucson **79.327** y High Desert **139.382**. Long Island coincide en 51.482 en ambos. Se mide contra la fuente y se reporta el número real; si la diferencia es drift entre 2026-07-30 y 2026-07-31 se documenta, y si no, es hallazgo"
+  - "verificar el no-solape contra las 45.413 membresías de Long Island que **sí** resuelven sales order real: ese conjunto no debe moverse ni una fila"
+  - "si ningún perfil safesql levanta, este escenario se marca **bloqueado por acceso** y se declara explícitamente en el test run — no se da por pasado con las cifras del PR"
+- title: 'IM-1160 AC5 — The NVARCHAR cast guard is load-bearing: every COALESCE branch and the order-backed UNION ALL branch stay cast, and removing any one of them reproduces the IM-770 type-precedence failure'
+  tags:
+  - regression
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-5
+  - revert-proof
+  - type-precedence
+  - im-770
+  - altru
+  - migration
+  - contract
+  - pr-163
+  given:
+  - "la regla de precedencia de tipos de SQL Server: `uniqueidentifier` gana sobre `nvarchar`, así que una sola rama sin castear coacciona la llave string de vuelta y **revienta en tiempo de evaluación de fila**, a mitad de stream"
+  - las cinco proyecciones que el PR castea — las cuatro ramas del `COALESCE` y la rama order-backed del `UNION ALL`
+  when:
+  - se corren los asserts de cast de la suite sobre la rama del PR, y luego se remueve deliberadamente **un** `CAST` a la vez para la prueba de reversión
+  then:
+  - "sobre la rama del PR, las cinco proyecciones están casteadas a `NVARCHAR(100)` y la query corre **hasta el final** — no basta que arranque, porque el fallo del trap IM-770 aparece en la primera fila orderless, no al parsear"
+  - "al remover cualquiera de los cinco `CAST`, la query **FALLA**. Si pasa igual, la guarda es decorativa y el AC no está cubierto"
+  - "la rama order-backed merece prueba propia: por sí sola no necesitaría fallback, y es justo la que un mantenedor futuro borraría por 'innecesaria' — verificar que al quitarla se rompen las llaves sintéticas de la otra rama del `UNION ALL`"
+  - "verificar que el assert del `CAST` externo sobre la rama sintética existe de verdad: el propio PR reporta que el lookback de 400 caracteres que tenía antes ya quedaba satisfecho por el cast **interno**, o sea que no probaba el externo"
+  - "confirmar que los 20 tests de contrato corren **sin Docker** — son asserts sobre el texto del SQL — para que este escenario no dependa del runtime de contenedores"
+- title: 'IM-1160 AC4 — The new migration object is wired end to end, so the POS Purchases the Opportunity lookup references are actually exported'
+  tags:
+  - happy-path
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-4
+  - altru
+  - migration
+  - wiring
+  - pipeline
+  - extractor
+  - pr-163
+  given:
+  - "el objeto de migración nuevo `pos-purchase-membership-no-order`, con sus tres archivos propios (`.pipeline.ts`, `.specification.ts`, `.extractor.ts`)"
+  - "los cuatro puntos de registro que hay que tocar para que un objeto nuevo se exporte de verdad"
+  when:
+  - se sigue la cadena de cableado de punta a punta y se ejecuta una corrida de extracción
+  then:
+  - "`migration-object.enum.ts` declara `POS_PURCHASE_MEMBERSHIP_NO_ORDER = 'pos-purchase-membership-no-order'`"
+  - "`extractor.registry.ts` instancia `new PosPurchaseMembershipNoOrderExtractor()` y lo mapea a ese enum"
+  - "`data-migration.module.ts` registra el pipeline como provider, lo inyecta y lo **devuelve en el array de pipelines** — verificar las tres cosas, porque registrarlo sin devolverlo lo deja inerte"
+  - "`package.json` agrega el spec nuevo a `test:queries:docker`, que lista los specs explícitamente: **un spec no registrado se salta en silencio en CI**. Este es exactamente el tipo de hueco que hace que una suite reporte verde sin haber corrido nada"
+  - "el pipeline construye el descriptor con la forma `MEMBERSHIP` de `buildPosPurchaseDescriptor` y produce el CSV de POS Purchase con los external ids sintéticos"
+  - "confirmar en una corrida real que las filas salen: el AC exige que los POS Purchases referenciados **se exporten**, no solo que el objeto exista en el código"
+- title: 'IM-1160 AC6 — Regression coverage proves the guard and the grain contract, the shared-CTE sync spec is non-vacuous, and the neighbouring queries that share the fixture do not regress'
+  tags:
+  - regression
+  - im-1160
+  - im-1164
+  - im-70
+  - ac-6
+  - query-regression
+  - cte-sync
+  - blast-radius
+  - docker
+  - pr-163
+  given:
+  - "los dos specs nuevos: `pos-purchase-membership-no-order-query.spec.ts` (20 tests de contrato) y `pos-purchase-membership-no-order-query.integration.spec.ts` (15 tests dockerizados)"
+  - "el spec de sincronía de CTEs: los dos archivos SQL comparten **ocho CTEs verbatim**, y este repo los edita rutinariamente (IM-621, IM-950 e IM-952 los tocaron todos)"
+  - "el fixture compartido `membership-program-linkage-query-fixture.ts`, que el PR modificó y que también consume `membership-program-linkage-query.integration.spec.ts`"
+  when:
+  - se corre `npm test -- --runInBand query-regression`, luego `npm run test:queries:docker`, y después se hace una edición de un solo lado a un CTE compartido para probar que el spec de sincronía no es vacuo
+  then:
+  - "la suite de contrato pasa completa sobre la rama del PR"
+  - "⚠️ **CIFRAS DEL PR A RE-DERIVAR:** el PR afirma 393 tests / 41 suites en `query-regression` y 78 / 8 en docker. Se cuenta el número real de la corrida, no se copia el del body"
+  - "una edición de un solo lado a `ResolvedMembershipFinancialTransactions` **hace fallar** el spec de igualdad byte a byte tras normalizar whitespace — el propio PR dice haberlo verificado; se re-verifica, porque un spec de sincronía vacuo es peor que ninguno"
+  - "las cinco formas de fixture que agregó la review están realmente ejercitadas: cuota recurrente (para que la llave venga de `RECURRINGGIFTINSTALLMENT.ID`), add-on solo, vitalicia IM-950, comp de $0 y fully refunded"
+  - "`membership-program-linkage-query.integration.spec.ts` sigue en verde con el fixture modificado — radio de impacto del cambio de fixture compartido"
+  - "correr la suite **completa** del repo, no solo el subconjunto que el PR nombra, para medir el radio de impacto real"
+  - "⚠️ si el runtime de contenedores no levanta (el fallo testcontainers/colima `Log stream ended and message /.*Started.*/ was not received` ya se observó en este repo), los 15 tests de integración se declaran **no corridos por causa ambiental** — no se marcan como pasados, y se prueba que es ambiental corriendo un spec dockerizado que el PR no toca"
+- title: 'IM-1160 open follow-up — fund_assignment_memberships.sql still resolves only real sales orders, so its Opportunity POS lookup disagrees with the synthetic purchase the Opportunity now carries'
+  tags:
+  - missing-doc
+  - edge-case
+  - im-1160
+  - im-1164
+  - im-70
+  - altru
+  - migration
+  - fund-assignment
+  - product-decision
+  - pr-163
+  given:
+  - "`fund_assignment_memberships.sql`, que el ticket deja explícitamente como *follow-up to decide* y que este PR **no** modifica"
+  - "su campo `vnfp__Opportunity_POS_Purchase__c`, que sigue resolviendo únicamente sales orders reales"
+  when:
+  - se comparan el POS Purchase de la Opportunity y el de su fund assignment para una membresía orderless
+  then:
+  - "la Opportunity carga el POS Purchase **sintético** mientras su fund assignment carga **NULL** — los dos se contradicen"
+  - "**no es una referencia colgante** y **no es defecto de este PR**: el ticket lo documenta como decisión pendiente. Se valida que el desacuerdo sea el esperado, no que esté resuelto"
+  - "medir a cuántas filas afecta el desacuerdo por tenant, para que producto decida con un número y no con una intuición"
+  - "confirmar que ningún consumidor downstream (reportes, UI, fórmulas) asume que los dos campos coinciden — si alguno lo asume, deja de ser follow-up y pasa a ser defecto"
+  - "dejar registrado en el test run que este escenario **no se cierra**: alimenta la decisión de producto que el propio ticket pide tomar"
+tags:
+- im-1160
+- im-1164
+- im-70
+- altru
+- migration
+- pos-purchase
+- opportunity-membership
+- membership
+- synthetic-key
+- type-precedence
+- im-770
+- cast-nvarchar
+- grain
+- partition
+- fund-assignment
+- long-island
+- tucson
+- high-desert
+- safesql
+- query-regression
+- pr-163
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-03T15:10:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-03T15:10:00Z'

@@ -1,0 +1,35 @@
+IM-1160 / TC-140 scenario 2 (AC2) — two-file key agreement, verified independently of the dev's tests
+
+QA extracted the synthetic-key expression from each file by parsing the SQL directly: comments
+stripped (/* */ and --), whitespace normalised, then the CONCAT(...) containing the synthetic
+prefix pulled out with balanced-paren matching. This deliberately does NOT reuse the PR's own
+helper, so a bug in that helper cannot hide a mismatch.
+
+membership_transactions.sql          -> 1 synthetic-key expression found:
+    ( 'membership-no-order-pos-', CAST(COALESCE(rgi.RecurringInstallmentID, mt.ID) AS NVARCHAR(36)) )
+
+sales_order_only_membership2.sql     -> 1 synthetic-key expression found:
+    ( 'membership-no-order-pos-', CAST(COALESCE(rgi.RecurringInstallmentID, mt.ID) AS NVARCHAR(36)) )
+
+BYTE-IDENTICAL: True
+
+Supporting static checks:
+  synthetic prefix present in sales_order_only_membership.sql (must be False) -> False
+  partition predicate "COALESCE(so.ID, revenue_so.ID, payment_so.ID) IS NULL" -> present
+  rank guard "om.PurchaseRank = 1"                                            -> present
+
+Branch ORDER also matters and was checked: the synthetic branch is the LAST arm of the COALESCE,
+so any membership that resolves a real sales order through so / revenue_so / payment_so keeps its
+real SALESORDER.ID and never receives a synthetic key. Confirmed empirically in scenario 3:
+pos_real is 19623 both before and after the change.
+
+REFERENTIAL CLOSURE (the assertion that actually matters for a lookup)
+  new query distinct_keys 79327 == POST pos_synthetic 79327
+  Every key the Opportunity references is emitted; every emitted key is referenced once.
+
+OBSERVATION, not a defect — dead branches in the COALESCE.
+The ticket states that revenue_so / payment_so resolve zero rows on all three tenants and that
+every real POS link comes from the direct SALESORDERITEMMEMBERSHIP path. QA did not isolate those
+two branches on tucson (it would need a separate per-branch aggregate), so this remains the dev's
+claim, unverified by QA. If true, branches 2 and 3 of the COALESCE are dead code. Not introduced
+by this PR and not in scope of any AC, but worth a cleanup ticket.

@@ -1,0 +1,37 @@
+IM-1160 / TC-140 scenario 7 — measuring the documented follow-up
+"fund_assignment_memberships.sql still resolves only real sales orders"
+
+This is NOT a defect of PR #163. The ticket lists it under "Follow-up to decide" and the PR
+lists it under "Known gap (out of scope, logged on IM-1160)". The test case exists to put a
+NUMBER on the disagreement so product can decide with data instead of intuition.
+
+Measured on tucson, 2026-08-03, safesql aggregate-only:
+
+  fund_assignment_memberships.sql
+    fa_rows      102524   total membership fund-assignment rows
+    fa_pos_null   80585   rows whose vnfp__Opportunity_POS_Purchase__c is NULL
+    fa_pos_real   21939   rows resolving a real SALESORDER
+
+  membership_transactions.sql (POST)
+    total_opportunities  98950
+    pos_synthetic        79327   Opportunities that now carry a synthetic POS Purchase
+
+THE DISAGREEMENT
+  80585 membership fund-assignment rows on tucson will export
+  vnfp__Opportunity_POS_Purchase__c = NULL while the Opportunity they belong to now
+  carries a synthetic POS Purchase. Before this PR both sides were NULL together, so
+  they agreed. After this PR they disagree on that population.
+
+  Fund-assignment rows (102524) outnumber Opportunities (98950) because fund assignments
+  are at split grain, so the two counters are not expected to match exactly - what matters
+  is that a large, non-marginal population is now inconsistent between the two objects.
+
+WHY IT IS NOT A DANGLING REFERENCE
+  The fund assignment does not point at a POS Purchase that fails to exist; it simply
+  points at nothing. Nothing breaks on load. The risk is semantic: any report, formula or
+  UI that joins Opportunity POS Purchase to fund-assignment POS Purchase, or that assumes
+  the two agree, will now see a mismatch on ~80.6k rows in this tenant alone.
+
+WHAT QA COULD NOT DECIDE
+  Whether the fund assignment SHOULD mirror the fallback is a product call, exactly as the
+  ticket states. QA's contribution is the magnitude. Left open deliberately.

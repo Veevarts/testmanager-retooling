@@ -1,0 +1,55 @@
+IM-1160 / TC-140 scenario 6 (AC6) — regression coverage, CTE sync, blast radius
+
+1. CONTRACT SUITE ON PR HEAD
+   npm test -- --runInBand query-regression  ->  41 suites, 393 tests, ALL PASS.
+   Matches the PR's claim of 393/41 exactly. Re-derived, not copied.
+   The new contract spec alone: 20 tests, all pass.
+
+2. SHARED-CTE SYNC SPEC IS NON-VACUOUS  (verified on the exact CTE the PR names)
+   Injecting a SEMANTIC one-sided edit inside the body of
+   ResolvedMembershipFinancialTransactions in sales_order_only_membership2.sql makes
+   "keeps ResolvedMembershipFinancialTransactions identical in both files" FAIL. Confirmed.
+
+   Two honest notes about the method:
+   - A comment-only edit does NOT trip the spec. That is correct: it normalises and strips
+     comments before comparing. Not a gap.
+   - A first attempt injected the edit 3000 chars from the CTE's start, which overshot its
+     1159-char body and landed inside RecurringInstallments; the spec correctly reported
+     RecurringInstallments as drifted. The re-run used paren-balanced bounds. The initial
+     result was a flaw in QA's probe, not in the spec.
+
+3. FULL-REPO BLAST RADIUS
+   PR head:     47 suites / 415 tests pass; 1 suite / 10 tests FAIL.
+   The failing suite is donation-transaction-recurring.spec.ts — a DONATION query spec that
+   PR #163 does not touch. It fails with "Could not find a working container runtime strategy"
+   and fails IDENTICALLY at merge-base 0b8e9ce. PRE-EXISTING AND ENVIRONMENTAL, not a regression.
+
+4. THE 15 NEW DOCKERIZED INTEGRATION TESTS — NOT RUN
+   npm run test:queries:docker (and a direct jest run with RUN_DOCKER_SQL_QUERY_TESTS=1 plus
+   DOCKER_HOST pointed at colima) fails at ~6.5s:
+     "Log stream ended and message /.*Started.*/ was not received"
+
+   Proven environmental three independent ways:
+     a) the mcr.microsoft.com/mssql/server:2022-latest image IS cached locally (2.31 GB),
+        so this is not an image-pull race;
+     b) contact-roles-query.integration.spec.ts — untouched by this PR — fails identically
+        at ~6.2s;
+     c) a manually started container reports status=running, exit=0, oom=false, but has not
+        emitted "Started" after 25 s. SQL Server needs roughly 90 s to become ready while the
+        colima log stream closes at about 6 s, so the wait strategy never sees its marker.
+
+   CONSEQUENCE: these 15 tests are UNVERIFIED. They are not counted as passed and not counted
+   as failed. Everything they would have proven behaviourally was instead measured against real
+   source data on tucson (scenario 3), which QA considers stronger evidence — but the gap is
+   stated rather than papered over.
+
+   NOTE ON CI: because test:queries:docker lists its specs explicitly, the new spec had to be
+   registered in package.json to run at all. It was (verified). An unregistered spec would be
+   skipped silently — the failure mode this registration prevents.
+
+5. SHARED FIXTURE
+   membership-program-linkage-query-fixture.ts is consumed by the docker-gated
+   membership-program-linkage-query.integration.spec.ts. The fixture change is additive (new
+   exported shapes: recurring installment, add-on-only, IM-950 lifetime, $0 comp, fully refunded).
+   No existing assertion changed. The consuming spec is docker-gated, so it was skipped here for
+   the same environmental reason as item 4.

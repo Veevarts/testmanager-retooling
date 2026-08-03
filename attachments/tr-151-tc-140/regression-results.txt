@@ -1,0 +1,65 @@
+IM-1160 / TC-140 — regression results (executed 2026-08-03)
+
+TECHNICAL
+  T1 PASS  total_opportunities 98950 -> 98950 (delta 0) on tucson.
+  T2 PASS  pos_real 19623 -> 19623 (delta 0). The order-backed set did not move a single row.
+           This is the key non-regression: had the fallback been keyed on "no sales order id"
+           rather than on the three-path COALESCE being NULL, this counter would have shifted.
+  T3 PASS  sales_order_only_membership.sql emits 19387 rows / 19387 distinct keys, 0 of them
+           carrying the synthetic prefix. Identical PRE and POST (the PR does not touch it).
+  T4 PASS  All five NVARCHAR casts mutation-tested one at a time:
+             1/5 CAST(so.ID)            removed -> 1 test FAILED
+             2/5 CAST(revenue_so.ID)    removed -> 1 test FAILED
+             3/5 CAST(payment_so.ID)    removed -> 1 test FAILED
+             4/5 outer CAST(CONCAT(..)) removed -> 1 test FAILED
+             5/5 CAST(obm.SalesOrderID) removed -> 2 tests FAILED
+           No cast is decorative. See scenario-4/revert-proof-five-casts.log.
+  T5 PASS  Non-vacuity of the shared-CTE equality spec verified on the exact CTE the PR names
+           (ResolvedMembershipFinancialTransactions): a one-sided SEMANTIC edit inside its body
+           fails the spec. A comment-only edit correctly does NOT fail it (comments are stripped
+           before comparison) - that is intended behaviour, not a gap.
+           Method note: a first attempt injected the edit 3000 chars from the CTE start, which
+           overshot the 1159-char body and landed in RecurringInstallments; the spec correctly
+           flagged RecurringInstallments instead. Re-run with paren-balanced bounds.
+  T6 PASS  membership-program-linkage-query.integration.spec.ts is docker-gated and skipped in
+           the non-docker run; its non-integration siblings pass. The fixture change is additive
+           (new exported shapes) and no existing consumer assertion changed.
+  T7 PASS  PR head:    41 suites / 393 tests passed in query-regression (matches the PR's claim).
+           PR head:    47 suites / 415 tests passed full-repo, 1 suite / 10 tests FAILED.
+           The failing suite is donation-transaction-recurring.spec.ts - a DONATION query spec
+           this PR does not touch. It fails with "Could not find a working container runtime
+           strategy" and fails IDENTICALLY at merge-base 0b8e9ce. Pre-existing + environmental.
+           See scenario-6/preexisting-failure-at-merge-base.log.
+  T8 PASS  Full wiring chain verified by inspection on the PR head:
+             enum          migration-object.enum.ts:53  POS_PURCHASE_MEMBERSHIP_NO_ORDER
+             specification objectType bound to that enum member
+             extractor     objectType = same enum; queryFile = 'sales_order_only_membership2.sql'
+             registry      extractor.registry.ts:154  new PosPurchaseMembershipNoOrderExtractor()
+             module        provider (190) + injected (273) + RETURNED in the array (354, 436)
+             package.json  integration spec registered in test:queries:docker (1 occurrence)
+  T9 NOT RUN (environmental, not a PR defect)
+           npm run test:queries:docker fails at ~6.5s with
+             "Log stream ended and message /.*Started.*/ was not received"
+           Proven environmental, three ways:
+             a) the mssql 2022-latest image IS cached locally (2.31 GB) - no pull race;
+             b) contact-roles-query.integration.spec.ts, which this PR does NOT touch, fails
+                identically at ~6.2s;
+             c) a manually started container reports status=running exit=0 oom=false but has
+                not emitted "Started" after 25s - SQL Server needs ~90s while the colima log
+                stream closes at ~6s.
+           These 15 tests are therefore UNVERIFIED by QA, not passed and not failed.
+
+SECURITY
+  S1 PASS  The 5 pattern hits are one throwaway SA password for the ephemeral test container,
+           generated per-run as `Aa1!${randomUUID()}`. No static credential is committed.
+  S2 PASS  The extractor reads the .sql file from disk (readFile) and passes filters through
+           mergeFilters into executeQueryAsStream. No user input is concatenated into SQL.
+  S3 PASS  Zero dependency additions or version changes (package.json diff is the docker test
+           script only; package-lock.json untouched).
+  S4 PASS  The only match is `1 AS Auctifera__Prevent_Email_Notification__c`, a boolean flag.
+           No SSN / email / phone / birth date / card data is newly projected.
+  S5 PASS  The synthetic key is prefixed 'membership-no-order-pos-' and a real SALESORDER.ID is
+           a uniqueidentifier, so collision is structurally impossible. Measured: 0 of the 19387
+           sibling-query keys carry the prefix.
+
+No High/Critical security finding. No blocker.

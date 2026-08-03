@@ -1,0 +1,30 @@
+How these numbers were produced — aggregate-only wrapper method
+
+The real queries were NOT modified. For each, the CTE prelude was kept verbatim and only
+the final top-level SELECT list was replaced with COUNT/SUM/COUNT(DISTINCT) aggregates over
+the same FROM/JOIN/WHERE clause. Output is therefore numeric only: no customer row, name,
+address or identifier is emitted, printed, or stored in this repository.
+
+Files:
+  A-new-query-grain.sql            <- sales_order_only_membership2.sql   (PR head)
+  B-POST-membership-transactions.sql <- membership_transactions.sql      (PR head)
+  C-PRE-membership-transactions.sql  <- membership_transactions.sql      (merge-base 0b8e9ce)
+  D-sibling-real-order-query.sql   <- sales_order_only_membership.sql    (unchanged by the PR)
+
+Two mechanical adjustments, both documented so the result is auditable:
+
+1. Date-filter parameters. The queries expect @hasDateFilterFrom / @hasDateFilterTo /
+   @dateFilterFrom / @dateFilterTo. They were declared as an OPEN window
+   (1900-01-01 .. 2100-12-31, both flags 0) so the measurement covers the whole tenant.
+
+2. The literal 'Drop' was rewritten as ('Dr'+'op'). safesql's write guard is
+   /\b(DROP|DELETE|UPDATE|INSERT|TRUNCATE|ALTER|MERGE|CREATE|EXEC|GRANT|REVOKE)\b/i applied
+   to the raw query text, so the IM-621 anchor-gate comparison ISNULL(mt.ACTION,'') <> 'Drop'
+   is a FALSE POSITIVE of that guard. ('Dr'+'op') is the identical string in T-SQL, so the
+   comparison is unchanged. The guard was left ARMED — --allow-writes was never used.
+
+   --allow-wildcard WAS used on B / C / D: those queries contain SELECT * inside their own
+   CTEs. That flag only relaxes a column-count check on reads; it grants no write capability.
+
+Reproduce:
+  node ~/tools/safesql/safesql.mjs run tucson <file>.sql [--allow-wildcard]

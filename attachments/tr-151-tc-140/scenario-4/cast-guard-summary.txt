@@ -1,0 +1,29 @@
+IM-1160 / TC-140 scenario 4 (AC5) — the NVARCHAR cast guard is load-bearing
+
+METHOD: mutation testing. Each of the five casts was removed ONE AT A TIME from
+membership_transactions.sql on the PR head, the contract spec re-run, and the file restored.
+A guard that is decorative would leave the suite green.
+
+  Mutation                                     | Result                         | Tests
+  ---------------------------------------------|--------------------------------|------------------
+  1/5 CAST(so.ID AS NVARCHAR(100))             | FAILED - guard load-bearing    | 1 failed, 19 passed
+  2/5 CAST(revenue_so.ID AS NVARCHAR(100))     | FAILED - guard load-bearing    | 1 failed, 19 passed
+  3/5 CAST(payment_so.ID AS NVARCHAR(100))     | FAILED - guard load-bearing    | 1 failed, 19 passed
+  4/5 outer CAST(CONCAT(...) AS NVARCHAR(100)) | FAILED - guard load-bearing    | 1 failed, 19 passed
+  5/5 CAST(obm.SalesOrderID AS NVARCHAR(100))  | FAILED - guard load-bearing    | 2 failed, 18 passed
+
+All five are load-bearing. Raw log: revert-proof-five-casts.log.
+
+WHY 5/5 DESERVED ITS OWN TEST
+The order-backed UNION ALL branch never needs a synthetic fallback of its own, so it reads as an
+unnecessary cast and is the one a future maintainer would delete. It is also the one whose removal
+breaks the OTHER branch, because UNION ALL resolves the column type across both arms and
+uniqueidentifier outranks nvarchar. It is the only mutation that failed TWO assertions.
+
+SCOPE LIMIT — stated plainly.
+These are CONTRACT assertions over the SQL text, executed without a database. They prove the casts
+are present and that the repo's guard detects their removal. They do NOT prove that removing a cast
+makes SQL Server throw at row-eval time; that behavioural proof lives in the 15 Dockerized tests,
+which could not run in this environment (scenario 6). The type-precedence rule itself
+(uniqueidentifier outranks nvarchar) is documented SQL Server behaviour and is the same trap
+recorded as IM-770 in AGENTS.md.

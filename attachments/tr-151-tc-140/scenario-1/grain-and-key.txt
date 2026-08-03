@@ -1,0 +1,37 @@
+IM-1160 / TC-140 scenario 1 (AC1) — grain, key format and derived status
+
+MEASURED (tucson, safesql, aggregate-only, 2026-08-03) — see A-new-query-grain.sql
+  emitted_rows    79327
+  distinct_keys   79327   -> exactly one POS Purchase per Opportunity, no duplicates
+  prefixed_rows   79327   -> 100% carry the literal 'membership-no-order-pos-' prefix
+  null_keys           0   -> no row emitted without a key
+
+The grain guarantee comes from WHERE om.PurchaseRank = 1 over a ROW_NUMBER() partitioned by
+COALESCE(rgi.RecurringInstallmentID, mt.ID) — the Opportunity's own external-id expression — so
+the partition key and the emitted key are the same expression by construction.
+
+KEY FORMAT / COLLISION SAFETY
+  A real SALESORDER.ID is a uniqueidentifier. The synthetic key is a prefixed string. Collision
+  is structurally impossible, and measured: 0 of the 19387 keys emitted by the sibling real-order
+  query carry the prefix (scenario-3).
+
+PREFIX IS IN EXECUTABLE SQL, NOT ONLY IN A COMMENT
+  Checked explicitly because the PR itself reports that an earlier version of its own test was
+  vacuous for exactly this reason (stripComments did not remove /* ... */, so the assertion was
+  matching the file header). QA's extraction strips both comment styles before searching, and the
+  prefix is present in the executable projection of both files.
+
+DERIVED STATUS — VERIFIED STATICALLY ONLY
+  Auctifera__Status__c is derived (fully refunded -> Refunded; installment STATUSCODE 0 -> Pending,
+  2 -> Sold, 1/3/4 -> Canceled; no installment -> Sold) rather than a flat 'Sold'. QA confirmed the
+  CASE expression exists and matches the documented mapping, and the dev's Docker tests assert the
+  mapping behaviourally. Those tests could not run here, so the per-status ROW COUNTS on tucson
+  were NOT measured. The status mapping is therefore verified as written, not as executed.
+  This is the one part of AC1 that QA leaves partially unproven; it is called out rather than
+  claimed.
+
+ORPHAN GUARD (closed during the PR's review round)
+  MembershipLineItems now carries the same INNER JOIN FINANCIALTRANSACTION as the Opportunity
+  query, so a line item orphaned from its parent transaction cannot mint a POS Purchase that no
+  Opportunity references. Confirmed present in the CTE. Its effect is implicitly measured by the
+  referential-closure identity in scenario 3 (79327 == 79327, no orphans).
