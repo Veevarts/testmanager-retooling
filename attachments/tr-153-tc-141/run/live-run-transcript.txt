@@ -90,3 +90,65 @@ EL BLOQUEADOR
   si la causa es "org no autorizada", un **500** es mala señal. Un 403/404 con un mensaje
   explícito ("org <id> not authorized in AuthBroker") ahorraría el viaje de debugging que
   este fallo obliga a hacer. Vale como mejora en el lado del AuthBroker.
+
+=========================================================================================
+RUN 3 — planRunId e42b4877-0d3d-4b8f-b4ee-e4e7c5bf149a  ·  ORG DISTINTA
+=========================================================================================
+
+  ORG      00Dfj00000QJMx7EAH · https://orgfarm-eff80326ae-dev-ed.develop.my.salesforce.com
+           Developer Edition de orgfarm, conectada al mismo workspace el 2026-07-02.
+           NO es illinois-trainings. NO es productiva.
+  INICIO   2026-08-04T21:08:50.957Z · template ad-hoc
+
+  Descubrimiento previo: GET /implementations/clients/<clientId>/orgs devuelve DOS orgs
+  conectadas al workspace, no una:
+    00DWI00000CIwZi2AL  illinois-trainings (sandbox)      conectada 2026-06-22
+    00Dfj00000QJMx7EAH  orgfarm dev-ed                    conectada 2026-07-02
+
+  QA disparó el run pero NO atestó el handoff de NPSP: a diferencia de illinois —donde el PRE
+  confirmaba NPSP 3.237.0.2 ya instalado, así que atestar era veraz— en una dev-ed recién
+  conectada no había forma de verificar que NPSP estuviera. Atestar habría sido fabricar
+  evidencia. El handoff lo atestó el QA humano desde la UI.
+
+  Resultado: state=failed · 1/3 done · 1 failed · 1 pending
+    manual  "Install NPSP through MetaDeploy"              done (atestado en la UI por el QA)
+    auto    "Install veevart packages"                     FAILED
+    auto    "Verify the core package namespaces resolve"   pending (nunca intentado)
+
+  ERROR — IDÉNTICO, carácter por carácter, al de illinois:
+    Auctifera: {"Error":"InstallError","Cause":"{\"errorType\":\"InstallError\",
+    \"errorMessage\":\"AuthBroker returned status 500\",\"trace\":[\"InstallError: AuthBroker
+    returned status 500\",\"    at SalesforceLibSessionAdapter.mintSession
+    (file:///var/task/mint-session.mjs:57141:19)\", ...]}"
+
+=========================================================================================
+DIAGNÓSTICO CORREGIDO — EL FALLO NO ES ESPECÍFICO DE UNA ORG
+=========================================================================================
+
+  TRES corridas · DOS orgs distintas · el MISMO error determinista en el MISMO punto.
+
+    run 0a35de60  illinois-trainings (sandbox)  -> AuthBroker 500 en mintSession
+    run c9da6a0f  illinois-trainings (sandbox)  -> AuthBroker 500 en mintSession
+    run e42b4877  orgfarm dev-ed                -> AuthBroker 500 en mintSession
+
+  La hipótesis anterior ("illinois-trainings no está autorizada en el AuthBroker") QUEDA
+  DESCARTADA: falla igual contra una org completamente distinta, de otro tipo, conectada en
+  otra fecha. Ambas figuran `state: active` en el registro de orgs conectadas del workspace.
+
+  Lectura corregida: **el AuthBroker del entorno DEV está devolviendo 500 para toda org**, o
+  el cableado de T1 hacia él en dev está roto. No es un hueco de autorización por org.
+
+  CONSECUENCIA PARA LA REVIEW
+  El installer T1 no puede mintear sesión contra NINGUNA org en dev, así que la verificación
+  end-to-end de IM-741 está bloqueada en ese entorno para cualquier org — no solo para la que
+  se probó primero. El único entorno donde se sabe que funciona es PRODUCCIÓN, donde el dev
+  corrió el 2026-08-04 (run 381d1432).
+
+  Esto NO es un defecto del código de IM-741: la lógica de ordenamiento, partición,
+  idempotencia y stop-on-failure está verificada por contrato y por mutación (TR-152). Es un
+  bloqueador de ENTORNO que impide cerrar el AC7 y observar la secuencia completa del AC1.
+
+  Sigue en pie la observación de diagnosticabilidad, ahora más fuerte: sea cual sea la causa
+  (autorización, config, servicio caído), lo que llega es un 500 genérico. Un error tipado del
+  AuthBroker ahorraría exactamente el trabajo de descarte que hubo que hacer acá: tres corridas
+  contra dos orgs para concluir que no era un problema de la org.

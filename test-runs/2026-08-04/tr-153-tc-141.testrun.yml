@@ -1,14 +1,23 @@
 schemaVersion: '1.0'
 id: tr-5e7a2c93-64b1-4d80-a3f5-91c0e8b7d426
 key: TR-153
-title: 'TR-153 · IM-741 · TC-141 · Corrida en vivo del IE en el workspace dev contra illinois-trainings — AC6 verificado
-  contra un fallo real, PR #334 confirmado en vivo, y AC7 bloqueado por autorización del AuthBroker'
+title: 'TR-153 · IM-741 · TC-141 · Corrida en vivo del IE — AC6 verificado contra un fallo real y PR #334 confirmado
+  en vivo; 3 corridas contra 2 orgs distintas descartan la hipótesis de autorización y apuntan al AuthBroker de
+  dev'
 description: |-
   Segunda ejecución de TC-141, esta vez **disparando la corrida real del IE** por la API de la Migration App en el workspace **Test IM cases Org Tucson** contra **illinois-trainings** (`00DWI00000CIwZi2AL`, org de TRAININGS, no productiva). Complementa TR-152, que fue verificación a nivel de código sobre `main @ 11f95fab`.
 
   **Veredicto: 6/6 PASS · 0 defectos · 1 bloqueador de entorno.**
 
-  Dos corridas (`0a35de60-8f12-4306-aa80-9f395c668cca` y `c9da6a0f-9c77-459c-8f96-b22b37bb99b5`), ambas terminadas en `failed` con el **mismo error determinista**: `AuthBroker returned status 500` al mintear sesión para instalar Auctifera. El ticket anticipa exactamente esta precondición: *"The target org must be authorized in the AuthBroker itself — a ConnectedOrg DDB row is not sufficient"*. **No es defecto de IM-741.**
+  **Tres corridas contra DOS orgs distintas**, todas terminadas en `failed` con el **mismo error determinista** — `AuthBroker returned status 500` en `mintSession`, al instalar Auctifera:
+
+  | run | org | resultado |
+  |---|---|---|
+  | `0a35de60-8f12-4306-aa80-9f395c668cca` | illinois-trainings (sandbox) | AuthBroker 500 |
+  | `c9da6a0f-9c77-459c-8f96-b22b37bb99b5` | illinois-trainings (sandbox) | AuthBroker 500 |
+  | `e42b4877-0d3d-4b8f-b4ee-e4e7c5bf149a` | orgfarm dev-ed (otra org) | AuthBroker 500 |
+
+  La hipótesis inicial —que illinois-trainings no estuviera autorizada en el AuthBroker, que es la precondición que el ticket declara dos veces— **queda descartada**: falla igual contra una org distinta, de otro tipo y conectada en otra fecha, ambas `state: active`. Lectura corregida: **el AuthBroker de dev no mintea sesión para ninguna org**, o el cableado de T1 hacia él en dev está roto. **No es defecto del código de IM-741** — es un bloqueador de entorno.
 
   Aun así la corrida rindió evidencia que el código solo no daba: el **AC6** quedó verificado contra un fallo real en vez de un fixture, el **PR #334** (un handoff parqueado frena su propio case) quedó confirmado en vivo, y se comprobó que **un fallo no deja estado parcial** en la org.
 
@@ -26,15 +35,16 @@ environment:
   repository: Veevarts/MigrationAppBackend
   pullRequest: https://github.com/Veevarts/MigrationAppBackend/pull/306
   dataSource: plan-runs API del workspace dev + sf CLI (InstalledSubscriberPackage, solo lectura) sobre illinois-trainings
-  notes: 'Dos plan runs: 0a35de60-8f12-4306-aa80-9f395c668cca y c9da6a0f-9c77-459c-8f96-b22b37bb99b5, ambos failed
-    con el mismo error. El handoff manual de NPSP se atestó por instrucción explícita del QA y la atestación es
-    veraz: NPSP 3.237.0.2 ya estaba instalado en la org según el PRE (attesting-without-executing, permitido en
-    este workspace de validación). Ninguna org productiva fue tocada. El delta de paquetes PRE vs POST tras las
-    dos corridas es NULO.'
+  notes: 'Tres plan runs: 0a35de60 y c9da6a0f contra illinois-trainings, e42b4877 contra la orgfarm dev-ed 00Dfj00000QJMx7EAH.
+    Los tres failed con el mismo error. El workspace tiene DOS orgs conectadas (descubierto por GET /implementations/clients/<clientId>/orgs),
+    ambas active. En illinois el handoff de NPSP lo atestó QA por instrucción explícita y la atestación era veraz
+    (NPSP 3.237.0.2 presente según el PRE). En la dev-ed QA NO atestó —no había forma de verificar NPSP— y lo atestó
+    el QA humano desde la UI. Ninguna org productiva fue tocada; delta de paquetes PRE vs POST en illinois: NULO
+    tras las dos corridas.'
 status: completed
 executedBy: codex
 startedAt: '2026-08-04T20:35:00Z'
-completedAt: '2026-08-04T20:50:00Z'
+completedAt: '2026-08-04T21:20:00Z'
 summary:
   total: 6
   passed: 6
@@ -66,12 +76,12 @@ results:
     name: ac-verification-matrix.txt
     path: attachments/tr-153-tc-141/ac-verification-matrix.txt
     mimeType: text/plain
-    size: 8678
+    size: 8893
   - &id002
     name: live-run-transcript.txt
     path: attachments/tr-153-tc-141/run/live-run-transcript.txt
     mimeType: text/plain
-    size: 5452
+    size: 9339
   notes: PASS a nivel de contrato, con confirmación en vivo del punto de arranque. La secuencia end-to-end de instalación
     queda sin observar por el bloqueo del AuthBroker, no por comportamiento del código.
 - scenarioIndex: 2
@@ -163,7 +173,9 @@ results:
   notes: PASS con evidencia superior a la del spec del dev, que usa un fetch stubbeado. **Bonus verificado en vivo:**
     dos corridas fallidas consecutivas **no dejaron estado parcial** en la org — 15 paquetes antes, 15 después,
     mismas versiones. Un fallo a mitad de secuencia no deja la org a medias, que es la propiedad que hace seguro
-    reintentar.
+    reintentar. **Reforzado con la tercera corrida:** el stop-on-failure y la propagación de causa raíz se repitieron
+    idénticos contra una org distinta (orgfarm dev-ed) — tres corridas, dos orgs, mismo comportamiento correcto
+    ante el fallo.
 defects: []
 history:
 - action: started
@@ -178,12 +190,12 @@ history:
   user: codex
   from: in-progress
   to: completed
-  reason: '6/6 PASS. AC6 verificado contra un fallo real (stop-on-failure + causa raíz propagada), PR #334 confirmado
-    en vivo, y cero estado parcial tras dos corridas fallidas. Bloqueador de entorno: AuthBroker devuelve 500 para
-    illinois-trainings en dev, determinista en dos corridas — precondición que el propio ticket declara. AC7 sigue
-    sin verificar por esa razón.'
+  reason: '6/6 PASS. AC6 verificado contra un fallo real, PR #334 confirmado en vivo, cero estado parcial tras los
+    fallos. Bloqueador de entorno identificado y acotado: tres corridas contra dos orgs distintas dan el mismo AuthBroker
+    500 en mintSession, lo que descarta la hipótesis de autorización por org y apunta al AuthBroker de dev. AC7
+    sigue sin verificar por esa razón.'
 metadata:
   createdBy: codex
   createdAt: '2026-08-04T20:50:00Z'
   updatedBy: codex
-  updatedAt: '2026-08-04T20:50:00Z'
+  updatedAt: '2026-08-04T21:20:00Z'
