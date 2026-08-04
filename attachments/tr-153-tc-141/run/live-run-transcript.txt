@@ -1,0 +1,92 @@
+IM-741 / TC-141 — corrida en vivo del IE (Migration App, workspace dev)
+
+WORKSPACE   Test IM cases Org Tucson · clientId cdff34f1-9774-41b0-a6a3-124bc03d11cb
+ORG         illinois-trainings · 00DWI00000CIwZi2AL  (TRAININGS, no productiva)
+CASE        ic-3-01-install-veevart-packages · v2 · order 300 · feasibility hybrid
+API         https://zu76ogw8dg.execute-api.us-east-1.amazonaws.com/dev/api
+FECHA       2026-08-04
+
+PREFLIGHT (solo lectura, GET /implementations/cases)
+  80 cases seeded en el catálogo dev.
+  ic-3-01-install-veevart-packages  v2  order 300  hybrid   "Install the Veevart package set"
+  ic-3-02-folders-and-enhanced-sharing v2 order 295 manual  "Turn on Folders and Enhanced Sharing"
+  -> Las versiones coinciden con las que el dev corrió en prod (ambas v2).
+  -> El orden confirma el cambio del PR #332: folders (295) precede al installer (300).
+
+RUN 1 — planRunId 0a35de60-8f12-4306-aa80-9f395c668cca
+  POST /implementations/plan-runs  {clientId, orgId, caseIds:["ic-3-01-install-veevart-packages"]}
+    -> 202 {"status":"PENDING","startedAt":"2026-08-04T20:37:50.127Z"}
+
+  Estado inicial tras arrancar: state=paused · total 3 · done 0 · blocked 1 · pending 2
+    handoff  "Install NPSP through MetaDeploy"                    blocked-human
+    auto     "Install veevart packages"                           pending
+    auto     "Verify the core package namespaces resolve"         pending
+
+  >>> VERIFICACIÓN EN VIVO DEL PR #334 <<<
+  El handoff parqueado NO dejó avanzar a su propio case: el step auto siguiente quedó en
+  `pending`, no despachado. Ese es exactamente el bug que #334 arregla ("a parked handoff must
+  stop its own case advancing"); antes, el engine despachaba el siguiente step del mismo case
+  mientras el operador seguía haciendo el NPSP manual. Observado, no inferido.
+
+  Atestación del handoff (por instrucción explícita del QA; NPSP 3.237.0.2 YA está instalado en
+  esta org según el PRE, así que la atestación es veraz — attesting-without-executing):
+  POST /implementations/plan-runs/<id>/steps/<caseRunId>/<stepRunId>/handoff -> 202
+
+  Traza posterior:
+    t+0s   running  [1/3 done, 0 failed]  NPSP=done | veevart packages=running | verify=pending
+    t+10s  running  [1/3 done, 1 failed]  NPSP=done | veevart packages=failed  | verify=pending
+    t+20s  failed   [1/3 done, 1 failed]  NPSP=done | veevart packages=failed  | verify=pending
+
+  ERROR (campo `error` del step, verbatim):
+    Auctifera: {"Error":"InstallError","Cause":"{\"errorType\":\"InstallError\",
+    \"errorMessage\":\"AuthBroker returned status 500\",\"trace\":[\"InstallError: AuthBroker
+    returned status 500\",\"    at SalesforceLibSessionAdapter.mintSession
+    (file:///var/task/mint-session.mjs:57141:19)\", ...]}"
+
+RUN 2 — planRunId c9da6a0f-9c77-459c-8f96-b22b37bb99b5
+  Mismo case, misma org, mismo flujo (handoff atestado igual).
+  Resultado IDÉNTICO: state=failed · 1/3 done · 1 failed · 1 pending
+  Mismo error en el mismo paquete: Auctifera / AuthBroker returned status 500.
+  -> El fallo es DETERMINISTA, no un 500 transitorio.
+
+QUÉ QUEDÓ PROBADO CON ESTAS DOS CORRIDAS
+
+  1. AC6 stop-on-failure — VERIFICADO CONTRA UN FALLO REAL, no contra un fixture.
+     Al fallar el step de instalación, "Verify the core package namespaces" quedó en `pending`
+     y nunca se intentó. En las dos corridas. Esto es más fuerte que la cobertura de spec del
+     dev, que usa un fetch stubbeado.
+
+  2. AC6 causa raíz real propagada — el `errorMessage` que llega arriba es
+     "AuthBroker returned status 500" con el stack completo hasta `mintSession`. Es accionable:
+     nombra el subsistema (AuthBroker), el código (500) y el punto exacto (mintSession).
+
+  3. PR #334 verificado en vivo (ver arriba).
+
+  4. El orden empieza por el tier 0 — el primer (y único) paquete intentado fue **Auctifera**,
+     que es el primer elemento de TIER_0_FOUNDATIONS = ['Auctifera','NPSP']. Consistente con la
+     regla de orden, aunque la corrida no llegó lo bastante lejos para probar la secuencia completa.
+
+  5. NO HAY ESTADO PARCIAL EN FALLO — el delta PRE vs POST de paquetes instalados es NULO tras
+     las dos corridas: 15 paquetes antes, 15 después, mismas versiones. Un fallo a mitad de
+     secuencia no deja la org a medias. Ver post/delta-PRE-vs-POST.txt.
+
+QUÉ NO SE PUDO PROBAR
+
+  AC7 (re-corrida contra org ya instalada = no-op) y la secuencia de orden completa del AC1
+  quedan SIN VERIFICAR: la corrida nunca pasó del primer paquete.
+
+EL BLOQUEADOR
+
+  `AuthBroker returned status 500` al mintear sesión para 00DWI00000CIwZi2AL en el entorno dev.
+  El propio ticket lo anticipa dos veces: "The org must be authorized in the AuthBroker — a DDB
+  connect-org record is not sufficient" y "no end-to-end install has completed [...] The target
+  org must be authorized in the AuthBroker itself".
+
+  Lectura de QA: illinois-trainings no está autorizada en el AuthBroker de dev (o el AuthBroker
+  de dev tiene un problema persistente para esa org). NO es un defecto de IM-741 — es una
+  precondición de entorno que el ticket ya declara.
+
+  OBSERVACIÓN DE DIAGNOSTICABILIDAD (superficie de IM-740 / T9, no de IM-741):
+  si la causa es "org no autorizada", un **500** es mala señal. Un 403/404 con un mensaje
+  explícito ("org <id> not authorized in AuthBroker") ahorraría el viaje de debugging que
+  este fallo obliga a hacer. Vale como mejora en el lado del AuthBroker.

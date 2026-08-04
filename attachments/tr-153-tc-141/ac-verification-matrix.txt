@@ -1,0 +1,123 @@
+IM-741 — COTEJO CONTRA EL SPEC DEL TICKET Y SUS CRITERIOS DE ACEPTACIÓN
+Consolidado: TR-152 (código, main@11f95fab) + TR-153 (corrida en vivo, workspace dev)
+
+=========================================================================================
+PARTE 1 — EL SPEC DEL CASE vs LO QUE REALMENTE CORRIÓ
+=========================================================================================
+
+seeds/specs/ic-3-01-install-veevart-packages.json declara 3 steps.
+El run los ejecutó exactamente, en ese orden y con esos tipos:
+
+  # | Step declarado en el spec                          | Tipo en runtime | Estado observado
+  --|----------------------------------------------------|-----------------|------------------
+  1 | Install NPSP through MetaDeploy                     | handoff         | blocked-human → done (atestado)
+  2 | Install veevart packages                            | auto            | failed (AuthBroker 500)
+  3 | Verify the core package namespaces resolve in the org | auto          | pending (nunca intentado)
+
+  => El spec y el runtime COINCIDEN. El paso de NPSP está declarado como handoff (manual), que
+     es la consecuencia del PR #330 y contradice el AC3 tal como está escrito (ver AC3 abajo).
+  => Catálogo dev: ic-3-01 v2 order 300 · ic-3-02 v2 order 295.
+     El orden confirma el PR #332: folders y enhanced sharing PRECEDEN al installer.
+
+=========================================================================================
+PARTE 2 — LOS 7 CRITERIOS DE ACEPTACIÓN, UNO POR UNO
+=========================================================================================
+
+AC1 · "reads GET /packages fresh and installs every row with a valid 04t, one POST per package
+       in dependency order, polling each to a terminal per-org status before the next"
+  CÓDIGO   PASS. Regla de 4 tiers sobre raíces; 3 mutaciones load-bearing (quitar TIER_1 → 6
+           tests fallan, quitar TIER_2 → 1, romper normalizeName → 5). Las dos trampas de
+           collation (VNFP al final; VeevartDataModel sin espacio tras Veevart Ticketing) están
+           corregidas y cubiertas.
+  EN VIVO  PARCIAL. El primer paquete intentado fue **Auctifera**, primer elemento de
+           TIER_0_FOUNDATIONS — consistente con la regla. La secuencia completa NO se pudo
+           observar: la corrida murió en ese primer paquete por el AuthBroker.
+  VEREDICTO PASS a nivel de contrato; la secuencia end-to-end queda sin observar.
+
+AC2 · "the registry row for NPSP carries no 04t (it serializes as the literal string "null") →
+       NPSP is reported skipped with a warning rather than failing the run"
+  CÓDIGO   PASS. isPackageVersionId valida por PATRÓN, no por «string no vacío» — por eso el
+           centinela de 4 caracteres "null" se rechaza. Cubiertos null real, "null", cadena
+           vacía y registry vacío.
+  EN VIVO  NO OBSERVADO. La corrida no llegó a la partición del registry.
+  VEREDICTO PASS a nivel de contrato.
+
+AC3 · "the NPSP step: T3 resolves the chain from MetaDeploy and installs all six packages via
+       InstalledPackage in published order, verifying each by read-back"
+  ESTADO   **SUPERADO POR EL PROPIO DESARROLLO — el AC está desactualizado.**
+           PR #330 lo cambió tras el fallo real
+             npsp: FieldSet(Account.BDE_Entry_FS) In field: RecordTypeId
+                   - no CustomField named Account.RecordTypeId found
+           NPSP no son seis paquetes: el plan publicado tiene NUEVE pasos, todos is_required, y
+           TRES no son paquetes (Account Record Types, Opportunity Record Types, NPSP Config for
+           Mobile App). Los pasos 6 y 7 corren ENTRE las dependencias y npsp.
+  EN VIVO  CONFIRMADO: el step 1 del case aparece como `handoff` (manual), no como automático.
+           El comportamiento entregado es NPSP manual vía MetaDeploy.
+  VEREDICTO El CÓDIGO hace lo correcto. El AC es el que hay que reescribir. Deuda de
+           documentación del ticket, no defecto.
+
+AC4 · "an SFN retry of the same step attempt → the body idempotencyKey is attempt-independent so
+       the service replays the existing job — no double install"
+  CÓDIGO   PASS. Diseño de dos niveles: la llave del step incluye el intento (ToolResultStore);
+           la llave de JOB lo strippea (`.replace(/#\d+$/,'')`) y apenda el 04t. Mutación:
+           reinyectar el intento → 1 test falla.
+  EN VIVO  NO OBSERVADO (no hubo submit exitoso que replayar).
+  VEREDICTO PASS a nivel de contrato.
+
+AC5 · "a package whose job ends ERROR with retryable: true → T1 requeues once via
+       POST /install-jobs/{jobId}/retry before declaring failure"
+  CÓDIGO   PASS. Ambos lados del predicado cubiertos por spec del dev.
+  EN VIVO  NO OBSERVADO. El fallo fue anterior al job (mintSession), así que nunca hubo un job
+           con estado `ERROR` que reintentar.
+  VEREDICTO PASS a nivel de contrato.
+
+AC6 · "a package fails → the sequence stops and later packages report not attempted, with the
+       real root cause as errorMessage"
+  CÓDIGO   PASS. `notAttempted` produce "not attempted: earlier package <X> failed" — nombra al
+           culpable. Tres estados sin colapsar: skipped / failed / not attempted.
+  EN VIVO  **PASS — Y ESTA ES LA VERIFICACIÓN MÁS FUERTE DE TODA LA REVIEW.**
+           Contra un fallo REAL, no un fixture: al fallar el step de instalación, "Verify the
+           core package namespaces" quedó en `pending` y NUNCA se intentó, en las dos corridas.
+           Y el errorMessage que llegó arriba es la causa raíz literal del subsistema:
+             "AuthBroker returned status 500"  + stack hasta SalesforceLibSessionAdapter.mintSession
+           Nombra el subsistema, el código de error y el punto exacto. Accionable sin logs.
+  VEREDICTO PASS, con evidencia en vivo superior a la del spec.
+
+AC7 · "a re-run against an org already installed → every package reports already-installed /
+       applied and the run succeeds"
+  ESTADO   **SIN VERIFICAR.**
+           Se INTENTÓ de verdad esta vez, en un entorno no productivo (dev workspace +
+           illinois-trainings), no se descartó por defecto. Dos corridas, ambas muertas en el
+           primer paquete por `AuthBroker returned status 500` — determinista.
+           El ticket ya anticipa esta precondición dos veces: "The target org must be authorized
+           in the AuthBroker itself — a ConnectedOrg DDB row is not sufficient."
+  VEREDICTO Bloqueado por autorización de entorno, NO por defecto del código. Requiere que
+           illinois-trainings (o cualquier org de trainings) quede autorizada en el AuthBroker
+           de dev para poder cerrarse.
+
+=========================================================================================
+PARTE 3 — INVARIANTES DEL SPEC ("AI constraints") DEL TICKET
+=========================================================================================
+
+  "Lambda holds only short-lived credentials; the api key is read from Secrets Manager per
+   invocation and never stored"                                    -> PASS (lectura del adapter)
+  "idempotencyKey on every submit, and it must NOT contain the attempt"
+                                                                    -> PASS (mutación load-bearing)
+  "Dependency ordering owned by us; the service installs only the named version"
+                                                                    -> PASS (regla de tiers)
+  "The package list is resolved over the wire, never pinned in the repo"
+                                                                    -> PASS con matiz: DOS paquetes
+     (Veevart Data Model 0.3.0.4 y Veevart Reporting 1.16) SÍ están pineados en
+     shared/domain/pinned-veevart-packages.ts porque el registry no publica filas `prd` para
+     ellos. Es una desviación consciente y documentada del invariante, con la nota de que una
+     fila viva del registry tiene precedencia sobre el pin — o sea, los pins se desactivan solos.
+     NO es defecto, pero es una excepción al invariante que el ticket enuncia en absoluto.
+
+=========================================================================================
+PARTE 4 — HALLAZGO DE HIGIENE, VERIFICADO EN VIVO
+=========================================================================================
+
+  Dos corridas fallidas consecutivas NO dejaron ningún estado parcial en la org:
+  15 paquetes antes, 15 después, mismas versiones exactas. Un fallo a mitad de secuencia no
+  deja la org a medias. Esto no está en ningún AC, pero es la propiedad que hace seguro
+  reintentar — y es la que sostiene el AC7 cuando se pueda ejecutar.
