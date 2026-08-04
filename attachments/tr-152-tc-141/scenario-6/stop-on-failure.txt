@@ -1,0 +1,34 @@
+IM-741 / TC-141 escenario 6 (AC6) — la secuencia se detiene y los posteriores quedan not attempted
+
+TRES ESTADOS DISTINTOS, QUE NO SE COLAPSAN
+  skipped       — la fila no tenía 04t usable; nunca se intentó y no es un problema (AC2)
+  failed        — se intentó y el servicio lo rechazó
+  not attempted — no se intentó PORQUE algo anterior falló (AC6)
+
+  Confundir los tres es el modo de falla obvio de un reporte de instalación: un operador que ve
+  "no instalado" sin saber por qué no puede decidir si reintentar, escalar o ignorar.
+
+IMPLEMENTACIÓN
+  domain/model/tools/package-install-result.ts
+      export const notAttempted = (...)
+          message: `not attempted: earlier package ${stoppedBy} failed`
+  El mensaje NOMBRA al paquete que detuvo la secuencia — no es un genérico. Eso es lo que hace el
+  reporte accionable sin entrar a los logs.
+
+COBERTURA DEL DEV
+  t1-installer.http-adapter.spec.ts:
+    - "stops the sequence when a package fails, marking the rest not attempted"
+    - assert explícito: expect(result.packages[2].message).toContain('not attempted')
+
+POR QUÉ DETENERSE ES LO CORRECTO
+  El orden es de dependencias (escenario 1): lo que venía después de un paquete fallido depende de
+  él. Seguir intentando produciría una cascada de fallos derivados que enterrarían la causa raíz.
+
+CAUSA RAÍZ REAL, NO ENVUELTA
+  El AC exige que el `errorMessage` sea la causa raíz del servicio. Los fallos reales que documenta
+  el dev muestran que llega accionable:
+    - "npsp: FieldSet(Account.BDE_Entry_FS) In field: RecordTypeId - no CustomField named
+       Account.RecordTypeId found"   -> diagnosticable, llevó al cambio de #330
+    - "Veevart Ticketing: Invalid Upgrade. The package you're installing depends on package
+       'Veevart Data Model', version '0.1'."   -> nombró la dependencia faltante y llevó al TIER_2
+  Ambos mensajes fueron suficientes para arreglar el problema sin instrumentación adicional.

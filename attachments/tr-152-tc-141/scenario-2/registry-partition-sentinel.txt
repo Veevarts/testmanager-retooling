@@ -1,0 +1,31 @@
+IM-741 / TC-141 escenario 2 (AC2) — filas sin 04t usable se saltan, no fallan
+
+LA GUARDA
+  domain/model/tools/package-install-spec.ts
+      export const isPackageVersionId = (value: unknown): value is string =>
+          typeof value === 'string' && VERSION_ID_PATTERN.test(value);
+
+  Es validación por PATRÓN, no por "string no vacío". Eso es lo que hace que el centinela
+  `"null"` —cuatro caracteres, string perfectamente válido— sea rechazado: no matchea la forma de
+  un `04t`. Una guarda escrita como `typeof value === 'string' && value.length > 0` habría
+  aceptado el centinela e intentado instalar un paquete con el id literal "null". Ese es
+  exactamente el modo de falla que este AC previene.
+
+LA PARTICIÓN
+  domain/model/tools/registry-package.ts — `partitionRegistryPackages` devuelve
+  `{ installable, skipped }`. Una fila sin `04t` usable cae en `skipped` con una razón que nombra
+  la versión publicada y el valor recibido (`JSON.stringify`, así que el centinela aparece citado
+  y es distinguible de un null real en el log). La corrida SIGUE con el resto.
+
+COBERTURA DEL DEV — las cuatro formas están cubiertas (registry-package.spec.ts)
+  - `null` real de JSON
+  - el string literal `"null"` — test propio: "skips the literal string \"null\" the registry
+    serializes for a NULL id", con el comentario explicando que un NULL de DynamoDB llega como
+    los cuatro caracteres "null"
+  - cadena vacía
+  - registry vacío (devuelve los dos lados vacíos)
+
+CONFIRMADO CONTRA LA CORRIDA REAL
+  En el run 381d1432, NPSP salió `skipped` (sin 04t) y el `PlanRun` cerró COMPLETED igual.
+  Un skip no es un fallo, y el reporte distingue `skipped` de `failed` y de `not attempted`
+  (tres estados con significados distintos — ver escenario 6).

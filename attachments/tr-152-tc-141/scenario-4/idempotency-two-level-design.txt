@@ -1,0 +1,48 @@
+IM-741 / TC-141 escenario 4 (AC4) — idempotencia independiente del intento
+
+EL DISEÑO ES DE DOS NIVELES, y el ticket solo describe uno. Verificado en código:
+
+NIVEL 1 — llave del STEP (para el ToolResultStore)
+  `${planRunId}#${caseRunId}#${stepRunId}#${attempt}`     (application/ports/tool-result-store.port.ts)
+  SÍ incluye el intento. Se usa en `resolve`:
+      const cached = await this.resultStore.get(event.idempotencyKey);
+  Protege el reintento del MISMO attempt (p. ej. un retry a nivel Lambda dentro del mismo Task
+  attempt de SFN): ahí la llave coincide y el resultado se replaya sin tocar el registry.
+
+NIVEL 2 — llave del JOB (la que viaja al servicio sf-package-pusher)
+  infrastructure/adapters/tools/t1-installer.http-adapter.ts:
+      const jobIdempotencyKey = (stepIdempotencyKey, target) =>
+          `${stepIdempotencyKey.replace(/#\d+$/, '')}#${target.packageVersionId}`;
+  STRIPPEA el intento (`#\d+$`) y APENDA el `04t`. Esta es la llave que satisface el AC4.
+  - Quitar el intento hace que un Task retry de SFN (que sí incrementa attempt) mande la MISMA
+    llave, así que el servicio replaya el job existente en vez de mintear uno nuevo — es decir, no
+    hay segunda instalación del mismo paquete en la misma org.
+  - Apendar el `04t` es necesario porque un solo step instala muchos paquetes: la llave del step
+    pelada colisionaría entre ellos.
+  - Sigue siendo run-scoped (el runId permanece), así que un plan-run genuinamente nuevo obtiene un
+    job fresco en vez de heredar uno terminal de una corrida anterior.
+
+  Va en el BODY del request. El `t1-installer.port.ts` documenta que el servicio ignora por completo
+  una cabecera `Idempotency-Key`, así que mandarla ahí no habría servido de nada.
+
+MUTATION TESTING
+  Mutación                                   | Resultado             | Tests
+  -------------------------------------------|-----------------------|--------------------
+  meter el intento en la llave de job         | FALLA (load-bearing)  | 1 failed, 92 passed
+  (se removió el .replace(/#\d+$/,''))
+
+  El invariante está lockeado por un test real, no solo por el comentario.
+
+POR QUÉ ESTO ES LO QUE HACE QUE UN RETRY AVANCE
+  Con la llave estable, los paquetes ya completados responden ALREADY_INSTALLED rápido, así que un
+  reintento de SFN progresa en vez de reempezar. Combinado con el `Wait` de Step Functions
+  (PackageInstall-SM), una instalación larga no consume tiempo de Lambda equivalente: cada estado
+  es una invocación corta, y el techo de 15 min deja de aplicar.
+
+NOTA DE PRECISIÓN sobre un comentario del código
+  El handler dice, sobre el chequeo del ToolResultStore: "an SFN retry of the step replays instead
+  of reinstalling". Eso es exacto solo para el reintento del mismo attempt: como la llave del step
+  TERMINA en el attempt, un Task retry de SFN (attempt+1) NO acierta esa caché. Lo que protege ese
+  caso es la llave de nivel 2. Los dos niveles juntos cubren ambos, pero el comentario, leído solo,
+  sugiere que la caché cubre más de lo que cubre. Es una imprecisión de comentario, no un defecto
+  de comportamiento.

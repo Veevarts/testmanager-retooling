@@ -1,0 +1,27 @@
+IM-741 / TC-141 — OWASP Top 10 (2021), scan de aplicabilidad
+Superficie: backend NestJS/TypeScript (hexagonal) + Step Functions + SAM. Consume una API interna
+de DevOps (sf-package-pusher) por un proxy VPC, y la API pública de MetaDeploy de Salesforce.org.
+No expone endpoint nuevo al usuario final ni introduce dependencias.
+
+ID   Categoría                           | Aplica | Método                                                     | Veredicto
+-----|------------------------------------|--------|------------------------------------------------------------|----------
+A01  Broken Access Control               | Aplica | La org destino debe estar autorizada en el AuthBroker; una fila ConnectedOrg en DynamoDB NO basta (el ticket lo declara y el adapter lo respeta). El orgId se canonicaliza a 18 antes de resolver. | PASS
+A02  Cryptographic Failures              | N/A    | No se introduce cripto, firma ni manejo de llaves. La api key vive en Secrets Manager, gestionado por AWS. | N/A
+A03  Injection                           | Aplica | El body del POST se construye con JSON.stringify sobre valores tipados (packageVersionId validado por patrón, orgId canonicalizado). No hay concatenación de strings en la petición ni SQL. | PASS
+A04  Insecure Design                     | Aplica | Revisado el diseño de idempotencia de dos niveles: la llave de job strippea el intento y apenda el 04t, y sigue siendo run-scoped para que un plan-run nuevo no herede un job terminal. El fallo de diseño obvio —mintear un job por intento y doble-instalar— está explícitamente evitado y testeado. | PASS
+A05  Security Misconfiguration           | Aplica | `EnableT1Installer` se mantiene como kill switch; los recursos T1 resuelven `{{resolve:ssm:...}}` en la creación del changeset, así que una referencia rota falla el changeset del stack completo — falla temprano y ruidoso, no en silencio. | PASS
+A06  Vulnerable & Outdated Components    | N/A    | El PR no agrega ni actualiza dependencias. | N/A
+A07  Identification & Authentication     | N/A    | No se toca login, sesión ni verificación de credenciales de usuario. La autenticación máquina-a-máquina es la api key ya existente. | N/A
+A08  Software & Data Integrity Failures  | Aplica | El cambio instala PAQUETES en orgs de clientes, así que la integridad es central: se verificó que el orden de dependencias es correcto, que un fallo detiene la secuencia en vez de dejar la org a medias sin señal, y que el step T6 confirma el estado final de forma independiente del reporte del installer. La resolución de la cadena NPSP consume la API pública de MetaDeploy (Salesforce.org, el vendor de esos paquetes) por HTTPS. | PASS
+A09  Security Logging & Monitoring       | Aplica | El adapter loguea action/orgId/idempotencyKey/packageCount en cada operación, y el replay idempotente emite `t1.resolve.idempotentReplay`. Suficiente para reconstruir qué se instaló dónde. No se loguean secretos. | PASS
+A10  Server-Side Request Forgery         | Aplica | Los destinos son fijos y de configuración (la URL base del servicio por SSM, MetaDeploy en install.salesforce.org). Ningún host proviene de entrada de usuario. | PASS
+
+RESUMEN: 7 aplicables · 7 PASS · 0 FAIL · 3 N/A · 0 bloqueadores High/Critical.
+Ningún defecto surge de este scan.
+
+NOTA §11 (juicio pendiente de acuerdo del reviewer, ya declarado por el dev)
+MetaDeploy (install.salesforce.org) se llama en tiempo de corrida para resolver la cadena NPSP.
+El dev lo lee como "Salesforce, el vendor de estos paquetes" y no como una integración con producto
+de terceros. QA coincide con esa lectura desde el ángulo de seguridad: es el publicador de los
+paquetes que se están instalando, y la llamada es de solo lectura sobre su API pública. Se deja
+anotado porque el propio dev pidió acuerdo explícito del reviewer.

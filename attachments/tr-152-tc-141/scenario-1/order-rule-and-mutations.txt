@@ -1,0 +1,52 @@
+IM-741 / TC-141 escenario 1 (AC1) — regla de orden de dependencias
+
+CÓDIGO BAJO PRUEBA: main @ 11f95fab (PR #336, el último funcional de IM-741)
+  domain/model/tools/package-install-order.ts
+
+LA REGLA, TAL COMO SE ENTREGA
+  Tier 0  Auctifera, NPSP                        — no dependen de nada
+  Tier 1  VNFP                                   — depende de ambos tier-0
+  Tier 2  Veevart Data Model, Veevart Reporting  — los product packages construyen sobre estos
+  Tier 3  todo lo demás                          — cae solo, sin nombrarse
+
+Solo se nombran las RAÍCES. Un paquete que DevOps agregue al registry cae automáticamente en el
+último tier, así que la regla sigue siendo correcta sin que este archivo lo conozca. Eso satisface
+el requisito del ticket de "una regla sobre las raíces, nunca una lista de paquetes".
+
+LAS DOS TRAMPAS DE COLLATION QUE LA REGLA CORRIGE
+  1. `GetPackages` ordena por `name.localeCompare(name)`, que compara case-insensitive en la
+     fuerza primaria: `Veevart …` va ANTES que `VNFP`, dejando VNFP último — después de los cinco
+     paquetes que dependen de él. (Un sort ASCII plano habría sido correcto por accidente, `N` < `e`;
+     apoyarse en eso era una trampa latente.)
+  2. `VeevartDataModel` NO lleva espacio, así que `localeCompare` lo pone DESPUÉS de
+     `Veevart Ticketing`, el paquete que depende de él. Una corrida en prod lo probó:
+     "Veevart Ticketing: Invalid Upgrade. The package you're installing depends on package
+     'Veevart Data Model', version '0.1'."
+  `normalizeName` (quita espacios + lowercase) existe porque el registry lo llama `VeevartDataModel`
+  y el error de Salesforce lo llama `Veevart Data Model`: un match exacto no reconocería la raíz y
+  la devolvería en silencio al último tier, reproduciendo el bug sin señal.
+
+MUTATION TESTING — cada guarda removida de a una (log crudo: revert-proof-order-and-idempotency.log)
+
+  Mutación                                        | Resultado                  | Tests
+  ------------------------------------------------|----------------------------|---------------------
+  quitar TIER_1_CORE (VNFP)                        | FALLA (load-bearing)       | 6 failed, 14 passed
+  quitar TIER_2_PLATFORM (Data Model / Reporting)  | FALLA (load-bearing)       | 1 failed, 19 passed
+  romper normalizeName (volver a match exacto)     | FALLA (load-bearing)       | 5 failed, 15 passed
+
+  Ninguna de las tres es decorativa. La de normalizeName es la más valiosa: es la que protege contra
+  la reaparición SILENCIOSA del bug (una raíz no reconocida no da error, solo se ordena mal).
+
+PROPIEDADES DE LA FUNCIÓN, VERIFICADAS POR LECTURA
+  Pura y total: los duplicados colapsan (por nombre normalizado, gana la primera grafía que dio el
+  registry), una lista vacía devuelve vacío, y el arreglo del llamador nunca se muta. Los tier-2 se
+  ordenan por nombre entre sí para que una corrida sea reproducible sin importar en qué orden los
+  devolvió el registry.
+
+OBSERVACIÓN — no es defecto, es deuda que el propio código declara
+  El archivo lleva `TODO(IM-741)`: "once the registry exposes installOrder / dependsOn, ordering
+  becomes data and this policy collapses into a sort on that field. Three separate prod failures
+  have now been dependency-order problems this rule had to be taught by hand."
+  Mientras eso no exista, cada paquete nuevo con dependencias reales exige editar este archivo, y
+  el modo de falla es una corrida rota en un cliente. Es el argumento concreto para el pedido a
+  DevOps que ya está en Known gaps.

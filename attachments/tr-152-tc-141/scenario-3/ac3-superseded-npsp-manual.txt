@@ -1,0 +1,56 @@
+IM-741 / TC-141 escenario 3 — el AC3 quedó SUPERADO por el propio desarrollo
+
+EL AC3 COMO ESTÁ ESCRITO EN EL TICKET
+  "Given the NPSP step, When T3 runs, Then it resolves the chain from MetaDeploy and installs all
+   six packages via InstalledPackage in published order, verifying each by read-back."
+
+LO QUE SE ENTREGA HOY — NPSP ES UN PASO MANUAL
+
+El PR #330 lo cambió tras un fallo real en corrida:
+    npsp: FieldSet(Account.BDE_Entry_FS) In field: RecordTypeId
+          - no CustomField named Account.RecordTypeId found
+Las cinco dependencias instalaron; `npsp` se negó.
+
+LA RAZÓN: NPSP NO SON SEIS PAQUETES
+El plan publicado por Salesforce.org tiene NUEVE pasos, todos `is_required`, y TRES no son paquetes:
+
+  #     Paso                              tipo
+  1-5   npe01, npo02, npe03, npe4, npe5   Package
+  6     Account Record Types              Metadata     <- NO es paquete
+  7     Opportunity Record Types          Other        <- NO es paquete
+  8     Nonprofit Success Pack            Package
+  9     NPSP Config for Mobile App        Metadata     <- NO es paquete
+
+Los pasos 6 y 7 corren ENTRE las dependencias y `npsp`, y son prerequisitos, no adorno: los field
+sets de `npsp` referencian `Account.RecordTypeId`, que Salesforce solo expone una vez que Account
+tiene record types. Un managed package no puede crear record types sobre un objeto estándar, así
+que el installer tendría que sembrarlos primero.
+
+VERIFICACIÓN DE QA — el spec seed refleja lo entregado
+  seeds/specs/ic-3-01-install-veevart-packages.json tiene TRES pasos:
+    1. Install NPSP through MetaDeploy                          (manual)
+    2. Install veevart packages                                 (T1)
+    3. Verify the core package namespaces resolve in the org    (T6)
+  Coincide con la corrida real: NPSP `skipped` por T1, instalado a mano, y el T6 final verificando.
+
+PRECISIÓN SOBRE NpspInstall-SM — "unrouted" es impreciso
+El dev reporta que NpspInstall-SM "is deployed in both environments but currently unrouted".
+Verificado en run-sm.asl.json: la máquina SÍ está cableada. La condición de despacho es
+
+    Choice[1] -> NpspInstallSMInvoke
+        kind == AUTOMATED  AND  tool == T3  AND  inputPayload.op == installPackages
+
+Es decir: está VIVA y dispararía en el momento en que cualquier case declare un step AUTOMATED T3
+`installPackages`. Hoy no se alcanza porque el catálogo ya no tiene ninguno (ic-3-01 hace NPSP
+manual, y un step MANUAL enruta a Choice[0], HybridCaseSMInvoke).
+
+  "cableada pero inalcanzable con el catálogo actual"  ≠  "sin rutear"
+
+La diferencia importa: no es código muerto que se pueda ignorar en un refactor, y un case nuevo
+mal declarado la despierta sin que nadie lo note.
+
+VEREDICTO
+El CÓDIGO hace lo correcto. El AC es el que quedó viejo. Se registra como DEUDA DE DOCUMENTACIÓN
+del ticket — hay que reescribir el AC3 para que describa el paso manual y la razón (los tres pasos
+no-paquete), o quien lea el ticket dentro de seis meses concluirá que la implementación no lo
+cumple.

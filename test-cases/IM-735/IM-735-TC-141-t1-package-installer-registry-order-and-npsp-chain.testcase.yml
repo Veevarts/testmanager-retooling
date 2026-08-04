@@ -1,0 +1,360 @@
+schemaVersion: '1.0'
+id: 6539596d-d2b4-4f9e-84e7-30069c824578
+key: TC-141
+title: IM-741 — T1 Package Installer — the registry is read fresh on every run, packages install in a dependency
+  order the registry itself cannot express, rows without a usable 04t are skipped instead of failing, retries replay
+  instead of double-installing, and a failure stops the sequence with the real root cause
+description: |-
+  Cobertura QA de IM-741 (**W2-2 · Package Installer — install every Veevart package
+  (registry + 04t) & the NPSP chain**), bajo el epic **IM-735 Implementation Cases
+  Automation**. QA Sub-task asociada: **IM-1169**. Prioridad de la historia: **Highest**.
+
+  Sigue el patrón de epic ya establecido en `test-cases/IM-735/` (TC-45..50, TC-65): un test
+  case por bloque funcional real del epic. Este cubre el bloque **T1 Package Installer**.
+
+  ## Qué pide la historia
+
+  Que una org target reciba NPSP más **todos** los paquetes que publica el registry de DevOps,
+  en orden de dependencias, con el contrato documentado en `docs/contracts/t1-installer.md` y
+  verificado contra un sandbox.
+
+  Dos mecanismos, porque los paquetes son de dos clases distintas:
+
+  | Conjunto | Mecanismo | Herramienta |
+  | --- | --- | --- |
+  | Todo lo que publica el registry (2GP + 1GP con `04t`) | `GET /packages` → `POST /install-jobs` → poll | **T1** |
+  | La cadena NPSP (sin un `04t` único) | `InstalledPackage` (namespace + versión) | **T3** `installPackages` |
+
+  Dos invariantes de diseño que el ticket subraya:
+
+  - **La lista de paquetes nunca se espeja en el repo.** `GET /packages` se lee fresco en cada
+    corrida, así que un paquete nuevo se toma sin editar catálogo ni desplegar.
+  - **El orden es nuestro.** El servicio no orquesta dependencias y las filas del registry no
+    traen `dependsOn`. `GET /packages` ordena con `localeCompare`, cuya collation
+    case-insensitive pone todo `Veevart …` **antes** de `VNFP` — dejando VNFP al final, después
+    de los cinco paquetes que dependen de él. El orden devuelto **no es instalable tal cual**.
+
+  ## ⚠️ El alcance real es MUCHO más grande que los 4 PRs que nombra el ticket
+
+  El ticket y sus comentarios mencionan **#306, #310, #312 y #314**. El escaneo del repo
+  encuentra **17 PRs mergeados** que referencian IM-741:
+
+  | PR | Qué cambió |
+  | --- | --- |
+  | #306 | implementación base (+6789/−1015, 49 archivos) |
+  | #307 | habilita T1 en dev y sienta el installer en el orden 301 |
+  | #310 · #312 · #314 | flag de CI, T3 `installPackages` no object-scoped, habilitar prod |
+  | **#321** | restaura la cadena de prerequisitos en el master template + reparación de drift de catálogo |
+  | **#322** | envía `activateRSS` + `securityType` en `InstalledPackage` |
+  | **#328** | instala la cadena NPSP **un paquete por invocación** |
+  | **#330** | **NPSP pasa a ser un paso MANUAL** |
+  | **#332** | folders + enhanced sharing deben preceder al installer |
+  | **#334** | un handoff parqueado debe frenar el avance de su propio case |
+  | **#336** | pinea los dos paquetes que el registry de DevOps no publica |
+  | #329 · #331 · #333 · #335 · #338 | promociones main → stable |
+
+  **Consecuencia para QA:** el comportamiento entregado hoy en `stable` **no es** el de #306.
+  Cualquier lectura del ticket que se quede en los 4 PRs nombrados valida la cosa equivocada.
+
+  ## ⚠️ AC3 quedó SUPERADO por el propio desarrollo
+
+  El AC3 dice, textualmente, que T3 *"resuelve la cadena desde MetaDeploy e instala los seis
+  paquetes vía `InstalledPackage` en el orden publicado, verificando cada uno por read-back"*.
+
+  **Eso ya no es lo que se entrega.** El PR #330 lo cambió tras un fallo real en corrida:
+
+  ```
+  npsp: FieldSet(Account.BDE_Entry_FS) In field: RecordTypeId
+        - no CustomField named Account.RecordTypeId found
+  ```
+
+  NPSP **no son seis paquetes**: el plan publicado por Salesforce.org tiene **nueve** pasos,
+  todos `is_required`, y **tres no son paquetes** (Account Record Types, Opportunity Record
+  Types, NPSP Config for Mobile App). Los pasos 6 y 7 corren **entre** las dependencias y
+  `npsp`, porque los field sets de `npsp` referencian `Account.RecordTypeId`, que Salesforce
+  solo expone una vez que Account tiene record types — y un managed package no puede crear
+  record types sobre un objeto estándar.
+
+  Resultado: **NPSP es hoy un paso manual vía MetaDeploy**, y T1 lo reporta `skipped`. El
+  escenario 3 de este TC valida el comportamiento **entregado**, y deja registrado que el AC
+  del ticket está desactualizado y debería reescribirse.
+
+  ## Estado de la entrega
+
+  El dev reporta (comentario del 2026-08-04) la **primera corrida end-to-end exitosa**, en
+  **producción**: run `381d1432-686c-40d0-ab63-621967935843`, org `00DWI00000GLw9R2AT`,
+  ~33 min, `PlanRun: COMPLETED`, 10 paquetes. Esa corrida es la evidencia principal de los AC
+  end-to-end y **QA no la puede repetir**: escribir en una org de producción está prohibido, y
+  ese orgId no está entre los alias `sf` disponibles en la máquina de QA.
+
+  ## Riesgos abiertos
+
+  - **El alcance del ticket está desactualizado en dos frentes**: los PRs nombrados (4 de 17) y
+    el AC3. Ambos hay que corregirlos en el ticket, no solo en la review.
+  - **La única corrida verde es en PRODUCCIÓN.** No hay corrida equivalente en un entorno no
+    productivo que QA pueda reproducir o auditar sin riesgo. Toda verificación de QA sobre esa
+    org es **solo lectura** y depende de acceso que hoy no está.
+  - **El orden de dependencias se aprendió a punta de fallos.** Cada hecho de ordenamiento
+    (VNFP al final, `VeevartDataModel` sin espacio cayendo después de `Veevart Ticketing`,
+    Ticketing dependiendo de Data Model) salió de una corrida rota, no de un dato del registry.
+    Mientras DevOps no publique `installOrder`/`dependsOn`, la regla de tiers es una lista
+    curada a mano que se degrada en silencio con cada paquete nuevo.
+  - **Dos paquetes van pineados** (Veevart Data Model 0.3.0.4 y Veevart Reporting 1.16) porque
+    el registry no publica filas `prd`. Los pins son un parche que se desactiva solo cuando
+    DevOps publique — hay que verificar que la precedencia registry-sobre-pin funciona.
+  - **MetaDeploy paso 9** (*NPSP Config for Salesforce Mobile App*) está marcado required en el
+    plan de Salesforce.org y no lo cubre ni la automatización ni, según el dev, ningún case del
+    catálogo.
+  - **Sin soporte de install-key** en el servicio: los paquetes protegidos por contraseña no
+    pueden pasar por ahí.
+  - **Frescura del registry** depende de que pipelines externos llamen `POST /deployments`;
+    nada en `sf-package-pusher` produce esas escrituras.
+  - Las cifras del dev (185 suites / 1993 tests) son suyas: **se re-derivan, no se toman por
+    buenas.**
+
+  ## AC7 queda FUERA DEL ALCANCE DE QA — por política, no por omisión
+
+  El AC7 (*re-corrida contra una org ya instalada = no-op exitoso*) **no tiene escenario en este
+  test case**. Verificarlo exige **disparar el installer**, que es una escritura, y la única org
+  con la instalación completa es de **producción** (`00DWI00000GLw9R2AT`, run
+  `381d1432-686c-40d0-ab63-621967935843`).
+
+  QA no ejecuta escenarios que requieran tocar una org productiva. No es una limitación de esta
+  corrida: es una regla permanente, así que el AC no se incluye como escenario "bloqueado" que
+  arrastre el pass rate — sencillamente no es QA-ejecutable desde aquí.
+
+  Lo que sí se verificó, de solo lectura y como control de la técnica, está en
+  `attachments/tr-152-tc-141/ac7-excluded-prod-only.txt`: la aserción del step T6 corrida contra
+  tres orgs de trainings (`npsp`, `Auctifera` y `vnfp` resuelven en las tres), y la revisión de los
+  10 perfiles `sf` logueados confirmando que el orgId de la corrida no está entre ellos.
+
+  **Queda como entrega del dev/PM, no de QA.** Y como riesgo de proceso a escalar: el propio ticket
+  pedía verificación *against a sandbox*, y la única validación end-to-end existente vive en
+  producción — así que hoy no hay forma de re-verificar esta historia, ni este cambio ni el
+  próximo que toque el installer, sin tocar una org productiva.
+type: integration
+priority: critical
+status: active
+preconditions:
+- Clone de `MigrationAppBackend` en el commit de `main`/`stable` que incluye los 17 PRs de IM-741, para correr la
+  suite y las pruebas de reversión sobre la regla de orden
+- 'Node instalado; la suite del repo corre sin HTTP en vivo (el propio ticket lo exige: "No live HTTP in any test"),
+  así que los escenarios de contrato son auto-ejecutables'
+- ⚠️ La corrida verde de referencia está en PRODUCCIÓN (org `00DWI00000GLw9R2AT`). Las orgs de producción NO se
+  escriben. Cualquier verificación sobre ella es de solo lectura y hoy NO hay alias `sf` para ese orgId — si no
+  se consigue, los escenarios end-to-end se apoyan en la evidencia del dev y se declara explícitamente qué no pudo
+  re-verificar QA
+- Acceso de lectura a la Migration App (`migration.rtl.veevartapp.com`) para auditar el PlanRun `381d1432-686c-40d0-ab63-621967935843`
+  sin dispararlo de nuevo
+- Nunca disparar una corrida de instalación contra una org de cliente ni de producción desde QA
+format: gherkin
+scenarios:
+- title: IM-741 AC1 — The registry is read fresh on every run and every row with a valid 04t installs in a dependency
+    order the registry itself cannot express, one install-job per package, each polled to a terminal per-org status
+  tags:
+  - happy-path
+  - im-741
+  - im-1169
+  - im-735
+  - ac-1
+  - migration-app
+  - t1-installer
+  - package-registry
+  - install-order
+  - pr-306
+  - pr-336
+  given:
+  - el registry de DevOps expuesto por `GET /packages`, que se lee **fresco en cada corrida** y nunca se espeja
+    en el repo
+  - 'la regla de tiers en `domain/model/tools/package-install-order.ts`, que hoy en `main` declara `TIER_0_FOUNDATIONS
+    = [''Auctifera'',''NPSP'']`, `TIER_1_CORE = [''VNFP'']` y un `TIER_2_PLATFORM` agregado por el PR #336'
+  when:
+  - se ordena el conjunto de paquetes devuelto por el registry y se ejecuta la secuencia de instalación
+  then:
+  - 'el orden resultante es **tiers primero, resto alfabético**: los roots conocidos en orden de tier, y luego lo
+    no-root ordenado por `localeCompare`'
+  - 'verificar que la regla se aplica sobre **raíces de dependencia**, no sobre una lista de paquetes: un paquete
+    nuevo del registry debe ordenarse solo, sin tocar código'
+  - '**la trampa de collation es el corazón del AC**: `localeCompare` case-insensitive pone todo `Veevart …` antes
+    de `VNFP`, dejando VNFP después de los cinco que dependen de él. Confirmar que la regla lo corrige y que existe
+    un test que falla si se quita el tier'
+  - '**segunda trampa, misma causa**: `VeevartDataModel` no lleva espacio, así que la collation lo pone **después**
+    de `Veevart Ticketing`, que depende de él. Verificar que `normalizeName` + `TIER_2_PLATFORM` lo resuelven'
+  - se emite **un `POST /install-jobs` por paquete**, y cada uno se poletea hasta un estado terminal **antes** de
+    lanzar el siguiente — no en paralelo
+  - los estados per-org que se mapean son los reales del servicio (`SUCCESS`/`ERROR`/`PENDING`/`IN_PROGRESS`/`ALREADY_INSTALLED`),
+    **no** los nombres de job que el ticket original asumía (`SUCCEEDED`/`FAILED`/`QUEUED`/`RUNNING`); debe existir
+    cobertura de un estado desconocido
+- title: IM-741 AC2 — A registry row whose 04t is unusable is skipped with a warning instead of failing the run,
+    including the literal "null" string sentinel
+  tags:
+  - edge-case
+  - im-741
+  - im-1169
+  - im-735
+  - ac-2
+  - migration-app
+  - t1-installer
+  - registry-partition
+  - negative
+  - pr-306
+  given:
+  - '`partitionRegistryPackages` en `domain/model/tools/registry-package.ts`, que separa las filas en `installable`
+    y `skipped` según `isPackageVersionId(row.packageVersionId)`'
+  - la fila de NPSP en el registry, que **no trae `04t` y serializa como el string literal `"null"`**, no como un
+    `null` de JSON
+  when:
+  - se particiona el conjunto de filas del registry antes de instalar
+  then:
+  - la fila sin `04t` usable cae en `skipped` con una razón legible que nombra la versión publicada y el valor recibido
+    — **no** revienta la corrida
+  - 'el centinela string `"null"` se trata como no-instalable: verificar que el predicado no lo acepta por ser un
+    string no vacío, que es exactamente el modo de falla que este AC previene'
+  - probar también `null` real, cadena vacía y un `04t` con forma inválida — el AC nombra el centinela, pero la
+    guarda debe sostener las cuatro formas
+  - 'la corrida **sigue** con el resto de paquetes: un skip no es un fallo, y el reporte final debe distinguir `skipped`
+    de `failed`'
+  - confirmar en la evidencia de la corrida real que NPSP salió `skipped` y aun así el `PlanRun` cerró `COMPLETED`
+- title: 'IM-741 AC3 SUPERSEDED — NPSP is no longer installed automatically by T3: the published plan has nine required
+    steps of which three are not packages, so NPSP ships as a manual MetaDeploy step'
+  tags:
+  - missing-doc
+  - im-741
+  - im-1169
+  - im-735
+  - ac-3
+  - ac-drift
+  - migration-app
+  - npsp
+  - metadeploy
+  - t3-metadata
+  - pr-330
+  given:
+  - el AC3 del ticket, que exige que T3 resuelva la cadena desde MetaDeploy e instale **los seis paquetes** vía
+    `InstalledPackage` en orden publicado, verificando cada uno por read-back
+  - 'el PR #330, que cambió ese comportamiento tras un fallo real en corrida: `npsp: FieldSet(Account.BDE_Entry_FS)
+    In field: RecordTypeId - no CustomField named Account.RecordTypeId found`'
+  when:
+  - se compara el AC3 escrito contra el comportamiento realmente entregado en `stable`
+  then:
+  - '**el AC3 está desactualizado y hay que reescribirlo.** NPSP no son seis paquetes: el plan publicado tiene **nueve**
+    pasos, todos `is_required`, y **tres no son paquetes** (Account Record Types, Opportunity Record Types, NPSP
+    Config for Mobile App)'
+  - los pasos 6 y 7 corren **entre** las dependencias y `npsp`, porque los field sets de `npsp` referencian `Account.RecordTypeId`,
+    que Salesforce solo expone una vez que Account tiene record types — y un managed package no puede crear record
+    types sobre un objeto estándar
+  - 'el comportamiento entregado es: **NPSP se instala manualmente vía MetaDeploy** como paso del case `ic-3-01`,
+    y T1 lo reporta `skipped`. Validar ESE comportamiento, no el del AC'
+  - verificar que el spec seed `ic-3-01-install-veevart-packages.json` refleja los tres pasos reales (NPSP manual
+    → instalar paquetes Veevart → verificar namespaces) y que el paso manual está declarado como handoff, no como
+    automático
+  - '`NpspInstall-SM` (un paquete por invocación, PR #328) quedó **construido pero sin rutear** porque NPSP es manual:
+    confirmar que está desplegado e inerte, y que no se dispara por accidente'
+  - 'dejar registrado como **deuda de documentación del ticket**, no como defecto de código: el código hace lo correcto;
+    el AC es el que quedó viejo'
+- title: IM-741 AC4 — The idempotency key is attempt-independent, so a Step Functions retry of the same step replays
+    the existing job instead of installing twice
+  tags:
+  - regression
+  - im-741
+  - im-1169
+  - im-735
+  - ac-4
+  - migration-app
+  - t1-installer
+  - idempotency
+  - step-functions
+  - pr-306
+  given:
+  - 'la restricción explícita del ticket: hay `idempotencyKey` en cada submit y **no debe contener el intento**'
+  - '`PackageInstall-SM`, que mueve la espera a un estado `Wait` de Step Functions: `ResolvePlan → [ SubmitInstall
+    → Wait → CheckInstall → pending? ↻ ] por paquete → BuildResult → Evaluate`'
+  when:
+  - se reintenta el mismo step attempt y T1 vuelve a submitear el mismo paquete
+  then:
+  - el `idempotencyKey` del body es **idéntico entre intentos** — verificar que ni el número de intento ni un timestamp
+    ni un uuid aleatorio entran en su derivación
+  - 'el servicio **replaya el job existente** en vez de crear uno nuevo: no hay doble instalación'
+  - 'probar el caso por reversión: si se inyecta el intento en la llave, debe fallar un test — si pasa igual, el
+    invariante no está lockeado'
+  - 'confirmar que la propiedad es la que hace que un retry de SFN **avance** en vez de reempezar: los paquetes
+    ya completados responden `ALREADY_INSTALLED` rápido, así que la corrida progresa entre reintentos'
+  - verificar que el `Wait` de Step Functions es lo que remueve el techo de 15 min de Lambda, y que cada estado
+    es una invocación corta — una instalación de dos horas no puede costar dos horas de Lambda
+- title: IM-741 AC5 — A job that ends ERROR with retryable true is requeued exactly once through the retry endpoint
+    before the package is declared failed
+  tags:
+  - edge-case
+  - im-741
+  - im-1169
+  - im-735
+  - ac-5
+  - migration-app
+  - t1-installer
+  - retry
+  - negative
+  - pr-306
+  given:
+  - un paquete cuyo job termina en `ERROR` con `retryable: true`
+  when:
+  - T1 poletea ese job y evalúa el resultado
+  then:
+  - T1 reencola **exactamente una vez** vía `POST /install-jobs/{jobId}/retry` antes de declarar el fallo
+  - 'verificar que es **una** y no un bucle: un segundo `ERROR` retryable debe declarar el fallo, no reintentar
+    de nuevo'
+  - 'un `ERROR` con `retryable: false` (o sin el campo) **no** se reintenta — se declara fallo de una'
+  - 'el reintento no debe romper la idempotencia del escenario 4: la llave sigue siendo la misma'
+- title: IM-741 AC6 — When a package fails the sequence stops, every later package reports "not attempted", and
+    the reported errorMessage is the real root cause rather than a wrapper
+  tags:
+  - negative
+  - im-741
+  - im-1169
+  - im-735
+  - ac-6
+  - migration-app
+  - t1-installer
+  - stop-on-failure
+  - error-reporting
+  - pr-306
+  given:
+  - una secuencia de paquetes en orden de dependencias donde uno de los intermedios falla
+  when:
+  - T1 procesa la secuencia y construye el resultado
+  then:
+  - 'la secuencia **se detiene**: no se intenta instalar lo que venía después de un paquete fallido, porque justamente
+    dependían de él'
+  - los paquetes posteriores se reportan **`not attempted`**, un estado distinguible de `failed` y de `skipped`
+    — tres estados con significados distintos que no deben colapsarse
+  - 'el `errorMessage` que sale es **la causa raíz real** del servicio, no un mensaje envuelto o genérico: es lo
+    único que permite diagnosticar sin entrar a los logs'
+  - verificar contra los fallos reales que documenta el dev (el `FieldSet ... RecordTypeId` de NPSP, el `EmailTemplateFolder`
+    de VNFP) que el mensaje que llega arriba es accionable
+tags:
+- im-741
+- im-1169
+- im-735
+- migration-app
+- migration-app-backend
+- t1-installer
+- t3-metadata
+- t6-apex
+- package-registry
+- install-order
+- idempotency
+- npsp
+- metadeploy
+- step-functions
+- implementation-cases
+- ic-3-01
+- ac-drift
+- pr-306
+- pr-330
+- pr-336
+- ac7-out-of-scope
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-04T15:20:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-04T16:35:00Z'

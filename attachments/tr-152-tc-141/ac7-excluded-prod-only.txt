@@ -1,0 +1,58 @@
+IM-741 / TC-141 — AC7 FUERA DEL ALCANCE DE QA (política: no se tocan orgs de producción)
+
+LO QUE EL AC PIDE
+  Una re-corrida contra una org ya instalada reporta `already-installed` en todo y cierra en éxito,
+  y el step T6 confirma que los namespaces resuelven en la org.
+
+POR QUÉ QA NO LO PUDO EJECUTAR
+
+1. La única corrida verde está en PRODUCCIÓN.
+   run 381d1432-686c-40d0-ab63-621967935843 · org 00DWI00000GLw9R2AT · 2026-08-04 · ~33 min.
+   Las orgs de producción NO se escriben desde QA bajo ninguna circunstancia, y una re-corrida del
+   installer es una escritura. Disparar esa corrida para "verificar idempotencia" habría sido
+   exactamente el tipo de acción que la guardrail prohíbe.
+
+2. Ese orgId no está entre los perfiles logueados. Revisados los 10 (`sf org list --all`):
+     00DWJ000008Vcu62AC  hammer-trainings      Connected
+     00DWI00000CIwZi2AL  illinois-trainings    Connected
+     00Ddp000002XbndEAC  maloof-trainings      Connected
+     00DKb000000O5y6MAC  veevart-admin         Connected
+     00DWB000004Bjp72AC  (montclair trainings) Connected
+     00DW4000008i2zBMAQ  veevartd              Connected
+     00D60000000KdOJEA0  veevart-prod          Connected
+     00DO400000SluOPMAZ  pruebaBug             error 420
+     00Ddq00000CssSjEAJ  auctifera-nps2        Deleted
+     00DRt00000TAlrNMAT  vnfp-pkg (scratch)    Active
+   00DWI00000GLw9R2AT -> AUSENTE. (Comparte prefijo 00DWI con illinois-trainings, pero es otra org.)
+
+LO QUE SÍ SE PUDO VERIFICAR — la TÉCNICA del check T6, no la corrida
+Se ejecutó de solo lectura la misma aserción que hace el step T6, contra tres orgs de trainings:
+
+  org                 paquetes   npsp        Auctifera   vnfp
+  illinois-trainings  15         RESUELVE    RESUELVE    RESUELVE
+  veevartd            13         RESUELVE    RESUELVE    RESUELVE
+  hammer-trainings    15         RESUELVE    RESUELVE    RESUELVE
+
+  Query (solo lectura, Tooling API):
+    SELECT SubscriberPackage.NamespacePrefix, SubscriberPackageVersion.MajorVersion,
+           SubscriberPackageVersion.MinorVersion
+    FROM InstalledSubscriberPackage
+
+Esto confirma que la aserción del T6 es real y discriminante —devuelve namespaces concretos y es
+independiente de lo que reporte cualquiera de los dos installers—, que es justamente lo que la hace
+valiosa como verificación final. NO confirma nada sobre el run 381d1432 ni sobre la idempotencia.
+
+Dato incidental: esas orgs muestran la cadena NPSP completa (npe01, npe03, npe4, npe5, npo02, npsp),
+o sea los seis namespaces que el AC3 llamaba "los seis paquetes" — coherente con que el conteo de
+PAQUETES sea seis y el de PASOS del plan sea nueve. Las dos cifras no se contradicen; describen
+cosas distintas.
+
+ESTADO: fuera de alcance. NO es un escenario de este test case y no cuenta para el pass rate.
+Lo que el AC pide queda como entrega del dev/PM, apoyado en su reporte de la corrida en prod.
+QA no lo verifica ni lo da por bueno: sencillamente no es QA-ejecutable desde aquí, igual que
+cualquier AC que exija desplegar o verificar en producción.
+
+RIESGO DE PROCESO A ESCALAR
+El propio ticket pedía verificación "against a sandbox". La única validación end-to-end que existe
+está en producción. Eso significa que hoy no hay forma de re-verificar esta historia sin tocar una
+org productiva — ni para QA ni para el próximo cambio que toque el installer.

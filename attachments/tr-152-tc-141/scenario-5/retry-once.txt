@@ -1,0 +1,25 @@
+IM-741 / TC-141 escenario 5 (AC5) — reencolar exactamente una vez
+
+CONTRATO DEL SERVICIO (documentado en el header del spec del adapter)
+  GET  install-jobs/{jobId}     -> { jobId, orgs: [ { orgId, status, errors[], retryable } ] }
+  POST install-jobs/{id}/retry  -> { jobId, requeued }
+
+COBERTURA DEL DEV — t1-installer.http-adapter.spec.ts
+  describe('T1InstallerHttpAdapter — retry of retryable failures')
+    - "requeues a retryable ERROR once and reports the eventual success"
+        fixture: { status: 'ERROR', retryable: true, errors: ['locked'] }
+    - "does not requeue a non-retryable ERROR"
+        fixture: { status: 'ERROR', retryable: false, errors: ['nope'] }
+
+  Los dos lados del predicado están cubiertos: se reintenta cuando `retryable` es true, y no se
+  reintenta cuando es false. El AC pide "una vez" y el nombre del test lo afirma explícitamente.
+
+RELACIÓN CON EL AC4
+  El reintento no altera la llave de idempotencia: sigue siendo la misma llave de job
+  (`stepKey sin attempt` + `04t`), así que reencolar no puede degenerar en una segunda instalación.
+  Los dos invariantes se sostienen juntos.
+
+LÍMITE DE ALCANCE, DECLARADO
+  Es cobertura de CONTRATO sobre un fetch stubbeado — el propio ticket exige que ningún test haga
+  HTTP en vivo. Prueba que el adapter llama al endpoint de retry una vez y cómo interpreta la
+  respuesta; no prueba el comportamiento del servicio real de DevOps ante ese reintento.

@@ -1,0 +1,221 @@
+schemaVersion: '1.0'
+id: tr-8c41d5e7-2a96-4b03-9f18-6d5074e2b1ca
+key: TR-152
+title: 'TR-152 · IM-741 · TC-141 · T1 Package Installer — 6/6 PASS: regla de orden y llave de idempotencia probadas
+  load-bearing por mutación, y AC3 documentado como superado por el propio desarrollo'
+description: |-
+  Ejecución de TC-141 contra **MigrationAppBackend** en `main @ 11f95fab` (PR #336, el último funcional de IM-741), bajo el epic **IM-735 Implementation Cases Automation**. QA Sub-task: **IM-1169**. Historia: **IM-741** (Highest).
+
+  **Veredicto: 6/6 PASS · 0 defectos.**
+
+  Dos correcciones al ticket que QA encontró antes de ejecutar: el alcance real son **17 PRs mergeados**, no los 4 que nombra el ticket; y el **AC3 quedó superado** por el PR #330 (NPSP pasó a ser un paso manual). Ambas son deuda de documentación del ticket, no defectos de código.
+
+  **El AC7 queda fuera del alcance de QA por política**, no por omisión: verificar la re-corrida idempotente exige disparar el installer —una escritura— y la única org con la instalación completa es de producción. QA no ejecuta escenarios que requieran tocar una org productiva, así que ese AC no se incluye como escenario y no arrastra el pass rate. Queda como entrega del dev/PM. El detalle, con la revisión de los 10 perfiles `sf` logueados y la validación de solo lectura de la técnica del step T6 contra tres orgs de trainings, está en `ac7-excluded-prod-only.txt`.
+
+  Ninguna org fue escrita durante esta corrida.
+testCaseIds:
+- TC-141
+environment:
+  name: 'MigrationAppBackend @ main 11f95fab (PR #336) · jest 232 suites/2747 tests · sin HTTP en vivo · sf CLI
+    solo lectura sobre orgs de trainings'
+  url: https://github.com/Veevarts/MigrationAppBackend/pull/306
+  buildVersion: Backend/servicio (NestJS hexagonal + Step Functions + SAM) — el cambio funcional es la regla de
+    orden de dependencias, la partición del registry, el adapter HTTP de T1 y su llave de idempotencia de dos niveles,
+    más el cableado del objeto y los ASL de las state machines
+  branch: main
+  commit: 11f95fab
+  repository: Veevarts/MigrationAppBackend
+  pullRequest: https://github.com/Veevarts/MigrationAppBackend/pull/306
+  dataSource: código del repo + specs del dev; verificación de orgs por sf CLI en modo SOLO LECTURA (InstalledSubscriberPackage)
+    sobre illinois-trainings, veevartd y hammer-trainings
+  notes: 'El alcance real de IM-741 son 17 PRs mergeados (306, 307, 310, 312, 314, 321, 322, 328, 330, 332, 334,
+    336 + 5 promociones a stable), no los 4 que nombra el ticket. La corrida end-to-end del dev es en PRODUCCIÓN
+    (org 00DWI00000GLw9R2AT): fuera del alcance de QA por política. Se revisaron los 10 perfiles sf logueados y
+    ese orgId no está entre ellos. Las únicas llamadas a Salesforce en esta corrida fueron SELECT de solo lectura
+    sobre InstalledSubscriberPackage en illinois-trainings, veevartd y hammer-trainings.'
+status: completed
+executedBy: codex
+startedAt: '2026-08-04T15:30:00Z'
+completedAt: '2026-08-04T16:20:00Z'
+summary:
+  total: 6
+  passed: 6
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+results:
+- scenarioIndex: 1
+  scenarioTitle: IM-741 AC1 — The registry is read fresh on every run and every row with a valid 04t installs in
+    a dependency order the registry itself cannot express, one install-job per package, each polled to a terminal
+    per-org status
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T15:50:00Z'
+  actual: 'Verificado sobre `main @ 11f95fab` (PR #336, el último funcional de IM-741). La regla entregada tiene
+    **cuatro tiers**: Auctifera+NPSP → VNFP → Veevart Data Model+Veevart Reporting → todo lo demás por `localeCompare`.
+    Solo se nombran las **raíces**, así que un paquete nuevo del registry cae solo en el último tier sin tocar código
+    — que es exactamente lo que pedía el ticket ("una regla, nunca una lista"). **Mutation testing, 3 de 3 load-bearing:**
+    quitar `TIER_1_CORE` → 6 tests fallan; quitar `TIER_2_PLATFORM` → 1 falla; romper `normalizeName` → 5 fallan.'
+  attachments:
+  - name: order-rule-and-mutations.txt
+    path: attachments/tr-152-tc-141/scenario-1/order-rule-and-mutations.txt
+    mimeType: text/plain
+    size: 3582
+  - name: revert-proof-order-and-idempotency.log
+    path: attachments/tr-152-tc-141/scenario-1/revert-proof-order-and-idempotency.log
+    mimeType: text/plain
+    size: 444
+  - name: package-install-order.ts
+    path: attachments/tr-152-tc-141/scenario-1/package-install-order.ts
+    mimeType: text/x-typescript
+    size: 6076
+  notes: 'Objetivo cumplido. La guarda más valiosa es `normalizeName`: el registry llama al paquete `VeevartDataModel`
+    y el error de Salesforce lo llama `Veevart Data Model`; con match exacto la raíz no se reconocería y volvería
+    en silencio al último tier — **reproduciendo el bug sin ninguna señal**. Las dos trampas de collation están
+    documentadas en el propio archivo con la cita textual del fallo en prod. El código lleva un `TODO(IM-741)` reconociendo
+    que esto colapsa a un sort cuando DevOps exponga `installOrder`/`dependsOn`: hoy cada paquete nuevo con dependencias
+    reales exige editar el archivo, y el modo de falla es una corrida rota en un cliente.'
+- scenarioIndex: 2
+  scenarioTitle: IM-741 AC2 — A registry row whose 04t is unusable is skipped with a warning instead of failing
+    the run, including the literal "null" string sentinel
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T15:55:00Z'
+  actual: '`isPackageVersionId` valida por **patrón** (`VERSION_ID_PATTERN`), no por «string no vacío» — y eso es
+    precisamente lo que hace que el centinela `"null"` (cuatro caracteres, string válido) sea rechazado. `partitionRegistryPackages`
+    lo manda a `skipped` con una razón que nombra la versión publicada y el valor recibido vía `JSON.stringify`,
+    así que el centinela aparece citado y se distingue de un `null` real en el log. El spec del dev cubre las cuatro
+    formas: `null` real, el literal `"null"`, cadena vacía y registry vacío.'
+  attachments:
+  - name: registry-partition-sentinel.txt
+    path: attachments/tr-152-tc-141/scenario-2/registry-partition-sentinel.txt
+    mimeType: text/plain
+    size: 1779
+  notes: 'Objetivo cumplido. El modo de falla que este AC previene es concreto: una guarda escrita como `typeof
+    v === ''string'' && v.length > 0` habría aceptado el centinela e intentado instalar un paquete con id literal
+    `"null"`. Confirmado contra la corrida real: NPSP salió `skipped` y el `PlanRun` cerró `COMPLETED` igual — un
+    skip no es un fallo.'
+- scenarioIndex: 3
+  scenarioTitle: 'IM-741 AC3 SUPERSEDED — NPSP is no longer installed automatically by T3: the published plan has
+    nine required steps of which three are not packages, so NPSP ships as a manual MetaDeploy step'
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T16:00:00Z'
+  actual: '**El AC3 está superado por el propio desarrollo.** Dice que T3 instala «los seis paquetes» de NPSP automáticamente;
+    el PR #330 lo cambió tras el fallo real `npsp: FieldSet(Account.BDE_Entry_FS) In field: RecordTypeId - no CustomField
+    named Account.RecordTypeId found`. NPSP no son seis paquetes: el plan publicado tiene **nueve** pasos, todos
+    `is_required`, y **tres no son paquetes** (Account Record Types, Opportunity Record Types, NPSP Config for Mobile
+    App). Los pasos 6 y 7 corren **entre** las dependencias y `npsp` porque sus field sets referencian `Account.RecordTypeId`,
+    que solo existe una vez que Account tiene record types — y un managed package no puede crearlos sobre un objeto
+    estándar. QA verificó que el seed `ic-3-01` declara los tres pasos entregados: NPSP manual por MetaDeploy →
+    T1 → verificación T6.'
+  attachments:
+  - name: ac3-superseded-npsp-manual.txt
+    path: attachments/tr-152-tc-141/scenario-3/ac3-superseded-npsp-manual.txt
+    mimeType: text/plain
+    size: 3045
+  notes: 'El **código hace lo correcto**; el AC es el que quedó viejo. Se registra como **deuda de documentación
+    del ticket**, no como defecto. ⚠️ **Precisión sobre `NpspInstall-SM`:** el dev la reporta como *deployed but
+    currently unrouted*. `run-sm.asl.json` **sí la cablea** — `Choice[1] → NpspInstallSMInvoke` con `kind==AUTOMATED
+    ∧ tool==T3 ∧ inputPayload.op==installPackages`. Está viva y dispararía en cuanto algún case declare un step
+    así; hoy no se alcanza sólo porque el catálogo no lo declara. «Cableada pero inalcanzable» ≠ «sin rutear», y
+    la diferencia importa: no es código muerto que se pueda borrar en un refactor.'
+- scenarioIndex: 4
+  scenarioTitle: IM-741 AC4 — The idempotency key is attempt-independent, so a Step Functions retry of the same
+    step replays the existing job instead of installing twice
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T16:05:00Z'
+  actual: 'El diseño es de **dos niveles** y el ticket solo describe uno. Nivel 1, llave del step (`${planRunId}#${caseRunId}#${stepRunId}#${attempt}`),
+    **sí** incluye el intento y alimenta el `ToolResultStore`. Nivel 2, la llave que viaja al servicio: `jobIdempotencyKey
+    = stepKey.replace(/#\d+$/,'''') + ''#'' + packageVersionId` — **strippea el intento** y apenda el `04t`. Esa
+    es la que satisface el AC4. **Mutación:** reinyectar el attempt → 1 test falla, así que el invariante está lockeado
+    por un test y no solo por el comentario.'
+  attachments:
+  - name: idempotency-two-level-design.txt
+    path: attachments/tr-152-tc-141/scenario-4/idempotency-two-level-design.txt
+    mimeType: text/plain
+    size: 3127
+  - name: revert-proof-order-and-idempotency.log
+    path: attachments/tr-152-tc-141/scenario-1/revert-proof-order-and-idempotency.log
+    mimeType: text/plain
+    size: 444
+  notes: 'Objetivo cumplido. El `04t` se apenda porque un solo step instala muchos paquetes y la llave del step
+    pelada colisionaría entre ellos; la llave sigue siendo run-scoped para que un plan-run nuevo no herede un job
+    terminal. Va en el **body**, no en cabecera: el servicio ignora `Idempotency-Key` por completo. **Imprecisión
+    de comentario detectada** (no defecto): el handler dice que el chequeo del `ToolResultStore` hace que «an SFN
+    retry of the step replays instead of reinstalling», pero como esa llave termina en el attempt, un Task retry
+    de SFN no acierta esa caché — a ese caso lo cubre la llave de nivel 2. Los dos niveles juntos cubren ambos;
+    el comentario leído solo sugiere que la caché cubre más de lo que cubre.'
+- scenarioIndex: 5
+  scenarioTitle: IM-741 AC5 — A job that ends ERROR with retryable true is requeued exactly once through the retry
+    endpoint before the package is declared failed
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T16:08:00Z'
+  actual: 'Cubiertos **los dos lados del predicado** en `t1-installer.http-adapter.spec.ts`, bajo `describe(''T1InstallerHttpAdapter
+    — retry of retryable failures'')`: «requeues a retryable ERROR once and reports the eventual success» (fixture
+    `{status:''ERROR'', retryable:true}`) y «does not requeue a non-retryable ERROR» (fixture `{status:''ERROR'',
+    retryable:false}`). El contrato del servicio está documentado en el header del spec: `POST install-jobs/{id}/retry
+    → { jobId, requeued }`.'
+  attachments:
+  - name: retry-once.txt
+    path: attachments/tr-152-tc-141/scenario-5/retry-once.txt
+    mimeType: text/plain
+    size: 1447
+  notes: 'Objetivo cumplido. El reintento no altera la llave de idempotencia —sigue siendo la misma llave de job—
+    así que reencolar no puede degenerar en una segunda instalación: AC4 y AC5 se sostienen juntos. **Límite de
+    alcance declarado:** es cobertura de contrato sobre un fetch stubbeado (el ticket exige que ningún test haga
+    HTTP en vivo). Prueba que el adapter llama al endpoint una vez y cómo interpreta la respuesta; no prueba el
+    comportamiento del servicio real de DevOps ante ese reintento.'
+- scenarioIndex: 6
+  scenarioTitle: IM-741 AC6 — When a package fails the sequence stops, every later package reports "not attempted",
+    and the reported errorMessage is the real root cause rather than a wrapper
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-04T16:12:00Z'
+  actual: '`notAttempted` en `package-install-result.ts` produce `not attempted: earlier package <X> failed` — **nombra
+    al paquete que detuvo la secuencia**, no es un mensaje genérico. El spec asserta explícitamente `expect(result.packages[2].message).toContain(''not
+    attempted'')` bajo «stops the sequence when a package fails, marking the rest not attempted». Los tres estados
+    quedan distinguibles y sin colapsar: `skipped` (no tenía 04t, nunca se intentó, no es problema), `failed` (se
+    intentó y falló), `not attempted` (no se intentó porque algo anterior falló).'
+  attachments:
+  - name: stop-on-failure.txt
+    path: attachments/tr-152-tc-141/scenario-6/stop-on-failure.txt
+    mimeType: text/plain
+    size: 1963
+  notes: 'Objetivo cumplido. Detenerse es lo correcto porque el orden es de dependencias: seguir intentando produciría
+    una cascada de fallos derivados que enterraría la causa raíz. Y la causa raíz llega **accionable**: los dos
+    fallos reales documentados (`FieldSet ... RecordTypeId` de NPSP y `Veevart Ticketing ... depends on package
+    ''Veevart Data Model'', version ''0.1''`) fueron suficientes para diagnosticar y arreglar sin instrumentación
+    adicional. Confundir los tres estados es el modo de falla obvio de un reporte de instalación: un operador que
+    ve «no instalado» sin saber por qué no puede decidir si reintentar, escalar o ignorar.'
+defects: []
+history:
+- action: started
+  timestamp: '2026-08-04T15:30:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: Arranca la ejecución de TC-141 sobre MigrationAppBackend main@11f95fab tras aprobarse el gate del bundle.
+- action: completed
+  timestamp: '2026-08-04T16:20:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: '6/6 PASS, 0 defectos. Regla de orden (3 mutaciones) y llave de idempotencia (1 mutación) probadas load-bearing;
+    suite completa 232/2747 re-derivada; AC3 documentado como superado por el PR #330. AC7 excluido por política:
+    requiere disparar el installer contra una org de producción.'
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-04T16:20:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-04T16:40:00Z'
