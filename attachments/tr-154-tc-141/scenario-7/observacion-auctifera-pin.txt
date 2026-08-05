@@ -1,0 +1,67 @@
+TR-154 · IM-741 / TC-141 · Escenario 7 (AC7) — observación abierta
+Severidad: BAJA · No bloquea el AC7 · No es defecto de comportamiento
+
+===============================================================================
+QUÉ SE OBSERVÓ
+===============================================================================
+En LAS DOS corridas, el installer sometió un PackageInstallRequest para
+`04tHo000000KySOIA0` y Salesforce lo rechazó con:
+
+  "Package(033C0000000FUL1) Unable to install., Details: A newer version of this
+   package is currently installed."
+
+  033C0000000FUL1 = SubscriberPackage de Auctifera
+  La org tiene Auctifera 8.318.0.2 (04thk000000qDBIAA2), que es MÁS NUEVA que la
+  versión que el installer intenta poner.
+
+  run 1 -> 19:39:35  04tHo000000KySOIA0  ERROR
+  run 2 -> 20:05:03  04tHo000000KySOIA0  ERROR   (idéntico, determinista)
+
+También aparece el mismo ERROR en el historial del dev del 2026-08-03 y
+2026-08-04, así que no es de esta corrida: pasa siempre.
+
+===============================================================================
+POR QUÉ NO INVALIDA EL AC7
+===============================================================================
+El AC7 pide: "every package reports already-installed / applied and the run
+succeeds."
+
+  - La corrida SUCCEEDS: `completed`, 3/3 done, 0 failed. ✅
+  - NO hay mutación de la org: el request es rechazado por Salesforce antes de
+    tocar nada; el 04t instalado de Auctifera no cambia entre PRE y POST. ✅
+  - El installer TOLERA el error y sigue con el resto de la secuencia. ✅
+
+Es decir: el resultado observable del AC7 se cumple.
+
+===============================================================================
+POR QUÉ IGUAL VALE LA PENA REPORTARLO
+===============================================================================
+Estrictamente, la re-corrida no es un no-op *limpio*: de los 9 paquetes del set,
+8 se detectan como "ya instalados" ANTES de someter el job (0 requests), pero
+Auctifera NO — se somete un install que siempre falla.
+
+La detección de "already-installed" cubre el caso "misma versión" pero NO el caso
+"hay una versión más nueva instalada". Consecuencias:
+
+  1. Cada corrida quema un intento de instalación y ~3 minutos de reloj.
+  2. Cada corrida deja un PackageInstallRequest en ERROR en la org del cliente.
+     Un IE que audite PackageInstallRequest verá errores rojos recurrentes en una
+     corrida que la app reporta verde. Es ruido que induce a error.
+  3. Si algún día el installer endureciera el manejo de errores de Salesforce,
+     este caso pasaría de "tolerado" a "falla la corrida" sin que nadie haya
+     cambiado nada del installer.
+
+===============================================================================
+RECOMENDACIÓN (para el dev, no bloqueante)
+===============================================================================
+Cualquiera de las dos:
+
+  a) Actualizar el pin de Auctifera para que apunte a la versión vigente
+     (8.318.0.2 / 04thk000000qDBIAA2) en vez de 04tHo000000KySOIA0; o
+
+  b) Extender la comprobación de already-installed para tratar
+     "versión instalada >= versión objetivo" como satisfecha, y reportar
+     `already-installed` sin someter el job.
+
+La (b) es más robusta: sobrevive a que el cliente tenga una versión más nueva por
+cualquier otra vía, que es justo el escenario que dispara esto.

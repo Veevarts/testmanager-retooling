@@ -1,0 +1,81 @@
+TR-154 · IM-741 / TC-141 · POST-verify — cotejo PRE / post-run1 / post-run2
+Fecha: 2026-08-05 · Todas las queries de solo lectura
+
+===============================================================================
+1. CONTEO DE PAQUETES EN LOS TRES CORTES
+===============================================================================
+  PRE (antes del run 1)        7 paquetes
+  POST run 1                  15 paquetes   (+8)
+  POST run 2                  15 paquetes   (+0)   <-- el no-op
+
+===============================================================================
+2. ESTADO FINAL, PAQUETE POR PAQUETE  (POST run 2)
+===============================================================================
+  SELECT SubscriberPackage.Name, SubscriberPackage.NamespacePrefix,
+         SubscriberPackageVersion.MajorVersion/Minor/Patch/Build,
+         SubscriberPackageVersion.Id
+  FROM InstalledSubscriberPackage ORDER BY SubscriberPackage.Name
+
+   # | Paquete                   | ns          | versión     | 04t                | origen
+  ---|---------------------------|-------------|-------------|--------------------|--------
+   1 | Affiliations              | npe5        | 3.14.0.3    | 04t4w000000tQ1HAAU | PRE
+   2 | Auctifera                 | Auctifera   | 8.318.0.2   | 04thk000000qDBIAA2 | PRE
+   3 | Contacts & Organizations  | npe01       | 3.23.0.3    | 04t4w0000004ALTAA2 | PRE
+   4 | Households                | npo02       | 3.19.0.3    | 04t4w000000gfNKAAY | PRE
+   5 | Nonprofit Success Pack    | npsp        | 3.237.0.2   | 04tKd000000el3CIAQ | PRE
+   6 | Recurring Donations       | npe03       | 3.26.0.3    | 04t4w000000gfNFAAY | PRE
+   7 | Relationships             | npe4        | 3.16.0.4    | 04t4w000001A00cAAC | PRE
+   8 | Veevart Accounting        | veevart     | 0.8.0.1     | 04tVs000000J4KrIAK | run 1
+   9 | Veevart Data Model        | veevart     | 0.3.0.4     | 04tVs000000IySLIA0 | run 1
+  10 | Veevart Forms             | veevart     | 1.1.0.1     | 04tVs000000Fg8bIAC | run 1
+  11 | Veevart Nonprofit         | vnfp        | 2.301.0.1   | 04thk000000BXQbAAO | run 1
+  12 | Veevart Payments          | veevart     | 1.2.0.0     | 04tVs000000Ezd7IAC | run 1
+  13 | Veevart Rentals & Groups  | veevart     | 0.3.0.1     | 04tVs000000Cr0XIAS | run 1
+  14 | Veevart Reporting         | veevreport  | 1.16.0.1    | 04tQH0000093tE5YAI | run 1
+  15 | Veevart Ticketing         | veevart     | 0.17.0.13   | 04tVs000000GIVdIAO | run 1
+
+===============================================================================
+3. LA PRUEBA DEL NO-OP  (AC7)
+===============================================================================
+  Comparación post-run1 vs post-run2:
+
+    conteo de InstalledSubscriberPackage   15  ->  15    sin cambio
+    conjunto de SubscriberPackageVersion.Id  idéntico     sin cambio
+    versiones                                idéntico     sin cambio
+    duplicados                                0            ninguno
+    install requests en la ventana del run 2  1 (el pin de Auctifera, ERROR)
+
+  Los 8 paquetes instalados por el run 1 mantienen EL MISMO 04t después del run 2.
+  Ninguno fue reinstalado, degradado ni duplicado.
+
+  >>> AC7 = PASS. Verificado en dos planos independientes:
+      (a) el plano de la app  -> PlanRun dd1d8959 cerró `completed`, 3/3 done, 0 failed
+      (b) el plano de la org  -> 0 install requests para los paquetes ya instalados
+                                 y estado byte-idéntico
+
+  El plano (b) es el que importa: no depende de que la app reporte la verdad.
+
+===============================================================================
+4. VERIFICACIÓN DE NAMESPACES  (el step 3 del case)
+===============================================================================
+  SELECT COUNT() FROM EntityDefinition WHERE NamespacePrefix = '<ns>'
+
+    vnfp        58 objetos
+    Auctifera  651 objetos
+    npsp       124 objetos
+    veevart      9 objetos
+    veevreport   0 objetos
+
+  Los tres namespaces core que el step verifica (npsp, Auctifera, vnfp) resuelven
+  con objetos reales. `veevreport` en 0 es esperable: Veevart Reporting entrega
+  reportes/dashboards, que no son EntityDefinition. El propio step
+  "Verify the core package namespaces resolve in the org" cerró `done` en ambas
+  corridas.
+
+===============================================================================
+5. AUSENCIA DE ESTADO PARCIAL
+===============================================================================
+  Ninguna de las dos corridas dejó paquetes a medio instalar, versiones mixtas ni
+  requests colgados en IN_PROGRESS. El único PackageInstallRequest no exitoso es
+  el del pin de Auctifera, que es determinista y no muta la org (ver
+  scenario-7/observacion-auctifera-pin.txt).

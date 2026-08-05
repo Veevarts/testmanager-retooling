@@ -1,0 +1,258 @@
+schemaVersion: '1.0'
+id: tr-d7640653-f0a7-48a8-bd30-06ef6652647f
+key: TR-154
+title: 'TR-154 · IM-741 · TC-141 · AC7 verificado en vivo — dos corridas consecutivas del installer contra la misma
+  org prueban el no-op; además corrige tres afirmaciones erróneas de QA, incluida la que sacó al AC7 del alcance'
+description: |-
+  Tercera ejecución de TC-141, disparando **dos corridas reales del IE** por la API de la Migration App contra la
+  org **`00DWI00000GLw9R2AT`** (`momentum-flow-9884-dev-ed.scratch`). Completa TR-152 (verificación a nivel de
+  código) y TR-153 (primera corrida en vivo, que murió en el AuthBroker).
+
+  **Veredicto: 7/7 PASS · 0 defectos · 1 observación de severidad baja · 1 hallazgo lateral fuera de alcance.**
+
+  ## Lo que desbloqueó todo: la org nunca fue de producción
+
+  TC-141, TR-152 y TR-153 trataron `00DWI00000GLw9R2AT` como una org productiva, y sobre esa creencia se excluyó
+  el AC7 del alcance de QA. La medición dice otra cosa:
+
+  | campo | valor |
+  |---|---|
+  | `Organization.Name` | **IM-735 Package Install Test** |
+  | `OrganizationType` | Developer Edition |
+  | `IsSandbox` | true |
+  | `TrialExpirationDate` | 2026-08-29 |
+
+  Es una scratch desechable creada para probar este ticket. **El AC7 siempre fue QA-ejecutable**; la exclusión se
+  apoyó en un hecho equivocado, no en una regla. Escenario 7 restituido y ejecutado.
+
+  ## Las dos corridas
+
+  La org tenía Tier 0 completo (Auctifera 8.318.0.2 + NPSP 3.237.0.2 + sus 5 dependencias) y **cero paquetes
+  Veevart**, así que no estaba "ya instalada" y el AC7 exigía dos corridas:
+
+  | | run 1 `6e4ab4cb` | run 2 `dd1d8959` |
+  |---|---|---|
+  | resultado | `completed` 3/3, 0 failed | `completed` 3/3, 0 failed |
+  | duración | ~24 min | **~3.7 min** |
+  | install requests | 9 (8 SUCCESS + 1 ERROR) | **1** (el mismo ERROR) |
+  | paquetes nuevos | 8 (7 → 15) | **0** |
+
+  **Los 8 paquetes que instaló el run 1 generaron CERO `PackageInstallRequest` en el run 2.** No es que se
+  reinstalaran rápido: el job no se sometió. La detección de "ya está en versión" ocurre antes del submit, que es
+  el contrato que la propia descripción del case declara: *"Idempotent — a package already at version reports
+  already-installed, so re-running is a no-op"*. Estado final byte-idéntico: mismos 15 paquetes, mismos `04t`,
+  cero duplicados.
+
+  El AC7 queda probado en **dos planos independientes**: el de la app (PlanRun verde) y el de la org (0 requests +
+  estado inmutable). El segundo es el que vale, porque no depende de que la app diga la verdad.
+
+  ## AC1 medido contra la org, no contra el código
+
+  El orden real de instalación reprodujo exactamente la regla de tiers de `package-install-order.ts`, incluidas
+  las dos trampas de collation que el AC describe: VNFP quedó **antes** de los `Veevart …` (no al final), y
+  `VeevartDataModel` **antes** de `Veevart Ticketing`, que depende de él. Un install-job por paquete, cada uno
+  poleteado a terminal antes del siguiente (~1m24s entre cierres, sin solape).
+
+  ## Tres correcciones a lo que QA había afirmado
+
+  1. **La org no es productiva** (arriba) — cambió el alcance del TC.
+  2. **"El AuthBroker de dev no mintea sesión para ninguna org" era falso.** Hoy minteó sin problema, y el listado
+     del workspace muestra corridas verdes contra illinois-trainings el 2026-07-27. El diagnóstico correcto es el
+     que QA había planteado *primero* y luego descartó: los fallos del 2026-08-04 eran de **autorización de esas
+     orgs concretas** en el AuthBroker — justo la precondición que el ticket declara dos veces. La org que
+     funcionó hoy fue autorizada 30 min antes de correr; las que fallaron databan de junio y julio.
+  3. **El case es `ic-3-01-install-veevart-packages`** (order 300), no `ic-3-01-install-auctifera` (order 297, que
+     es el install manual de Auctifera). Referencias previas a "re-correr ic-3-01" eran ambiguas.
+
+  ## Observación abierta (severidad baja, no bloquea)
+
+  En **ambas** corridas el installer somete `04tHo000000KySOIA0` (pin de Auctifera) y Salesforce lo rechaza:
+  *"A newer version of this package is currently installed"*. La org tiene 8.318.0.2, más nueva que el pin. El
+  installer lo tolera y la corrida cierra verde, así que el AC7 se cumple — pero la re-corrida no es un no-op
+  *limpio*: la detección de already-installed cubre "misma versión" y no "hay una más nueva instalada". Cada
+  corrida quema un intento y deja un `PackageInstallRequest` en ERROR que un IE auditando la org verá como rojo
+  en una corrida verde. Recomendación al dev en el adjunto.
+
+  ## Hallazgo lateral (fuera del alcance de IM-741)
+
+  La página **Audit log** de un plan run está siempre vacía porque el endpoint que consume no existe:
+  `GET /implementations/runs/{planRunId}/audit` → **404**. Verificado sobre un run `completed` con transiciones
+  reales y una atestación humana. No es responsabilidad del installer, pero deja sin trazabilidad cualquier
+  corrida del IE.
+testCaseIds:
+- TC-141
+environment:
+  name: Migration App dev (workspace Test IM cases Org Tucson) · plan-runs API · org 00DWI00000GLw9R2AT
+    (momentum-flow-9884-dev-ed.scratch, Developer Edition, NO productiva) · case ic-3-01-install-veevart-packages
+    v2 · backend main@11f95fab
+  url: https://migration.dev.rtl.veevartapp.com
+  buildVersion: Dos corridas en vivo del IE (Path A · API) — POST /implementations/plan-runs con caseIds exactos,
+    atestación del handoff de NPSP fundada en estado medido, polling del run detail, y cotejo PRE/POST en la org
+    por REST + Tooling API de solo lectura (InstalledSubscriberPackage, PackageInstallRequest, EntityDefinition)
+  branch: main
+  commit: 11f95fab
+  repository: Veevarts/MigrationAppBackend
+  pullRequest: https://github.com/Veevarts/MigrationAppBackend/pull/306
+  dataSource: plan-runs API del workspace dev (runs 6e4ab4cb-e5ac-47c1-8621-5acb40a71784 y
+    dd1d8959-f09d-484a-8429-71c8df0ad463) + Salesforce REST/Tooling API v62.0 de solo lectura sobre
+    00DWI00000GLw9R2AT
+  notes: 'Las dos corridas terminaron completed 3/3 con 0 failed. El handoff manual de NPSP se parqueó en ambas y
+    lo atestó QA con fundamento verificable: NPSP 3.237.0.2 y sus 5 dependencias estaban medidas como instaladas
+    en el baseline PRE antes de atestar. Ninguna escritura fuera de la scratch de pruebas.'
+status: completed
+results:
+- scenarioIndex: 1
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    AC1 verificado ahora **contra la org**, no solo contra el código. El run 1 produjo un
+    PackageInstallRequest por paquete, en este orden y sin solape temporal:
+
+      tier 0 -> Auctifera            19:39:35
+      tier 1 -> VNFP                 19:42:47
+      tier 2 -> Veevart Data Model   19:52:18
+                Veevart Reporting    19:53:35
+      tier 3 -> Accounting           19:54:59
+                Forms                19:56:23
+                Payments             19:57:48
+                Rentals & Groups     19:59:12
+                Ticketing            20:01:30
+
+    Coincide exactamente con TIER_0_FOUNDATIONS / TIER_1_CORE / TIER_2_PLATFORM de
+    package-install-order.ts, incluido el orden interno de TIER_2. Las dos trampas de collation
+    que el AC nombra quedaron desmentidas en vivo: VNFP se instaló ANTES de los `Veevart …`
+    (localeCompare lo dejaría al final) y `VeevartDataModel` ANTES de `Veevart Ticketing`, que
+    depende de él. Un job por paquete, cada uno a estado terminal antes del siguiente (~1m24s
+    entre cierres consecutivos, cero solape). 8 paquetes nuevos, de 7 a 15.
+  notes: Evidencia en attachments/tr-154-tc-141/run1/install-run-transcript.txt y post/pre-vs-post-and-noop-proof.txt
+- scenarioIndex: 2
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    NPSP no aparece en ningún PackageInstallRequest de las dos corridas: la fila del registry sin
+    `04t` usable no se intenta instalar por T1. Las corridas cerraron `completed` con 0 failed, de
+    modo que el skip no es un fallo. Consistente con la partición verificada a nivel de código en
+    TR-152 (isPackageVersionId rechaza el centinela string "null", el null real, la cadena vacía y
+    un 04t con forma inválida).
+  notes: La cadena NPSP llega hoy por el step manual de MetaDeploy, no por T1 — ver escenario 3
+- scenarioIndex: 3
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    Confirmado en vivo que el AC3 del ticket está SUPERADO. El case expone el paso de NPSP como
+    step de tipo `handoff` / `manual` llamado "Install NPSP through MetaDeploy", que se parquea en
+    `blocked-human` y espera atestación humana — no como una instalación automática de seis
+    paquetes vía T3 `installPackages`. Se comportó así en las DOS corridas.
+
+    El comportamiento entregado es correcto; lo que está desactualizado es la redacción del AC3,
+    que debe reescribirse en el ticket.
+  notes: 'Motivo del cambio (PR #330): el plan publicado por Salesforce.org tiene 9 pasos required,
+    3 de los cuales no son paquetes'
+- scenarioIndex: 4
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    Sostenido desde TR-152 a nivel de código: jobIdempotencyKey() en t1-installer.http-adapter.ts
+    hace `stepIdempotencyKey.replace(/#\d+$/, '')` para quitar el intento y le concatena el
+    packageVersionId, así que la llave es attempt-independiente por construcción.
+
+    La re-corrida de hoy aporta evidencia consistente en el plano observable: ningún paquete ya
+    instalado se instaló dos veces, que es el efecto que la idempotencia debe garantizar.
+  notes: Verificación directa de la llave = código + mutación (TR-152); aquí solo el efecto observable
+- scenarioIndex: 5
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    Sostenido desde TR-152: el requeue vía POST /install-jobs/{jobId}/retry ocurre exactamente una
+    vez para un ERROR con retryable:true, un segundo ERROR retryable declara el fallo sin volver a
+    reintentar, y un ERROR con retryable:false (o sin el campo) no se reintenta. Cobertura probada
+    load-bearing por mutación.
+
+    Ninguna de las corridas de hoy produjo un ERROR retryable del servicio, así que no había ruta
+    viva que ejercitar sin fabricar un fallo artificial.
+  notes: Verificado por código + mutación en TR-152; no reproducible en vivo sin inducir un fallo del servicio
+- scenarioIndex: 6
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:02:00Z'
+  actual: |-
+    Verificado en TR-153 contra fallos reales: al morir el step de instalación, el step siguiente
+    del mismo case quedó en `pending` y NUNCA se intentó, en las 3 corridas fallidas, con la causa
+    raíz propagada verbatim en el campo `error`.
+
+    Las corridas de hoy confirman el lado complementario del mismo mecanismo: el handoff parqueado
+    dejó al step auto siguiente en `pending` (no `running`) en ambas, que es el comportamiento que
+    introdujo el PR #334. El engine no adelanta trabajo del mismo case mientras el anterior no cierre.
+  notes: Evidencia de fallo real en TR-153; confirmación del gating en attachments/tr-154-tc-141/run1/install-run-transcript.txt
+- scenarioIndex: 7
+  testCaseId: 6539596d-d2b4-4f9e-84e7-30069c824578
+  testCaseKey: TC-141
+  status: passed
+  executedAt: '2026-08-05T20:08:22Z'
+  actual: |-
+    AC7 EJECUTADO Y PROBADO — el escenario que TR-152 y TR-153 habían excluido por creer que la org
+    era productiva.
+
+    Run 2 (dd1d8959) contra la misma org, sin tocar nada entre corridas:
+
+      PlanRun            completed · 3/3 done · 0 failed
+      duración           ~3.7 min   (vs ~24 min del run 1 -> 6.5x)
+      install requests   1          (vs 9 del run 1)
+      paquetes nuevos    0          (15 antes, 15 después)
+      04t de los 15      idénticos  (cero reinstalaciones, cero duplicados, cero cambios de versión)
+
+    >>> Los 8 paquetes instalados por el run 1 generaron CERO PackageInstallRequest en el run 2. <<<
+
+    No se reinstalaron rápido: el job no se sometió. La detección de "ya está en versión" ocurre
+    ANTES del submit, que es exactamente lo que declara el contrato del case ("Idempotent — a
+    package already at version reports already-installed, so re-running is a no-op").
+
+    Probado en dos planos independientes: el de la app (PlanRun verde) y el de la org (0 requests +
+    estado byte-idéntico). El segundo es el determinante porque no depende de lo que reporte la app.
+
+    El step manual de NPSP volvió a parquearse en la re-corrida y atestarlo no disparó reinstalación
+    de la cadena.
+
+    OBSERVACIÓN (severidad baja, no invalida el AC): el pin de Auctifera 04tHo000000KySOIA0 se
+    somete en AMBAS corridas y Salesforce lo rechaza con "A newer version of this package is
+    currently installed" (la org tiene 8.318.0.2). El installer lo tolera y la corrida cierra verde,
+    pero la detección de already-installed no cubre el caso "hay una versión más nueva instalada",
+    así que cada corrida quema un intento y deja un request en ERROR en la org.
+  notes: Evidencia en attachments/tr-154-tc-141/run2/noop-rerun-transcript.txt, post/pre-vs-post-and-noop-proof.txt
+    y scenario-7/observacion-auctifera-pin.txt
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+defects: []
+history:
+- action: created
+  timestamp: '2026-08-05T20:30:00Z'
+  user: codex
+  reason: Tercera ejecución de TC-141 — se restituye el escenario AC7 tras comprobar que la org de la corrida verde
+    es una scratch de pruebas y no una org productiva
+- action: completed
+  timestamp: '2026-08-05T20:35:00Z'
+  user: codex
+  reason: 7/7 PASS con AC7 verificado en vivo por dos corridas consecutivas; 0 defectos, 1 observación de severidad
+    baja sobre el pin de Auctifera y 1 hallazgo lateral (endpoint de audit 404) fuera del alcance de IM-741
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-05T20:30:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-05T20:35:00Z'

@@ -81,19 +81,26 @@ description: |-
 
   ## Estado de la entrega
 
-  El dev reporta (comentario del 2026-08-04) la **primera corrida end-to-end exitosa**, en
-  **producción**: run `381d1432-686c-40d0-ab63-621967935843`, org `00DWI00000GLw9R2AT`,
-  ~33 min, `PlanRun: COMPLETED`, 10 paquetes. Esa corrida es la evidencia principal de los AC
-  end-to-end y **QA no la puede repetir**: escribir en una org de producción está prohibido, y
-  ese orgId no está entre los alias `sf` disponibles en la máquina de QA.
+  El dev reporta (comentario del 2026-08-04) la **primera corrida end-to-end exitosa**: run
+  `381d1432-686c-40d0-ab63-621967935843`, org `00DWI00000GLw9R2AT`, ~33 min,
+  `PlanRun: COMPLETED`, 10 paquetes.
+
+  **CORRECCIÓN 2026-08-05 — esa org NO es de producción.** `00DWI00000GLw9R2AT` es una
+  Developer Edition **scratch** (`momentum-flow-9884-dev-ed.scratch.my.salesforce.com`) cuyo
+  `Organization.Name` es literalmente **"IM-735 Package Install Test"**. La corrida del dev fue
+  en una org de pruebas desechable, no en un entorno productivo. QA **sí puede repetirla**, y de
+  hecho la repitió: ver TR-154.
 
   ## Riesgos abiertos
 
   - **El alcance del ticket está desactualizado en dos frentes**: los PRs nombrados (4 de 17) y
     el AC3. Ambos hay que corregirlos en el ticket, no solo en la review.
-  - **La única corrida verde es en PRODUCCIÓN.** No hay corrida equivalente en un entorno no
-    productivo que QA pueda reproducir o auditar sin riesgo. Toda verificación de QA sobre esa
-    org es **solo lectura** y depende de acceso que hoy no está.
+  - ~~**La única corrida verde es en PRODUCCIÓN.**~~ **RESUELTO 2026-08-05**: la org de la
+    corrida verde es una scratch de pruebas, no producción. QA reprodujo el end-to-end completo
+    (TR-154) y además ejecutó el AC7. El riesgo real que queda es otro: **el installer no tiene
+    hoy una org de trainings donde correr** — los intentos contra `illinois-trainings` fallaron
+    por autorización del AuthBroker, así que la única cobertura viva vive en scratch orgs
+    efímeras (esta expira el 2026-08-29).
   - **El orden de dependencias se aprendió a punta de fallos.** Cada hecho de ordenamiento
     (VNFP al final, `VeevartDataModel` sin espacio cayendo después de `Veevart Ticketing`,
     Ticketing dependiendo de Data Model) salió de una corrida rota, no de un dato del registry.
@@ -112,21 +119,19 @@ description: |-
   - Las cifras del dev (185 suites / 1993 tests) son suyas: **se re-derivan, no se toman por
     buenas.**
 
-  ## AC7 queda FUERA DEL ALCANCE DE QA — por política, no por omisión
+  ## AC7 — estuvo excluido por error, y quedó verificado en vivo el 2026-08-05
 
-  El AC7 (*re-corrida contra una org ya instalada = no-op exitoso*) **no tiene escenario en este
-  test case**. Verificarlo exige **disparar el installer**, que es una escritura, y la única org
-  con la instalación completa es de **producción** (`00DWI00000GLw9R2AT`, run
-  `381d1432-686c-40d0-ab63-621967935843`).
+  Durante TR-152 y TR-153 este AC (*re-corrida contra una org ya instalada = no-op exitoso*) se
+  dejó **fuera del test case** con el argumento de que verificarlo exigía escribir en una org de
+  producción.
 
-  QA no ejecuta escenarios que requieran tocar una org productiva. No es una limitación de esta
-  corrida: es una regla permanente, así que el AC no se incluye como escenario "bloqueado" que
-  arrastre el pass rate — sencillamente no es QA-ejecutable desde aquí.
+  **Ese argumento era falso.** La org `00DWI00000GLw9R2AT` nunca fue productiva: es la scratch
+  Developer Edition "IM-735 Package Install Test", creada precisamente para probar este ticket.
+  La exclusión se apoyó en una identificación equivocada de la org, no en una regla de política.
 
-  Lo que sí se verificó, de solo lectura y como control de la técnica, está en
-  `attachments/tr-152-tc-141/ac7-excluded-prod-only.txt`: la aserción del step T6 corrida contra
-  tres orgs de trainings (`npsp`, `Auctifera` y `vnfp` resuelven en las tres), y la revisión de los
-  10 perfiles `sf` logueados confirmando que el orgId de la corrida no está entre ellos.
+  El escenario 7 lo cubre y TR-154 lo ejecuta: dos corridas consecutivas del mismo case contra la
+  misma org, la primera instalando y la segunda probando el no-op, con cotejo de
+  `PackageInstallRequest` e `InstalledSubscriberPackage` en ambas.
 
   **Queda como entrega del dev/PM, no de QA.** Y como riesgo de proceso a escalar: el propio ticket
   pedía verificación *against a sandbox*, y la única validación end-to-end existente vive en
@@ -140,13 +145,15 @@ preconditions:
   suite y las pruebas de reversión sobre la regla de orden
 - 'Node instalado; la suite del repo corre sin HTTP en vivo (el propio ticket lo exige: "No live HTTP in any test"),
   así que los escenarios de contrato son auto-ejecutables'
-- ⚠️ La corrida verde de referencia está en PRODUCCIÓN (org `00DWI00000GLw9R2AT`). Las orgs de producción NO se
-  escriben. Cualquier verificación sobre ella es de solo lectura y hoy NO hay alias `sf` para ese orgId — si no
-  se consigue, los escenarios end-to-end se apoyan en la evidencia del dev y se declara explícitamente qué no pudo
-  re-verificar QA
-- Acceso de lectura a la Migration App (`migration.rtl.veevartapp.com`) para auditar el PlanRun `381d1432-686c-40d0-ab63-621967935843`
-  sin dispararlo de nuevo
-- Nunca disparar una corrida de instalación contra una org de cliente ni de producción desde QA
+- '✅ CORREGIDO 2026-08-05: la org `00DWI00000GLw9R2AT` **no es de producción**. Es una Developer Edition scratch
+  (`momentum-flow-9884-dev-ed.scratch`) llamada literalmente "IM-735 Package Install Test", creada para probar
+  este ticket. La suposición de que era productiva fue lo que sacó al AC7 del alcance; con la org identificada
+  correctamente, el AC7 **sí es ejecutable por QA** y se ejecuta contra ella'
+- Acceso de escritura a esa scratch org vía la Migration App para disparar el case dos veces seguidas (instalación
+  + re-corrida), y acceso de lectura por API de Salesforce para el cotejo PRE/POST de `InstalledSubscriberPackage`
+  y `PackageInstallRequest`
+- Nunca disparar una corrida de instalación contra una org de cliente ni de producción desde QA — la scratch de
+  pruebas no es ninguna de las dos
 format: gherkin
 scenarios:
 - title: IM-741 AC1 — The registry is read fresh on every run and every row with a valid 04t installs in a dependency
@@ -330,6 +337,36 @@ scenarios:
     único que permite diagnosticar sin entrar a los logs'
   - verificar contra los fallos reales que documenta el dev (el `FieldSet ... RecordTypeId` de NPSP, el `EmailTemplateFolder`
     de VNFP) que el mensaje que llega arriba es accionable
+- title: IM-741 AC7 — A re-run against an already-installed org is a no-op that still succeeds, submitting zero
+    install jobs for packages already at version and leaving the org state byte-identical
+  tags:
+  - happy-path
+  - im-741
+  - im-1169
+  - im-735
+  - ac-7
+  - migration-app
+  - t1-installer
+  - idempotency
+  - no-op
+  - pr-306
+  given:
+  - una org donde el case `ic-3-01-install-veevart-packages` v2 ya corrió completo y dejó el set de paquetes Veevart
+    instalado
+  - 'la propia descripción del case lo declara como contrato: "Idempotent — a package already at version reports
+    already-installed, so re-running is a no-op"'
+  when:
+  - se dispara el MISMO case una segunda vez contra la MISMA org, sin cambiar nada entre corridas
+  then:
+  - el `PlanRun` cierra `completed` con todos los steps en `done` y **0 failed** — un no-op tiene que seguir siendo
+    verde, no "verde porque no hizo nada"
+  - 'cada paquete ya instalado reporta `already-installed`/aplicado y **no genera un `PackageInstallRequest` nuevo**:
+    la detección ocurre antes de someter el job, no después'
+  - 'el estado de la org queda idéntico: mismo conteo de `InstalledSubscriberPackage`, mismos `SubscriberPackageVersion.Id`,
+    cero duplicados y cero cambios de versión'
+  - 'la duración cae de forma drástica frente a la corrida que sí instaló — es la firma observable del no-op y
+    distingue "detectó que ya estaba" de "reinstaló encima"'
+  - verificar que el step manual de NPSP vuelve a parquearse y que atestarlo no dispara reinstalación de la cadena
 tags:
 - im-741
 - im-1169
@@ -351,10 +388,11 @@ tags:
 - pr-306
 - pr-330
 - pr-336
-- ac7-out-of-scope
+- ac-7-verified-live
+- scratch-org
 version: 1
 metadata:
   createdBy: codex
   createdAt: '2026-08-04T15:20:00Z'
   updatedBy: codex
-  updatedAt: '2026-08-04T16:35:00Z'
+  updatedAt: '2026-08-05T20:30:00Z'

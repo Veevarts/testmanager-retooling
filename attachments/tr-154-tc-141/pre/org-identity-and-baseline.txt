@@ -1,0 +1,90 @@
+TR-154 · IM-741 / TC-141 · PRE baseline
+Fecha: 2026-08-05 · Ejecutado por: codex (QA)
+
+===============================================================================
+1. IDENTIDAD DE LA ORG — la corrección que habilita todo lo demás
+===============================================================================
+
+Query (Salesforce REST v62.0, solo lectura):
+  SELECT Id, Name, OrganizationType, InstanceName, IsSandbox, TrialExpirationDate
+  FROM Organization
+
+Resultado:
+  Id                   00DWI00000GLw9R2AT
+  Name                 IM-735 Package Install Test
+  OrganizationType     Developer Edition
+  InstanceName         USA768S
+  IsSandbox            true
+  TrialExpirationDate  2026-08-29T14:35:58.000+0000
+  Instance URL         https://momentum-flow-9884-dev-ed.scratch.my.salesforce.com
+
+>>> ESTA ORG NO ES DE PRODUCCIÓN. <<<
+
+Es una scratch Developer Edition, con fecha de expiración, cuyo nombre declara su
+propósito: probar IM-735 / IM-741. TC-141 (rev. anterior), TR-152 y TR-153 la
+trataron como org productiva y por eso excluyeron el AC7 del alcance de QA.
+La exclusión se apoyaba en un hecho equivocado, no en una regla.
+
+Consecuencia: el AC7 SIEMPRE fue QA-ejecutable. Este run lo ejecuta.
+
+===============================================================================
+2. ESTADO DE PAQUETES ANTES DE CUALQUIER CORRIDA DE QA
+===============================================================================
+
+Query (Tooling API v62.0, solo lectura):
+  SELECT SubscriberPackage.Name, SubscriberPackage.NamespacePrefix,
+         SubscriberPackageVersion.MajorVersion, ...MinorVersion,
+         ...PatchVersion, ...BuildNumber, ...Id
+  FROM InstalledSubscriberPackage ORDER BY SubscriberPackage.Name
+
+  # | Paquete                      | ns         | versión    | 04t
+  --|------------------------------|------------|------------|-------------------
+  1 | Affiliations                 | npe5       | 3.14.0.3   | 04t4w000000tQ1HAAU
+  2 | Auctifera                    | Auctifera  | 8.318.0.2  | 04thk000000qDBIAA2
+  3 | Contacts & Organizations     | npe01      | 3.23.0.3   | 04t4w0000004ALTAA2
+  4 | Households                   | npo02      | 3.19.0.3   | 04t4w000000gfNKAAY
+  5 | Nonprofit Success Pack       | npsp       | 3.237.0.2  | 04tKd000000el3CIAQ
+  6 | Recurring Donations          | npe03      | 3.26.0.3   | 04t4w000000gfNFAAY
+  7 | Relationships                | npe4       | 3.16.0.4   | 04t4w000001A00cAAC
+
+  TOTAL PRE = 7 paquetes.
+
+Lectura:
+  - Tier 0 (Auctifera + NPSP y sus 5 dependencias 1GP) YA presente.
+    -> la precondición del case está satisfecha, y NPSP no necesita MetaDeploy.
+  - CERO paquetes Veevart: no están VNFP, Data Model, Reporting, Accounting,
+    Payments, Forms, Rentals & Groups ni Ticketing.
+
+>>> Por lo tanto la org NO estaba "ya instalada", y el AC7 no se puede probar con
+    una sola corrida. Hacen falta DOS:
+      run 1 = instalar (deja la org en el estado "already-installed")
+      run 2 = la prueba real del no-op
+
+===============================================================================
+3. HISTORIAL PREVIO EN LA ORG (contexto, no evidencia de QA)
+===============================================================================
+
+  SELECT SubscriberPackageVersionKey, Status, CreatedDate
+  FROM PackageInstallRequest ORDER BY CreatedDate DESC
+
+Hay actividad del dev los días 2026-08-03 y 2026-08-04 (secuencias completas de
+instalación, algunas con errores de dependencias ya resueltos). Los paquetes
+Veevart fueron desinstalados después, dejando la org en el estado PRE de arriba.
+
+Nota: el usuario describió la org como "totalmente nueva". Estrictamente no lo es
+—tiene historial de instalación previa— pero su ESTADO DE PAQUETES al momento de
+empezar sí es limpio del lado Veevart, que es lo que importa para este test.
+
+===============================================================================
+4. CABLEADO EN LA MIGRATION APP
+===============================================================================
+
+  GET /implementations/clients/cdff34f1-9774-41b0-a6a3-124bc03d11cb/orgs
+
+  orgId                 instanceUrl                                        state   connectedAt
+  00DWI00000CIwZi2AL    ilholocaustmuseum--trainings.sandbox                active  2026-06-22T20:11:21Z
+  00DWI00000GLw9R2AT    momentum-flow-9884-dev-ed.scratch                  active  2026-08-05T18:42:08Z   <-- target
+  00Dfj00000QJMx7EAH    orgfarm-eff80326ae-dev-ed.develop                  active  2026-07-02T17:08:26Z
+
+La org target fue conectada/autorizada HOY, ~30 min antes de la corrida. Las otras
+dos (las que fallaron con AuthBroker 500 el 2026-08-04) datan de junio y julio.

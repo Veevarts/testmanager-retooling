@@ -1,0 +1,85 @@
+TR-154 · IM-741 / TC-141 · Correcciones a lo que QA afirmó en TR-152 y TR-153
+Fecha: 2026-08-05
+
+Este run corrige tres afirmaciones de QA que la evidencia nueva desmiente. Se
+dejan por escrito porque dos de ellas se publicaron en Jira y una llegó a cambiar
+el alcance del test case.
+
+===============================================================================
+CORRECCIÓN 1 — "la org 00DWI00000GLw9R2AT es de producción"   (FALSO)
+===============================================================================
+  Dicho en: TC-141 (preconditions + descripción), TR-152, TR-153, comentarios en
+            IM-741 e IM-1169.
+
+  Realidad medida:
+    Organization.Name              "IM-735 Package Install Test"
+    Organization.OrganizationType  Developer Edition
+    Organization.IsSandbox         true
+    TrialExpirationDate            2026-08-29
+    instance                       momentum-flow-9884-dev-ed.scratch.my.salesforce.com
+
+  Es una scratch org desechable creada para probar este ticket.
+
+  IMPACTO: sobre esta creencia se construyó la exclusión del AC7 del alcance de
+  QA. La regla invocada ("QA no escribe en orgs productivas") es correcta; lo que
+  estaba mal era el hecho al que se aplicó. El AC7 siempre fue ejecutable.
+
+  LECCIÓN: verificar la identidad de una org (Organization.OrganizationType /
+  IsSandbox / Name) ANTES de declarar un escenario fuera de alcance por productivo.
+  Un orgId 00D... no dice nada por sí solo.
+
+===============================================================================
+CORRECCIÓN 2 — "el AuthBroker de dev no mintea sesión para NINGUNA org"  (FALSO)
+===============================================================================
+  Dicho en: TR-153 v2 (descripción) y en un comentario de corrección en IM-741.
+
+  Cómo se llegó a esa conclusión: 3 corridas del 2026-08-04 fallaron con
+  `AuthBroker returned status 500` en `mintSession` — dos contra illinois-trainings
+  (0a35de60, c9da6a0f) y una contra la orgfarm dev-ed (e42b4877). Que fallara
+  también contra una org distinta se leyó como "el broker está roto para todas".
+
+  Realidad medida hoy:
+    - Los runs 6e4ab4cb y dd1d8959 contra 00DWI00000GLw9R2AT mintearon sesión sin
+      problema y completaron 3/3.
+    - Además, el listado de plan runs del workspace muestra corridas VERDES previas
+      contra illinois-trainings el 2026-07-27 (5682c9b0 y 0a3fb75f, ambas 3/3 done).
+
+  Es decir: el AuthBroker de dev funciona, y funcionaba también antes.
+
+  DIAGNÓSTICO CORRECTO: el fallo del 2026-08-04 era **específico de la autorización
+  de esas orgs**, que es exactamente la precondición que el ticket declara dos veces:
+
+    "The org must be authorized in the AuthBroker — a DDB connect-org record is
+     not sufficient."
+
+  La org que funcionó hoy fue conectada/autorizada a las 18:42 del mismo día. Las
+  que fallaron databan de 2026-06-22 y 2026-07-02.
+
+  O sea: la hipótesis ORIGINAL de QA era la correcta, y la "corrección" que la
+  descartó fue el error. Se descartó porque fallaba contra dos orgs distintas, sin
+  considerar que ambas podían estar igual de desautorizadas.
+
+===============================================================================
+CORRECCIÓN 3 — el nombre del case
+===============================================================================
+  En notas y en un mensaje a dev se pidió "re-correr ic-3-01". Es ambiguo y apunta
+  al case equivocado:
+
+    ic-3-01-install-auctifera        order 297  -> install MANUAL de Auctifera
+    ic-3-01-install-veevart-packages order 300  -> ESTE es el T1 installer de IM-741
+
+===============================================================================
+HALLAZGO LATERAL (fuera del alcance de IM-741, se reporta aparte)
+===============================================================================
+  La página "Audit log" de un plan run está siempre vacía ("No matching events").
+  La causa es que el endpoint que consume no existe:
+
+    GET /implementations/runs/{planRunId}/audit  ->  404
+
+  Verificado sobre el run dd1d8959, que está `completed` con 3 steps y transiciones
+  de estado reales (incluida una atestación humana). La UI promete "Every state
+  transition is logged. Replay individual steps from their row when needed." y hoy
+  no puede cumplirlo.
+
+  No es defecto de IM-741 (el installer no es responsable del audit trail), pero sí
+  es una pérdida de trazabilidad para cualquier corrida del IE.

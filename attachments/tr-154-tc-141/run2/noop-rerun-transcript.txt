@@ -1,0 +1,74 @@
+TR-154 · IM-741 / TC-141 · RUN 2 — la re-corrida que prueba el AC7
+Fecha: 2026-08-05 · Mismo case, misma org, nada cambiado entre corridas
+
+===============================================================================
+DISPARO
+===============================================================================
+  POST /implementations/plan-runs
+    { clientId: cdff34f1-9774-41b0-a6a3-124bc03d11cb,
+      orgId:    00DWI00000GLw9R2AT,
+      caseIds:  ["ic-3-01-install-veevart-packages"] }
+  -> 202
+    planRunId  dd1d8959-f09d-484a-8429-71c8df0ad463
+    status     PENDING
+    startedAt  2026-08-05T20:04:42.240Z
+
+  Entre el cierre del run 1 (20:02) y el disparo del run 2 (20:04:42) NO se tocó
+  la org: ni desinstalaciones, ni cambios de versión, ni configuración.
+
+===============================================================================
+PARQUEO EN EL HANDOFF (idéntico al run 1)
+===============================================================================
+  state = paused · case state = blocked-human
+    handoff  "Install NPSP through MetaDeploy"                4b630e33  blocked-human
+    auto     "Install veevart packages"                       9c3c54d9  pending
+    auto     "Verify the core package namespaces resolve..."  497773a7  pending
+
+  El handoff manual VUELVE a parquearse en la re-corrida — no se "recuerda" como
+  hecho de la corrida anterior. Atestado igual que en el run 1.
+
+===============================================================================
+PROGRESO
+===============================================================================
+  t+0s    running   [d1 f0 r1 p1]  NPSP=done | veevart packages=running | verify=pending
+  t+100s  running   [d1 f0 r1 p1]  (idem)
+  t+200s  running   [d1 f0 r1 p1]  (idem)
+  t+220s  completed [d3 f0 r0 p0]  NPSP=done | veevart packages=done | verify=done
+
+  ESTADO FINAL: state=completed · caseState=done · 3/3 done · 0 failed
+
+===============================================================================
+LO QUE PASÓ DEL LADO DE SALESFORCE  (PackageInstallRequest, ventana del run 2)
+===============================================================================
+  Query: SELECT SubscriberPackageVersionKey, Status, CreatedDate
+         FROM PackageInstallRequest
+         WHERE CreatedDate >= 2026-08-05T20:04:00Z ORDER BY CreatedDate ASC
+
+  hora      SubscriberPackageVersionKey   Status
+  --------  ---------------------------   ------
+  20:05:03  04tHo000000KySOIA0            ERROR    <- el pin viejo de Auctifera, otra vez
+
+  TOTAL: 1 install request.
+
+>>> LOS 8 PAQUETES QUE EL RUN 1 INSTALÓ GENERARON **CERO** INSTALL REQUESTS. <<<
+
+  No es que se hayan reinstalado rápido: es que NO SE SOMETIÓ EL JOB. La detección
+  de "ya está en versión" ocurre ANTES de mandar el install, que es exactamente el
+  contrato que declara la descripción del case:
+
+    "Idempotent — a package already at version reports already-installed,
+     so re-running is a no-op."
+
+===============================================================================
+LA FIRMA TEMPORAL DEL NO-OP
+===============================================================================
+                          run 1 (instala)     run 2 (no-op)
+  duración total          ~24 min             ~3.7 min
+  install requests        9 (8 OK + 1 ERROR)  1 (el mismo ERROR)
+  paquetes nuevos         8                   0
+  resultado               completed 3/3       completed 3/3
+  failed                  0                   0
+
+  6.5x más rápido, y toda la diferencia se explica por los 8 installs que NO se
+  hicieron. Si el installer estuviera reinstalando encima, la duración sería
+  comparable a la del run 1.
