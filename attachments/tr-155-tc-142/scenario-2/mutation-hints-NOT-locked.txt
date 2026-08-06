@@ -1,0 +1,96 @@
+TR-155 · IM-1161 / TC-142 · Escenario 2 — prueba de mutación sobre los hints
+Fecha: 2026-08-06 · Worktree del PR #164 @ bebdc71 (desechable, no toca el árbol del usuario)
+
+===============================================================================
+LO QUE SÍ SE CUMPLE
+===============================================================================
+  ✅ El hint está SOLO en el ensamblado final.
+     - statements `SELECT … INTO #`: el último termina en offset 18.596
+     - `OPTION (…)` aparece 1 sola vez, en offset 38.945 → después del último INTO
+     - línea 984: `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5);`
+
+  ✅ Los comentarios inline que justifican los valores están presentes (líneas 980-983):
+
+     -- of queueing on the resource semaphore until it times out. The instance offers
+     -- a single query at most ~154 MB (2 vCPU / 3 GB box), so asking for more is
+     -- asking to fail. MAX_GRANT_PERCENT = 25 also completes (~458 s); 5 is used
+     -- because a smaller request is likelier to be granted on a busy instance.
+
+===============================================================================
+LO QUE NO SE CUMPLE  ->  la guarda de regresión es DECORATIVA
+===============================================================================
+Suite ejecutada en cada mutación:
+  npx jest --runInBand membership-transactions-query.spec.ts   (33 tests)
+
+  mutación                                                     resultado
+  -----------------------------------------------------------  --------------------
+  M1  borrar `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)`        33/33 PASA  <-- ❌
+  M2  `MAX_GRANT_PERCENT = 5` -> `= 25`                         33/33 PASA  <-- ❌
+  M3  borrar un `DROP TABLE IF EXISTS #MembershipLineItems`     33/33 PASA  <-- ❌
+  M4  borrar `CREATE NONCLUSTERED INDEX IX_RecurringInstallments` 33/33 PASA <-- ❌
+  M5  borrar `CREATE NONCLUSTERED INDEX IX_RefundedSalesOrders` 1 falla     (incidental)
+  control (archivo restaurado)                                  33/33 PASA
+
+Nota sobre M5: SÍ falla, pero no porque exista una aserción que proteja el índice.
+Falla porque el helper `readStage` usa la línea `CREATE NONCLUSTERED INDEX IX_<name>`
+como DELIMITADOR de parseo; al quitarla, el helper lanza
+"staged statement #<name> has no index statement". Es rotura del parser, no una guarda.
+Se comprueba en que M4 —un índice que ningún test lee— no rompe nada.
+
+===============================================================================
+BÚSQUEDA EXHAUSTIVA DE ASERCIONES EN TODO EL REPO
+===============================================================================
+  $ grep -rn --include='*.spec.ts' -E "MAX_GRANT_PERCENT|LOOP JOIN|DROP TABLE IF EXISTS|NOCOUNT" src
+  (sin resultados)
+
+  $ grep -rn --include='*.spec.ts' -E "CREATE NONCLUSTERED INDEX" src
+  pos-purchase-membership-no-order-query.spec.ts:144:  `CREATE NONCLUSTERED INDEX IX_${name} `,
+  membership-transactions-query.spec.ts:33:  const end = sql.indexOf(`CREATE NONCLUSTERED INDEX IX_${name} `, into);
+  membership-transactions-query.spec.ts:486: const lastIndexAt = query.lastIndexOf('CREATE NONCLUSTERED INDEX');
+
+  Las tres ocurrencias son uso del string como delimitador de parseo. NINGUNA es
+  una aserción sobre la presencia del DDL.
+
+  => `MAX_GRANT_PERCENT`, `LOOP JOIN`, `DROP TABLE IF EXISTS` y `SET NOCOUNT ON`
+     aparecen en CERO aserciones de todo el repositorio.
+
+===============================================================================
+POR QUÉ IMPORTA
+===============================================================================
+Los dos hints NO son una optimización marginal: SON el arreglo. La propia tabla de
+mediciones del PR lo demuestra —
+
+  | LOOP JOIN solo                        | err 8645              |
+  | MAX_GRANT_PERCENT = 15 solo           | err 8645              |
+  | LOOP JOIN + MAX_GRANT_PERCENT = 5     | 164.465 filas, 445 s  |
+
+Sin la combinación, la query vuelve a fallar con error 8645 — es decir, vuelve a
+devolver CERO FILAS PARA TODOS LOS CLIENTES, que es el bug original de este ticket.
+
+Hoy nada impide que un refactor futuro borre esa línea: la suite sigue verde.
+Lo mismo aplica al bloque `DROP` inicial, que el propio PR describe como
+"load-bearing, not redundant" porque las conexiones del pool sobreviven a la query.
+
+VEREDICTO DEL ESCENARIO: FAIL — no por el código, que es correcto, sino porque la
+protección de regresión sobre el elemento más frágil del arreglo no existe.
+
+===============================================================================
+ARREGLO SUGERIDO (barato)
+===============================================================================
+En `membership-transactions-query.spec.ts`, añadir:
+
+  it('keeps the memory-grant hints on the final assembly', () => {
+    expect(query).toContain('OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)');
+  });
+
+  it('keeps the leading drop block so a pooled session is re-runnable', () => {
+    const firstInto = query.indexOf('\nINTO #');
+    const lead = query.slice(0, firstInto).match(/DROP TABLE IF EXISTS #/g) ?? [];
+    expect(lead).toHaveLength(15);
+  });
+
+  it('indexes every staged temp table', () => {
+    const into = query.match(/\nINTO (#\w+)\n/g) ?? [];
+    const idx  = query.match(/CREATE NONCLUSTERED INDEX IX_\w+ /g) ?? [];
+    expect(idx).toHaveLength(into.length);
+  });

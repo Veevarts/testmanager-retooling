@@ -1,0 +1,101 @@
+TR-155 · IM-1161 / TC-142 · Escenario 1 — estructura del script staged y contrato de salida
+Comparación PR #164 @ bebdc71  vs  merge-base a8380f9a
+
+===============================================================================
+1. MATERIALIZACIÓN
+===============================================================================
+  statements `SELECT … INTO #temp`      : 15
+  `CREATE NONCLUSTERED INDEX`           : 15
+  emparejamiento INTO <-> INDEX 1:1     : SÍ, mismo nombre y mismo orden
+  temps sin índice                      : ninguno
+
+  temp table                                              índice sobre
+  ------------------------------------------------------  ----------------------------------------
+  #MembershipLineItems                                    (LineItemID)
+  #MembershipAnchorCandidates                             (CandidateFinancialTransactionId)
+  #ResolvedMembershipFinancialTransactions                (MembershipTransactionID, ResolutionRank)
+  #RecurringInstallments                                  (FinancialTransactionID)
+  #DonationLineItems                                      (SOURCELINEITEMID)
+  #DiscountLineItems                                      (SOURCELINEITEMID)
+  #SalesOrderAddOnLineItems                               (SALESORDERID)
+  #MembershipTransactionAddOnLineItems                    (MEMBERSHIPTRANSACTIONID)
+  #SalesOrdersByPayment                                   (PAYMENTID)
+  #CreditPaymentPerRefund                                 (CREDITID)
+  #RefundedSalesOrders                                    (SalesOrderID)
+  #RefundedMembershipTransactions                         (MembershipTransactionID)
+  #OrderBackedMembershipFinancialCandidates               (OrderMembershipItemID, ResolutionRank)
+  #OrderBackedMembershipFinancialTransactions             (OrderMembershipItemID)
+  #LatestNoFinancialAnchorLifetimeMembershipTransactions  (MembershipTransactionID)
+
+  Cada índice está sobre la clave por la que ese temp se sondea después. Correcto.
+
+===============================================================================
+2. DROPS IDEMPOTENTES EN LOS DOS EXTREMOS
+===============================================================================
+  `DROP TABLE IF EXISTS #…` totales : 30
+  bloque LEAD (antes del 1er INTO)  : 15
+  bloque TRAIL (al final)           : 15
+  LEAD == TRAIL como conjunto       : SÍ
+  LEAD cubre los 15 staged          : SÍ   (0 faltantes, 0 sobrantes)
+  TRAIL cubre los 15 staged         : SÍ   (0 faltantes, 0 sobrantes)
+  mismo orden en ambos bloques      : SÍ
+  el bloque LEAD precede al 1er INTO: SÍ
+
+  NOTA METODOLÓGICA: un primer sondeo de QA reportó "LEAD != TRAIL". Era un error
+  del propio sondeo —comparaba nombres con `#` contra nombres sin `#`— no del
+  código. Re-verificado con normalización correcta: los dos bloques son idénticos.
+
+  El bloque LEAD es load-bearing, no redundante: las conexiones del pool sobreviven
+  a la query, así que una corrida fallida deja temp tables vivas en la sesión y la
+  siguiente reventaría al hacer `SELECT … INTO` sobre un nombre ya existente.
+
+===============================================================================
+3. AISLAMIENTO DE SESIÓN
+===============================================================================
+  temp tables GLOBALES (`##`)  : NINGUNA
+  DDL sobre objeto no-temp     : NINGUNO
+
+  Las 15 son de sesión (`#`), así que corridas concurrentes no colisionan y el DDL
+  no puede alcanzar una tabla del cliente.
+
+  NOTA: un `grep '##'` sobre el diff completo devuelve 24 coincidencias, pero TODAS
+  son encabezados markdown de los tres archivos de docs. Sobre el `.sql` el conteo
+  es 0. Verificado por archivo, no sobre el diff agregado.
+
+===============================================================================
+4. ARTEFACTO EJECUTABLE DE CORRIDO
+===============================================================================
+  `SET NOCOUNT ON` : presente
+  contiene `GO`    : NO
+
+===============================================================================
+5. CONTRATO DE SALIDA — LO QUE VE EL EXTRACTOR
+===============================================================================
+  `SELECT … INTO` no emite recordset, así que solo las ramas finales devuelven filas.
+
+                                        merge-base    PR #164
+  ramas de salida (UNION ALL)              2             2
+  columnas por rama                       35            35
+  nombres y orden idénticos rama A       -----------  SÍ
+  nombres y orden idénticos rama B       -----------  SÍ
+  las dos ramas coinciden entre sí        SÍ            SÍ
+
+  => 35 columnas, un único result set. `executeQueryAsStream` no necesita cambios,
+     tal como declara el PR.
+
+  Columnas (idénticas antes y después):
+    vnfp__Implementation_External_ID__c, Revenue_ID_legacy__c, RecordTypeId, Name,
+    Membership_Upgraded_Downgraded__c, npe01__Membership_Origin__c, vnfp__Member__c,
+    npsp__Primary_Contact__c, AccountId, CloseDate, npe01__Membership_Start_Date__c,
+    npe01__Membership_End_Date__c, vnfp__Gift_Message__c, Description,
+    Revenue_Reference__c, StageName, Amount,
+    vnfp__Split_Receipting_Donation_Amount__c, vnfp__Split_Receipting_Membership_Amount__c,
+    vnfp__Split_Receipting_Membership_Subtotal__c, vnfp__Split_Receipting__c,
+    Add_On_Quantity__c, Add_On_Total__c, vnfp__Discount_Amount__c,
+    vnfp__Membership_Price__c, vnfp__Membership_Program__c,
+    npsp__Acknowledgment_Date__c, npsp__Acknowledgment_Status__c,
+    vnfp__Deliver_Membership_To__c, vnfp__Midterm_Upgrade__c, vnfp__POS_Purchase__c,
+    Program_Name__c, vnfp__Corporate_Membership__c, Given_Anonymously__c,
+    npe03__Recurring_Donation__c
+
+VEREDICTO DEL ESCENARIO: PASS

@@ -1,0 +1,295 @@
+schemaVersion: '1.0'
+id: tr-f1ff9bd2-e41e-48db-ab77-457d0f0100c3
+key: TR-155
+title: 'TR-155 · IM-1161 · TC-142 · 3/6 PASS · 2 FAIL · 1 handoff — el staging y el contrato de salida son
+  correctos, pero los dos hints que SON el arreglo no están protegidos por ningún test'
+description: |-
+  Ejecución de TC-142 sobre **MigrationToolETL#164** (`fix/membership-transactions-query-timeout-IM-1161` →
+  `main`, OPEN, +1327/−283). Clasificación: **Mixed** — SQL (dos archivos de query) + backend (config del
+  `SqlServerAdapter`) + specs de regresión.
+
+  **Veredicto: 3/6 PASS · 2 FAIL · 1 not-run (handoff) · 0 defectos de comportamiento · 3 huecos de regresión.**
+
+  ## Resumen de la solución
+
+  La causa raíz no es el timeout que dice el título del ticket: es un **memory grant (error 8645)**. La query
+  pedía ~1.8 GB donde la instancia concede ~154 MB, así que **nunca completó en ningún tenant y devolvía cero
+  filas para todos los clientes**. El PR parte la cadena `WITH` en 15 `SELECT … INTO #Cte` —cada statement
+  obtiene su propio grant— indexa cada temp por su clave de sondeo, pone
+  `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)` en el ensamblado final, y sube el `requestTimeout` del adapter de
+  120 s a 30 min configurables para que la query completada alcance a llegar a la app.
+
+  ## Lo que quedó bien probado
+
+  - **Contrato de salida intacto**: 35 columnas, mismos nombres y mismo orden, en las dos ramas del `UNION ALL`,
+    idéntico al merge-base. `SELECT … INTO` no emite recordset, así que el extractor sigue viendo un único result
+    set y `executeQueryAsStream` no necesita cambios.
+  - **Estructura**: 15 staged / 15 índices emparejados 1:1, 30 `DROP TABLE IF EXISTS` (15 al inicio + 15 al
+    final, mismo conjunto y mismo orden), `SET NOCOUNT ON`, sin `GO`, **cero temp tables globales** y **cero DDL
+    alcanzando un objeto persistente del cliente**.
+  - **La guarda de pares de CTEs compartidos ES load-bearing**: mutando dentro de un CTE realmente compartido,
+    salta en los **dos** sentidos —desde el archivo staged y desde el que no migró—. Es el riesgo real de este PR,
+    porque los dos archivos quedaron en formas distintas, y está cubierto.
+  - **Premisa de unicidad re-derivada, no heredada**: `tucson` 295.486/295.486 e `illinois_2` 191.630/191.630,
+    `DuplicateExcess = 0` en ambos. Coinciden dígito a dígito con lo que reporta el dev.
+
+  ## Los dos FAIL — ninguno es un defecto de comportamiento, los tres son huecos de regresión
+
+  El código entregado es correcto en todo lo que pude medir. Lo que falla es que **lo más frágil del arreglo no
+  está protegido**:
+
+  1. **Los hints no están asegurados por ningún test.** Borrar `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)` deja
+     la suite en 33/33 verde. Cambiar el `5` por `25`, también. Y esos hints **son** el arreglo: la propia tabla
+     del PR muestra que `LOOP JOIN` solo → error 8645, `MAX_GRANT_PERCENT` solo → error 8645, y solo la
+     combinación completa 164.465 filas. Si un refactor futuro borra esa línea, vuelve el bug original —cero
+     filas para todos los clientes— y **la suite no se entera**. Lo mismo con el bloque `DROP` inicial, que el
+     propio PR describe como *"load-bearing, not redundant"*.
+  2. **`parseTimeoutMs` no tiene cobertura.** Quitar el guard `&& parsed > 0` deja los 4 tests verdes. Importa
+     porque `0 ?? 1_800_000` es **0** —`??` no cae al default en cero— y `Number('')` también es 0, así que una
+     variable de entorno declarada pero vacía bastaría. `mssql` lee `requestTimeout: 0` como **sin límite**: una
+     query colgada retendría su conexión del pool compartido para siempre, que es estrictamente peor que el bug
+     original de 120 s.
+
+  Búsqueda exhaustiva en todo el repo: `MAX_GRANT_PERCENT`, `LOOP JOIN`, `DROP TABLE IF EXISTS` y `NOCOUNT`
+  aparecen en **cero aserciones**. `CREATE NONCLUSTERED INDEX` aparece solo como delimitador de parseo del helper
+  `readStage`, no como aserción. Los tres arreglos son de pocas líneas y están redactados en los adjuntos.
+
+  ## Lo que QA no puede ejecutar (escenario 6, handoff)
+
+  La query staged **no puede pasar por safesql**: el guard de solo-lectura casa con `DROP` y `CREATE`, y el script
+  trae 30 + 15. Correrla exigiría `--allow-writes`, que está prohibido — la guarda está funcionando como debe, no
+  es un obstáculo a sortear. Además no existen perfiles `longisland` ni `high_desert`, donde el PR midió, y el
+  techo de 120 s de safesql es menor que los 488–1485 s medidos. Queda como pendiente del dev, con el detalle en
+  el adjunto.
+
+  Dos cosas concretas quedan pedidas ahí: **la mitigación que el propio PR se autoimpone** (correr en dos tenants
+  más antes de desplegar el `LOOP JOIN` forzado, hoy medido en 2 de 9) y **revisar si el staging movió el CTE no
+  determinista** — porque el PR sí tocó `OrderBackedMembershipFinancialTransactions`, lo materializó con índice, y
+  materializar cambia el plan, que era justo lo que hacía arbitrario al ganador.
+
+  ## Falso positivo descartado
+
+  La suite completa deja 1 suite en rojo (10 tests, `donation-transaction-recurring.spec.ts`, *"Could not find a
+  working container runtime strategy"*). **No es del PR**: ejecuté ese mismo spec sobre el merge-base y fallan los
+  mismos 10, con el mismo error. Ambiental y preexistente. Comprobado, no asumido.
+testCaseIds:
+- TC-142
+environment:
+  name: 'MigrationToolETL PR #164 @ bebdc71 vs merge-base a8380f9a · worktrees desechables · Node v25.4.0 ·
+    jest · safesql sobre perfiles tucson / illinois_2 / aspen (solo lectura)'
+  url: https://github.com/Veevarts/MigrationToolETL/pull/164
+  buildVersion: 'Mixed — SQL (membership_transactions.sql migrado a staging + sales_order_only_membership2.sql
+    con reescrituras seekables) + backend (requestTimeout configurable del SqlServerAdapter) + specs de regresión.
+    Estrategia: verificación estructural del .sql base vs PR, suite jest con pruebas de mutación sobre cada guarda,
+    y sondeos agregados de solo lectura por safesql para la premisa de unicidad.'
+  branch: fix/membership-transactions-query-timeout-IM-1161
+  commit: bebdc71
+  repository: Veevarts/MigrationToolETL
+  pullRequest: https://github.com/Veevarts/MigrationToolETL/pull/164
+  dataSource: safesql (agregados COUNT/COUNT DISTINCT sobre SALESORDER, sin filas ni PII) en tucson e illinois_2;
+    aspen inalcanzable
+  notes: |-
+    ## Solution understood
+
+    La query de extracción de Opportunities de membresía fallaba por memory grant (error 8645, pool `internal`),
+    no por runtime: pedía ~1.8 GB donde la instancia concede ~154 MB a una sola query. Como SQL Server inlinea
+    cada referencia a un CTE, la cadena `WITH` completa se planificaba como un solo statement gigante.
+    El PR la parte en 15 `SELECT … INTO #Cte`, de modo que cada statement pide su propio grant y cada grant cabe;
+    indexa cada temp por la clave que después se sondea; y fuerza `LOOP JOIN` con `MAX_GRANT_PERCENT = 5` en el
+    ensamblado final para que el request se conceda de inmediato en vez de quedar en el semáforo de recursos.
+    En paralelo sube el `requestTimeout` del adapter de 120 s fijos a 1.800.000 ms configurables, porque una
+    corrida real tarda 488–1485 s y el timeout viejo la abortaba antes de que llegara una sola fila.
+    Efecto lateral esperado y declarado: el pool es compartido, así que una query genuinamente colgada retiene su
+    conexión 30 min en lugar de 2.
+
+    ## Inferred technical tests
+
+    - Estructura del .sql staged vs merge-base (contrato de salida, drops, índices, aislamiento) — AUTO, escenario 1.
+    - Ubicación y protección de los hints de plan, por mutación — AUTO, escenario 2.
+    - Config de timeout del adapter y sus bordes negativos, por mutación — AUTO, escenario 3.
+    - Suite de regresión de queries + guarda de pares de CTEs compartidos, por mutación — AUTO, escenario 4.
+    - Premisa de unicidad de SALESORDER.REVENUEID por agregados — AUTO (safesql), escenario 5.
+    - Corrida end-to-end, conteo de filas y tiempos — MANUAL: la query staged no puede pasar por safesql
+      (WRITE_KEYWORDS casa con DROP/CREATE) y no existen los perfiles donde el PR midió. Escenario 6.
+status: completed
+results:
+- scenarioIndex: 1
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-06T17:40:00Z'
+  actual: |-
+    15 statements `SELECT … INTO #temp` y 15 `CREATE NONCLUSTERED INDEX`, emparejados 1:1 por nombre y en el
+    mismo orden; ningún temp sin índice, y cada índice sobre la clave por la que ese temp se sondea después.
+
+    30 `DROP TABLE IF EXISTS`: 15 en el bloque inicial y 15 en el final, mismo conjunto y mismo orden, cubriendo
+    exactamente los 15 staged. El bloque inicial precede al primer `INTO`.
+
+    Cero temp tables globales (`##`) y cero DDL apuntando a un objeto que no sea `#temp` — el script no puede
+    alcanzar una tabla del cliente ni colisionar entre sesiones concurrentes. `SET NOCOUNT ON` presente, sin `GO`.
+
+    Contrato de salida idéntico al merge-base: dos ramas de `UNION ALL`, 35 columnas cada una, mismos nombres y
+    mismo orden, y las dos ramas coinciden entre sí. `SELECT … INTO` no emite recordset, así que el extractor
+    sigue viendo un único result set.
+
+    NOTA: un primer sondeo mío reportó que los bloques DROP inicial y final diferían. Era un error del sondeo
+    (comparaba nombres con `#` contra nombres sin `#`), no del código; re-verificado con normalización correcta.
+  notes: Evidencia en attachments/tr-155-tc-142/scenario-1/staging-structure-and-output-contract.txt
+- scenarioIndex: 2
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: failed
+  executedAt: '2026-08-06T17:45:00Z'
+  actual: |-
+    Las dos primeras aserciones se cumplen: el hint aparece UNA sola vez y está después del último statement de
+    staging (offset 38.945 vs último `INTO` en 18.596), y los comentarios inline que justifican ambos valores
+    están presentes con las mediciones que los sostienen.
+
+    LA TERCERA NO. La suite no protege el hint:
+
+      M1  borrar `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)`   -> 33/33 PASA
+      M2  `MAX_GRANT_PERCENT = 5` -> `= 25`                    -> 33/33 PASA
+      M3  borrar un `DROP TABLE IF EXISTS` del bloque inicial  -> 33/33 PASA
+      M4  borrar un `CREATE NONCLUSTERED INDEX`                -> 33/33 PASA
+      control (restaurado)                                     -> 33/33 PASA
+
+    M5 (borrar un índice que el helper `readStage` sí lee) rompe 1 test, pero por rotura del parser —usa esa
+    línea como delimitador—, no por una aserción que proteja el DDL. M4 lo demuestra: un índice que ningún test
+    lee se puede borrar sin consecuencia.
+
+    Búsqueda exhaustiva en todo el repo: `MAX_GRANT_PERCENT`, `LOOP JOIN`, `DROP TABLE IF EXISTS` y `NOCOUNT`
+    aparecen en CERO aserciones. `CREATE NONCLUSTERED INDEX` aparece 3 veces, todas como delimitador de parseo.
+
+    Por qué importa: los hints SON el arreglo. La tabla del propio PR muestra `LOOP JOIN` solo → err 8645,
+    `MAX_GRANT_PERCENT = 15` solo → err 8645, y solo la combinación completa 164.465 filas. Borrar esa línea
+    devuelve la query al error 8645, es decir, a cero filas para todos los clientes, sin que la suite se entere.
+  notes: El comportamiento entregado es correcto; lo que falla es la protección de regresión. Arreglo sugerido
+    (3 aserciones) en attachments/tr-155-tc-142/scenario-2/mutation-hints-NOT-locked.txt
+- scenarioIndex: 3
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: failed
+  executedAt: '2026-08-06T17:50:00Z'
+  actual: |-
+    El comportamiento es correcto y está bien razonado. Verificado por mutación:
+
+      M10  DEFAULT 1_800_000 -> 120_000            -> 3 de 4 tests FALLAN  (protegido)
+      M11  sacar requestTimeout de dentro de options -> 3 de 4 tests FALLAN  (protegido)
+      M12  quitar el guard `&& parsed > 0`         -> 4/4 PASAN            (NO protegido)
+
+    1.800.000 ms queda por encima de los 1.485.000 ms medidos en longisland, y el valor se escribe dentro de
+    `options`, que es la ubicación que mssql resuelve primero.
+
+    LA ASERCIÓN DE COBERTURA DE LOS BORDES NEGATIVOS NO SE CUMPLE. `parseTimeoutMs` vive en
+    `sql-server.module.ts`, no está exportada y no aparece en ninguna spec del repo.
+
+    Es el hueco que más importa. Demostración en runtime:
+
+      MSSQL_REQUEST_TIMEOUT_MS=""   sin_guard-> 0    con_guard-> 1800000
+      MSSQL_REQUEST_TIMEOUT_MS="0"  sin_guard-> 0    con_guard-> 1800000
+      MSSQL_REQUEST_TIMEOUT_MS="-5" sin_guard-> -5   con_guard-> 1800000
+
+      0 ?? 1800000 === 0   <- `??` NO cae al default en cero
+
+    Y `mssql` interpreta `requestTimeout: 0` como SIN LÍMITE. Como `Number('')` también es 0, una variable
+    declarada pero vacía —el caso típico de un despliegue mal configurado— bastaría. Si alguien "simplifica" ese
+    guard, una query colgada retiene su conexión del pool compartido para siempre: peor que el bug original.
+  notes: Evidencia en attachments/tr-155-tc-142/scenario-3/timeout-config-and-zero-hazard.txt
+- scenarioIndex: 4
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-06T17:55:00Z'
+  actual: |-
+    Suite verde: `query-regression` + spec del adapter = 43 suites / 425 tests, 0 fallos (118 skipped son
+    `*.integration` / `*.live`, que exigen base viva).
+
+    `readCte` resuelve las dos formas —`Name AS (` y `INTO #Name`— y normaliza quitando comentarios, el `#` y los
+    espacios, de modo que los 8 CTEs compartidos siguen comparables aunque solo un archivo migró a staging.
+
+    Guarda probada LOAD-BEARING en los dos sentidos:
+
+      M8  inyectar `1234 +` dentro de DiscountLineItems (archivo NO migrado)  -> 1 test FALLA
+      M9  inyectar una columna en el staged #MembershipLineItems             -> 1 test FALLA
+      control                                                                 -> 21/21 PASA
+
+    Fallo emitido: "the shared CTEs stay a matched pair › keeps <CTE> identical in both files".
+
+    Dos mutaciones previas (M6, M7) no dispararon la guarda, pero fue error de puntería mío: las cadenas que
+    cambié no caían dentro de ninguno de los 8 CTEs cubiertos. Al apuntar dentro de un CTE realmente compartido,
+    la guarda salta de inmediato.
+  notes: Es la regresión de mayor riesgo del PR —dos archivos hermanos en formas distintas— y está cubierta.
+    Evidencia en attachments/tr-155-tc-142/scenario-4/mutation-shared-cte-guard-IS-load-bearing.txt
+- scenarioIndex: 5
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-06T18:00:00Z'
+  actual: |-
+    Sondeo agregado de solo lectura (`COUNT(REVENUEID)` vs `COUNT(DISTINCT REVENUEID)` sobre `SALESORDER`), sin
+    filas, sin PII, sin wildcard y sin `--allow-writes`:
+
+      perfil       NonNull    Distinct   DuplicateExcess   Total      cifra del PR
+      tucson       295.486    295.486    0                 353.544    295.486/295.486  coincide
+      illinois_2   191.630    191.630    0                 304.977    191.630/191.630  coincide
+      aspen        —          —          —                 —          inalcanzable
+
+    Las dos cifras del dev quedan RE-DERIVADAS de forma independiente, dígito a dígito. `DuplicateExcess = 0` en
+    ambos ⇒ la premisa que sostiene todos los `TOP 1` se cumple donde QA puede comprobarla.
+
+    aspen falla con `Failed to connect to localhost:41434 in 20000ms`, lo que confirma de forma independiente lo
+    que el PR registró el 2026-08-05: los 5 perfiles pendientes siguen sin conexión. El *Remaining work item C*
+    del ticket SIGUE ABIERTO.
+
+    Sin verificar: aspen, everson, everson2, kidstream, moad. No se da por cerrado con cobertura parcial.
+  notes: Evidencia en attachments/tr-155-tc-142/scenario-5/revenueid-uniqueness-rederived.txt
+- scenarioIndex: 6
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: not-run
+  actual: |-
+    NO EJECUTABLE POR QA, por tres bloqueos independientes:
+
+    1. La query staged no puede pasar por safesql: `WRITE_KEYWORDS` casa con `DROP` y `CREATE`, y el script trae
+       30 + 15. Exigiría `--allow-writes`, que está prohibido. La guarda está funcionando como debe.
+    2. No existen los perfiles donde el PR midió (`longisland`, `high_desert`). Locales: aspen, illinois_2,
+       tucson, tucson_backup3.
+    3. El techo de 120 s de safesql es menor que los 488–1485 s medidos.
+
+    No se marca como cubierto ni se infiere de la evidencia del dev.
+  notes: |-
+    PENDIENTE DE TU PARTE (o del dev):
+    (a) Correr la extracción completa en DOS tenants adicionales —es la mitigación que el propio PR se autoimpone
+        por forzar LOOP JOIN en 9 tenants habiéndolo medido en 2— y adjuntar conteo de filas, tiempo total y
+        confirmación de que no aparece el error 8645.
+    (b) Correr el fingerprint de OrderBackedMembershipFinancialTransactions >=3 veces sobre la versión staged y
+        compararlo entre sí y contra el valor pre-staging. El PR materializó ese CTE con índice y materializar
+        cambia el plan, que era justo lo que hacía arbitrario al ganador: puede haberse estabilizado, seguir
+        igual, o quedar determinista eligiendo un ganador distinto al ya cargado en el org destino.
+    (c) Actualizar el endpoint de aspen / everson / everson2 / kidstream para poder cerrar el item C.
+    Detalle en attachments/tr-155-tc-142/scenario-6/handoff-end-to-end-y-no-determinismo.txt
+summary:
+  total: 6
+  passed: 3
+  failed: 2
+  blocked: 0
+  skipped: 0
+  notRun: 1
+  passRate: 50
+defects: []
+history:
+- action: created
+  timestamp: '2026-08-06T17:30:00Z'
+  user: codex
+  reason: 'Ejecución de TC-142 contra el PR #164, con worktrees desechables para no tocar el árbol de trabajo
+    del usuario'
+- action: completed
+  timestamp: '2026-08-06T18:10:00Z'
+  user: codex
+  reason: 3/6 PASS, 2 FAIL y 1 handoff. Los dos FAIL son huecos de regresión, no defectos de comportamiento
+    los hints que SON el arreglo y el guard de parseTimeoutMs no están protegidos por ningún test
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-06T17:30:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-06T18:10:00Z'

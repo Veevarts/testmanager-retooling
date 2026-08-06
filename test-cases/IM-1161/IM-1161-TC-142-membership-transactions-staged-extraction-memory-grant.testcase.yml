@@ -1,0 +1,342 @@
+schemaVersion: '1.0'
+id: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+key: TC-142
+title: IM-1161 — membership_transactions.sql staged into temp tables so it fits the memory grant — the extraction
+  completes for the first time, the plan hints stay load-bearing, and the request timeout becomes configurable
+  without a zero-means-unlimited hole
+description: |-
+  Cobertura QA de IM-1161 (**Optimize membership_transactions.sql — extraction exceeds the
+  120s request timeout**), tipo **Error**, prioridad **High**, bajo el epic **IM-70 Altru
+  Queries**. QA Sub-task asociada: **IM-1175**. PR bajo prueba:
+  **MigrationToolETL#164** (`fix/membership-transactions-query-timeout-IM-1161` → `main`,
+  +1327/−283, 12 archivos, OPEN).
+
+  ## ⚠️ La descripción del ticket quedó ATRÁS del PR — el diagnóstico cambió
+
+  El ticket describe el problema como un **timeout de 120s** resuelto con reescrituras de
+  forma de join (`OUTER APPLY`, `UNION ALL`), y deja la materialización como *"Remaining
+  work item B — necesita una decisión"*, con el item A diciendo que la query **sigue
+  excediendo el timeout**.
+
+  El PR dice otra cosa, y es más grave:
+
+  | | Ticket | PR #164 |
+  | --- | --- | --- |
+  | Causa raíz | timeout de request (120s) | **memory grant, error 8645**, pool `internal` |
+  | Alcance del fallo | "no completa en Long Island" | **no completó en NINGÚN tenant** |
+  | Salida previa | lenta | **cero filas, para todos los clientes** |
+  | Item B (materializar) | pendiente, sin decidir | **implementado**: 15 `SELECT … INTO #Cte` |
+  | Item D (fingerprint e2e) | no capturable | **resuelto 2026-08-06** sobre un restore local |
+
+  La query pedía ~1.8 GB de grant donde la instancia concede como mucho ~154 MB. **No era
+  lentitud: era una query que nunca devolvió una fila.** Esto sube el impacto real del
+  ticket y cambia qué hay que probar: el criterio de éxito no es "baja de 120s", es
+  "completa y emite filas".
+
+  **Consecuencia para QA:** validar contra la redacción del ticket valida el problema
+  equivocado. Este TC se escribe contra lo que el PR entrega.
+
+  ## Qué entrega el PR
+
+  - **15 CTEs → 15 `SELECT … INTO #Cte`**, cada uno seguido de un
+    `CREATE NONCLUSTERED INDEX` sobre la clave por la que después se sondea. Cada
+    statement obtiene su propio grant, y así cada grant cabe.
+  - **`OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)`** en el ensamblado final.
+  - **`DROP TABLE IF EXISTS` en los dos extremos** (15 al inicio + 15 al final). El bloque
+    inicial es *load-bearing*, no redundante: las conexiones del pool sobreviven a la query,
+    así que una corrida fallida puede dejar temp tables vivas en la sesión.
+  - **`SET NOCOUNT ON`, sin `GO`**: `SELECT … INTO` no emite recordset, de modo que el
+    extractor sigue viendo **exactamente un result set de 35 columnas** y
+    `executeQueryAsStream` no se toca.
+  - **`requestTimeout` configurable**: `MSSQL_REQUEST_TIMEOUT_MS`, default **1.800.000 ms**
+    (30 min), con `parseTimeoutMs` que rechaza vacío / no-numérico / ≤ 0 y cae al default —
+    porque `mssql` interpreta `0` como *sin límite*.
+  - Las mismas reescrituras seekables aplicadas a `sales_order_only_membership2.sql`.
+  - Specs re-ancladas de `Name AS (` a los statements `INTO #Name` vía un helper `readStage`;
+    en la spec de no-order, `readCte` lee **ambas formas** para que la guarda de pares siga
+    cubriendo los 8 CTEs compartidos aunque solo se haya movido un archivo.
+
+  Cifras que reporta el dev y que **se re-derivan, no se toman por buenas**: 164.465 filas /
+  488 s en high_desert y 97.047 filas / 1485 s en longisland.
+
+  ## ⛔ Lo que QA NO puede ejecutar aquí, y por qué
+
+  Esto no es una limitación de esta corrida sino del andamiaje de verificación, y define el
+  alcance real del test case:
+
+  1. **La query staged no puede pasar por `safesql`.** El guard de solo-lectura
+     (`WRITE_KEYWORDS = /\b(DROP|…|CREATE|…)\b/i`) se aplica al texto crudo, y el script
+     trae **30 `DROP TABLE IF EXISTS` y 15 `CREATE NONCLUSTERED INDEX`**. Correrla exigiría
+     `--allow-writes`, que está prohibido. No hay forma legítima de ejecutar el script
+     completo desde QA.
+  2. **No hay perfil `longisland` ni `high_desert`** en `~/tools/safesql/profiles/`. Los
+     perfiles locales son `aspen`, `illinois_2`, `tucson`, `tucson_backup3`. Las cifras
+     principales del PR **no son reproducibles** por QA en su fuente original.
+  3. **Aun con perfil, el techo de 120s de safesql** es inferior a los 488–1485 s medidos.
+
+  Por eso el escenario 6 queda como **handoff explícito al dev**, con el detalle de qué
+  evidencia hace falta, en vez de fingir cobertura. Lo que sí es ejecutable —estructura del
+  SQL, hints, lógica del adapter, suite de regresión y la premisa de unicidad por agregados—
+  se ejecuta.
+
+  ## Riesgos abiertos
+
+  - **`LOOP JOIN` forzado para todos los tenants, medido en 2 de 9.** El propio PR lo marca
+    como riesgo y su mitigación es *"correr en dos tenants más antes de desplegar"*. Un plan
+    de nested-loops forzado sobre otra forma de datos puede ser mucho peor. **Hoy esa
+    mitigación no está cumplida**, y QA no puede cumplirla por el punto ⛔1.
+  - **`MAX_GRANT_PERCENT = 5` está calibrado a un techo de ~154 MB.** Si redimensionan las
+    instancias, estrangula una query que ya podría servirse entera.
+  - **La premisa de unicidad de `SALESORDER.REVENUEID`** sostiene todos los `TOP 1`. Sigue
+    sin verificar en 5 perfiles (aspen, everson, everson2, kidstream, moad); el PR registra
+    que el 2026-08-05 se reintentó y **los cinco siguen inalcanzables**, porque cuatro
+    apuntan al endpoint `veev-ue1-prod-private-nlb-*` que longisland ya tiene actualizado.
+    Si alguno tuviera duplicados, el `TOP 1` pasa a ser una elección arbitraria.
+  - **`OrderBackedMembershipFinancialTransactions` es no determinista** y el ticket lo deja
+    sin arreglar a propósito, recomendando ticket aparte. **Pero el PR sí lo tocó**: lo
+    materializó en `#OrderBackedMembershipFinancialCandidates` +
+    `#OrderBackedMembershipFinancialTransactions` con índice. Materializar puede cambiar el
+    plan y por lo tanto **cuál fila arbitraria gana**. Hay que comprobar si el no
+    determinismo sigue, desapareció o cambió de forma — no asumir que quedó igual.
+  - **El timeout por defecto sube de 2 a 30 minutos sobre un pool compartido.** El propio
+    código lo dice: una query genuinamente colgada retiene su conexión 30 min en vez de 2.
+  - El ticket declara *"this ticket is NOT done"* con items A–D; A y B y D ya no aplican tal
+    como están redactados, y C sigue abierto. **El ticket necesita actualizarse**, no solo
+    aprobarse.
+preconditions:
+- 'Repo `MigrationToolETL` clonado con la rama `fix/membership-transactions-query-timeout-IM-1161` (PR #164) y
+  su merge-base contra `main`, para comparar el archivo antes y después'
+- Node instalado y dependencias del repo instaladas — la suite de regresión de queries (`query-regression`) corre
+  sin HTTP en vivo, así que los escenarios de contrato son auto-ejecutables
+- '`safesql` operativo con los perfiles locales disponibles (`aspen`, `illinois_2`, `tucson`, `tucson_backup3`)
+  para los sondeos agregados de solo lectura'
+- ⛔ NUNCA usar `--allow-writes` en safesql. El script staged trae DROP/CREATE y por diseño no puede correr por
+  ahí; eso NO se resuelve bajando la guarda
+- Las bases de clientes son de SOLO LECTURA. Todo sondeo es agregado (COUNT/SUM/CHECKSUM), sin filas ni PII
+format: gherkin
+scenarios:
+- title: IM-1161 AC1 — The 15-CTE chain becomes 15 staged temp tables, each indexed on its probe key, bracketed by
+    idempotent drops, and still emits exactly one result set of 35 columns
+  tags:
+  - happy-path
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-1
+  - altru
+  - migration
+  - sql-optimization
+  - temp-table-staging
+  - pr-164
+  given:
+  - '`membership_transactions.sql` en la rama del PR #164, donde la cadena `WITH` de 15 CTEs pasó a ser 15 statements
+    `SELECT … INTO #Cte`'
+  - el extractor `executeQueryAsStream`, que NO se modificó y sigue esperando un único recordset
+  when:
+  - se compara el archivo contra su versión en el merge-base y se analiza la estructura del script resultante
+  then:
+  - 'existen **15** statements `SELECT … INTO #<Nombre>`, y cada uno va seguido de su `CREATE NONCLUSTERED INDEX
+    IX_<Nombre>` sobre la clave por la que ese temp se sondea después — verificar el emparejamiento uno a uno, no
+    solo los conteos'
+  - 'hay **30** `DROP TABLE IF EXISTS #…`: 15 al inicio y 15 al final. Confirmar que el bloque INICIAL existe y
+    que es load-bearing — las conexiones del pool sobreviven a la query, así que una corrida fallida deja temp tables
+    vivas y la siguiente reventaría sin ese drop'
+  - '**todas las temp tables son de sesión (`#`), ninguna global (`##`)**: una `##` sería visible entre sesiones
+    y rompería el aislamiento entre corridas concurrentes. Verificar sobre el `.sql`, no sobre el diff completo,
+    porque los `##` de los docs markdown son falsos positivos'
+  - '`SET NOCOUNT ON` presente y **sin `GO`**, de modo que el archivo sigue siendo un artefacto único ejecutable
+    de corrido'
+  - 'el script emite **exactamente un result set de 35 columnas**: `SELECT … INTO` no emite recordset, así que solo
+    el `SELECT` final devuelve filas. Contar las columnas del SELECT final y confirmar que ningún DDL apunta a un
+    objeto que no sea temp'
+  - ninguna columna de salida, filtro, grano de join ni compuerta de inclusión cambió respecto del merge-base —
+    el PR se declara equivalente en resultado, y eso es lo que hay que auditar en el diff
+- title: IM-1161 AC2 — The two plan hints sit only on the final assembly, carry their measurements inline, and the
+    regression suite fails if either is removed
+  tags:
+  - happy-path
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-2
+  - altru
+  - sql-optimization
+  - query-hints
+  - revert-proof
+  - pr-164
+  given:
+  - '`OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)` en el ensamblado final de `membership_transactions.sql`'
+  - la tabla de mediciones del PR, donde `LOOP JOIN` solo o `MAX_GRANT_PERCENT = 15` solo siguen dando error 8645,
+    y la combinación adoptada devuelve 164.465 filas en 445 s
+  when:
+  - se ubica el hint en el archivo y se ejecuta la suite de regresión con y sin él
+  then:
+  - el hint está **solo en el `SELECT` final**, no repetido en los statements de staging — cada uno de esos ya obtiene
+    su propio grant y no lo necesita
+  - los comentarios inline que justifican ambos valores están presentes, con las mediciones que los sostienen —
+    es lo único que impide que alguien los "simplifique" después
+  - '**probar que la guarda es load-bearing por mutación**: quitar el hint (o cambiar `MAX_GRANT_PERCENT`) debe
+    hacer fallar un test de la suite. Si la suite sigue verde sin el hint, la protección es decorativa'
+  - 'dejar registrado el riesgo que el propio PR declara: el `LOOP JOIN` se fuerza para los 9 tenants pero se midió
+    en 2, y la mitigación que el PR se autoimpone —correr en dos tenants más antes de desplegar— **no está cumplida
+    hoy**'
+- title: IM-1161 AC3 — The request timeout becomes configurable with a 30-minute default, and a blank or non-positive
+    value falls back to that default instead of silently meaning "no limit"
+  tags:
+  - happy-path
+  - negative
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-3
+  - migration
+  - sql-server-adapter
+  - configuration
+  - pr-164
+  given:
+  - '`sql-server.adapter.ts`, donde `requestTimeout: 120000` pasó a `this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS`
+    con `DEFAULT_REQUEST_TIMEOUT_MS = 1_800_000`'
+  - '`parseTimeoutMs` en `sql-server.module.ts`, que convierte `MSSQL_REQUEST_TIMEOUT_MS` y devuelve `undefined`
+    si el valor no es finito o no es positivo'
+  when:
+  - se ejecuta la suite del adapter y se prueban los valores de borde de la variable de entorno
+  then:
+  - sin variable de entorno, el timeout efectivo es **1.800.000 ms**, por encima de los 1485 s medidos en longisland
+    — si el default quedara por debajo, el arreglo de la query no llegaría a la app
+  - 'con un valor válido, gana el valor de entorno; verificar además que el `requestTimeout` se escribe **dentro
+    de `options`**, porque `mssql` resuelve `cfg.options.requestTimeout ?? config.requestTimeout ?? 15000` y la
+    otra ubicación no tendría efecto'
+  - '**el caso negativo es el que importa**: `""`, un valor no numérico, `0` y un negativo deben caer al default.
+    Un `0` que se propagara sería interpretado por `mssql` como *sin límite*, que es peor que el bug original —
+    una query colgada nunca soltaría la conexión'
+  - probar por mutación que existe cobertura real de esos bordes, no solo del camino feliz
+  - 'dejar constancia del trade-off que el propio código documenta: el pool es compartido, así que una query colgada
+    ahora retiene su conexión 30 minutos en vez de 2'
+- title: IM-1161 AC4 — The regression specs are re-anchored to the staged statements and still guard the eight CTEs
+    shared with the no-order POS query, which did not move
+  tags:
+  - regression
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-4
+  - altru
+  - query-regression
+  - revert-proof
+  - pr-164
+  given:
+  - '`membership-transactions-query.spec.ts`, cuyas aserciones se re-anclaron de `Name AS (` a los statements `INTO
+    #Name` mediante un helper `readStage`'
+  - '`pos-purchase-membership-no-order-query.spec.ts`, cuyo `readCte` ahora lee **ambas** formas porque
+    `sales_order_only_membership2.sql` NO fue migrado a staging'
+  when:
+  - se ejecuta `npm test -- --runInBand query-regression` sobre la rama del PR
+  then:
+  - la suite pasa completa y las aserciones re-ancladas cubren **las mismas** propiedades que antes; el cambio de
+    ancla no puede haber relajado ninguna comprobación
+  - '`readCte` resuelve tanto `Name AS (` como `INTO #Name`, de modo que la guarda de pares sigue protegiendo los
+    **8 CTEs compartidos** entre los dos archivos pese a que solo uno cambió de forma'
+  - '**verificar por mutación que la guarda de pares sigue viva**: desincronizar a mano uno de los 8 CTEs compartidos
+    debe romper la suite. Es exactamente la regresión que esa guarda existe para atrapar, y el riesgo es real porque
+    los dos archivos quedaron en formas distintas'
+  - confirmar que la suite también bloquea la reintroducción de la cadena muerta de 4 CTEs que el ticket reporta
+    haber eliminado
+- title: IM-1161 AC5 — The SALESORDER.REVENUEID uniqueness premise behind every TOP 1 is independently re-derived,
+    not taken from the PR
+  tags:
+  - edge-case
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-5
+  - altru
+  - safesql
+  - data-integrity
+  - tucson
+  - pr-164
+  given:
+  - 'todos los `OUTER APPLY (SELECT TOP 1 … WHERE so.REVENUEID = <clave>)` del PR, cuya corrección semántica depende
+    de una sola premisa: que `SALESORDER.REVENUEID` sea único entre los valores no NULL'
+  - las cifras que reporta el dev (Tucson 295.486/295.486, Illinois 191.630/191.630) y los 5 perfiles que declara
+    inalcanzables (aspen, everson, everson2, kidstream, moad)
+  when:
+  - se corre un sondeo **agregado de solo lectura** por safesql comparando `COUNT(REVENUEID)` contra `COUNT(DISTINCT
+    REVENUEID)` sobre `SALESORDER` en cada perfil alcanzable
+  then:
+  - en `tucson` e `illinois_2` los dos conteos coinciden, re-derivando de forma independiente las cifras del PR —
+    **no se toman por buenas las del dev**
+  - se intenta también `aspen`, que es uno de los 5 perfiles que el PR declara inalcanzables; si conecta, cierra
+    parte del *Remaining work item C*, y si no, se documenta el fallo concreto de conexión como evidencia de que
+    el item sigue abierto
+  - 'la consulta es exclusivamente agregada: sin filas, sin PII, y sin `SELECT *` para no chocar con la guarda de
+    wildcard'
+  - 'si algún perfil mostrara `COUNT(REVENUEID) > COUNT(DISTINCT REVENUEID)`, se levanta **defecto de severidad alta**:
+    el `TOP 1` pasaría a elegir arbitrariamente y los importes de la migración dependerían del plan'
+  - queda explícito en la evidencia qué perfiles siguen sin verificar, para que el item C no se dé por cerrado con
+    cobertura parcial
+- title: 'IM-1161 AC6 — HANDOFF: end-to-end completion, row counts and the untested-tenant mitigation cannot be executed
+    by QA, and the staged rewrite may have perturbed a CTE already known to be non-deterministic'
+  tags:
+  - manual
+  - handoff
+  - im-1161
+  - im-1175
+  - im-70
+  - ac-6
+  - altru
+  - non-determinism
+  - missing-doc
+  - pr-164
+  given:
+  - la query staged, que trae 30 `DROP` y 15 `CREATE INDEX` y por lo tanto **no puede pasar por safesql** sin
+    `--allow-writes`, que está prohibido
+  - que no existen perfiles locales `longisland` ni `high_desert`, y que el techo de 120s de safesql es menor que
+    los 488–1485 s medidos
+  - '`OrderBackedMembershipFinancialTransactions`, que el ticket documenta como **no determinista** (dos fingerprints
+    distintos en tres corridas idénticas de 121 filas) y deja sin arreglar a propósito'
+  when:
+  - se intenta cubrir la completitud end-to-end y la mitigación de tenants desde QA
+  then:
+  - 'se deja constancia explícita de que **QA no puede ejecutar** la corrida end-to-end, y por qué — no se marca
+    como cubierto ni se infiere de la evidencia del dev'
+  - 'queda como **pendiente del dev**, con la evidencia concreta que hace falta: la corrida completa en los dos
+    tenants adicionales que el propio PR se autoimpone como mitigación del `LOOP JOIN` forzado, con conteo de filas,
+    tiempo total y confirmación de que no hay error 8645'
+  - '**revisar si el staging alteró el no determinismo**: el PR materializó ese CTE en
+    `#OrderBackedMembershipFinancialCandidates` + `#OrderBackedMembershipFinancialTransactions` con índice, y
+    materializar cambia el plan, que es justo lo que hacía arbitrario al ganador. Hay que correr el fingerprint
+    varias veces sobre la versión staged y comparar: puede haberse estabilizado, seguir igual, o cambiar de valor
+    ganador respecto de lo ya cargado en el org destino'
+  - 'el `ORDER BY` sigue sin desempate (`PARTITION BY soim.ID ORDER BY CASE … , ft.CALCULATEDDATE DESC, ft.ID DESC`)
+    y las filas empatan en las tres claves, difiriendo solo en `source_line.ID` y `MembershipAmount`; confirmar que
+    el PR no introdujo un desempate encubierto vía el índice del temp'
+  - se recomienda ticket aparte para el no determinismo, como pide el propio ticket, pero **con el hallazgo de si
+    el staging lo movió** — porque eso cambia si es re-migración idempotente o no
+tags:
+- im-1161
+- im-1175
+- im-70
+- altru
+- migration
+- migration-tool-etl
+- sql-optimization
+- temp-table-staging
+- memory-grant
+- query-hints
+- query-regression
+- sql-server-adapter
+- configuration
+- safesql
+- non-determinism
+- ac-drift
+- pr-164
+priority: high
+type: integration
+status: active
+estimatedDuration: 150
+version: 1
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-06T14:00:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-06T14:00:00Z'

@@ -1,0 +1,84 @@
+TR-155 · IM-1161 / TC-142 · Escenario 3 — timeout configurable del SqlServerAdapter
+Suite: sql-server.adapter.spec.ts (4 tests)
+
+===============================================================================
+1. COMPORTAMIENTO — CORRECTO
+===============================================================================
+  `sql-server.adapter.ts`
+     const DEFAULT_REQUEST_TIMEOUT_MS = 1_800_000;      // 30 min
+     requestTimeout: this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+     ...escrito DENTRO de `options`, que es la ubicación que mssql resuelve primero:
+        cfg.options.requestTimeout ?? config.requestTimeout ?? 15000
+
+  `sql-server.module.ts`
+     const parseTimeoutMs = (value?: string): number | undefined => {
+       const parsed = Number(value);
+       return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+     };
+
+  1.800.000 ms > 1.485.000 ms medidos en longisland → el default deja completar la
+  corrida más lenta conocida. Si el default quedara por debajo, el arreglo de la
+  query no llegaría a la app.
+
+===============================================================================
+2. MUTACIONES — QUÉ ESTÁ PROTEGIDO Y QUÉ NO
+===============================================================================
+  mutación                                                      resultado
+  ------------------------------------------------------------  ---------------------
+  M10  DEFAULT 1_800_000 -> 120_000 (revertir el arreglo)        3 de 4 FALLAN  ✅
+  M11  sacar `requestTimeout` de dentro de `options`             3 de 4 FALLAN  ✅
+  M12  quitar el guard `&& parsed > 0` de parseTimeoutMs         4/4 PASAN      ❌
+  control                                                        4/4 PASAN
+
+  Aserciones existentes (sql-server.adapter.spec.ts):
+     expect(sqlConfig.options.requestTimeout).toBeGreaterThan(1_485_000);
+     expect(sqlConfig.options.requestTimeout).not.toBe(120000);
+     expect(sqlConfig.options.requestTimeout).toBe(300000);   // override
+
+  Cobertura de `parseTimeoutMs`: NINGUNA. Búsqueda en todo el repo:
+     $ grep -rn "parseTimeoutMs" src
+     sql-server.module.ts:15  (definición)
+     sql-server.module.ts:29  (uso)
+  No aparece en ninguna spec. La función no está exportada y no tiene test directo.
+
+===============================================================================
+3. POR QUÉ EL GUARD NO CUBIERTO ES EL QUE MÁS IMPORTA
+===============================================================================
+Demostración en runtime de la semántica de `??` con 0:
+
+  MSSQL_REQUEST_TIMEOUT_MS=""        sin_guard-> 0        con_guard-> 1800000
+  MSSQL_REQUEST_TIMEOUT_MS="abc"     sin_guard-> 1800000  con_guard-> 1800000
+  MSSQL_REQUEST_TIMEOUT_MS="0"       sin_guard-> 0        con_guard-> 1800000
+  MSSQL_REQUEST_TIMEOUT_MS="-5"      sin_guard-> -5       con_guard-> 1800000
+  MSSQL_REQUEST_TIMEOUT_MS="300000"  sin_guard-> 300000   con_guard-> 300000
+
+  clave:  0 ?? 1800000  ===  0     <-- `??` NO cae al default cuando el valor es 0
+
+  Y `mssql` interpreta `requestTimeout: 0` como SIN LÍMITE.
+
+  Además `Number('')` es 0, así que una variable de entorno declarada pero vacía
+  —el caso más probable en un despliegue mal configurado— produciría exactamente
+  ese 0. Es justo el caso que el comentario del código menciona.
+
+  Consecuencia si alguien "simplifica" ese guard: una query colgada retiene su
+  conexión del pool COMPARTIDO para siempre. Es estrictamente peor que el bug
+  original de 120 s, y no hay test que lo impida.
+
+  El guard está bien escrito. El problema es que nada lo protege.
+
+===============================================================================
+4. TRADE-OFF QUE EL PROPIO CÓDIGO DOCUMENTA
+===============================================================================
+  "this pool is shared by every extractor, so a genuinely stuck query now holds its
+   connection for the full window instead of failing in two minutes."
+
+  El default sube de 2 a 30 minutos. Es deliberado y está declarado, pero conviene
+  que operaciones lo sepa: MSSQL_REQUEST_TIMEOUT_MS existe para ajustarlo por entorno.
+
+VEREDICTO DEL ESCENARIO: FAIL — el comportamiento es correcto y está bien razonado,
+pero la aserción de cobertura del TC ("probar por mutación que existe cobertura real
+de esos bordes, no solo del camino feliz") no se cumple.
+
+ARREGLO SUGERIDO (barato): exportar `parseTimeoutMs` y añadir
+  it.each([['', 1_800_000], ['abc', 1_800_000], ['0', 1_800_000], ['-5', 1_800_000], ['300000', 300000]])
+    ('resolves %s to %i', (env, expected) => { ... });

@@ -1,0 +1,62 @@
+TR-155 · IM-1161 / TC-142 · Escenario 4 — la guarda de pares de CTEs compartidos
+Suite: pos-purchase-membership-no-order-query.spec.ts (21 tests)
+
+===============================================================================
+EL RIESGO QUE ESTA GUARDA CUBRE
+===============================================================================
+El PR migró `membership_transactions.sql` a staging (`SELECT … INTO #Cte`) pero NO
+migró `sales_order_only_membership2.sql`, que sigue con `Name AS ( … )`. Los dos
+archivos comparten 8 CTEs que deben permanecer idénticos. Quedaron en FORMAS
+DISTINTAS, así que el riesgo de que diverjan sin que nadie lo note es real.
+
+La solución del PR: `readCte` lee AMBAS formas y normaliza (quita comentarios,
+quita el `#`, colapsa espacios) para que el par siga siendo comparable.
+
+Los 8 CTEs bajo la guarda:
+  MembershipLineItems · ResolvedMembershipFinancialTransactions · RecurringInstallments
+  DonationLineItems · DiscountLineItems · SalesOrdersByPayment
+  LatestNoFinancialAnchorLifetimeMembershipTransactions · RefundedMembershipTransactions
+(+ MembershipTransactionAddOnLineItems con un test aparte que compara solo la
+ selección de filas, porque la proyección diverge legítimamente)
+
+===============================================================================
+MUTACIONES
+===============================================================================
+  mutación                                                          resultado
+  ----------------------------------------------------------------  ------------------
+  M6  cambiar `TYPECODE = 0` -> `= 99` en el archivo no-order        21/21 PASA
+  M7  cambiar `fti.TYPE = 'Standard'` en el archivo staged           21/21 PASA
+  M8  inyectar `1234 +` dentro de DiscountLineItems (lado no-order)  1 FALLA  ✅
+  M9  inyectar columna QaMutation en #MembershipLineItems (staged)   1 FALLA  ✅
+  control                                                            21/21 PASA
+
+  M6 y M7 pasan porque esas cadenas NO caen dentro de ninguno de los 8 CTEs
+  cubiertos — fue un error de puntería del primer sondeo de QA, no un hueco de la
+  guarda. Al apuntar dentro de un CTE realmente compartido (M8, M9), la guarda
+  dispara de inmediato.
+
+  Fallo exacto que emite:
+    ● POS purchase for memberships without a sales order › the shared CTEs stay a
+      matched pair › keeps DiscountLineItems identical in both files
+    ● … › keeps MembershipLineItems identical in both files
+
+===============================================================================
+LO IMPORTANTE
+===============================================================================
+La guarda atrapa la desincronización desde LOS DOS LADOS:
+  - M8 mutó el archivo NO migrado  -> detectado
+  - M9 mutó el archivo staged      -> detectado
+
+Es exactamente la regresión que el escenario pedía verificar, y es load-bearing.
+
+===============================================================================
+SUITE COMPLETA DE REGRESIÓN DE QUERIES (rama del PR)
+===============================================================================
+  npx jest --runInBand query-regression + sql-server.adapter.spec.ts
+  Test Suites: 15 skipped, 43 passed, 43 of 58 total
+  Tests:       118 skipped, 425 passed, 543 total
+
+  Los 15 suites skipped son `*.integration.spec.ts` / `*.live.spec.ts`, que exigen
+  una base viva. No son fallos.
+
+VEREDICTO DEL ESCENARIO: PASS

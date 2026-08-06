@@ -1,0 +1,49 @@
+TR-155 · IM-1161 / TC-142 · OWASP Top 10 (2021) — scan de aplicabilidad
+Superficie del PR: un archivo .sql migrado a staging, un .sql hermano con reescrituras,
+tres specs, y config de timeout del adapter SQL Server. Sin endpoints, sin authn/authz,
+sin dependencias nuevas.
+
+ID   Categoría                                    Aplica  Método                                     Veredicto
+---- -------------------------------------------- ------- ------------------------------------------ ---------
+A01  Broken Access Control                        N/A     El PR no toca authn/authz ni control de     —
+                                                          acceso; es una query de extracción y un
+                                                          timeout de conexión.
+A02  Cryptographic Failures                       N/A     No introduce cifrado, hashing ni manejo de  —
+                                                          secretos. La credencial del diff es un
+                                                          literal de fixture en un unit test.
+A03  Injection                                    SÍ      grep de concatenación dinámica e            PASS
+                                                          interpolación en el .sql; verificación de
+                                                          que @dateFilterFrom/@dateFilterTo siguen
+                                                          parametrizados. Cero concatenación; las
+                                                          `${}` del diff son helpers de test.
+A04  Insecure Design                              SÍ      Revisión del diseño del staging: 15 temp    PASS
+                                                          tables de sesión (`#`), cero globales
+                                                          (`##`), DDL que no alcanza ningún objeto
+                                                          persistente, drops idempotentes en ambos
+                                                          extremos. Corridas concurrentes aisladas.
+A05  Security Misconfiguration                    SÍ      El default de requestTimeout sube de 2 a    PASS
+                                                          30 min sobre un pool compartido. Es
+                                                          deliberado, documentado inline y ajustable
+                                                          por MSSQL_REQUEST_TIMEOUT_MS. El guard
+                                                          `parsed > 0` impide el 0 = sin límite.
+                                                          (El guard NO está cubierto por tests: se
+                                                          reporta como hueco de regresión, no como
+                                                          vulnerabilidad — el comportamiento hoy
+                                                          entregado es correcto.)
+A06  Vulnerable & Outdated Components             N/A     El PR no agrega ni actualiza dependencias;  —
+                                                          package.json no cambia.
+A07  Identification & Authentication Failures     N/A     No toca autenticación ni sesiones de        —
+                                                          usuario.
+A08  Software & Data Integrity Failures           SÍ      Equivalencia del contrato de salida: 35     PASS
+                                                          columnas, mismos nombres y orden, en las
+                                                          dos ramas, idéntico al merge-base. La
+                                                          guarda de pares de CTEs compartidos impide
+                                                          divergencia silenciosa entre los dos
+                                                          archivos.
+A09  Security Logging & Monitoring Failures       N/A     No cambia logging ni auditoría. Los logs    —
+                                                          del adapter ya existentes no exponen la
+                                                          contraseña (imprimen passwordConfigured).
+A10  Server-Side Request Forgery                  N/A     No hay peticiones salientes construidas a   —
+                                                          partir de entrada del usuario.
+
+RESUMEN: 5 aplicables · 5 PASS · 0 FAIL · 5 N/A · 0 blockers High/Critical

@@ -1,0 +1,82 @@
+TR-155 · IM-1161 / TC-142 · Escenario 6 — HANDOFF (no ejecutable por QA)
+
+===============================================================================
+POR QUÉ QA NO PUEDE EJECUTAR LA CORRIDA END-TO-END
+===============================================================================
+Tres bloqueos independientes, ninguno resoluble bajando una guarda:
+
+1. La query staged NO puede pasar por safesql.
+   El guard de solo-lectura se aplica al texto crudo:
+     WRITE_KEYWORDS = /\b(DROP|DELETE|UPDATE|INSERT|TRUNCATE|ALTER|MERGE|CREATE|EXEC(?:UTE)?|GRANT|REVOKE)\b/i
+   y el script trae 30 `DROP TABLE IF EXISTS` + 15 `CREATE NONCLUSTERED INDEX`.
+   Ejecutarla exigiría `--allow-writes`, que está PROHIBIDO. No es un obstáculo a
+   sortear: es la guarda funcionando como debe.
+
+2. No existen los perfiles donde se midió.
+   Perfiles locales: aspen, illinois_2, tucson, tucson_backup3.
+   El PR mide en longisland (97.047 filas / 1485 s) y high_desert (164.465 / 488 s).
+   Ninguno de los dos está disponible ⇒ las cifras principales del PR no son
+   reproducibles por QA en su fuente original.
+
+3. Techo de tiempo. safesql corta a 120 s; la corrida medida tarda 488–1485 s.
+
+===============================================================================
+PENDIENTE DEL DEV — evidencia concreta que falta
+===============================================================================
+(a) LA MITIGACIÓN QUE EL PROPIO PR SE AUTOIMPONE, y que hoy NO está cumplida:
+
+    "Risk: LOOP JOIN is forced for every tenant but was measured on two of nine.
+     On a different data shape a forced nested-loops plan can be far worse.
+     Mitigation: run on two more tenants before rolling out."
+
+    Hacen falta 2 tenants adicionales, con: conteo de filas, tiempo total, y
+    confirmación de que NO aparece el error 8645. Sin eso, se despliega un hint de
+    plan forzado a 9 tenants con evidencia de 2.
+
+(b) Revisar si el staging MOVIÓ el no determinismo conocido.
+
+    El ticket documenta `OrderBackedMembershipFinancialTransactions` como no
+    determinista: tres corridas idénticas de 121 filas devolvieron DOS fingerprints
+    distintos. El ORDER BY empata en sus tres claves:
+
+      PARTITION BY soim.ID
+      ORDER BY CASE WHEN candidate.SourceType = 'Payment' THEN 0 ELSE 1 END,
+               ft.CALCULATEDDATE DESC, ft.ID DESC
+
+    y las filas candidatas difieren solo en source_line.ID y MembershipAmount, que
+    el ORDER BY no menciona ⇒ el ganador es arbitrario y dependiente del plan.
+
+    PERO ESTE PR SÍ TOCÓ ESE CTE: lo materializó en
+      #OrderBackedMembershipFinancialCandidates   (índice sobre OrderMembershipItemID, ResolutionRank)
+      #OrderBackedMembershipFinancialTransactions (índice sobre OrderMembershipItemID)
+
+    Materializar CAMBIA EL PLAN, y el plan es justamente lo que hacía arbitrario al
+    ganador. Tres desenlaces posibles, y hay que saber cuál es:
+      - se estabilizó por accidente (ahora determinista, pero por suerte, no por diseño)
+      - sigue igual de arbitrario
+      - quedó determinista pero eligiendo un ganador DISTINTO al que ya está cargado
+        en el org destino  <-- el peor caso: rompe la idempotencia de re-migración
+
+    Pedido concreto: correr el fingerprint de esa CTE >=3 veces sobre la versión
+    staged, en el mismo tenant, y comparar entre sí y contra el valor pre-staging.
+
+    Ojo: el índice sobre (OrderMembershipItemID, ResolutionRank) podría estar
+    introduciendo un desempate ENCUBIERTO por orden físico. Un desempate real
+    (p.ej. `source_line.ID DESC`) debe ser explícito en el ORDER BY, no emergente.
+
+(c) Item C del ticket sigue abierto: unicidad de REVENUEID en aspen, everson,
+    everson2, kidstream y moad. QA confirmó que aspen sigue inalcanzable
+    (Failed to connect to localhost:41434). Cuatro de esos perfiles apuntan al
+    endpoint `veev-ue1-prod-private-nlb-*` que longisland ya tiene actualizado;
+    hace falta la misma actualización antes de poder cerrarlo.
+
+===============================================================================
+LO QUE QA SÍ APORTÓ EN LUGAR DE FINGIR ESTA COBERTURA
+===============================================================================
+  - Contrato de salida verificado equivalente al merge-base (35 col, dos ramas).
+  - Premisa de unicidad re-derivada en los 2 perfiles alcanzables.
+  - Guarda de pares de CTEs compartidos probada load-bearing en ambos sentidos.
+  - Tres huecos de regresión encontrados por mutación (escenarios 2 y 3).
+
+ESTADO: not-run (handoff). NO se marca como cubierto ni se infiere de la evidencia
+del dev.
