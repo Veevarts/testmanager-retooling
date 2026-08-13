@@ -1,0 +1,265 @@
+schemaVersion: '1.0'
+id: tr-6ff6963a-8940-4e0e-a1c1-dd03f8a516d6
+key: TR-156
+title: 'TR-156 · IM-1161 · TC-142 · 5/6 PASS · 0 FAIL · 1 handoff — los tres huecos de regresión de TR-155
+  quedaron cerrados y probados por mutación, incluidas dos mutaciones nuevas más finas'
+description: |-
+  Re-ejecución de TC-142 contra **MigrationToolETL#164** en su head nuevo **`cbc76e1c`** (TR-155 corrió sobre
+  `bebdc71`). Motivo: tras el rebote de QA, el dev subió dos commits que atacan directamente lo reportado —
+  `52dd0c2d` *"guard the parts of the fix that were unprotected"* y `cbc76e1c` *"measure a third tenant and clear
+  the sibling-file risk"*.
+
+  **Veredicto: 5/6 PASS · 0 FAIL · 1 not-run (handoff). Los dos FAIL de TR-155 quedaron cerrados.**
+
+  ## Lo que se arregló, verificado por mutación y no por lectura del diff
+
+  | mutación | TR-155 (`bebdc71`) | TR-156 (`cbc76e1c`) |
+  |---|---|---|
+  | M1 borrar `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)` | 33/33 PASA ❌ | 1 FALLA ✅ |
+  | M2 `MAX_GRANT_PERCENT = 5` → `25` | 33/33 PASA ❌ | 1 FALLA ✅ |
+  | M3 borrar un `DROP` del bloque inicial | 33/33 PASA ❌ | 1 FALLA ✅ |
+  | M4 borrar un `CREATE INDEX` no leído por el helper | 33/33 PASA ❌ | 1 FALLA ✅ |
+  | M12 quitar el guard `&& parsed > 0` | 4/4 PASAN ❌ | 8 FALLAN ✅ |
+
+  Además probé **dos mutaciones nuevas que el dev no podía anticipar**, para descartar que la cobertura fuera un
+  `toContain` grueso:
+
+  - **M2b** — quitar *solo* `LOOP JOIN` dejando el grant → **1 falla**. La guarda discrimina las dos piezas del
+    hint, no el string completo.
+  - **M12b** — relajar el guard de `> 0` a `>= 0`, que deja pasar exactamente el único valor peligroso →
+    **6 fallan**. El caso borde que importaba está cubierto por dos vías.
+
+  También quité `SET NOCOUNT ON` (**M4b**) y también se detecta.
+
+  La suite creció donde tenía que crecer: `membership-transactions-query.spec.ts` de 33 a 39 tests (+6, uno por
+  guarda) y adapter+module de 4 a 16. `sql-server.module.spec.ts` es un archivo nuevo que exporta y cubre
+  `parseTimeoutMs` con '', '0', '-5', 'abc', '   ', `undefined`, un override positivo y un test explícito
+  *"never returns zero"* — con el razonamiento del guard escrito en el docblock, incluido que `Number('')` es 0 y
+  que `??` no atrapa el 0.
+
+  ## Lo que se mantiene
+
+  Estructura y contrato de salida sin cambios: 15 staged / 15 índices / 30 drops, `LEAD == TRAIL`, cero temp
+  tables globales, cero DDL alcanzando un objeto persistente, y 35 columnas idénticas al merge-base en las dos
+  ramas del `UNION ALL`. La guarda de pares de CTEs compartidos sigue load-bearing en los dos sentidos.
+
+  ## Lo que avanzó pero no cerró, y un retroceso que no es del PR
+
+  **El tercer tenant llegó, pero queda uno corto de la barra que el propio PR fijó.** La mitigación decía *"run on
+  two more tenants before rolling out"* — desde 2 medidos, eso son 4. Ahora son **3**: se sumó tucson
+  (98.950 filas / 249 s). El dato es tranquilizador en el eje que importaba —249 s contra los 1485 s de
+  longisland, así que el plan forzado no se degradó en otra forma de datos— pero la barra era 4.
+
+  **`illinois_2` dejó de ser alcanzable.** La semana pasada re-derivé ahí la unicidad de `REVENUEID`
+  (191.630/191.630); hoy falla la conexión igual que aspen. El PR lo documenta (*"illinois_2 has since joined the
+  unreachable set — it is also on the old NLB"*) y lo confirmé de forma independiente desde la máquina de QA. El
+  conjunto sin verificar **creció de 5 a 6 perfiles**. Es infraestructura, no el PR, pero deja el *item C* peor
+  que antes.
+
+  **El CTE no determinista sigue sin respuesta.** `OrderBackedMembershipFinancialTransactions` sigue siendo el
+  pendiente de TR-155: el PR lo materializó con índice, materializar cambia el plan, y el plan era justo lo que
+  hacía arbitrario al ganador. No hay ninguna medición del fingerprint post-staging en el PR.
+
+  ## Limitación de esta corrida
+
+  El MCP de Atlassian está desconectado, así que esta ejecución **no pudo leer el ticket ni publicar el veredicto
+  en Jira**. Todo el trabajo técnico se hizo contra el PR y el repo. IM-1161 sigue en **Rechazado** por TR-155 y
+  necesita transición manual —o una sesión con Atlassian reconectado— para reflejar este resultado.
+testCaseIds:
+- TC-142
+environment:
+  name: 'MigrationToolETL PR #164 @ cbc76e1c (TR-155 corrió sobre bebdc71) vs merge-base a8380f9a · worktree
+    desechable · Node v25.4.0 · jest · safesql sobre tucson / illinois_2 / aspen (solo lectura)'
+  url: https://github.com/Veevarts/MigrationToolETL/pull/164
+  buildVersion: 'Mixed — SQL + backend + specs de regresión. Estrategia de esta corrida: re-ejecutar exactamente
+    las mutaciones de TR-155 sobre el head nuevo para comprobar que los huecos se cerraron, más dos mutaciones
+    nuevas y más finas (M2b, M12b) para descartar cobertura superficial, más verificación estructural y sondeos
+    agregados de solo lectura.'
+  branch: fix/membership-transactions-query-timeout-IM-1161
+  commit: cbc76e1c
+  repository: Veevarts/MigrationToolETL
+  pullRequest: https://github.com/Veevarts/MigrationToolETL/pull/164
+  dataSource: safesql (COUNT/COUNT DISTINCT sobre SALESORDER, agregados, sin filas ni PII) — tucson responde;
+    illinois_2 y aspen inalcanzables
+  notes: |-
+    ## Solution understood
+
+    Sin cambios respecto de TR-155 en la solución de fondo: la causa raíz es un memory grant (error 8645), no un
+    timeout de runtime; la cadena `WITH` se parte en 15 `SELECT … INTO #Cte` para que cada statement pida su
+    propio grant, cada temp se indexa por su clave de sondeo, el ensamblado final lleva
+    `OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)`, y el `requestTimeout` del adapter pasa de 120 s fijos a
+    1.800.000 ms configurables.
+
+    Lo que cambió entre `bebdc71` y `cbc76e1c` es exclusivamente PROTECCIÓN y DOCUMENTACIÓN: +69 líneas de tests
+    en la spec de la query, +22 en la del adapter, un `sql-server.module.spec.ts` nuevo, la exportación de
+    `parseTimeoutMs`, y la medición de un tercer tenant en el doc. Ninguna lógica de producción cambió de
+    comportamiento.
+
+    ## Inferred technical tests
+
+    - Re-ejecutar las mutaciones de TR-155 sobre el head nuevo — AUTO, escenarios 2 y 3. Es la prueba directa de
+      si los huecos se cerraron.
+    - Mutaciones NUEVAS y más finas (quitar media parte del hint; relajar el guard a `>= 0`) — AUTO, para
+      descartar que la cobertura sea superficial.
+    - Verificación estructural y de contrato de salida contra el merge-base — AUTO, escenario 1.
+    - Guarda de pares de CTEs compartidos por mutación bidireccional — AUTO, escenario 4.
+    - Unicidad de REVENUEID por agregados de solo lectura — AUTO, escenario 5.
+    - Corrida end-to-end y fingerprint del CTE no determinista — MANUAL: los tres bloqueos de TR-155 siguen
+      vigentes. Escenario 6.
+status: completed
+results:
+- scenarioIndex: 1
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-13T15:35:00Z'
+  actual: |-
+    Re-medido sobre `cbc76e1c` (el `.sql` no cambió respecto de `bebdc71`, pero la corrida se sostiene con su
+    propia evidencia):
+
+      staged SELECT..INTO #temp        15
+      CREATE NONCLUSTERED INDEX        15   emparejados 1:1 y en el mismo orden
+      DROP TABLE IF EXISTS             30   LEAD == TRAIL == los 15 staged
+      temp tables globales (##)        ninguna
+      SET NOCOUNT ON / GO              presente / ausente
+      DDL sobre objeto no-temp         ninguno
+
+    Contrato de salida contra el merge-base a8380f9a: dos ramas de 35 columnas en ambos, rama A y rama B
+    idénticas, y las dos ramas coinciden entre sí. `executeQueryAsStream` sigue sin necesitar cambios.
+  notes: Evidencia en attachments/tr-156-tc-142/scenario-1/staging-structure-cbc76e1c.txt
+- scenarioIndex: 2
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-13T15:20:00Z'
+  actual: |-
+    HUECO CERRADO. Las mismas mutaciones de TR-155, sobre el head nuevo:
+
+      M1   borrar OPTION (LOOP JOIN, MAX_GRANT_PERCENT = 5)   33/33 PASA -> 1 FALLA
+      M2   MAX_GRANT_PERCENT = 5 -> 25                        33/33 PASA -> 1 FALLA
+      M3   borrar un DROP del bloque inicial                  33/33 PASA -> 1 FALLA
+      M4   borrar un CREATE INDEX no leído por el helper      33/33 PASA -> 1 FALLA
+      control                                                 39/39 PASA
+
+    Y dos mutaciones NUEVAS que inventé para esta corrida, precisamente para descartar que la protección fuera un
+    `toContain` grueso del hint completo:
+
+      M2b  quitar SOLO `LOOP JOIN`, dejando el grant          1 FALLA
+      M4b  quitar SET NOCOUNT ON                              1 FALLA
+
+    La guarda discrimina las dos piezas del hint por separado, así que no es superficial. La suite pasó de 33 a
+    39 tests: +6, uno por guarda.
+  notes: Comparación completa en attachments/tr-156-tc-142/scenario-2/mutation-hints-NOW-locked.txt
+- scenarioIndex: 3
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-13T15:25:00Z'
+  actual: |-
+    HUECO CERRADO, y con margen.
+
+      M10  DEFAULT 1_800_000 -> 120_000        3 de 4 FALLAN -> 7 FALLAN
+      M11  sacar requestTimeout de options     3 de 4 FALLAN -> 7 FALLAN
+      M12  quitar el guard `&& parsed > 0`     4/4 PASAN     -> 8 FALLAN
+      control                                  16/16 PASAN
+
+    M12b, mutación nueva y deliberadamente sutil —relajar el guard de `> 0` a `>= 0`, que deja pasar exactamente
+    el único valor peligroso— también se detecta: **6 fallan**. Eso descarta cobertura superficial.
+
+    El dev exportó `parseTimeoutMs` y añadió `sql-server.module.spec.ts` (archivo nuevo) con casos para '', '0',
+    '-5', 'abc', '   ', undefined, un override positivo, y un test explícito "never returns zero". El docblock
+    documenta el razonamiento —que `Number('')` es 0, que `??` no atrapa el 0, y que tedious arma su timer con
+    `if (timeout)`— así que la próxima persona que lo lea entiende por qué el guard no es ruido.
+
+    Suite de 4 a 16 tests.
+  notes: Comparación completa en attachments/tr-156-tc-142/scenario-3/mutation-parsetimeout-NOW-covered.txt
+- scenarioIndex: 4
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-13T15:30:00Z'
+  actual: |-
+    Sin regresión tras los commits nuevos:
+
+      control                                                    21/21 PASA
+      M8  desincronizar DiscountLineItems (archivo NO migrado)     1 FALLA
+      M9  desincronizar #MembershipLineItems (archivo staged)      1 FALLA
+      control final                                              21/21 PASA
+
+    `sales_order_only_membership2.sql` sigue sin migrar a staging, así que el riesgo de divergencia entre los dos
+    archivos hermanos sigue vigente — y la guarda lo sigue cubriendo desde los dos lados.
+  notes: Evidencia en attachments/tr-156-tc-142/scenario-4/shared-cte-guard-cbc76e1c.txt
+- scenarioIndex: 5
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: passed
+  executedAt: '2026-08-13T15:32:00Z'
+  actual: |-
+    La premisa se sostiene donde todavía se puede medir:
+
+      perfil       2026-08-06 (TR-155)         2026-08-13 (TR-156)
+      tucson       295.486/295.486 · dup 0     295.486/295.486 · dup 0 · total 353.544
+      illinois_2   191.630/191.630 · dup 0     INALCANZABLE (localhost:41435, 20s)
+      aspen        inalcanzable                INALCANZABLE (localhost:41434, 20s)
+
+    RETROCESO DE ALCANCE, ajeno al PR: `illinois_2` respondía hace una semana y hoy no. El PR lo documenta
+    ("illinois_2 has since joined the unreachable set — it is also on the old NLB") y lo confirmé de forma
+    independiente desde la máquina de QA, así que no es una peculiaridad del entorno del dev.
+
+    El conjunto de perfiles sin verificar creció de 5 a 6: aspen, everson, everson2, illinois_2, kidstream, moad.
+    La medición de illinois_2 del 2026-08-06 sigue valiendo como evidencia histórica —el dato no cambia— pero ya
+    no es re-derivable a demanda, que es lo que haría falta para cerrar el item C.
+  notes: Es riesgo de infraestructura, no defecto del PR. Detalle en attachments/tr-156-tc-142/scenario-5/revenueid-reachability-regression.txt
+- scenarioIndex: 6
+  testCaseId: c4d0cffe-aba9-40c7-ad88-015cc71875c7
+  testCaseKey: TC-142
+  status: not-run
+  actual: |-
+    Sigue sin ser ejecutable por QA: los tres bloqueos de TR-155 no cambiaron —la query staged no puede pasar por
+    safesql (WRITE_KEYWORDS casa con DROP/CREATE y --allow-writes está prohibido), no existen perfiles
+    longisland/high_desert, y el techo de 120 s es menor que los tiempos medidos.
+
+    (a) LA MITIGACIÓN AVANZÓ PERO NO LLEGÓ A SU PROPIA BARRA. El PR decía "run on two more tenants before rolling
+        out"; desde 2 medidos, eso son 4. Ahora son 3: se sumó tucson (98.950 filas / 249 s). El dato reduce el
+        riesgo —249 s frente a los 1485 s de longisland, o sea que el plan forzado no se degradó en otra forma de
+        datos— pero queda uno corto.
+
+    (b) EL CTE NO DETERMINISTA SIGUE SIN MEDIRSE. No hay en el PR ningún fingerprint post-staging de
+        OrderBackedMembershipFinancialTransactions, que este PR materializó con índice.
+  notes: |-
+    PENDIENTE DE TU PARTE (o del dev):
+    (a) Un cuarto tenant para cumplir la mitigación que el propio PR se autoimpone, con filas, tiempo y ausencia
+        de error 8645. O bien ajustar explícitamente la mitigación a tres si se considera suficiente — pero que
+        sea una decisión escrita, no un olvido.
+    (b) Correr el fingerprint de OrderBackedMembershipFinancialTransactions >=3 veces sobre la versión staged y
+        compararlo entre sí y contra el valor pre-staging. Si aparece un desempate, que sea explícito en el
+        ORDER BY y no emergente del índice del temp.
+    (c) Recuperar el acceso a aspen / everson / everson2 / illinois_2 / kidstream (NLB viejo) para poder cerrar el
+        item C. Hoy está peor que la semana pasada.
+    Detalle en attachments/tr-156-tc-142/scenario-6/handoff-tercer-tenant-y-no-determinismo.txt
+summary:
+  total: 6
+  passed: 5
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 1
+  passRate: 83
+defects: []
+history:
+- action: created
+  timestamp: '2026-08-13T15:10:00Z'
+  user: codex
+  reason: 'Re-ejecución de TC-142 sobre el head cbc76e1c tras los dos commits del dev que atacan los huecos que
+    reportó TR-155'
+- action: completed
+  timestamp: '2026-08-13T15:45:00Z'
+  user: codex
+  reason: 5/6 PASS y 0 FAIL — los tres huecos de regresión quedaron cerrados y probados por mutación, incluidas
+    dos mutaciones nuevas más finas. Queda el handoff con la mitigación a uno de su barra y el CTE no determinista
+    sin medir
+metadata:
+  createdBy: codex
+  createdAt: '2026-08-13T15:10:00Z'
+  updatedBy: codex
+  updatedAt: '2026-08-13T15:45:00Z'

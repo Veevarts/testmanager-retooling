@@ -1,0 +1,64 @@
+TR-156 · IM-1161 / TC-142 · Escenario 6 — qué se cerró y qué sigue abierto
+
+===============================================================================
+(a) MITIGACIÓN DEL LOOP JOIN FORZADO — AVANZÓ, PERO NO LLEGÓ A SU PROPIA BARRA
+===============================================================================
+La mitigación que el PR se autoimpone dice, textual:
+
+  "Mitigation: run on two more tenants before rolling out."
+
+Partiendo de 2 medidos, "dos más" son 4. El PR ahora reporta:
+
+  "LOOP JOIN is forced on all nine tenants and is now measured on three —
+   high_desert (164.465 filas / 488 s), longisland (97.047 / 1485 s) y
+   tucson (249 s / 98.950 filas)"
+
+  tenant       antes            ahora
+  -----------  ---------------  ------------------
+  high_desert  164.465 / 488 s  164.465 / 488 s
+  longisland   97.047 / 1485 s  97.047 / 1485 s
+  tucson       no medido        98.950 / 249 s   <-- NUEVO
+
+Es decir: 3 de 9, no 4. Avanzó de forma real —tucson es un tenant nuevo, con
+tiempo y conteo— pero queda UNO corto de la barra que el propio PR fijó.
+
+Además, el nuevo dato es tranquilizador en el eje que importaba: tucson corre en
+249 s, muy por debajo de longisland (1485 s), así que el plan forzado no se
+degradó en una forma de datos distinta. Eso reduce el riesgo, no lo elimina.
+
+QA no puede cubrir esto (los tres bloqueos siguen vigentes: safesql rechaza el
+script por DROP/CREATE, no hay perfiles longisland/high_desert, y el techo de 120 s
+es menor que los tiempos medidos).
+
+===============================================================================
+(b) EL CTE NO DETERMINISTA — SIGUE SIN RESPUESTA
+===============================================================================
+`OrderBackedMembershipFinancialTransactions` sigue siendo el pendiente que TR-155
+levantó y que este PR no resolvió ni midió:
+
+  - El ticket lo documenta como no determinista (2 fingerprints distintos en 3
+    corridas idénticas de 121 filas).
+  - Este PR SÍ lo tocó: lo materializó en #OrderBackedMembershipFinancialCandidates
+    + #OrderBackedMembershipFinancialTransactions, con índice.
+  - Materializar cambia el plan, y el plan era justo lo que hacía arbitrario al
+    ganador.
+
+No hay en el PR ninguna medición del fingerprint post-staging. Los tres desenlaces
+posibles siguen indistinguibles:
+  - se estabilizó por accidente,
+  - sigue arbitrario,
+  - quedó determinista pero eligiendo un ganador DISTINTO al ya cargado en el org
+    destino -> rompería la idempotencia de re-migración.
+
+PEDIDO CONCRETO (sin cambios respecto de TR-155): correr el fingerprint de esa CTE
+>=3 veces sobre la versión staged, en el mismo tenant, y compararlo entre sí y
+contra el valor pre-staging. Si se agrega un desempate, que sea explícito en el
+ORDER BY y no emergente del índice del temp.
+
+===============================================================================
+(c) ITEM C — PEOR QUE ANTES
+===============================================================================
+Ver scenario-5: `illinois_2` pasó a inalcanzable, así que el conjunto sin verificar
+creció de 5 a 6 perfiles. Causa de infraestructura (NLB viejo), no del PR.
+
+ESTADO: not-run (handoff). (a) avanzó pero no cerró; (b) y (c) siguen abiertos.

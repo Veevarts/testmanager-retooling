@@ -1,0 +1,42 @@
+TR-156 · IM-1161 / TC-142 · Escenario 3 — RE-VERIFICACIÓN tras el fix del dev
+
+===============================================================================
+EL HUECO QUE SE REPORTÓ EN TR-155
+===============================================================================
+`parseTimeoutMs` no estaba exportada y no tenía ninguna spec. Quitarle el guard
+`&& parsed > 0` dejaba los 4 tests verdes, pese a que un 0 propagado significa
+"sin límite" en mssql sobre un pool compartido.
+
+===============================================================================
+LO QUE HIZO EL DEV
+===============================================================================
+  - `sql-server.module.ts`: exporta `parseTimeoutMs` (+21 líneas, antes +14)
+  - `sql-server.module.spec.ts`: ARCHIVO NUEVO (+36 líneas), con el razonamiento
+    del guard escrito en el docblock —incluido el detalle de que `Number('')` es 0
+    y que `??` no atrapa el 0— y casos para '', '0', '-5', 'abc', '   ', undefined,
+    override positivo, y un test explícito "never returns zero".
+
+===============================================================================
+MISMAS MUTACIONES, LOS DOS HEADS
+===============================================================================
+  mutación                                          TR-155 (bebdc71)   TR-156 (cbc76e1c)
+  ------------------------------------------------  -----------------  ------------------
+  M10  DEFAULT 1_800_000 -> 120_000                  3 de 4 FALLAN ✅   7 FALLAN  ✅
+  M11  sacar requestTimeout de dentro de options     3 de 4 FALLAN ✅   7 FALLAN  ✅
+  M12  quitar el guard `&& parsed > 0`               4/4 PASAN     ❌   8 FALLAN  ✅
+  M12b guard que acepta 0 (`>= 0` en vez de `> 0`)   (no probada)       6 FALLAN  ✅
+  control                                            4/4 PASAN          16/16 PASAN
+
+  La suite pasó de 4 a 16 tests.
+
+  M12b es una mutación NUEVA y deliberadamente sutil: en vez de borrar el guard,
+  relajarlo de `> 0` a `>= 0`, que deja pasar exactamente el único valor peligroso.
+  También se detecta (6 fallos). Eso descarta que la cobertura sea superficial.
+
+===============================================================================
+VEREDICTO
+===============================================================================
+El hueco está CERRADO, y con margen: el caso borde que más importaba (el 0) está
+cubierto por dos vías —la tabla de casos y el test "never returns zero"—.
+
+ESCENARIO 3: FAIL (TR-155) -> PASS (TR-156)
