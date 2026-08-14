@@ -1,0 +1,68 @@
+AC4 Subject create/edit form groups related fields, validates path, and saves cleanly
+Executed 2026-08-14 (dev live + code review).
+
+## Form structure (DOM audit)
+
+Headings on `/admin/features` "Add subject":
+  · h1 "Create subject"
+  · h2 "Untitled subject"
+  · h3 "Classification"    ← subject kind + product/department picker
+  · h3 "Subject type"      ← Product / Department / Feature / Standalone radios
+  · h3 "Details"           ← Name, Slug, Description, ownership
+  · h3 "Review"            ← summary before save
+
+4 fieldsets → grouping is enforced by semantic HTML.
+
+Radio group (Subject type) options:
+  · Product      — "A complete Veevart product"
+  · Department   — "Service or operational work"
+  · Feature      — "A capability within a product"
+  · Standalone   — "Outside product grouping"
+
+Screenshot: scenario-4/dev-subject-guided-form.png
+
+## Slug/path validation (client-side)
+
+lib/subjectForm.ts:92-107:
+  export function subjectFormValidationError(form: SubjectFormState): string | null {
+    if (!form.name.trim()) return "Enter a subject name.";
+    if (!form.slug.trim()) return "Enter a subject slug.";
+    if (!/^[a-z0-9_-]+$/i.test(form.slug.trim())) {
+      return "The slug can contain only letters, numbers, dashes, and underscores.";
+    }
+    ...
+  }
+
+Slug normalizer (lib/subjectForm.ts:46-54):
+  export function normalizeSubjectSlug(value: string): string {
+    return value
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[-_]+|[-_]+$/g, "");
+  }
+
+Unit test evidence (lib/subjectForm.test.ts):
+  · normalizeSubjectSlug("  Crédit Card / Checkout  ") → "credit-card-checkout"
+  · uniqueSubjectSlug appends -2, -3, -4 when the base collides
+  · subjectFormValidationError requires product for kind=product|feature
+  · subjectFormValidationError requires department for kind=department
+  · subjectPayload omits fields not applicable to the selected kind
+  · subjectPayload keeps `version` only for kind=feature
+  · subjectPayload keeps `implementationPerson` only for department=implementation
+
+## Server-side validation (defense in depth)
+
+Server createFeatureSchema validation (server/src/lib/validation.ts) — the same
+regex `/^[a-z0-9_-]+$/i` is enforced server-side too.
+
+## Save workflow
+
+After a successful save, `lastSavedFeatureId` triggers the follow-up CTA
+("Create survey for this subject" or "Edit survey for this subject") for the
+newly-saved subject — clear next-step affordance.
+
+Verdict: AC4 PASS (4 grouped sections + slug validation client+server + save
+workflow with next-step CTA + comprehensive unit test coverage).
