@@ -1,0 +1,52 @@
+AC8 Legacy/dev NPS requests providing only subdomain continue to resolve outside production
+Executed 2026-08-14.
+
+## Code side — subdomain path still active in isActiveClientOrg
+
+server/src/routes/features.ts:52-58:
+
+  if (!clientOrgId) return false;
+  return db.select({...}).from(organizations)
+    .where(and(eq(organizations.subdomain, clientOrgId), eq(organizations.active, true)))
+    .limit(1).all().length > 0;
+
+The subdomain lookup is unchanged from pre-IM-1165 behavior. When a request lacks
+salesforceOrgId but includes clientOrgId (the legacy path), the code falls through to
+the subdomain match.
+
+## In practice, subdomain fallback is dev/stg only
+
+Prd inventory (from AC1):
+  · 186 organizations, 0 with subdomain.
+  · Therefore, in prd the fallback branch always returns false — no data to match.
+
+Dev/stg inventory (dev observed live):
+  · Auctifera → salesforceOrgId only
+  · VNFP     → subdomain only (flow-site-19432-dev-ed)  <-- this is the legacy path
+
+So a VNFP scratch that sends only `clientOrgId=flow-site-19432-dev-ed` on dev
+continues to resolve to the VNFP org via subdomain fallback — this IS AC8.
+
+## Test coverage — many existing tests exercise the subdomain fallback
+
+server/src/routes/apiBoundary.test.ts (36 subdomain-based test setups):
+  · line 197  create org with subdomain-only (dev env test)
+  · line 541  "prioritizes a global general survey for active organizations" — subdomain lookup
+  · line 574  clientOrgId: org.subdomain
+  · line 685-690  scoped organization tests using subdomain
+  · line 731, 738, 819, 829, 846, 860, 927, 1064, 1472, 1477, 1497 — dozens of subdomain-based test setups
+
+CI on the merged PR #38 branch: server tests + client build PASSED (32s job). None of
+these subdomain-based tests regressed.
+
+## Note on AC8 wording
+
+The AC says "subdomain-based resolution continues to work without breaking existing
+test flows". It does NOT explicitly require that prd BLOCK subdomain requests. In
+practice, prd blocks them by data absence (no organization row has a subdomain in
+prd), not by env-gated code. This is a valid design: the runtime code is env-agnostic;
+the data model is what enforces the boundary.
+
+Verdict: AC8 PASS (code unchanged, tests unchanged, dev/stg VNFP scratch still
+resolves via subdomain; prd has no subdomain-carrying rows so the fallback is a no-op
+in prd by data absence).

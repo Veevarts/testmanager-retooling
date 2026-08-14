@@ -1,0 +1,39 @@
+AC6 Staging/Development manual form XOR — live verification
+Executed 2026-08-14.
+
+## Staging (surveytool.stg.veevart.ai) — environment endpoint returned "staging"
+
+Form fields rendered when the mode is "Salesforce Org ID 18":
+  1. Name *
+  2. Identifier type (select: Salesforce Org ID 18 [selected] / Subdomain fallback)
+  3. Salesforce Org ID 18 * (placeholder "00Dxxxxxxxxxxxxxxx")
+  4. Active (checkbox)
+
+Switching identifier type to "Subdomain fallback" swaps input 3 for
+"Subdomain *" (placeholder "e.g. scratch-subdomain"). Only ONE identifier input
+is present at any time — XOR enforced by the UI.
+
+Screenshot: stg-form-default.png
+
+## Development (surveytool.dev.veevart.ai) — environment endpoint returned "development"
+
+Same form structure as staging.
+Screenshots: dev-form-orgid-mode.png (SF Org ID 18 mode) + dev-form-subdomain-mode.png (Subdomain fallback mode).
+
+## Server guard (defense in depth) — POST /api/admin/organizations on dev
+
+Case (dev): { name: qa-tc145-both, salesforceOrgId: 00Dxxxxxxxxxxxxxxxx, subdomain: qa-tc145-both }
+Result:    400 { error: "Provide either salesforceOrgId or subdomain, but not both" }
+Server:    server/src/routes/organizations.ts:45  `if (environment !== "production" && Boolean(subdomain) === Boolean(salesforceOrgId))`
+
+So even if the UI is bypassed and both fields are POSTed, the server refuses. Defense in depth.
+
+## Existing dev inventory (proves both identifier types coexist in the same list)
+
+GET /api/admin/organizations (dev):
+  · "Auctifera" → salesforceOrgId=00DEm00000V5eRWMAZ, subdomain=null, source=manual
+  · "VNFP"     → salesforceOrgId=null,               subdomain=flow-site-19432-dev-ed, source=manual
+
+Both records exist under the same table but each row uses a single identifier mode.
+
+Verdict: AC6 PASS in both staging and development (UI XOR + server XOR + real data shows both modes coexist per-record).
