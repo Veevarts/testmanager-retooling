@@ -1,0 +1,82 @@
+TR-157 · IM-969 / TC-143 · Escenarios 4 y 5 — AC4, AC5 y AC6
+=============================================================
+Territorio NUEVO: la audiencia por organizaciones específicas no se ejercitó en ninguna
+corrida previa. TR-146 cubrió `everyone` y organizaciones inactivas, que es otra cosa.
+
+BANCO DE PRUEBAS — deliberadamente en A/B, una organización por tipo de llave
+  id 1  VNFP       subdomain        = flow-site-19432-dev-ed   Active  manual
+  id 2  Auctifera  salesforceOrgId  = 00DEm00000V5eRWMAZ       Active  manual
+
+Esto importa: el formulario `New organization` ofrece `Identifier type` con
+`Salesforce Org ID 18` (opción por defecto) y `Subdomain fallback`. Tras IM-1165 la llave
+canónica es el Org Id y el subdominio quedó degradado a fallback — pero VNFP está registrada
+con el fallback, que es la llave con la que se produjo toda la evidencia previa. Tener una
+org por tipo permite distinguir un bug de scoping de una desalineación de llave.
+
+-----------------------------------------------------------------------
+AC4 — audiencia `To everyone` alcanza a las dos organizaciones activas
+-----------------------------------------------------------------------
+Survey id 1, audience=everyone, activa. UNA sola survey.
+
+  contexto enviado                                      elegibles
+  ----------------------------------------------------  ---------
+  clientOrgId=flow-site-19432-dev-ed                     [1]
+  salesforceOrgId=00DEm00000V5eRWMAZ                     [1]
+  clientOrgId + salesforceOrgId (lo que manda el launcher) [1]
+  salesforceOrgId=00DXX00000XXXXXXXX (inexistente)       []
+  clientOrgId vacío                                      []
+  sin userCreatedDate                                    []
+
+VEREDICTO AC4: PASS. Las dos organizaciones la reciben con una sola survey, sin duplicar
+por organización — que es exactamente el ahorro que el AC exige demostrar. Y lo hacen a
+través de llaves DISTINTAS, lo que hace la prueba más fuerte, no más débil.
+
+Comportamiento fail-closed confirmado en los tres casos de contexto incompleto: lista vacía
+con 200, nunca 5xx. Un "no elegible" es un caso normal, no un error.
+
+CORRECCIÓN METODOLÓGICA: la primera sonda de QA mandó el Org Id DENTRO de `clientOrgId` y
+devolvió [] para Auctifera. Era un error de la sonda, no del código: `isActiveClientOrg`
+compara `clientOrgId` contra `subdomain` y `salesforceOrgId` contra su campo propio, y son
+parámetros separados. Re-verificado con la forma correcta.
+
+-----------------------------------------------------------------------
+AC5 — acotada a UNA organización, no funciona en ninguna otra
+-----------------------------------------------------------------------
+Survey id 2 `QA TC-143 · org-scoped`, audience=organization,
+audienceDetails=00DEm00000V5eRWMAZ, activa.
+
+  organización                        elegibles   ¿objetivo?
+  ----------------------------------  ----------  ----------
+  Auctifera  (SELECCIONADA)            [2]         SÍ
+  VNFP       (NO seleccionada)         []          SÍ
+  inexistente                          []          SÍ
+
+VEREDICTO AC5: PASS. Es el requisito que el dueño de la historia pidió explícitamente:
+"cuando se seleccionan para una org, no deben funcionar en ninguna otra". Los dos lados
+ejercitados — el positivo sin el negativo no probaría scoping.
+
+-----------------------------------------------------------------------
+AC6 — la lista seleccionada sobrevive la recarga y la edición
+-----------------------------------------------------------------------
+  momento                              audience      audienceDetails       GSI1SK
+  -----------------------------------  ------------  --------------------  ---------------------------
+  tras CREAR                           organization  00DEm00000V5eRWMAZ    SCOPE#organization#SURVEY#2
+  tras EDITAR un campo AJENO           organization  00DEm00000V5eRWMAZ    SCOPE#organization#SURVEY#2
+
+La edición cambió `questionText` y no tocó la audiencia. Resultado: lista IDÉNTICA, ninguna
+organización perdida y —el modo de falla que el AC nombra explícitamente— NINGUNA organización
+no seleccionada agregada. Eligibility post-edición sigue 1 para Auctifera y 0 para VNFP.
+
+VEREDICTO AC6: PASS.
+
+-----------------------------------------------------------------------
+Hallazgo lateral — el gate 409 es más amplio de lo documentado
+-----------------------------------------------------------------------
+Crear la survey acotada por organización mientras la General `everyone` seguía activa:
+
+  POST /api/admin/surveys -> 409
+  {"error":"An active general survey already applies to this audience (survey 1)."}
+
+O sea que una General con audiencia GLOBAL bloquea incluso a una acotada por organización.
+Es defendible (la global efectivamente aplica a esa org), pero conviene que producto lo sepa:
+para configurar una campaña por organización hay que desactivar antes la global.

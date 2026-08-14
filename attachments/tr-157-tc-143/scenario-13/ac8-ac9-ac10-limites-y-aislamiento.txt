@@ -1,0 +1,95 @@
+TR-157 · IM-969 / TC-143 · AC8, AC9, AC10 — límites de display, precedencia
+============================================================================
+Ejecutados por el camino de FEATURE TRIGGER. Motivo: en modo after-login los
+recorders de impresión y dismissal se rechazan con 400 (defecto IM-1185), así
+que los contadores nunca suben y los límites no se pueden ejercitar ahí.
+
+-----------------------------------------------------------------------------
+CONTROL DE AISLAMIENTO DE IM-1185 — lo que el dev pidió validar, ya resuelto
+-----------------------------------------------------------------------------
+MISMA survey (id 2), MISMOS endpoints, MISMO contexto. Solo cambia el trigger:
+
+  generalTrigger    POST /impressions   POST /dismissals   contadores
+  ----------------  ------------------  -----------------  ----------------------
+  afterLogin        400 rechazado       400 rechazado      quedan en 0
+  featureTrigger    201 aceptado        201 aceptado       impressionCount 1, dismissalCount 1
+
+CONCLUSIÓN: el rechazo es ESPECÍFICO DEL MODO AFTER-LOGIN, no de la survey.
+Queda confirmado IM-1185 y cerrada la verificación que se le había pedido al dev.
+
+-----------------------------------------------------------------------------
+AC9 — máximo de vistas / impresiones
+-----------------------------------------------------------------------------
+maxImpressions=2 · respondent limpio
+  antes de impresiones           -> [2] elegible
+  tras alcanzar el límite        -> []  no se entrega
+VEREDICTO: PASS (en modo feature trigger)
+
+-----------------------------------------------------------------------------
+AC8 — máximo de dismissals por período
+-----------------------------------------------------------------------------
+maxDismissals=2 · respondent limpio
+  antes                          -> [2] elegible
+  tras 2 dismissals              -> []  no se entrega     dismissalCount=2
+
+maxDismissals=null (default de una General)
+  antes                          -> [2] elegible
+  tras UN SOLO dismissal         -> []  no se entrega     dismissalCount=1
+  Confirma el texto de ayuda: para una General, dejarlo vacío significa que un
+  solo dismissal la oculta. Es un default con consecuencias.
+VEREDICTO: PASS (en modo feature trigger)
+
+RESET DE PERÍODO: no ejercitado. Depende del paso del tiempo real (30/90/180/365
+días según Repeat window) y no es observable dentro de la ventana de ejecución.
+Se declara explícitamente como NO verificado en vivo — queda cubierto por la suite.
+
+-----------------------------------------------------------------------------
+AC10 — las tres reglas configuradas a la vez
+-----------------------------------------------------------------------------
+triesBetweenShows=3 · maxDismissals=2 · maxImpressions=2, todas juntas.
+
+  caso                                              entregada   contadores
+  ------------------------------------------------  ----------  ------------------
+  A  control limpio, usageCount=1 (todas cumplidas)  [2]  SÍ     imp 0 · dis 0
+  B  solo TRIES incumplido (usageCount=2)            []   no     imp 0 · dis 0
+  C  solo DISMISSALS incumplido                      []   no     imp 0 · dis 2
+  D  solo IMPRESIONES incumplido                     []   no     imp 1 · dis 0
+  E  LAS TRES incumplidas (usageCount=2)             []   no     imp 1 · dis 2
+
+Cada regla bloquea por separado, la combinación bloquea, y el control positivo
+entrega — sin él, esto solo probaría que algo bloquea siempre.
+VEREDICTO primera mitad de AC10: PASS.
+
+VERIFICABILIDAD DE LA RAZÓN — PASS PARCIAL, con un matiz que conviene reportar.
+El AC pide que "la razón se pueda verificar desde el estado registrado o la
+diagnóstica". El endpoint GET /api/admin/features/:id/respondent-state/:respondentId
+SÍ existe y devuelve por survey: limits{maxDismissals,maxShowsPerDay,cooldownDays},
+counters{impressionCount,todayImpressionCount,dismissalCount,dismissalCountAllTime,
+responseCount,lastRespondedAt}, eligible y reason.
+
+  - Por CONTADORES la causa se distingue perfectamente: los casos C, D y E se
+    diferencian entre sí (dis 2 / imp 1 / ambos).
+  - Pero el campo `reason` devuelve "general_client_org_missing" en los cinco
+    casos, incluido el control que SÍ se entrega. Es porque ese endpoint de admin
+    no recibe contexto de organización, así que para una General acotada por
+    organización nunca puede evaluar la audiencia y se corta antes de llegar a
+    las reglas de frecuencia.
+
+  O sea: la razón es verificable por contadores, NO por el campo `reason`, que
+  para generales org-scoped es engañoso — dice "falta la org" cuando la survey
+  es perfectamente entregable. Vale la pena que el endpoint acepte clientOrgId /
+  salesforceOrgId como parámetros.
+
+-----------------------------------------------------------------------------
+PRECEDENCIA — nota de diseño
+-----------------------------------------------------------------------------
+El AC habla de "la regla más restrictiva no cumplida". El orden real en
+lib/surveyRuntime.ts es SECUENCIAL FIJO y gana la PRIMERA incumplida:
+
+  audience -> start_date -> triggerType -> start/end -> maxResponses ->
+  onePerRespondent -> cooldown -> triesBetweenShows -> maxShowsPerDay -> maxDismissals
+
+El resultado observable coincide con lo que el AC pide (cualquier regla incumplida
+bloquea la entrega), pero CUÁL bloquea lo decide el orden del código, no una noción
+de restrictividad. Se documenta para que producto confirme que es el comportamiento
+esperado.

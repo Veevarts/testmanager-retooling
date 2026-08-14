@@ -1,0 +1,588 @@
+schemaVersion: "1.0"
+
+id: tr-baed721e-f02d-4c00-8b93-5c3c9243ba66
+key: TR-157
+title: "TR-157 · IM-969 · TC-143 · Compuerta de release NPS — 7/13 PASS · 1 FAIL · 5 not-run · DEFECTO IM-1185: en modo after-login las impresiones y dismissals se rechazan con 400, así que maxImpressions y maxDismissals no pueden dispararse en la entrega que este release ships"
+
+description: |
+  QA de IM-969 (**Execute Museum Demo NPS release QA**), epic IM-970 NPS Survey Tool delivery.
+  QA Sub-task: IM-1181.
+
+  No es una historia de feature: es **la compuerta de release del epic**. Los tres PRs bajo
+  prueba apuntan a `main` y los tres estaban ABIERTOS al ejecutar:
+  survey-tool **"#58"** (`staging` → `main`), AuctiferaDX **"#2583"** y
+  NFPFundraising **"#2234"** (`story/nps-survey-delivery-IM-970` → `main`).
+
+  ## Veredicto
+
+  **7/13 PASS · 1 FAIL · 5 not-run · 1 defecto High levantado (IM-1185).**
+
+  La corrida **no está completa** y se registra así a propósito. Lo que se ejecutó, se ejecutó
+  con evidencia; lo que no, queda `not-run` con la razón concreta y qué falta para cerrarlo.
+
+  ## PASO 0 — la precondición que hacía interpretable todo lo demás
+
+  El TC lo puso como bloqueante: los tres PRs van a `main` y la rama épica que validaron
+  TR-146/147/148 quedó 7 ahead / 18 behind. Si dev sirviera la épica, cualquier PASS sería
+  irrelevante para el release.
+
+  Medición: **dev y staging sirven el MISMO bundle, byte a byte** — `index-9Qd0lrHV.js`,
+  md5 `b98573f7941dba1270ad378d0aad79ed`, 362 440 B. `prd` sirve otro
+  (`index-BjPoAuUb.js`, md5 `2905d53660127f3178c6e77eb859a889`) y no contiene
+  `Load sample data`. **Validar en dev SÍ valida el release candidate.**
+
+  ## El hallazgo que decide el release — IM-1185
+
+  Para una General Survey en modo **after-login**, los eventos de **impresión** y **dismissal**
+  se rechazan con **400** `surveyId is not eligible for this feature context`. Como nunca se
+  persisten, `maxImpressions` y `maxDismissals` **no pueden dispararse jamás** en el modo de
+  entrega que este release ships.
+
+  **Aislamiento cerrado por QA** — misma survey, mismos endpoints, mismo contexto; lo único
+  que cambia es el trigger:
+
+  | `generalTrigger` | `POST /impressions` | `POST /dismissals` | contadores |
+  | --- | --- | --- | --- |
+  | `afterLogin` | **400** | **400** | quedan en 0 |
+  | `featureTrigger` | **201** | **201** | suben correctamente |
+
+  Causa: `routes/features.ts` → `validateSurveyEvent()` valida con
+  `selectEligibleSurveysForFeature`, el camino de **feature**, que excluye por diseño las
+  generales after-login (la separación de modos de IM-966, que QA verificó como correcta).
+  Los *recorders* viven en `featuresPublicRouter` y heredan esa validación.
+
+  Agravante: el launcher postea a esos endpoints y traga el error con un `console.warn`
+  fire-and-forget, así que en producción **falla en silencio**.
+
+  ## Riesgo de release que sigue vigente
+
+  El PR de NFPFundraising hacia `main` mantiene los **20 `console.log`** con distribución
+  idéntica a la que midió TR-147 el 2026-07-30. Uno vuelca la URL de eligibility —con
+  `clientOrgId`, `respondentId` y `userCreatedDate`— a la consola del usuario final.
+  **IM-968 sigue en `Rechazado` por esto** y el código va igual a `main`. AuctiferaDX "#2583"
+  agrega solo 3. El lint no lo atrapa: `eslint --print-config` sobre `npsWidget.js` devuelve
+  0 reglas activas y el script no cubre `payments` ni `ticketing`.
+
+  ## Alcance que el veredicto NO cubre
+
+  De los 15 hijos de IM-970: 4 Finalizada, 2 Request Approved, **1 Rechazado (IM-968)**,
+  5 en vuelo y 4 sin iniciar. Este veredicto cubre **lo que entregan los tres PRs**, no el epic.
+
+testCaseIds:
+  - 9fcc8577-5fca-4e24-8fa7-d883d4472164
+
+environment:
+  name: "survey-tool dev https://surveytool.dev.veevart.ai (environment: development), sirviendo el bundle byte-idéntico al de staging · orgs Salesforce: NFPFundraising flow-site-19432-dev-ed (OrgId 00DRt00000TAlrNMAT, expira 2026-08-14) y Auctifera nosoftware-fun-3261-dev-ed (OrgId 00DEm00000V5eRWMAZ, expira 2026-09-11) · runner tsx --test · admin vía Cognito Hosted UI"
+  url: "https://github.com/Veevarts/survey-tool/pull/58"
+  buildVersion: >-
+    Mixed — backend/API Node (rutas públicas y admin, store DynamoDB) + admin UI React +
+    Salesforce Aura/LWC/Apex en DOS paquetes. Tres PRs abiertos contra main:
+    survey-tool "#58" (29 archivos +3706/-2374, IM-1176 admin + IM-1147 dynamodbStore),
+    AuctiferaDX "#2583" (20 archivos +777/-23, monta el launcher en 4 utility bars y toca
+    2 permission sets) y NFPFundraising "#2234" (31 archivos +1519/-10).
+  notes: |
+    ## Solution understood
+
+    El epic entrega la General Survey en modo **after-login**: un launcher Aura montado en la
+    utility bar de cada paquete pide eligibility al survey-tool con el contexto del usuario
+    (`clientOrgId`, `respondentId`, `userCreatedDate` y, tras IM-1165, `salesforceOrgId`),
+    espera el delay configurado y abre el widget. El survey-tool decide la entrega evaluando
+    audiencia, fecha de inicio, tipo de trigger, límites de frecuencia y límites de display.
+    El "#58" promueve a producción el trabajo de admin de IM-1176 más la migración de
+    persistencia a DynamoDB de IM-1147.
+
+    ## Inferred technical tests
+
+    | Test inferido | Qué prueba | ¿Ejecutable? | Resultado |
+    |---|---|---|---|
+    | Fingerprint del bundle en dev/stg/prd | que dev sirva el release candidate | SÍ | PASS, dev == stg byte a byte |
+    | Suites del repo sobre el head de staging | no romper lo existente | SÍ | 105/105, 0 fail |
+    | Revert-proof por reversión de `src` | que los guards no sean vacuos | SÍ | 3 suites caen |
+    | Probes de eligibility por org y por llave | AC4, AC5 | SÍ | PASS |
+    | Read-back tras crear y editar | AC6 | SÍ | PASS |
+    | Barrido de `usageCount` | AC7 | SÍ | PASS |
+    | Recorders + `respondent-state` | AC8, AC9, AC10 | SÍ (solo featureTrigger) | FAIL en after-login → IM-1185 |
+    | Probes anónimos a `/api/admin/*` | AC13 | SÍ | PASS 401 ×5 |
+    | Login real en la org + modal | AC3 | SÍ (VNFP) | parcial, ver escenario 3 |
+    | Persistencia por UI del admin | AC1 | NO ejecutado | `not-run` |
+    | Dashboard Summary, detalle y CSV | AC12 | parcial | `not-run` |
+
+    ## Objective fit
+
+    Objetivo del ticket: confirmar que la entrega completa de la General Survey está lista para
+    liberar. **No se cumple todavía.** El comportamiento de audiencia, scoping, persistencia de
+    la lista de organizaciones y espaciado por interacciones está correcto y verificado. Pero
+    dos de las reglas de display que el ticket exige validar **no pueden aplicarse en el modo
+    que este release entrega**, y eso es un defecto de release, no un hueco de cobertura.
+
+    ## Higiene del entorno
+
+    Por decisión del dueño de la historia, **las surveys de prueba NO se borran: son evidencia**.
+    Estado final: la General del entorno (id 1) quedó **restaurada a ACTIVA** con su
+    configuración original; la `QA TC-143` (id 2) queda **presente e inactiva**; la respuesta
+    id 1 generada por QA **se conserva**. Organizations `Auctifera` y `VNFP`, ambas activas.
+
+status: completed
+
+summary:
+  total: 13
+  passed: 7
+  failed: 1
+  blocked: 0
+  notRun: 5
+  skipped: 0
+  passRate: 54
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "IM-969 AC1 — Everything the admin configures on a survey survives a page reload with the exact values that were saved"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: not-run
+    duration: 0
+    actual: |
+      **NO EJECUTADO — se declara, no se finge.**
+
+      La persistencia se verificó **por API** como parte de AC6 (crear → releer → editar →
+      releer, con `audienceDetails` y `GSI1SK` idénticos), pero el AC1 pide el round-trip
+      **desde el formulario del admin**, que es lo que IM-1176 cambió el 2026-08-13. Eso exige
+      manejar la pantalla campo por campo y no se alcanzó a hacer en esta ventana.
+    notes: "PENDIENTE DE TU PARTE / próxima corrida: abrir el formulario de creación y edición en /admin/surveys, completar survey, audiencia, modo de entrega, delay y reglas avanzadas, recargar la página y contrastar cada campo contra lo que devuelve GET /api/admin/surveys/<id>. Capturar paso a paso. Es el único AC donde el cambio de IM-1176 no se miró con los ojos de hoy."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 2
+    scenarioTitle: "IM-969 AC2 — A disabled survey is delivered by neither the after-login path nor the feature trigger path"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:46:00Z"
+    duration: 10
+    actual: |
+      | estado de la survey | elegibles |
+      | --- | --- |
+      | `active: false` | **0** |
+      | reactivada, todo lo demás igual | **1** |
+
+      El contraste es lo que hace válido el escenario: sin reactivar, un `[]` no probaría que
+      el gate es el estado activo y no otra regla. La respuesta es **200 con lista vacía**,
+      no un 5xx — una survey deshabilitada es un caso normal de *no elegible*, no un error.
+    notes: "El bloqueo se aplica antes que cualquier otra regla: la survey tenía audiencia, delay y límites en orden y aun así no se entregó mientras estuvo inactiva."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 3
+    scenarioTitle: "IM-969 AC3 — An eligible user who logs into Auctifera Giftshop AND into NFPFundraising is shown the General Survey after the configured delay"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: not-run
+    duration: 0
+    actual: |
+      **PARCIAL — la mitad NFPFundraising se observó en vivo, pero el AC nombra DOS paquetes
+      y exige captura paso a paso, así que el escenario NO se da por ejecutado.**
+
+      Lo observado en la org de NFPFundraising (`flow-site-19432-dev-ed`), con login real:
+      el modal **apareció solo** ~7 s después del login, sin tocar ningún botón de feature,
+      sobre la home de Fundraising (Quarterly Performance, Today's Events y Assistant visibles
+      detrás). Escala NPS 0–10, `Submit` deshabilitado hasta elegir puntaje.
+
+      · **iframe:** `/survey/2?surveyId=1&clientOrgId=flow-site-19432-dev-ed&respondentId=005Rt00000XjqlyIAB&userCreatedDate=2026-07-15T10%3A04%3A17.000Z&usageCount=0`
+      · **guard de sesión:** `LSKey[vnfp]veevart:npsAfterLoginChecked:flow-site-19432-dev-ed:005Rt00000XjqlyIAB = checked`, scopeado por org + respondent
+      · identidad leída de la propia org, no inventada: `005Rt00000XjqlyIAB` / `2026-07-15T10:04:17.000+0000`
+
+      **⚠️ SALVEDAD QUE ACOTA EL VALOR DE ESTA EVIDENCIA:** la scratch tiene desplegado un
+      paquete **anterior al "#2234"** — `vnfp.NpsWidgetController.getOrganizationId()` no
+      compila y la URL del iframe sale **sin `salesforceOrgId`**. O sea que esto valida el
+      contrato vigente en la org, **no el del release**.
+    notes: "PENDIENTE DE TU PARTE: (1) desplegar el \"#2234\" a una scratch para probar el contrato nuevo con salesforceOrgId — la org de VNFP expira el 2026-08-14; (2) rehacer el escenario capturando PASO A PASO (01-app, 02-modal, 03-respuesta enviada, 04-atribución en Dashboard); (3) ejecutar la mitad Auctifera Giftshop en nosoftware-fun-3261-dev-ed, que vence el 2026-09-11. El \"#2583\" monta el launcher en cuatro utility bars (Giftshop, Ticketing, Rentals y Engage), así que conviene confirmar por metadata en cuál está antes de navegar."
+    stepResults: []
+    attachments:
+      - name: 02-modal-after-login-vnfp.png
+        path: attachments/tr-157-tc-143/scenario-3/02-modal-after-login-vnfp.png
+        mimeType: image/png
+
+  - scenarioIndex: 4
+    scenarioTitle: 'IM-969 AC4 — A General Survey targeted "To everyone" reaches respondents of at least two different ACTIVE organizations without creating one survey per organization'
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:40:00Z"
+    duration: 15
+    actual: |
+      Survey id 1, `audience=everyone`, activa. **UNA sola survey.**
+
+      | contexto enviado | elegibles |
+      | --- | --- |
+      | `clientOrgId=flow-site-19432-dev-ed` (VNFP) | **[1]** |
+      | `salesforceOrgId=00DEm00000V5eRWMAZ` (Auctifera) | **[1]** |
+      | ambos, como manda el launcher | **[1]** |
+      | org inexistente | `[]` |
+      | `clientOrgId` vacío | `[]` |
+      | sin `userCreatedDate` | `[]` |
+
+      Las dos organizaciones la reciben **sin duplicar survey por organización**, que es
+      exactamente el ahorro que el AC exige demostrar. Y lo hacen a través de **llaves
+      distintas** — VNFP por subdominio, Auctifera por Salesforce Org Id — porque el banco de
+      pruebas se armó deliberadamente en A/B, una organización por tipo de identifier. Eso
+      hace la prueba más fuerte, no más débil.
+
+      Fail-closed confirmado en los tres casos de contexto incompleto: lista vacía con 200.
+
+      **Corrección metodológica:** la primera sonda de QA mandó el Org Id dentro de
+      `clientOrgId` y devolvió `[]` para Auctifera. Era un error de la sonda, no del código —
+      `isActiveClientOrg` compara `clientOrgId` contra `subdomain` y `salesforceOrgId` contra
+      su campo propio, y son parámetros separados. Re-verificado con la forma correcta.
+    notes: "El registro de organizaciones quedó en A/B a propósito: el formulario ofrece `Identifier type` con `Salesforce Org ID 18` (por defecto) y `Subdomain fallback`, y VNFP está en el fallback. Tener una org por tipo permite distinguir un bug de scoping de una desalineación de llave."
+    stepResults: []
+    attachments:
+      - name: ac5-ac6-audiencia-por-organizacion.txt
+        path: attachments/tr-157-tc-143/scenario-5/ac5-ac6-audiencia-por-organizacion.txt
+        mimeType: text/plain
+      - name: 00-organizations-configured.png
+        path: attachments/tr-157-tc-143/setup/00-organizations-configured.png
+        mimeType: image/png
+
+  - scenarioIndex: 5
+    scenarioTitle: "IM-969 AC5 + AC6 — Targeting specific organizations delivers only to the selected ones, and the selected list stays exactly as saved after reloading or editing"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:46:00Z"
+    duration: 25
+    actual: |
+      **Territorio nuevo: el modo de audiencia por organizaciones específicas no se ejercitó
+      en ninguna corrida previa.** TR-146 cubrió `everyone` e inactivas, que es otra cosa.
+
+      Survey id 2 `QA TC-143 · org-scoped`, `audience=organization`,
+      `audienceDetails=00DEm00000V5eRWMAZ`, activa.
+
+      **AC5 — entrega solo a la seleccionada:**
+
+      | organización | elegibles | ¿objetivo? |
+      | --- | --- | --- |
+      | Auctifera (SELECCIONADA) | **[2]** | SÍ |
+      | VNFP (NO seleccionada) | **`[]`** | SÍ |
+      | inexistente | `[]` | SÍ |
+
+      Es el requisito que el dueño de la historia pidió explícitamente: *cuando se seleccionan
+      para una org, no deben funcionar en ninguna otra*. Los dos lados ejercitados — el
+      positivo sin el negativo no probaría scoping.
+
+      **AC6 — la lista sobrevive lectura y edición:**
+
+      | momento | audience | audienceDetails | GSI1SK |
+      | --- | --- | --- | --- |
+      | tras CREAR | organization | `00DEm00000V5eRWMAZ` | `SCOPE#organization#SURVEY#2` |
+      | tras EDITAR un campo AJENO | organization | `00DEm00000V5eRWMAZ` | `SCOPE#organization#SURVEY#2` |
+
+      La edición cambió `questionText` y no tocó la audiencia. Resultado: lista **idéntica**,
+      ninguna organización perdida y —el modo de falla que el AC nombra explícitamente—
+      **ninguna organización no seleccionada agregada**. Eligibility post-edición sigue 1/0.
+    notes: "Hallazgo lateral: el gate 409 es más amplio de lo documentado. Crear la survey acotada por organización mientras la General `everyone` seguía activa devuelve 409 `An active general survey already applies to this audience (survey 1)`. O sea que una General global bloquea incluso a una acotada por organización. Es defendible, pero conviene que producto lo sepa: para configurar una campaña por organización hay que desactivar antes la global."
+    stepResults: []
+    attachments:
+      - name: ac5-ac6-audiencia-por-organizacion.txt
+        path: attachments/tr-157-tc-143/scenario-5/ac5-ac6-audiencia-por-organizacion.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 6
+    scenarioTitle: "IM-969 AC7 — Tries between shows keeps the survey suppressed until the configured number of tries has elapsed, and lets it reappear afterwards"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:47:00Z"
+    duration: 12
+    actual: |
+      `triesBetweenShows=3`, barrido completo de `usageCount`:
+
+      | usageCount | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | elegible | no | **SÍ** | no | no | **SÍ** | no | no |
+
+      Las **dos mitades** que el AC pide: suprime mientras no se cumple el intervalo, y
+      **vuelve a aparecer** cumplido el intervalo. La supresión sin el reaparecer no probaría
+      el AC.
+
+      El patrón es **1, 4, 7…** y coincide exactamente con el código:
+      `firstEligibleInteraction = 1`, luego cada N.
+
+      **Corrección metodológica:** QA esperaba 0, 3, 6 — un error de indexado 0-based en la
+      expectativa, no del comportamiento. El código es 1-based y está bien.
+    notes: "El espaciado se cuenta por respondent; para una General global el estado se cuenta por organización, semántica que TR-146 ya había elevado a producto."
+    stepResults: []
+    attachments:
+      - name: ac8-ac9-ac10-limites-y-aislamiento.txt
+        path: attachments/tr-157-tc-143/scenario-13/ac8-ac9-ac10-limites-y-aislamiento.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 7
+    scenarioTitle: "IM-969 AC8 + AC9 — Max dismissals per period and the maximum views/impressions each stop delivery at their limit and become eligible again when the applicable window resets"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: failed
+    executedAt: "2026-08-13T23:41:00Z"
+    duration: 30
+    actual: |
+      **FAIL — y conviene decir con precisión de qué tipo: la lógica de las reglas está bien;
+      lo que está roto es que en el modo que este release entrega, esas reglas nunca se
+      alcanzan.**
+
+      **La lógica funciona (verificada por el camino de feature trigger):**
+
+      | configuración | antes | después |
+      | --- | --- | --- |
+      | `maxImpressions=2` | elegible | `[]` al alcanzar el límite |
+      | `maxDismissals=2` | elegible | `[]` tras 2 dismissals (`dismissalCount=2`) |
+      | `maxDismissals=null` (default de una General) | elegible | `[]` tras **un solo** dismissal |
+
+      El último confirma el texto de ayuda: para una General, dejar el campo vacío significa
+      que un solo dismissal la oculta. Es un default con consecuencias, no un detalle.
+
+      **Pero en modo after-login los contadores nunca suben.** Mismo survey, mismos endpoints,
+      mismo contexto; lo único que cambia es el trigger:
+
+      | `generalTrigger` | `POST /impressions` | `POST /dismissals` | contadores |
+      | --- | --- | --- | --- |
+      | `afterLogin` | **400** | **400** | quedan en **0** |
+      | `featureTrigger` | **201** | **201** | suben correctamente |
+
+      El 400 es `surveyId is not eligible for this feature context`. Confirmado desde el
+      estado registrado: tras 2 intentos de impresión y 2 de dismissal en after-login,
+      `impressionCount: 0, dismissalCount: 0`.
+
+      **Objetivo NO cumplido:** el AC pide que el límite corte la entrega. En after-login —la
+      entrega central de este release— no puede cortar nunca. Un usuario podría descartar el
+      modal indefinidamente y volver a verlo en cada login.
+
+      **RESET DE PERÍODO: no ejercitado.** Depende del paso del tiempo real (30/90/180/365 días
+      según `Repeat window`) y no es observable en la ventana de ejecución. Se declara.
+    notes: "Defecto IM-1185, severidad High, asignado a David y enlazado como Blocks IM-969. El aislamiento que se le había pedido al dev —confirmar que el rechazo es específico del modo after-login— quedó CERRADO POR QA con la tabla de arriba. Comentado además en survey-tool #58 y NFPFundraising #2234."
+    stepResults: []
+    defects:
+      - jiraKey: "IM-1185"
+        url: "https://veevart.atlassian.net/browse/IM-1185"
+        severity: "High"
+        summary: "After-login General Survey: impressions and dismissals are rejected with 400, so maxImpressions and maxDismissals can never fire"
+    attachments:
+      - name: ac8-ac9-ac10-limites-y-aislamiento.txt
+        path: attachments/tr-157-tc-143/scenario-13/ac8-ac9-ac10-limites-y-aislamiento.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 8
+    scenarioTitle: "IM-969 AC10 — With tries, dismissal limits and view limits configured together, the most restrictive unmet rule is the one that blocks delivery, and which one it was can be verified"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T23:43:00Z"
+    duration: 25
+    actual: |
+      Las tres reglas configuradas a la vez: `triesBetweenShows=3`, `maxDismissals=2`,
+      `maxImpressions=2`.
+
+      | caso | entregada | contadores |
+      | --- | --- | --- |
+      | A · control limpio, `usageCount=1` (todas cumplidas) | **[2] SÍ** | imp 0 · dis 0 |
+      | B · solo TRIES incumplido (`usageCount=2`) | `[]` no | imp 0 · dis 0 |
+      | C · solo DISMISSALS incumplido | `[]` no | imp 0 · **dis 2** |
+      | D · solo IMPRESIONES incumplido | `[]` no | **imp 1** · dis 0 |
+      | E · LAS TRES incumplidas (`usageCount=2`) | `[]` no | imp 1 · dis 2 |
+
+      Cada regla bloquea por separado, la combinación bloquea, y **el control positivo
+      entrega** — sin él esto solo probaría que algo bloquea siempre.
+
+      **Verificabilidad de la razón — se cumple, con un matiz que hay que reportar.** El
+      endpoint `GET /api/admin/features/:id/respondent-state/:respondentId` existe y devuelve
+      por survey `limits`, `counters`, `eligible` y `reason`. Por **contadores** la causa se
+      distingue perfectamente: C, D y E son inconfundibles entre sí.
+
+      Pero el campo **`reason` devuelve `general_client_org_missing` en los cinco casos**,
+      incluido el control que SÍ entrega. Es porque ese endpoint no recibe contexto de
+      organización, así que para una General acotada por organización nunca llega a evaluar
+      las reglas de frecuencia. Dicho de otro modo: la razón es verificable por contadores,
+      **no por el campo que existe para eso**, que además es engañoso.
+    notes: "Nota de diseño para producto: el AC habla de «la regla más restrictiva no cumplida», pero el orden real en `lib/surveyRuntime.ts` es SECUENCIAL FIJO (audience → start_date → triggerType → start/end → maxResponses → onePerRespondent → cooldown → triesBetweenShows → maxShowsPerDay → maxDismissals) y gana la PRIMERA incumplida. El resultado observable cumple lo que el AC pide, pero cuál regla bloquea lo decide el orden del código. Sugerencia concreta: que `respondent-state` acepte `clientOrgId` / `salesforceOrgId` como parámetros para que `reason` sirva en generales org-scoped."
+    stepResults: []
+    attachments:
+      - name: ac8-ac9-ac10-limites-y-aislamiento.txt
+        path: attachments/tr-157-tc-143/scenario-13/ac8-ac9-ac10-limites-y-aislamiento.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 9
+    scenarioTitle: "IM-969 AC11 — Once the respondent answered the General Survey, no later after-login check shows it again for the same respondent and organization scope"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: not-run
+    duration: 0
+    actual: |
+      **NO EJECUTADO en esta corrida.**
+
+      Se generó una respuesta (id 1, `surveyId 2`, score 9) pero no se re-consultó la
+      eligibility para ese mismo respondent en secuencia, que es lo que el AC exige.
+
+      Antecedente reutilizable: **TR-147 escenario 3** ya ejecutó este caso en secuencia real
+      —inmediatamente después de enviar la respuesta, la misma consulta que devolvía la survey
+      devolvió `[]`—. Sirve como referencia, pero no como PASS de esta corrida: las
+      organizaciones son otras y el contrato cambió.
+    notes: "PENDIENTE: con la respuesta ya existente (respondent 005QA00000RESP1, survey 2), re-consultar la eligibility para ese respondent y confirmar que devuelve vacío; y verificar que el corte es por respondent + organización, no global, probando otro respondent de la misma org."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 10
+    scenarioTitle: "IM-969 AC12 — A submitted response is visible and accurate across Dashboard Summary, the Responses list, the response detail and the CSV export"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: not-run
+    duration: 0
+    actual: |
+      **PARCIAL — dos de las cuatro vistas.**
+
+      Respuesta creada: `POST /api/responses` → **201**, id 1, `surveyId 2`, score 9,
+      `respondentId 005QA00000RESP1`, comentario `QA TC-143 · respuesta de prueba…`.
+      Aparece correctamente en la lista de **Responses** del admin.
+
+      **Faltan Summary, el detalle de la respuesta y el export CSV**, que son la mitad del AC
+      y donde vive la aserción de coherencia entre vistas.
+
+      **Hallazgo de fidelidad ya observable:** el registro persiste
+      `clientOrgId: "00dem00000v5erwmaz"` — el Salesforce Org Id **en minúsculas** — y no
+      devuelve `salesforceOrgId` como campo propio. Para un Org Id de Salesforce el case
+      importa: `hasActiveOrganization` compara de forma exacta y `normalizedOrganizationKey`
+      lowercasea. Conviene decidir si el registro debe conservar el valor original.
+    notes: "PENDIENTE DE TU PARTE: recorrer Dashboard → Summary, abrir el detalle de la respuesta id 1 y ejercitar Export CSV con al menos dos filtros (Subject y Client org), contrastando el conteo del CSV contra el que muestra la pantalla y verificando que haya una columna legible por pregunta. La respuesta NO se borra: es la evidencia de este AC."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 11
+    scenarioTitle: "IM-969 AC13 — Public widget operations keep working with no admin session, and no admin route is reachable anonymously"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T20:50:00Z"
+    duration: 15
+    actual: |
+      **Rutas admin protegidas — 5 de 5 devuelven 401 anónimo:**
+      `/api/admin/surveys`, `/api/admin/organizations`, `/api/admin/features`,
+      `/api/admin/responses`, `/api/admin/analytics/summary`.
+
+      Verificado además en los **tres entornos**: dev, stg y prd responden `401` en
+      `/api/admin/surveys` sin sesión.
+
+      **Rutas públicas siguen anónimas:** `GET /api/surveys/general/eligible` responde **200**
+      sin ninguna sesión, y el envío de respuesta (`POST /api/responses`) funcionó de forma
+      anónima. Comportamiento **fail-closed** ante contexto incompleto en los cuatro casos
+      probados: lista vacía con 200, nunca 5xx.
+
+      **Gap declarado:** las operaciones anónimas de **impresión** y **dismissal** no se
+      pudieron ejercitar por el defecto IM-1185, que las rechaza con 400 antes de llegar a
+      cualquier consideración de autenticación.
+    notes: "Contracara del AC que sigue vigente desde TR-146, hallazgo de severidad Baja: el endpoint público devuelve el objeto survey completo, incluidos `audienceDetails` y `GSI1SK`. Para una survey acotada por organización eso expone el identificador de la organización objetivo a cualquier cliente anónimo que acierte el contexto. Se re-reporta, no se cierra."
+    stepResults: []
+    attachments:
+      - name: regression-plan.txt
+        path: attachments/tr-157-tc-143/regression-plan.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 12
+    scenarioTitle: "IM-969 AC14 — The release dossier is complete: evidence for both packages, positive and negative audience tests, boundary tests for the advanced rules, risks, skipped checks and rollback steps"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: not-run
+    duration: 0
+    actual: |
+      **NO SE PUEDE CERRAR TODAVÍA, y decirlo es el veredicto honesto.**
+
+      El AC exige el dossier completo. A esta altura hay:
+      · pruebas de audiencia **positivas y negativas** en los dos modos — sí
+      · pruebas de **borde** de las reglas avanzadas y de su precedencia — sí
+      · **riesgos** escritos, incluido el estado del epic — sí
+      · **chequeos omitidos** declarados con razón concreta — sí, en este mismo TR
+
+      Falta lo que impide firmarlo:
+      · **evidencia de los DOS paquetes**: solo hay NFPFundraising, y con contrato viejo
+      · **pasos de rollback** para los tres PRs, incluido el caso de rollback parcial (los
+        paquetes de Salesforce y el backend se liberan por separado, así que ése es el caso
+        real, no el teórico)
+      · el scan **OWASP Top 10** completo
+    notes: "PENDIENTE: cerrar AC3 en los dos paquetes con captura paso a paso, correr el scan OWASP, y escribir los pasos de rollback de survey-tool #58, AuctiferaDX #2583 y NFPFundraising #2234 — con qué queda inconsistente si se revierte solo uno de los tres."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 13
+    scenarioTitle: "IM-969 — Repo suites, package CI and revert-proof across the three release PRs"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T20:35:00Z"
+    duration: 35
+    actual: |
+      **Suites de `survey-tool` sobre el head de staging (`7324044`):**
+      server **73/73** + client **32/32** = **105/105, 0 fallos**. La línea base de TR-148 eran
+      93 tests, o sea la suite creció con el release.
+
+      **Revert-proof — los guards no son vacuos.** Método: dejar los tests de staging y
+      revertir SOLO el código fuente a `main`.
+
+      | mutación | resultado |
+      | --- | --- |
+      | control, staging completo | 105/105 pass |
+      | `server/src` revertido a `main` | **2 suites FALLAN** — `dynamodbStore.test.ts`, `apiBoundary.test.ts` |
+      | `client/src` revertido a `main` | **1 suite FALLA** — `surveyDisplayRules.test.ts` |
+
+      Que caiga `apiBoundary.test.ts` es lo más significativo: es el contrato que IM-963 lockeó
+      y que separa las rutas públicas de las admin.
+
+      Árbol restaurado a staging al terminar.
+    notes: "GAP DE COBERTURA A RE-DECLARAR: `NpsAfterLoginLauncherBackground` es un bundle Aura y jest de LWC no ejecuta Aura, así que el componente central del AC3 no tiene cobertura automatizada en ninguno de los dos paquetes. No es descuido del dev: es una limitación del stack de testing. PENDIENTE: las suites sfdx-lwc-jest de AuctiferaDX #2583 y NFPFundraising #2234, y la validación de los permission sets que toca el #2583 (Veevart.permissionset, auctifera.permissionset), que la historia declara como dependencia de release."
+    stepResults: []
+    attachments:
+      - name: suites-and-revert-proof.txt
+        path: attachments/tr-157-tc-143/scenario-13/suites-and-revert-proof.txt
+        mimeType: text/plain
+      - name: paso-0-entorno-y-release-candidate.txt
+        path: attachments/tr-157-tc-143/paso-0-entorno-y-release-candidate.txt
+        mimeType: text/plain
+
+defects:
+  - jiraKey: "IM-1185"
+    url: "https://veevart.atlassian.net/browse/IM-1185"
+    severity: "High"
+    summary: "After-login General Survey: impressions and dismissals are rejected with 400, so maxImpressions and maxDismissals can never fire"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-13T23:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-13T23:50:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-143"
+  parentIssue: "IM-969"
+  qaSubTask: "IM-1181"
+  epic: "IM-970"
+  prsUnderTest: "survey-tool #58 (staging->main, OPEN) · AuctiferaDX #2583 (->main, OPEN) · NFPFundraising #2234 (->main, OPEN)"
+  changeType: "mixed — backend/API Node + admin UI React + Salesforce Aura/LWC/Apex en dos paquetes"
+  verdict: "7/13 PASS · 1 FAIL · 5 not-run. Corrida INCOMPLETA y declarada como tal. El FAIL es de release: en modo after-login las impresiones y dismissals se rechazan con 400, asi que maxImpressions y maxDismissals no pueden dispararse en la entrega que este release ships."
+  paso0: "dev y stg sirven el MISMO bundle byte-identico index-9Qd0lrHV.js md5 b98573f7941dba1270ad378d0aad79ed 362440B. prd sirve index-BjPoAuUb.js md5 2905d53660127f3178c6e77eb859a889 359509B y no contiene 'Load sample data'. Validar en dev SI valida el release candidate."
+  isolationClosed: "El aislamiento que se le pidio al dev en IM-1185 lo cerro QA: misma survey, mismos endpoints, mismo contexto; con generalTrigger=afterLogin los recorders dan 400 y los contadores quedan en 0, con featureTrigger dan 201 y suben. El rechazo es especifico del modo after-login."
+  suitesRun: "survey-tool staging 7324044: server 73/73 + client 32/32 = 105/105, 0 fail. Baseline TR-148 era 93."
+  revertProof: "Revertir server/src a main con los tests de staging tumba dynamodbStore.test.ts y apiBoundary.test.ts. Revertir client/src tumba surveyDisplayRules.test.ts. Guards load-bearing."
+  releaseRisk: "NFPFundraising #2234 hacia main mantiene los 20 console.log medidos en TR-147 (7 npsWidget.js, 4 ExhibitionWizardHelper, 4 PaymentHelper, 2 PaymentController, 1+1+1). Uno vuelca la URL de eligibility con clientOrgId, respondentId y userCreatedDate a la consola del usuario final. IM-968 sigue en Rechazado por esto. AuctiferaDX #2583 agrega solo 3. El lint no lo atrapa: eslint --print-config sobre npsWidget.js devuelve 0 reglas activas y el script no cubre payments ni ticketing."
+  scopeGap: "La scratch de VNFP tiene desplegado un paquete ANTERIOR al #2234: vnfp.NpsWidgetController.getOrganizationId() no compila y el iframe del after-login sale sin salesforceOrgId. El PASS parcial del AC3 vale para el contrato vigente en la org, NO para el del release. Esa org expira el 2026-08-14."
+  secondaryFindings: "(1) El gate 409 es mas amplio de lo documentado: una General activa con audiencia global bloquea crear otra activa incluso si es organization-scoped. (2) respondent-state devuelve reason='general_client_org_missing' para generales org-scoped porque no recibe contexto de organizacion, incluso cuando la survey SI se entrega; la causa solo se distingue por contadores. (3) La respuesta persiste clientOrgId lowercased y no conserva salesforceOrgId como campo propio. (4) Vigente desde TR-146: el endpoint publico devuelve audienceDetails y GSI1SK, o sea la lista de organizaciones objetivo, a clientes anonimos."
+  environmentState: "NADA BORRADO por decision del dueno de la historia: las surveys de prueba son evidencia. La General del entorno (id 1) quedo RESTAURADA A ACTIVA con su configuracion original. La QA TC-143 (id 2) queda presente e INACTIVA. La respuesta id 1 generada por QA se conserva. Organizations Auctifera (00DEm00000V5eRWMAZ, Salesforce Org ID) y VNFP (flow-site-19432-dev-ed, Subdomain), ambas activas."
+  qaSelfCorrections: "Tres sondas de QA salieron mal y se descartaron antes de emitir veredicto: (1) mandar el Org Id dentro de clientOrgId, que devolvia [] para Auctifera; (2) esperar el patron de triesBetweenShows en 0-based cuando es 1-based; (3) una primera tanda de AC8/AC9/AC10 corrida sobre POSTs que devolvian 400 sin advertirlo, cuya conclusion sobre AC10 fue un artefacto. Las tres se rehicieron."
+  notCovered: "AC1 persistencia por UI del admin. AC3 con captura paso a paso y la mitad Auctifera Giftshop. AC11 re-consulta en secuencia. AC12 Summary, detalle y export CSV. AC14 dossier y pasos de rollback. Scan OWASP Top 10. Suites sfdx-lwc-jest de los dos paquetes y validacion de los permission sets del #2583."
+
+history:
+  - action: "started"
+    timestamp: "2026-08-13T20:30:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Ejecucion de TC-143 contra los tres PRs de release. Probe de tooling: clones OK, runner tsx --test detectado, admin del survey-tool alcanzable via Cognito, dos orgs Salesforce disponibles. Primer paso obligatorio: determinar que build sirve dev, porque los tres PRs apuntan a main y la rama epica quedo 18 commits detras."
+  - action: "completed"
+    timestamp: "2026-08-13T23:50:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "7/13 PASS · 1 FAIL · 5 not-run. Corrida INCOMPLETA y registrada como tal: lo ejecutado tiene evidencia, lo no ejecutado queda not-run con razon concreta y que falta para cerrarlo. PASO 0 resuelto: dev sirve el bundle byte-identico al de staging, o sea el release candidate. Verificados AC2, AC4, AC5, AC6, AC7, AC10 y AC13, mas suites 105/105 y revert-proof con guards load-bearing. El FAIL es AC8+AC9 y es de release, no de logica: las reglas funcionan por el camino de feature trigger pero en after-login los recorders rechazan con 400, asi que los contadores nunca suben. Defecto IM-1185 levantado, enlazado como Blocks IM-969 y comentado en survey-tool #58 y NFPFundraising #2234; el aislamiento que se le habia pedido al dev lo cerro QA. Entorno restaurado sin borrar nada: la General del entorno vuelve a estar activa y la survey y la respuesta de QA se conservan como evidencia."
