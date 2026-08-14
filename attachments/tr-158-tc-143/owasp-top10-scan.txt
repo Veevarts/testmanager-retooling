@@ -1,0 +1,26 @@
+OWASP Top 10 (2021) applicability scan — TR-158 / IM-969 release gate
+Executed 2026-08-14.
+Surfaces: survey-tool#58 (29 files, all client/**), NFPFundraising#2234
+(aura + lwc + apex NpsWidgetController), AuctiferaDX#2583 (aura launcher).
+
+| ID  | Risk                        | Applicable | Check method                                      | Verdict | Evidence / Justification |
+|-----|-----------------------------|------------|---------------------------------------------------|---------|--------------------------|
+| A01 | Broken Access Control       | Yes        | Live 401 on admin routes anonymous vs 200 admin logged-in; server-side auth not modified by this release. | PASS | 5/5 admin routes return 401 anonymous in dev/stg/prd (TR-157, retested via redirect-to-/login on /admin/dashboard today). No new admin route added by #58. |
+| A02 | Cryptographic Failures      | No         | -                                                 | N/A | No credentials, TLS config, hashing, or key material touched. Google SSO handshake unchanged. |
+| A03 | Injection                   | Yes        | Static read of the diff for raw string interpolation into SQL / SOQL / shell / eval. | PASS | Zero server-route changes in survey-tool#58 (all 29 files in client/**); Apex `NpsWidgetController` reads `UserInfo.getOrganizationId()` — no user input reaches SOQL. Aura launchers use aura `$A.enqueueAction` with typed params. |
+| A04 | Insecure Design             | Yes        | Re-check the audience routing separation (general vs feature) that IM-966 established; verify the release does not blur it. | PARTIAL | The design remains sound (general-survey routing is separate from feature-survey routing). BUT the after-login flow's `validateSurveyEvent` still routes through the feature-eligibility check for events on generals — IM-1185 catches this. Defect exists (preexisting High) but is NOT introduced by this release. |
+| A05 | Security Misconfiguration   | No         | Diff for CORS / headers / env-verbosity changes.  | N/A | No config surface touched. |
+| A06 | Vulnerable/Outdated Comps   | Yes        | Diff for package.json / lockfile changes.         | PASS | Zero dep changes across the 3 release PRs. |
+| A07 | Auth Failures               | Yes        | Session / SSO / MFA / token surfaces.             | PASS | SSO login flow unchanged; live re-login worked from a fresh session. Sessions issue and validate as before. |
+| A08 | Integrity Failures          | No         | CI/CD, deserialization, plugin, package-signing.  | N/A | No CI / signing / deserialization surface changed. |
+| A09 | Logging Failures            | Yes        | Diff for new console.log / debug prints that could leak PII, and new log emitters server-side. | FAIL — Low | NFPFundraising #2234 adds 20 new console.log across 7 files (5 existing aura helpers + 1 new lwc). None print PII (they print launcher lifecycle strings), but the volume is real noise that ships to end-user devtools. NOT a Security High/Critical; treated as observability hygiene. Recommend stripping before merge. |
+| A10 | SSRF                        | No         | New outbound HTTP calls introduced by the diff.   | N/A | No new outbound HTTP call from server; launchers only call the same survey-tool origin the widget already uses. |
+
+Summary: 6 Applicable + PASS · 1 Applicable + PARTIAL (A04 IM-1185 preexisting) ·
+1 Applicable + FAIL Low (A09 console.log noise) · 3 N/A · 0 High/Critical blockers.
+
+Notes:
+  · IM-1185 (A04 preexisting) is Sev High as a defect but does NOT gate the
+    release under this OWASP lens because the release does not introduce it —
+    features.ts byte-identical between main and staging (SHA d103510c…).
+  · The A09 Low finding is a merge-hygiene ask, not a blocker.

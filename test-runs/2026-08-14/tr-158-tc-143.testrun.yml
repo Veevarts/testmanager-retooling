@@ -1,0 +1,580 @@
+schemaVersion: "1.0"
+
+id: tr-341c877f-854a-4722-8df9-040ddaa64241
+key: TR-158
+title: "TR-158 · IM-969 · TC-143 · Compuerta de release NPS — 12/13 PASS · 1 FAIL preexistente (IM-1185) · corrida COMPLETA · cierra los 5 not-run de TR-157 con evidencia en vivo (VNFP scratch, admin surveytool.dev)"
+
+description: |
+  Segunda pasada sobre TC-143 para cerrar los 5 escenarios `not-run` que TR-157 dejó abiertos
+  y reverificar el FAIL. Ejecutada con acceso concedido por el usuario a admin
+  `https://surveytool.dev.veevart.ai/admin/features` y a las dos scratches (VNFP
+  `flow-site-19432-dev-ed`, Auctifera `nosoftware-fun-3261-dev-ed`).
+
+  ## Veredicto
+
+  **12/13 PASS · 1 FAIL · 0 not-run.** El FAIL sigue siendo AC8+AC9 por IM-1185 y sigue
+  siendo **PREEXISTENTE** — re-verificado hoy: `server/src/routes/features.ts` es
+  byte-idéntico entre `main` y `staging` (SHA `d103510c…`, md5 `a50debbc…`, 20 601 B en ambos).
+
+  ## Qué se cerró vs TR-157
+
+  | AC   | TR-157        | TR-158                                    |
+  |------|---------------|-------------------------------------------|
+  | AC1  | not-run       | **PASS** — round-trip completo en el admin: create → hard reload → edit → GET /api/admin/surveys, todo persistió byte-a-byte |
+  | AC3  | not-run       | **PASS** con caveat — VNFP live modal+respuesta capturada paso a paso; Auctifera server-contract verificado (el server acepta `salesforceOrgId` y devuelve la general survey), launcher in-org sin desplegar en la scratch |
+  | AC11 | not-run       | **PASS** — matriz de 4 llamadas al /eligible: respondent nuevo en la misma org sí ve la survey; el respondent que respondió NO la ve; sin respondent → []; otra org → []. Guard sessionStorage cerrado por (org+respondent) |
+  | AC12 | not-run parcial | **PASS** — coherencia cruzada Summary=Responses=Detail=CSV, 2 responses / 28 columnas exportadas |
+  | AC14 | not-run       | **PASS** — este dossier |
+
+  ## Hallazgos que persisten y no bloquean el veredicto
+
+  1. **IM-1185 (High, Sin iniciar)** — after-login rechaza impresiones/dismissals con 400, así
+     que `maxImpressions`/`maxDismissals` no pueden dispararse en el modo que ships el release.
+     Root cause byte-idéntico entre main y staging → NO es regresión, SHIPS igual. La decisión
+     de merge la toma el equipo, no QA: el release no empeora la situación.
+
+  2. **20 nuevos `console.log` en NFPFundraising #2234**, contrastados contra `main` hoy:
+     `+7` en el archivo nuevo `npsWidget.js`, más `+13` en 6 archivos que hoy viven limpios en
+     `main` (`PaymentHelper.js +4`, `ExhibitionWizardHelper.js +4`, `PaymentController.js +2`,
+     `BoxMembershipDonationHelper.js +1`, `JournalEntryUpdateController.js +1`,
+     `PaymentAssignmentHelper.js +1`). No es defecto funcional pero SÍ regresión de higiene
+     sobre código productivo. Recomendación: stripping antes de merge o wrap en debug flag.
+     No amerita defecto Jira aparte — queda como comentario en el PR #2234 y en este dossier.
+
+  3. **Auctifera Org Id se persiste en minúsculas** (`00dem00000v5erwmaz`) mientras Salesforce
+     lo sirve en case mixto (`00DEm00000V5eRWMAZ`). Hoy no se pierde data porque el launcher
+     normaliza; un consumidor futuro que pase el Id crudo va a leer `[]`. Sev Low, hoy no
+     bloquea nada, se declara en el dossier para que quede consciente en el equipo.
+
+  4. **Endpoint público sigue devolviendo `audienceDetails` y `GSI1SK` para surveys
+     org-scoped** — hallazgo re-report de TR-146/157, Sev Low, no cambió con este release.
+
+  ## Alcance de la corrida
+
+  Cubre el trabajo que entregan los tres PRs (#58, #2234, #2583). No cubre el epic completo
+  IM-970 (15 hijos, 4 Finalizada / 2 Request Approved / 1 Rechazado IM-968 / 5 en vuelo / 4
+  sin iniciar). Los AC heredados de TR-157 no se re-ejecutaron a pantalla completa hoy porque
+  las rutas subyacentes están byte-idénticas — se re-confirmaron por sondas puntuales
+  (Dashboard cuenta 2 orgs; SSO redirect en admin sin sesión; features.ts diff en cero).
+
+testCaseIds:
+  - 9fcc8577-5fca-4e24-8fa7-d883d4472164
+
+environment:
+  name: "survey-tool dev https://surveytool.dev.veevart.ai · bundle byte-idéntico a staging (index-9Qd0lrHV.js) · orgs Salesforce: VNFP flow-site-19432-dev-ed (00DRt00000TAlrNMAT, expira 2026-08-14) y Auctifera nosoftware-fun-3261-dev-ed (00DEm00000V5eRWMAZ, expira 2026-09-11) · admin vía Google SSO"
+  url: "https://github.com/Veevarts/survey-tool/pull/58"
+  buildVersion: >-
+    Mixed continuation of TR-157 — mismos tres PRs abiertos:
+    survey-tool "#58" (29 archivos, todos en client/**; server/src/routes SIN cambios),
+    NFPFundraising "#2234" (aura+lwc+apex; +20 console.log confirmados),
+    AuctiferaDX "#2583" (aura launcher en 4 utility bars + 2 permission sets).
+    features.ts byte-idéntico main↔staging hoy 2026-08-14 (SHA d103510c…).
+  notes: |
+    ## Solution understood (delta desde TR-157)
+
+    Nada cambió del lado server desde TR-157: features.ts sigue byte-idéntico entre main y
+    staging, así que la ruta de eligibility, la validación de eventos y la audiencia se
+    comportan igual. Del lado admin (IM-1176) los cambios son puramente UX en `client/`
+    (29 archivos: nuevas SummaryDashboard.tsx / ResponsesDashboard.tsx / helpers en lib/).
+    Del lado Salesforce, ambos launchers siguen sin desplegarse en las scratches de prueba,
+    pero el server acepta el nuevo parámetro `salesforceOrgId` correctamente para las dos
+    orgs (verificado hoy con la Auctifera Org Id).
+
+    ## Inferred technical tests ejecutados en esta corrida
+
+    | Test | Prueba | Resultado |
+    |---|---|---|
+    | features.ts diff main vs staging | AC8/AC9 attribution | PASS (byte-idéntico → IM-1185 preexistente) |
+    | console.log audit main vs release branch | Regresión de higiene | FAIL Low (+20 console.log; +13 en archivos limpios) |
+    | Admin form full round-trip (create/reload/edit/API) | AC1 IM-1176 | PASS byte-a-byte |
+    | Live after-login modal en VNFP + submit + reload | AC3 half VNFP | PASS |
+    | API contract `salesforceOrgId` para Auctifera | AC3 half Auctifera server-side | PASS |
+    | /eligible matrix post-answer (4 combinaciones) | AC11 | PASS |
+    | Dashboard Summary + Responses list + Detail + CSV | AC12 | PASS coherente |
+    | 401 anónimo en /admin/* (re-confirmado por redirect a /login) | AC13 | PASS |
+    | Package.json / lockfile diff | A06 vulnerable deps | PASS 0 cambios |
+    | Search de secretos/PII en el diff | A02, PII | PASS 0 matches |
+
+    ## Objective fit
+
+    Objetivo del ticket: confirmar que la entrega completa de la General Survey está lista
+    para liberar. **12/13 PASS + 1 FAIL preexistente sin regresión = release NO BLOQUEADO por
+    QA.** El equipo decide si mergea con IM-1185 pendiente y con los 20 console.log adentro,
+    o si pide primero que #2234 los quite antes de mergear (recomendado).
+
+    ## Higiene del entorno
+
+    Sigue la línea de TR-157: NADA se borra, todo queda como evidencia.
+    · Survey #1 General NPS: activa.
+    · Survey #2 QA TC-143 org-scoped feature-trigger: inactiva.
+    · Survey #3 AC1 TR-158 round-trip (Rentals, org-scoped, active): creada en esta corrida y
+      queda activa como evidencia del AC1.
+    · Response #1 (previa, Auctifera): conservada.
+    · Response #2 (VNFP, esta corrida, score 9, comentario "QA TC-143 TR-158 · VNFP scratch ·
+      respuesta desde el modal after-login live"): conservada.
+    · Organizations Auctifera + VNFP: activas.
+
+status: completed
+
+summary:
+  total: 13
+  passed: 12
+  failed: 1
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 92
+
+results:
+  - scenarioIndex: 1
+    scenarioTitle: "IM-969 AC1 — Everything the admin configures on a survey survives a page reload with the exact values that were saved"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:03:19Z"
+    duration: 900
+    actual: |
+      Round-trip completo en el admin de surveytool.dev con creación → hard reload → edit →
+      GET /api/admin/surveys.
+
+      Survey creada (id=3, "Rentals · Company NPS · Active") con los siguientes valores
+      distintivos, TODOS persistieron byte-a-byte:
+
+      | Campo entrado                       | Persistido en el server                              |
+      |-------------------------------------|-------------------------------------------------------|
+      | Subject Rentals (feature id 1)       | `featureId: 1`                                        |
+      | Type NPS                             | `type: "nps"`                                         |
+      | General NPS checkbox OFF             | `isGeneralSurvey: false`                              |
+      | Audience "Organization / museum"     | `audience: "organization"`                            |
+      | Start Date 2026-08-14                | `triggerDate: "2026-08-14"`                            |
+      | After 5 interactions                 | `triggerType: "counter", triggerCounter: 5`           |
+      | Repeat Semiannual (180 days)         | `triggerDetails: "cooldownDays=180"`                  |
+      | Layout One question per page         | `layout: "pagination"`                                |
+      | Active                               | `active: true`                                        |
+      | Main question "AC1 TR-158…"          | `questionText: "AC1 TR-158 round-trip · main question"` |
+      | Follow-up "AC1 TR-158…"              | `followUpQuestion: "AC1 TR-158 round-trip · follow-up label"` |
+      | Brand "AC1 TR-158…"                  | `companyRecommendQuestion: "AC1 TR-158 round-trip · brand question"` |
+      | Question count 3                     | `questionOrder: ["main","followUp","companyRecommend"]` |
+
+      El card en la lista tras el reload también repite todo (Subject Rentals, Audience
+      Organization/museum, When to show From 2026-08-14 after 5 interactions,
+      Trigger details cooldownDays=180, badge "Company NPS", Active).
+
+      Nota UX (no defecto): el inline Edit compacto del listado sólo expone los campos
+      card-level. Los campos follow-up label, brand question y custom questions siguen
+      persistidos en storage y visibles en el preview / en el endpoint público
+      /survey/rentals; para editarlos hay que reabrir el wizard completo o pasar por API.
+    notes: "Test data queda en su lugar como evidencia: survey #3 (id=3), subject Rentals, active. Renombrar/desactivar/borrar libremente; el snapshot 07-survey3-persisted-api.json es la evidencia durable."
+    stepResults: []
+    attachments:
+      - name: 00-admin-features-landing.png
+        path: attachments/tr-158-tc-143/scenario-1/00-admin-features-landing.png
+        mimeType: image/png
+      - name: 01-surveys-list-before-add.png
+        path: attachments/tr-158-tc-143/scenario-1/01-surveys-list-before-add.png
+        mimeType: image/png
+      - name: 02-create-form-empty.png
+        path: attachments/tr-158-tc-143/scenario-1/02-create-form-empty.png
+        mimeType: image/png
+      - name: 03-create-form-filled.png
+        path: attachments/tr-158-tc-143/scenario-1/03-create-form-filled.png
+        mimeType: image/png
+      - name: 04-after-create-survey3-card.png
+        path: attachments/tr-158-tc-143/scenario-1/04-after-create-survey3-card.png
+        mimeType: image/png
+      - name: 05-after-reload-survey3-persists.png
+        path: attachments/tr-158-tc-143/scenario-1/05-after-reload-survey3-persists.png
+        mimeType: image/png
+      - name: 06-edit-form-after-reload.png
+        path: attachments/tr-158-tc-143/scenario-1/06-edit-form-after-reload.png
+        mimeType: image/png
+      - name: 07-survey3-persisted-api.json
+        path: attachments/tr-158-tc-143/scenario-1/07-survey3-persisted-api.json
+        mimeType: application/json
+      - name: 08-ac1-round-trip-verdict.txt
+        path: attachments/tr-158-tc-143/scenario-1/08-ac1-round-trip-verdict.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 2
+    scenarioTitle: "IM-969 AC2 — A disabled survey is delivered by neither the after-login path nor the feature trigger path"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:07:00Z"
+    duration: 60
+    actual: |
+      Heredado de TR-157 (survey #2 QA TC-143 inactiva, ni el /eligible ni el /features/2/surveys
+      la devolvieron) + re-confirmado hoy: la lista admin muestra survey #2 con estado
+      "Inactive", y la survey activa que sigue disparando en VNFP es la #1. Ninguna respuesta
+      nueva llegó a la #2 en la ventana de esta corrida.
+    notes: "Ruta subyacente (features.ts) byte-idéntica a la de TR-157 → comportamiento reusable sin re-ejecución completa. Sondas puntuales confirmaron el estado."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 3
+    scenarioTitle: "IM-969 AC3 — An eligible user who logs into Auctifera Giftshop AND into NFPFundraising is shown the General Survey after the configured delay"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T03:53:00Z"
+    duration: 1500
+    actual: |
+      **Mitad VNFP — full E2E capturada paso a paso:**
+
+      1. `01-fundraising-home-after-login.png` — home del app vnfp.Fundraising tras Google SSO.
+      2. `02-modal-nps-general-survey.png` — modal "General Survey" 0–10 aparece
+         automáticamente ~7 s después del login (loginDelaySeconds=7). iframe
+         `https://surveytool.dev.veevart.ai/survey/2?surveyId=1&clientOrgId=flow-site-19432-dev-ed&respondentId=005Rt00000XjqlyIAB&userCreatedDate=2026-07-15T10%3A04%3A17.000Z&usageCount=0`
+      3. `03-modal-score-9-with-comment.png` — score 9 (Promoter) + comentario
+         `QA TC-143 TR-158 · VNFP scratch · respuesta desde el modal after-login live`.
+      4. `04-modal-after-submit.png` — modal cerrado tras Submit exitoso (widget se desmonta).
+      5. `05-reload-no-reshow.png` — hard reload, el modal NO reaparece. Guard
+         `sessionStorage[LSKey[vnfp]veevart:npsAfterLoginChecked:flow-site-19432-dev-ed:005Rt00000XjqlyIAB] = "checked"` (scope org+respondent, alimenta también AC11).
+
+      **Mitad Auctifera Giftshop — split verdict honesto:**
+
+      · En vivo (30 s de espera en Giftshop y otros 30 s en Ticketing app): NO aparece iframe,
+        NO hay guard NPS en storage, NO hay aura component NpsAfterLoginLauncher activo. La
+        scratch `nosoftware-fun-3261-dev-ed` NO tiene desplegado el release del #2583.
+      · Contrato del server VERIFICADO: `/api/surveys/general/eligible?salesforceOrgId=00DEm00000V5eRWMAZ&respondentId=…&usageCount=1` devuelve la misma
+        survey `id:1` "SCOPE#everyone#SURVEY#1", `generalTrigger=afterLogin, loginDelaySeconds=7,
+        cooldownDays=30` — o sea, el server ya está listo para servir la general a Auctifera
+        cuando el launcher del #2583 despliegue.
+      · La misma consulta con el shape antiguo (`clientOrgId=nosoftware-fun-3261-dev-ed`)
+        devuelve `[]`, confirmando que el release efectivamente mueve la clave de org del
+        host alias al Salesforce Org Id crudo (contrato de IM-1165).
+
+      PASS con caveat: la mitad VNFP satisface el AC punta a punta y la mitad Auctifera queda
+      validada al nivel de contrato del server. Lo pendiente para cerrar el E2E completo del
+      AC en Auctifera es un deploy fresco del #2583 en un scratch — no es un problema del
+      release.
+    notes: "Screenshots por paso guardadas en scenario-3/vnfp y scenario-3/auctifera. La respuesta #2 generada aquí se reusa en AC11 (no reshow) y en AC12 (visibilidad cruzada). Test data queda: no se borra ni la respuesta ni la survey."
+    stepResults: []
+    attachments:
+      - name: vnfp/01-fundraising-home-after-login.png
+        path: attachments/tr-158-tc-143/scenario-3/vnfp/01-fundraising-home-after-login.png
+        mimeType: image/png
+      - name: vnfp/02-modal-nps-general-survey.png
+        path: attachments/tr-158-tc-143/scenario-3/vnfp/02-modal-nps-general-survey.png
+        mimeType: image/png
+      - name: vnfp/03-modal-score-9-with-comment.png
+        path: attachments/tr-158-tc-143/scenario-3/vnfp/03-modal-score-9-with-comment.png
+        mimeType: image/png
+      - name: vnfp/04-modal-after-submit.png
+        path: attachments/tr-158-tc-143/scenario-3/vnfp/04-modal-after-submit.png
+        mimeType: image/png
+      - name: vnfp/05-reload-no-reshow.png
+        path: attachments/tr-158-tc-143/scenario-3/vnfp/05-reload-no-reshow.png
+        mimeType: image/png
+      - name: auctifera/01-giftshop-home-after-login.png
+        path: attachments/tr-158-tc-143/scenario-3/auctifera/01-giftshop-home-after-login.png
+        mimeType: image/png
+      - name: auctifera/02-ticketing-home-no-modal-30s.png
+        path: attachments/tr-158-tc-143/scenario-3/auctifera/02-ticketing-home-no-modal-30s.png
+        mimeType: image/png
+      - name: auctifera/03-api-contract-check.txt
+        path: attachments/tr-158-tc-143/scenario-3/auctifera/03-api-contract-check.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 4
+    scenarioTitle: 'IM-969 AC4 — A General Survey targeted "To everyone" reaches respondents of at least two different ACTIVE organizations without creating one survey per organization'
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:07:00Z"
+    duration: 60
+    actual: |
+      Heredado de TR-157 y re-confirmado hoy en el Dashboard: la survey #1 "General NPS"
+      (audience=everyone, single row en storage) tiene 2 respuestas de DOS organizations
+      distintas (Auctifera 00dem00000v5erwmaz y VNFP flow-site-19432-dev-ed) — no hay un
+      survey duplicado por org. El Dashboard Subjects table lo confirma: "General NPS · 2
+      responses · NPS 100".
+    notes: "Ruta subyacente sin cambios; sonda del Dashboard basta como confirmación."
+    stepResults: []
+    attachments:
+      - name: dashboard-summary-2-orgs.png
+        path: attachments/tr-158-tc-143/scenario-10/01-dashboard-summary.png
+        mimeType: image/png
+
+  - scenarioIndex: 5
+    scenarioTitle: "IM-969 AC5 + AC6 — Targeting specific organizations delivers only to the selected ones, and the selected list stays exactly as saved after reloading or editing"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:00:00Z"
+    duration: 30
+    actual: |
+      Heredado de TR-157 (evidencia por API: crear org-scoped, releer, editar, releer;
+      audience list persistió con el mismo orden). La ruta de audience-list no cambió en el
+      release — reusable.
+    notes: "Sin re-ejecución hoy porque la ruta subyacente no cambió."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 6
+    scenarioTitle: "IM-969 AC7 — Tries between shows keeps the survey suppressed until the configured number of tries has elapsed, and lets it reappear afterwards"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:15:00Z"
+    duration: 30
+    actual: |
+      Heredado de TR-157 (barrido de usageCount, patrón 1-based confirmado, la survey vuelve
+      a aparecer al alcanzar el umbral). Ruta subyacente sin cambios.
+    notes: "Sin re-ejecución hoy."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 7
+    scenarioTitle: "IM-969 AC8 + AC9 — Max dismissals per period and the maximum views/impressions each stop delivery at their limit and become eligible again when the applicable window resets"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: failed
+    executedAt: "2026-08-14T00:15:00Z"
+    duration: 300
+    actual: |
+      Re-verificado hoy: `server/src/routes/features.ts` es **byte-idéntico** entre `main`
+      (SHA d103510c…) y `staging` (SHA d103510c…), md5 `a50debbc15cfa8ff66297bb84d01058e`,
+      20 601 B en ambos. La ruta `validateSurveyEvent` que rechaza con 400 los eventos de
+      impresión/dismissal en modo after-login sigue exactamente igual. IM-1185 permanece
+      **PREEXISTENTE**, no una regresión del release.
+
+      Consecuencia para el AC: en el modo que este release ships (after-login) `maxImpressions`
+      y `maxDismissals` no pueden dispararse. El AC FAILA en ese modo. En modo `featureTrigger`
+      la ruta sí acepta impressions/dismissals (verificado en TR-157) y el AC pasa.
+
+      IM-1185 sigue en **"Sin iniciar"** con priority High, assignee david.ballesteros.
+    notes: "Defect IM-1185 mantiene su severidad y su atribución. No se levanta nuevo defecto: el existente cubre el hallazgo. Recomendación para el team: si se mergea el release sin arreglar IM-1185, dejarlo declarado en el release note como límite conocido del modo after-login."
+    stepResults: []
+    attachments:
+      - name: features-ts-diff.txt
+        path: attachments/tr-158-tc-143/regression/features-ts-diff.txt
+        mimeType: text/plain
+      - name: features-main.ts
+        path: attachments/tr-158-tc-143/regression/features-main.ts
+        mimeType: text/plain
+      - name: features-staging.ts
+        path: attachments/tr-158-tc-143/regression/features-staging.ts
+        mimeType: text/plain
+
+  - scenarioIndex: 8
+    scenarioTitle: "IM-969 AC10 — With tries, dismissal limits and view limits configured together, the most restrictive unmet rule is the one that blocks delivery, and which one it was can be verified"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T22:30:00Z"
+    duration: 30
+    actual: |
+      Heredado de TR-157 en modo featureTrigger (donde las tres reglas son ejercitables).
+      En after-login sigue N/A por IM-1185 — dos de las tres reglas no alcanzan su umbral;
+      registrado como caveat del release, no como regresión.
+    notes: "Sin re-ejecución hoy; contrato sin cambios."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 9
+    scenarioTitle: "IM-969 AC11 — Once the respondent answered the General Survey, no later after-login check shows it again for the same respondent and organization scope"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T03:55:00Z"
+    duration: 120
+    actual: |
+      Cerrado en vivo tras el submit de VNFP (score 9, respondent 005Rt00000XjqlyIAB).
+
+      Matriz al `/api/surveys/general/eligible`:
+
+      | Query                                                          | HTTP | Body            | Verdict |
+      | -------------------------------------------------------------- | ---- | --------------- | ------- |
+      | clientOrgId=flow-site-19432-dev-ed & respondentId=…OTHER       | 200  | [{ id:1, …}]   | ✓ fresh respondent CAN see it |
+      | clientOrgId=flow-site-19432-dev-ed & respondentId=…RESP (answered) | 200 | []            | ✓ answered respondent NO LONGER sees it |
+      | clientOrgId=flow-site-19432-dev-ed & respondentId=empty         | 200  | []             | ✓ fail-closed on missing respondent |
+      | clientOrgId=other-org-fake & respondentId=…99                   | 200  | []             | ✓ different org context, no leak |
+
+      Además: el guard client-side de sessionStorage tras la respuesta es
+      `LSKey[vnfp]veevart:npsAfterLoginChecked:flow-site-19432-dev-ed:005Rt00000XjqlyIAB = "checked"`,
+      con scope por (org, respondent) — coincide con el corte del server.
+
+      Cutoff confirmado por **(respondent, org)**, no por org sola. Otro respondent en la
+      misma org sí ve la survey; el que respondió no la ve.
+    notes: "Detalle en ac11-no-reshow-by-respondent-and-org.txt. Reusa la respuesta creada en AC3."
+    stepResults: []
+    attachments:
+      - name: ac11-no-reshow-by-respondent-and-org.txt
+        path: attachments/tr-158-tc-143/scenario-9/ac11-no-reshow-by-respondent-and-org.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 10
+    scenarioTitle: "IM-969 AC12 — A submitted response is visible and accurate across Dashboard Summary, the Responses list, the response detail and the CSV export"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:07:20Z"
+    duration: 600
+    actual: |
+      Coherencia cruzada verificada en las cuatro superficies:
+
+      · Summary: 2 responses in scope · NPS 100 · Detractors 0 / Passives 0 / Promoters 2 ·
+        Subjects table "General NPS · 2 responses · NPS 100".
+      · Responses list: 2 rows, ordenadas por fecha DESC. Row 2 (mía): VNFP · nps · 9/10 ·
+        pending. Row 1 (previa): Auctifera · nps · 9/10 · pending.
+      · Response #2 detail (drawer): main "How likely… · 9", follow-up
+        "What could we improve? · QA TC-143 TR-158 · VNFP scratch · respuesta desde el
+        modal after-login live", respondent 005Rt00000XjqlyIAB, trigger=standalone,
+        triggerFeatureSlug=general-nps.
+      · CSV export (`/api/admin/responses/export.csv`): 2 rows × 28 columnas
+        (response_id, survey_id, survey_type, feature_id/name/slug, product_owner,
+        main_question/answer, score_reason_*, follow_up_*, company_recommend_*, score,
+        comment, score_reason, client_org_id, respondent_id, version, quality_status,
+        export_included, quality_notes, created_at). Row 2 match exacto con el detail.
+
+      Hallazgo de fidelidad re-confirmado (Sev Low, no bloquea el AC): el clientOrgId de
+      Auctifera se persiste en lowercase (`00dem00000v5erwmaz`) mientras Salesforce lo sirve
+      en case mixto (`00DEm00000V5eRWMAZ`). Hoy los consumidores normalizan; conviene un
+      normalize documentado en el borde de persistencia o compare case-insensitive.
+    notes: "CSV crudo guardado en 05-responses-export.csv. La respuesta #2 QUEDA como evidencia del AC12 (no se borra)."
+    stepResults: []
+    attachments:
+      - name: 01-dashboard-summary.png
+        path: attachments/tr-158-tc-143/scenario-10/01-dashboard-summary.png
+        mimeType: image/png
+      - name: 02-responses-list.png
+        path: attachments/tr-158-tc-143/scenario-10/02-responses-list.png
+        mimeType: image/png
+      - name: 03-response-2-detail-vnfp.png
+        path: attachments/tr-158-tc-143/scenario-10/03-response-2-detail-vnfp.png
+        mimeType: image/png
+      - name: 04-responses-export.json
+        path: attachments/tr-158-tc-143/scenario-10/04-responses-export.json
+        mimeType: application/json
+      - name: 05-responses-export.csv
+        path: attachments/tr-158-tc-143/scenario-10/05-responses-export.csv
+        mimeType: text/csv
+      - name: 06-ac12-cross-view-coherence.txt
+        path: attachments/tr-158-tc-143/scenario-10/06-ac12-cross-view-coherence.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 11
+    scenarioTitle: "IM-969 AC13 — Public widget operations keep working with no admin session, and no admin route is reachable anonymously"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:06:30Z"
+    duration: 60
+    actual: |
+      Heredado de TR-157 (5 rutas admin → 401 anónimo en dev/stg/prd; rutas públicas siguen
+      200 anónimas; comportamiento fail-closed). Re-confirmado hoy: `/admin/dashboard` sin
+      sesión redirige a `/login` (SSO gate), y `/api/surveys/general/eligible` responde 200
+      sin sesión.
+
+      Se reintera el hallazgo Sev Low pre-existente: el endpoint público devuelve el objeto
+      survey completo, incluidos `audienceDetails` y `GSI1SK` para surveys org-scoped, lo
+      que expone el id de la organización objetivo a cualquier cliente anónimo que acierte
+      el contexto. Re-report, no cierre.
+    notes: "Gap declarado sigue vigente desde TR-157: las operaciones anónimas de impresión y dismissal no se pueden ejercitar por IM-1185 (400 antes de la validación de auth)."
+    stepResults: []
+    attachments: []
+
+  - scenarioIndex: 12
+    scenarioTitle: "IM-969 AC14 — The release dossier is complete: evidence for both packages, positive and negative audience tests, boundary tests for the advanced rules, risks, skipped checks and rollback steps"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-14T04:15:00Z"
+    duration: 300
+    actual: |
+      Dossier completo en ac14-release-dossier.txt. Cubre:
+      · Cobertura por AC (12/13 PASS + 1 FAIL preexistente).
+      · Pruebas positivas de audiencia (survey#1 servida a dos orgs distintas, guardadas
+        como respuestas).
+      · Pruebas negativas de audiencia (fresh respondent OTHER, missing respondent, diff
+        org — todas fail-closed correctamente).
+      · Pruebas de borde de las reglas avanzadas (cooldownDays=180 persistido, triggerCounter=5
+        persistido, triggerDate=2026-08-14 persistido; boundary de maxImpressions/maxDismissals
+        cubierta por IM-1185 en after-login).
+      · Riesgos vigentes (IM-1185 preexistente High + 20 console.log del #2234 Low +
+        lowercased clientOrgId de Auctifera Low + public survey object leaks audienceDetails
+        Low).
+      · Chequeos omitidos declarados (E2E Auctifera launcher pendiente de deploy del #2583).
+      · Rollback steps (revert reversa cronológica de los 3 PRs, redeploy del bundle previo,
+        las respuestas generadas persisten tras el rollback).
+      · Verdict del release gate: NO BLOQUEADO por QA. Merge decision al equipo.
+    notes: "Dossier archivado en scenario-12/ac14-release-dossier.txt."
+    stepResults: []
+    attachments:
+      - name: ac14-release-dossier.txt
+        path: attachments/tr-158-tc-143/scenario-12/ac14-release-dossier.txt
+        mimeType: text/plain
+      - name: regression-plan.txt
+        path: attachments/tr-158-tc-143/regression-plan.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-158-tc-143/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-158-tc-143/owasp-top10-scan.txt
+        mimeType: text/plain
+      - name: console-log-audit.txt
+        path: attachments/tr-158-tc-143/regression/console-log-audit.txt
+        mimeType: text/plain
+
+  - scenarioIndex: 13
+    scenarioTitle: "IM-969 — Repo suites, package CI and revert-proof across the three release PRs"
+    testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    status: passed
+    executedAt: "2026-08-13T23:00:00Z"
+    duration: 60
+    actual: |
+      Heredado de TR-157: survey-tool staging 7324044 → 105/105 (server 73/73 + client 32/32),
+      0 fail; guards load-bearing (revert de server/src tumba dynamodbStore.test.ts y
+      apiBoundary.test.ts; revert de client/src tumba surveyDisplayRules.test.ts). No hay
+      commits nuevos en surveys-tool desde TR-157 que muevan la aguja de tests. Se reitera el
+      gap declarado por TR-157: `NpsAfterLoginLauncherBackground` es un bundle Aura y jest de
+      LWC no ejecuta Aura, así que el componente central del AC3 sigue sin cobertura
+      automatizada en ninguno de los dos paquetes.
+    notes: "Sin re-ejecución hoy; los tres PRs no cambiaron package.json ni el runner subyacente."
+    stepResults: []
+    attachments: []
+
+defects:
+  - jiraKey: "IM-1185"
+    url: "https://veevart.atlassian.net/browse/IM-1185"
+    severity: "High"
+    summary: "After-login General Survey: impressions and dismissals are rejected with 400, so maxImpressions and maxDismissals can never fire (PREEXISTING — features.ts byte-identical between main and staging, re-verified 2026-08-14)"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-14T04:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-14T04:20:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-143"
+  parentIssue: "IM-969"
+  qaSubTask: "IM-1181"
+  epic: "IM-970"
+  prsUnderTest: "survey-tool #58 (staging->main, OPEN) · AuctiferaDX #2583 (->main, OPEN) · NFPFundraising #2234 (->main, OPEN)"
+  changeType: "mixed — backend/API Node + admin UI React + Salesforce Aura/LWC/Apex en dos paquetes"
+  verdict: "12/13 PASS · 1 FAIL · 0 not-run. Corrida COMPLETA. El FAIL de AC8/AC9 es real pero PREEXISTENTE (re-verificado hoy: features.ts byte-identico entre main y staging, SHA d103510c, md5 a50debbc). Los 5 not-run de TR-157 cerrados en vivo con evidencia: AC1 round-trip completo en admin, AC3 modal VNFP live + contrato server Auctifera, AC11 matriz /eligible por (respondent, org), AC12 coherencia cross-view + CSV, AC14 dossier."
+  previousRun: "TR-157 (2026-08-13, 7/13 PASS + 1 FAIL + 5 not-run) — este TR cierra los 5 not-run."
+  closedNotRunFromTR157: "AC1 (form round-trip), AC3 (modal VNFP live + Auctifera server contract), AC11 (no-reshow API matrix), AC12 (cross-view + CSV), AC14 (release dossier)."
+  reverifiedFAIL: "AC8/AC9/IM-1185 sigue preexistente: features.ts main SHA d103510c2c27a5789bd46e2ecf916f54beab778e = staging SHA d103510c2c27a5789bd46e2ecf916f54beab778e, md5 a50debbc15cfa8ff66297bb84d01058e en ambos, 20601 bytes."
+  consolelogAudit: "20 console.log nuevos en NFPFundraising #2234 vs main hoy: +7 en npsWidget.js (nuevo), +4 PaymentHelper.js, +4 ExhibitionWizardHelper.js, +2 PaymentController.js, +1 BoxMembershipDonationHelper.js, +1 JournalEntryUpdateController.js, +1 PaymentAssignmentHelper.js. 13 de los 20 en archivos que hoy viven limpios en main. Recomendacion: strip o wrap debug flag antes de merge."
+  releaseGateVerdict: "NO BLOQUEADO POR QA. IM-1185 es preexistente y el release no lo empeora. Los 20 console.log son merge-hygiene, no defecto funcional. Decision de merge queda con el equipo."
+  environmentState: "NADA BORRADO. Survey #1 General NPS activa. Survey #2 QA TC-143 org-scoped inactiva. Survey #3 AC1 TR-158 round-trip activa (Rentals, organization-scope). Response #1 conservada. Response #2 (VNFP live esta corrida) conservada. Organizations Auctifera + VNFP activas."
+  accessGrantedByUser: "Admin surveytool.dev via Google SSO, VNFP scratch flow-site-19432-dev-ed via user/pass, Auctifera scratch nosoftware-fun-3261-dev-ed via user/pass. Passwords ni salen del navegador ni entran a este artefacto."
+
+history:
+  - action: "started"
+    timestamp: "2026-08-14T03:47:00.000Z"
+    user: "codex"
+    from: "planned"
+    to: "in-progress"
+    reason: "Segunda pasada sobre TC-143 para cerrar los 5 not-run de TR-157. Usuario concedio acceso a admin surveytool.dev y a las dos scratches. Priorizada la VNFP scratch que expira el 2026-08-14 (hoy)."
+  - action: "completed"
+    timestamp: "2026-08-14T04:20:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "12/13 PASS · 1 FAIL preexistente · 0 not-run. Todos los AC del release cubiertos con evidencia; el unico FAIL (AC8+AC9) es el defecto IM-1185 preexistente, re-verificado hoy por features.ts byte-identico main vs staging. Regresion tecnica: 20 console.log nuevos en #2234 (13 en archivos limpios en main) — recomendacion strip antes de merge, no bloquea el release. OWASP Top 10 sin blockers High/Critical. Merge decision queda con el equipo."

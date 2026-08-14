@@ -1,0 +1,56 @@
+AC3 Auctifera Giftshop — API contract vs bundle deploy split-evidence
+Executed 2026-08-14, Auctifera scratch nosoftware-fun-3261-dev-ed
+Auctifera Org Id: 00DEm00000V5eRWMAZ
+
+------------------------------------------------------------------------------
+UI observation — no modal in 30 s across two apps
+------------------------------------------------------------------------------
+
+Navigated to Auctifera.Veevart_Giftshop and Auctifera.Veevart_Ticketing_App,
+waited 30 s each. Result:
+  · No iframe to surveytool.dev.veevart.ai in DOM
+  · No NPS-related localStorage / sessionStorage keys
+  · Utility bar loaded, no aura component with class matching "Nps" found
+  · Screenshots: 01-giftshop-home-after-login.png, 02-ticketing-home-no-modal-30s.png
+
+Conclusion at the UI level: the AuctiferaDX #2583 aura launcher is NOT deployed
+in this scratch. Same limitation as VNFP scratch (which lacks #2234's
+NpsWidgetController.getOrganizationId()).
+
+------------------------------------------------------------------------------
+Independent API contract check — the survey server IS ready for this Auctifera org
+------------------------------------------------------------------------------
+
+Endpoint:   GET /api/surveys/general/eligible
+Base URL:   https://surveytool.dev.veevart.ai
+
+| Query params                                                     | HTTP | Body           | What it proves |
+| ---------------------------------------------------------------- | ---- | -------------- | -------------- |
+| salesforceOrgId=00DEm00000V5eRWMAZ &                             | 200  | [{ id:1, …}]   | ✓ the release-contract param (salesforceOrgId) resolves this Auctifera org to |
+|   respondentId=005EmXXXAuctFake &                                |      |                |   a SCOPE#everyone general survey with generalTrigger=afterLogin, 7s delay,  |
+|   userCreatedDate=… & usageCount=1                               |      |                |   30d cooldown — same survey#1 that fires on VNFP                             |
+| clientOrgId=nosoftware-fun-3261-dev-ed & …                       | 200  | []             | ✗ the OLD contract (clientOrgId=host) does NOT resolve to this survey — the  |
+|                                                                  |      |                |   release moves the org key from the host alias to the raw Salesforce Org Id |
+| clientOrgId=nosoftware-fun-3261 & …                              | 200  | []             | ✗ same (no host-alias trim helps)                                            |
+
+------------------------------------------------------------------------------
+Verdict
+------------------------------------------------------------------------------
+
+AC3 Auctifera half — SPLIT VERDICT, honest about the boundary:
+  · Release CONTRACT verified at the survey-server side: the new
+    salesforceOrgId=<raw org id> parameter correctly resolves to the general
+    survey for this org (fires the exact same survey#1 that VNFP fires).
+  · Release CODE not verified in-org: neither the #2583 launcher aura nor the
+    #2234 widget controller with getOrganizationId() are deployed in either
+    scratch, so the UI E2E cannot be observed here.
+
+This is the same limitation that TR-157 documented; the delta today is that we
+now have the server-side confirmation of the org-key migration (which TR-157
+did not have).
+
+Pending from the human to fully close AC3 in-org E2E:
+  · Deploy #2234 (NFPFundraising) to a fresh scratch and #2583 (AuctiferaDX)
+    to a fresh scratch, then repeat the after-login capture cycle.
+  · Or wait for the released packages to reach a dev sandbox where both
+    launcher bits and the server contract line up.

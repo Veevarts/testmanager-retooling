@@ -1,0 +1,54 @@
+AC11 — no reshow after answered, by respondent + org
+Executed 2026-08-14, VNFP scratch (flow-site-19432-dev-ed) after live submit of NPS
+score 9 with comment "QA TC-143 TR-158 · VNFP scratch · respuesta desde el modal
+after-login live".
+
+Endpoint under test:  GET /api/surveys/general/eligible
+Base URL:             https://surveytool.dev.veevart.ai
+Bundle in prod:       index-9Qd0lrHV.js (release candidate, same as staging/main)
+
+------------------------------------------------------------------------------
+Matrix — same feature-shape, only the identity changes
+------------------------------------------------------------------------------
+
+| Query params                                                          | HTTP | Body           | Verdict |
+| --------------------------------------------------------------------- | ---- | -------------- | ------- |
+| clientOrgId=flow-site-19432-dev-ed &                                  | 200  | [{ id:1, …}]   | ✓ fresh respondent CAN see the general survey (SCOPE#everyone#SURVEY#1) |
+|   respondentId=005Rt00000XjqlyOTHER (unused) & usageCount=1           |      |                |         |
+| clientOrgId=flow-site-19432-dev-ed &                                  | 200  | []             | ✓ original respondent NO LONGER sees it after answering |
+|   respondentId=005Rt00000XjqlyIAB (just answered) & usageCount=1      |      |                |         |
+| clientOrgId=flow-site-19432-dev-ed &                                  | 200  | []             | ✓ fail-closed on missing respondent |
+|   respondentId="" & usageCount=1                                      |      |                |         |
+| clientOrgId=other-org-fake &                                          | 200  | []             | ✓ different org context, no leak |
+|   respondentId=005Rt00000Xjqly99 & usageCount=1                       |      |                |         |
+| salesforceOrgId=00DRt00000TAlrNMAT &                                  | 200  | []             | new-contract parameter shape (release adds this param); the |
+|   respondentId=005Rt00000XjqlyIAB & usageCount=1                      |      |                | current bundle emits clientOrgId not salesforceOrgId; both  |
+|                                                                       |      |                | shapes agree on the cutoff |
+| salesforceOrgId=00DRt00000TAlrNMAT &                                  | 200  | []             | new-contract with OTHER respondent still returns [] because |
+|   respondentId=005Rt00000XjqlyOTHER & usageCount=1                    |      |                | the survey audience matches the clientOrgId host shape, not |
+|                                                                       |      |                | the raw Salesforce Org Id — this is the IM-1165 contract    |
+|                                                                       |      |                | that #2234 is supposed to unify, and is NOT deployed here    |
+
+Client-side guard observed after the same submit:
+  sessionStorage[LSKey[vnfp]veevart:npsAfterLoginChecked:flow-site-19432-dev-ed:005Rt00000XjqlyIAB] = "checked"
+  scoped by ORG + RESPONDENT — matches the server contract.
+
+------------------------------------------------------------------------------
+Verdict
+------------------------------------------------------------------------------
+
+AC11 PASS: the eligibility cutoff after a response is applied by (respondent, org)
+tuple, not by org alone. A fresh respondent in the SAME org still sees the survey;
+the respondent who answered no longer does. Server-side agrees with the client-side
+sessionStorage guard.
+
+Side finding (not a blocker for AC11, but relevant to IM-1165):
+  the release adds a `salesforceOrgId` parameter to /eligible and expects the launcher
+  to send the raw Salesforce Org Id (00DRt00000TAlrNMAT). The current bundle sends
+  clientOrgId=flow-site-19432-dev-ed, and the eligibility check on the raw org id
+  returns [] for both the original AND the OTHER respondent — which means either
+  (a) the survey audience is not yet keyed by the raw org id, or
+  (b) the release also updates that keying and the two migrations must land together.
+  This is validated by the release code path but NOT by this scratch, which still
+  has the pre-#2234 vnfp package. Documented for the dossier, not counted against
+  AC11.

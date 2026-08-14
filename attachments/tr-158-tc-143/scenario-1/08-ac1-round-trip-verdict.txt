@@ -1,0 +1,90 @@
+AC1 — form round-trip after IM-1176: PASS with server-side confirmation
+Executed 2026-08-14 in https://surveytool.dev.veevart.ai (release-candidate bundle
+index-9Qd0lrHV.js, same served as staging).
+
+------------------------------------------------------------------------------
+What the AC asks
+------------------------------------------------------------------------------
+
+Everything the admin configures on a survey survives a page reload with the exact
+values that were saved.
+
+------------------------------------------------------------------------------
+Steps executed
+------------------------------------------------------------------------------
+
+1. Admin /admin/surveys → Add survey (subject = Rentals inferred from list context).
+2. Filled a distinctive value set:
+    Subject                     = Rentals
+    Type                        = NPS
+    General NPS survey          = OFF (feature-scoped)
+    Audience                    = To an organization / museum
+    Audience details            = 00DRt00000TAlrNMAT (typed; not selected from picker)
+    Start Date                  = 2026-08-14
+    Interactions                = After 5 interactions
+    Repeat window               = Semiannual (180 days)
+    Main question               = "AC1 TR-158 round-trip · main question"
+    Follow-up question          = "AC1 TR-158 round-trip · follow-up label"
+    Company/brand NPS           = "AC1 TR-158 round-trip · brand question"
+    Layout                      = One question per page (paginated)
+    Active                      = on
+3. Create → back to /admin/surveys → hard reload → open Edit on the new Survey #3.
+4. Independent read of the persisted state via GET /api/admin/surveys.
+
+------------------------------------------------------------------------------
+Server-side persisted state (Survey #3, GET /api/admin/surveys)
+------------------------------------------------------------------------------
+
+{
+  "id": 3, "active": true, "type": "nps", "audience": "organization",
+  "isGeneralSurvey": false, "featureId": 1, "layout": "pagination",
+  "triggerType": "counter", "triggerCounter": 5, "triggerDate": "2026-08-14",
+  "triggerDetails": "cooldownDays=180",
+  "questionText": "AC1 TR-158 round-trip · main question",
+  "followUpQuestion": "AC1 TR-158 round-trip · follow-up label",
+  "companyRecommendQuestion": "AC1 TR-158 round-trip · brand question",
+  "questionOrder": ["main", "followUp", "companyRecommend"],
+  "audienceDetails": null,   ← "00DRt00000TAlrNMAT" typed in the search box; UI treats it as a search filter, not a selection — expected
+  "scoreReasonEnabled": null ← "Add open text" toggle left off — expected
+}
+
+------------------------------------------------------------------------------
+Verdict
+------------------------------------------------------------------------------
+
+PASS. Every field that was ENTERED persisted to storage byte-for-byte and is
+served back on reload:
+  · card view: subject, type, audience, when-to-show, cooldown, main question,
+    "Company NPS" badge, status Active — all match.
+  · edit form: main question, subject, type, general checkbox, audience, start
+    date, interactions/counter, repeat window, layout, active — all match.
+  · server state: all persisted fields carry the entered values byte-for-byte.
+
+Screenshots: 00-admin-features-landing.png, 01-surveys-list-before-add.png,
+02-create-form-empty.png, 03-create-form-filled.png, 04-after-create-survey3-card.png,
+05-after-reload-survey3-persists.png, 06-edit-form-after-reload.png.
+Server-side snapshot: 07-survey3-persisted-api.json.
+
+------------------------------------------------------------------------------
+UX finding (not a defect, but worth flagging for the release dossier)
+------------------------------------------------------------------------------
+
+The compact inline Edit view opened via the list's "Edit" button surfaces only the
+main question and the card-level configuration (subject/type/audience/dates/
+interactions/repeat/layout/active). It does NOT expose the follow-up-question label,
+brand question, follow-up options, custom questions, or advanced delivery limits
+inputs — those live in the multi-section "Create survey" wizard and can only be
+edited by re-opening the full form (or via API).
+
+Nothing is silently lost: those fields ARE persisted server-side and DO show up on
+the survey preview and the public /survey/rentals endpoint. This is a design
+constraint of the compact edit and would only be a concern if an operator expects
+to fine-tune the follow-up label from the list quick-edit.
+
+------------------------------------------------------------------------------
+Test data left in place (per the "keep test data as evidence" convention)
+------------------------------------------------------------------------------
+
+Survey #3 (id=3) stays Active in the surveytool.dev admin, subject Rentals,
+audience Organization / museum. Rename/deactivate/delete at will; the API JSON
+snapshot in 07-survey3-persisted-api.json is the durable evidence.

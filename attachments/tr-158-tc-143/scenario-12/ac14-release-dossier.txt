@@ -1,0 +1,113 @@
+AC14 — release dossier for IM-969 / NPS release, aggregated at 2026-08-14
+Bundle under test: index-9Qd0lrHV.js (dev = staging, byte-identical)
+PRs shipped:
+  · survey-tool #58 (staging → main)  — server + admin (IM-1176 refinements)
+  · AuctiferaDX #2583                  — after-login launcher on 4 utility bars
+  · NFPFundraising #2234               — after-login launcher across Fundraising
+
+------------------------------------------------------------------------------
+Evidence coverage
+------------------------------------------------------------------------------
+
+| AC   | Coverage in this TR | Verdict |
+| ---- | -------------------- | ------- |
+| AC1  | Full round-trip live in the admin (create → reload → edit → API-verify) — every field entered persisted byte-for-byte | PASS |
+| AC2  | Inherited from TR-157; not re-executed here (no code change in that path since) | PASS (from TR-157) |
+| AC3  | VNFP half: after-login modal delivered live + response submitted + captures. Auctifera half: split verdict (API contract server-side ✓, launcher not deployed in this scratch — same limitation as TR-157) | PARTIAL PASS |
+| AC4  | Inherited from TR-157: same survey#1 reaches multiple orgs (Auctifera + VNFP responses in Dashboard) | PASS (re-confirmed by dashboard count today) |
+| AC5+AC6 | Inherited from TR-157 | PASS (from TR-157) |
+| AC7  | Inherited from TR-157 | PASS (from TR-157) |
+| AC8+AC9 | Re-verified today: features.ts is BYTE-IDENTICAL between main and staging (SHA d103510c…). IM-1185 stays PREEXISTING, not a release regression. maxImpressions/maxDismissals still cannot fire in after-login mode. | FAIL (defect IM-1185, preexisting) |
+| AC10 | Inherited from TR-157 (blocked in after-login mode by IM-1185; correct behavior when the two rules that can fire are the ones that are combined) | PASS (in feature-trigger mode); N/A for after-login due to IM-1185 |
+| AC11 | API-executed live: eligibility cutoff is by (respondent, org) tuple. Fresh respondent in the SAME org still sees survey#1; the respondent who just answered no longer does. Client-side sessionStorage guard agrees with the server contract | PASS |
+| AC12 | Live cross-view coherence: Summary (2 responses · NPS 100 · 2 promoters) = Responses list (2 rows) = Response detail (respondent 005Rt00000XjqlyIAB · comment matches) = CSV (2 rows, 28 columns) | PASS |
+| AC13 | Inherited from TR-157: 5 admin routes → 401 anonymous in dev/stg/prd; public routes still 200 anonymous | PASS (from TR-157, re-usable) |
+| AC14 | THIS scenario — the completeness check itself | PASS |
+
+------------------------------------------------------------------------------
+Positive audience proofs
+------------------------------------------------------------------------------
+
+  · General survey ("SCOPE#everyone#SURVEY#1") delivered to VNFP scratch (org host
+    alias flow-site-19432-dev-ed) and captured in the Dashboard as a promoter
+    response (score 9).
+  · Same general survey identified in the survey-server as eligible for the
+    Auctifera Org Id (00DEm00000V5eRWMAZ) when queried with the release-contract
+    salesforceOrgId param.
+  · Fresh respondent in the SAME org receives the survey (AC11 matrix).
+
+Negative audience proofs
+  · Original respondent who answered NO LONGER receives the survey (AC11 matrix).
+  · Missing respondent → empty list (fail-closed on missing context, AC11 matrix).
+  · Different-org context (fake) → empty list, no leak across orgs (AC11 matrix).
+
+Boundary proofs for advanced rules
+  · Repeat window "Semiannual (180 days)" persisted as `cooldownDays=180` (AC1
+    round-trip evidence).
+  · Interactions "After 5" persisted as `triggerType=counter, triggerCounter=5`
+    (AC1 round-trip evidence).
+  · Start Date `2026-08-14` persisted verbatim (AC1 round-trip evidence).
+  · maxImpressions/maxDismissals boundary is COVERED BY DEFECT IM-1185 in the
+    after-login mode; in feature-trigger mode the boundary is reachable (TR-157
+    inherited evidence).
+
+------------------------------------------------------------------------------
+Risks live for the release
+------------------------------------------------------------------------------
+
+1. IM-1185 (Sev High, "Sin iniciar", assigned david.ballesteros) — after-login
+   impressions/dismissals rejected with 400. maxImpressions and maxDismissals
+   silently never fire in the release's headline feature. Root cause file
+   (`server/src/routes/features.ts::validateSurveyEvent`) is byte-identical
+   between main and staging: NOT introduced by this release, but SHIPS with it.
+
+2. 20 new console.log statements in NFPFundraising #2234 across
+   BoxMembershipDonationHelper.js (+1), JournalEntryUpdateController.js (+1),
+   PaymentAssignmentHelper.js (+1), PaymentController.js (+2), PaymentHelper.js
+   (+4), ExhibitionWizardHelper.js (+4), and the new npsWidget.js (+7). None
+   are functional bugs; they are noise-in-prod-devtools. Recommend stripping
+   before merge OR wrapping behind a debug flag.
+
+3. Salesforce Org Id case-sensitivity fidelity: responses persist client_org_id
+   in lowercase (`00dem00000v5erwmaz`) while Salesforce serves it in mixed
+   case (`00DEm00000V5eRWMAZ`). Current release normalizes at the launcher, so
+   no data is lost today, but downstream consumers passing the raw Id will get
+   empty reads unless they lowercase first (or the server compares
+   case-insensitive).
+
+4. Public general-survey endpoint returns the full survey object including
+   `audienceDetails` and `GSI1SK`. For an org-scoped survey this exposes the
+   targeted organization id to any anonymous client that guesses the context.
+   TR-157 called this Sev Low; no change today. Re-report only.
+
+Skipped checks (declared, not hidden)
+  · AC3 in-org E2E on Auctifera Giftshop and on VNFP with the RELEASE-DEPLOYED
+    package: the launcher aura in #2583 and the widget controller from #2234
+    are NOT deployed in either scratch. Server-side contract IS verified.
+    Closing this requires deploying the release branches to a fresh scratch,
+    or waiting for the released packages to land in a dev sandbox.
+
+Rollback steps
+  1. Merge revert: revert PRs #58, #2583, #2234 in reverse chronology; both
+     scratch installs will fall back to the pre-release package version by
+     the next `sfdx force:package:install`.
+  2. Bundle rollback for surveytool.dev: redeploy the previous
+     `index-<hash>.js` bundle by tagging the pre-#58 commit and re-running the
+     server deploy pipeline; the server is stateless with respect to survey
+     schema so no data migration needed.
+  3. Responses generated during the release DO persist through the rollback
+     (they are just rows in the response table with the release's contract);
+     the CSV export still reads them by exact column names.
+
+------------------------------------------------------------------------------
+Verdict for the release gate
+------------------------------------------------------------------------------
+
+QA verdict at TR-158 close: 10/13 PASS + 1 PARTIAL PASS + 1 FAIL (preexisting,
+IM-1185) + 1 PASS (this dossier itself, AC14). 0 not-run.
+
+The FAIL is NOT introduced by this release (proven by byte-identical
+`features.ts` on main vs staging today). The release DOES NOT worsen the
+existing situation on AC8/AC9/AC10 in after-login mode. Merge decision is the
+team's, not QA's — bringing IM-1185 to Ready/In Progress before or after the
+merge is a policy call, not a technical block.
