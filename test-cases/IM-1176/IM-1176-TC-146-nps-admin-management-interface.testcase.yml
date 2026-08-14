@@ -1,0 +1,202 @@
+schemaVersion: "1.0"
+
+id: 47b2862c-683d-4e2c-8564-34218193ae09
+key: "TC-146"
+title: "NPS Survey Tool admin — Organizations sort/env-actions + Survey/Subject guided forms + Dashboard/Responses filters/CSV + Sync page removed"
+description: |
+  Cobertura QA para IM-1176 (Improve NPS admin management interface), del epic IM-970
+  NPS Survey Tool delivery. QA Sub-task: IM-1194.
+
+  El objetivo del ticket es reducir fricción en el workspace admin del Survey Tool:
+  organizations sortable con acciones condicionales por entorno; sample data en dev
+  utilizable como audiencia de encuestas; formularios guiados de survey y subject
+  (con validación de path); Dashboard Summary + Responses con summary responsive,
+  filtros, sorting, pagination, detalle y export CSV; página obsoleta de Sync
+  eliminada.
+
+  Repo en scope: `survey-tool`. Branch primaria: `feature/admin-ui-improvements`.
+  Este TC valida SOLO las mejoras de admin UI — la sincronización con Salesforce
+  ya está cubierta por IM-1165 / TC-145.
+
+  PRs (5 en el bundle):
+  · #56 MERGED (2026-08-12) `feature/admin-ui-improvements → develop` — mejoras admin iniciales
+  · #57 MERGED (2026-08-13) `develop → staging` — primer promote
+  · #59 MERGED (2026-08-13) `story/refine-admin-forms-and-organizations-IM-1176 → develop` — refinements
+  · #60 MERGED (2026-08-13) `develop → staging` — refinements a staging
+  · #58 OPEN                `staging → main` — promote a producción (pendiente)
+
+  IM-1176 está deployed a staging pero NO a producción todavía. Ejecutar QA contra
+  stg + dev; prd queda para post-merge del #58.
+
+  Riesgos abiertos:
+  · #58 (production promote) sigue OPEN — validar en prd solo tras merge.
+  · Sample data en dev debe ser reversible / no contaminante — verificar que "Load
+    sample data" no afecta stg ni prd.
+  · Dashboard responsive + CSV export son áreas grandes con muchos edge cases;
+    priorizar coverage funcional sobre exhaustividad de estilos.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-14T17:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-14T17:00:00Z"
+  version: 1
+  parentIssue: "IM-1176"
+  qaSubTask: "IM-1194"
+  epic: "IM-970"
+  reposInScope:
+    - "survey-tool"
+
+type: functional
+priority: medium
+status: active
+format: gherkin
+estimatedDurationMinutes: 180
+
+tags:
+  - im-1176
+  - im-970
+  - im-1194
+  - survey-tool
+  - admin-ui
+  - nps
+  - organizations
+  - surveys
+  - subjects
+  - dashboard
+  - responses
+  - csv-export
+
+preconditions:
+  - "Acceso admin al Survey Tool en stg (`https://surveytool.stg.veevart.ai/admin/*`) y dev (`https://surveytool.dev.veevart.ai/admin/*`) via Google SSO. Producción queda para post-merge del PR #58."
+  - "Al menos 1 organization sincronizada, 1 organization manual, 1 survey general (isGeneralSurvey=true) y 1 survey feature-scoped, y 1 subject/feature con path válido, disponibles en dev para probar los flujos."
+  - "Repo `Veevarts/survey-tool` clonado localmente en el HEAD de las ramas dev/staging para consultar código si hay dudas de UX/behavior."
+
+scenarios:
+  - title: "IM-1176 AC1 — Organizations table sortable headers + environment-conditional actions (prd Sync SF · dev Load sample · stg neither)"
+    tags:
+      - ac-1
+      - happy-path
+      - organizations
+      - env-conditional
+    given: |
+      Given un admin autenticado en Survey Tool con acceso a la ruta `/admin/organizations`
+      And existen múltiples organizaciones para observar sorting (>= 3 filas)
+    when: |
+      When se abre `/admin/organizations` en dev, en stg y en prd (post-merge #58)
+      And se hace click en cada encabezado de columna soportada (Name, Identifier, Source, Status)
+      And se inspeccionan los botones de acción del top-bar en cada entorno
+    then: |
+      Then las columnas Name/Identifier/Source/Status son sortables (asc/desc/none con indicador visual) en los 3 entornos
+      And en dev el botón visible es "Load sample data" (para poblar organizaciones de prueba)
+      And en prd el botón visible es "Sync Salesforce" (para disparar la sincronización con el catálogo SF)
+      And en stg NO aparece ninguno de esos dos botones (staging usa datos productivos, no requiere sync manual ni sample)
+      And "New organization" está presente en los 3 entornos (comportamiento no-env-específico)
+
+  - title: "IM-1176 AC2 — Development sample organizations are available as audience options when creating an organization-targeted survey"
+    tags:
+      - ac-2
+      - happy-path
+      - dev
+      - sample-data
+      - audience
+    given: |
+      Given un admin en dev que acaba de disparar "Load sample data" y observa >0 orgs con source=sample (o marca equivalente)
+    when: |
+      When crea un nuevo survey desde `/admin/surveys` y elige audience "organization"
+      And abre el selector de organizaciones destino
+    then: |
+      Then el selector lista las organizaciones sample cargadas en dev (además de las que ya existían en la tabla organizations)
+      And el survey creado guarda referencias válidas a esas orgs sample
+      And ninguna de las orgs sample se persiste en stg ni en prd (verificar tabla `organizations` de esos entornos post-flujo)
+      And limpiar las orgs sample con la acción prevista (si existe) o dejar `not-run` con nota si es one-way
+
+  - title: "IM-1176 AC3 — Survey create form presents a guided workflow; general surveys expose only after-login trigger and require a valid delay"
+    tags:
+      - ac-3
+      - happy-path
+      - surveys
+      - guided-form
+    given: |
+      Given un admin en `/admin/surveys/new` (o el modal equivalente)
+    when: |
+      When configura audience, timing y contenido del survey en el flujo guiado
+      And marca "General survey" (isGeneralSurvey=true)
+    then: |
+      Then el formulario presenta secciones progresivas (guided workflow: audience → timing/trigger → question(s) → save)
+      And al marcar General survey, el selector de trigger muestra ÚNICAMENTE la opción "after-login" (los demás triggers están ocultos o deshabilitados)
+      And el campo `accountCreatedDelayDays` es requerido para general surveys (submit sin valor → rechazo con mensaje claro)
+      And un delay válido (>= 0) permite el save; -1 o vacío rechaza el submit
+      And el save crea el survey y redirige al listado con feedback visible
+
+  - title: "IM-1176 AC4 — Subject create/edit form groups related fields, validates the path, and presents a clear save workflow"
+    tags:
+      - ac-4
+      - happy-path
+      - subjects
+      - validation
+    given: |
+      Given un admin en `/admin/features/new` (o el modal equivalente para subjects/features)
+    when: |
+      When llena los campos de identidad (name, slug, product owner, version) y de survey path
+      And prueba paths inválidos (vacío, con caracteres no permitidos, con espacios) y un path válido
+    then: |
+      Then los campos aparecen agrupados por sección (Identity, Survey path, Ownership, etc.) con encabezados o separadores visuales
+      And el input de path valida el formato en client-side (regex/patrón documentado) y muestra error claro para paths inválidos
+      And el server rechaza también los paths inválidos (defense in depth via `POST /api/admin/features` con `slug` incorrecto → 400)
+      And un path válido permite el save y redirige al listado con feedback
+      And editar un subject existente reusa la misma UX y no regresa a formularios legacy
+
+  - title: "IM-1176 AC5-a — Obsolete Sync page is unavailable in navigation and via direct URL"
+    tags:
+      - ac-5
+      - happy-path
+      - navigation
+      - regression
+    given: |
+      Given un admin autenticado en cualquier entorno (dev, stg, prd post-merge)
+    when: |
+      When inspecciona la navegación lateral / top-nav del admin
+      And navega directamente a la ruta legacy `/admin/sync` (o el path que la Sync page tenía)
+    then: |
+      Then el link "Sync" NO aparece en la navegación
+      And la ruta directa devuelve 404 o redirige a la pantalla principal (`/admin` o `/admin/dashboard`) sin errores en consola
+      And ningún otro flujo del admin depende de la Sync page eliminada
+
+  - title: "IM-1176 AC5-b — Dashboard Summary is responsive and exposes filtering + sorting + pagination"
+    tags:
+      - ac-5
+      - happy-path
+      - dashboard
+      - responsive
+    given: |
+      Given un admin en `/admin/dashboard` (o equivalente) con datos suficientes para observar >= 25 responses o >= 3 surveys
+    when: |
+      When redimensiona la ventana a viewport mobile (375px) y desktop (>=1200px)
+      And aplica filtros disponibles (por survey, por fecha, por productOwner, por org, por status de respuesta según lo que exponga)
+      And ordena por columnas soportadas
+      And navega entre páginas
+    then: |
+      Then el layout se adapta sin overflow horizontal en mobile
+      And los filtros filtran correctamente (verificar count antes/después)
+      And el sorting reordena las filas visibles según la columna
+      And la pagination avanza y muestra los indicadores de page X of Y
+      And ninguno de estos controles genera errores en consola (network 200 + no unhandled exceptions)
+
+  - title: "IM-1176 AC5-c — Responses page shows response detail + CSV export retains dashboard filters"
+    tags:
+      - ac-5
+      - happy-path
+      - responses
+      - csv-export
+    given: |
+      Given un admin en `/admin/responses` con >= 3 responses de al menos 2 surveys distintos
+    when: |
+      When abre el detalle de una response individual (click en la fila o botón "View")
+      And aplica filtros (survey, product owner, clientOrgId, fecha)
+      And usa "Export CSV" con los filtros aplicados
+    then: |
+      Then el detalle muestra todas las columnas de una response (score, comments, custom answers, respondentId, org, timestamps)
+      And el CSV descargado respeta los filtros aplicados (solo responses que matcheen)
+      And el header del CSV coincide con el schema documentado (survey_type, feature_id, feature_name, feature_slug, product_owner, ..., custom_answers)
+      And el filename del CSV incluye timestamp o range para trazabilidad
