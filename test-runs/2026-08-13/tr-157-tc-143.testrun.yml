@@ -2,7 +2,7 @@ schemaVersion: "1.0"
 
 id: tr-baed721e-f02d-4c00-8b93-5c3c9243ba66
 key: TR-157
-title: "TR-157 · IM-969 · TC-143 · Compuerta de release NPS — 7/13 PASS · 1 FAIL · 5 not-run · DEFECTO IM-1185: en modo after-login las impresiones y dismissals se rechazan con 400, así que maxImpressions y maxDismissals no pueden dispararse en la entrega que este release ships"
+title: "TR-157 · IM-969 · TC-143 · Compuerta de release NPS — 7/13 PASS · 1 FAIL · 5 not-run · corrida INCOMPLETA · el FAIL de AC8/AC9 es real pero PREEXISTENTE (IM-1185, ya vivo en main); lo que sí introduce este release son 13 console.log en archivos que hoy están limpios en main"
 
 description: |
   QA de IM-969 (**Execute Museum Demo NPS release QA**), epic IM-970 NPS Survey Tool delivery.
@@ -31,7 +31,7 @@ description: |
   (`index-BjPoAuUb.js`, md5 `2905d53660127f3178c6e77eb859a889`) y no contiene
   `Load sample data`. **Validar en dev SÍ valida el release candidate.**
 
-  ## El hallazgo que decide el release — IM-1185
+  ## El hallazgo de comportamiento — IM-1185, y por qué NO decide el release
 
   Para una General Survey en modo **after-login**, los eventos de **impresión** y **dismissal**
   se rechazan con **400** `surveyId is not eligible for this feature context`. Como nunca se
@@ -46,6 +46,16 @@ description: |
   | `afterLogin` | **400** | **400** | quedan en 0 |
   | `featureTrigger` | **201** | **201** | suben correctamente |
 
+  **⚠️ ATRIBUCIÓN CORREGIDA — esto es PREEXISTENTE.** `server/src/routes/features.ts` es
+  **byte-idéntico entre `main` y `staging`** (20 601 bytes en ambos), `validateSurveyEvent` no
+  tiene una sola línea de diferencia y el PR "#58" **ni siquiera toca ese archivo**. El 400 ya
+  está vivo en producción. **No es una regresión de este release y no debería frenar el merge**
+  de los tres PRs — el release no empeora la situación.
+
+  QA reportó esto inicialmente como bloqueante de release sin haber contrastado antes contra
+  `main`, que es justo el paso que el flujo exige. El hallazgo es válido; la urgencia era errónea
+  y quedó corregida en IM-1185.
+
   Causa: `routes/features.ts` → `validateSurveyEvent()` valida con
   `selectEligibleSurveysForFeature`, el camino de **feature**, que excluye por diseño las
   generales after-login (la separación de modos de IM-966, que QA verificó como correcta).
@@ -56,11 +66,24 @@ description: |
 
   ## Riesgo de release que sigue vigente
 
-  El PR de NFPFundraising hacia `main` mantiene los **20 `console.log`** con distribución
-  idéntica a la que midió TR-147 el 2026-07-30. Uno vuelca la URL de eligibility —con
-  `clientOrgId`, `respondentId` y `userCreatedDate`— a la consola del usuario final.
-  **IM-968 sigue en `Rechazado` por esto** y el código va igual a `main`. AuctiferaDX "#2583"
-  agrega solo 3. El lint no lo atrapa: `eslint --print-config` sobre `npsWidget.js` devuelve
+  **Esto SÍ lo introduce el release, y contrastado contra `main`.** El "#2234" agrega
+  **20 `console.log`**, y el desglose importa:
+
+  | archivo | ¿existe en `main`? | `console.log` en `main` | añade el PR |
+  | --- | --- | --- | --- |
+  | `npsWidget.js` | no, es nuevo | — | 7 |
+  | `PaymentHelper.js` | sí | **0** | 4 |
+  | `ExhibitionWizardHelper.js` | sí | **0** | 4 |
+  | `PaymentController.js` | sí | **0** | 2 |
+  | `JournalEntryUpdateController.js` | sí | **0** | 1 |
+  | `BoxMembershipDonationHelper.js` | sí | **0** | 1 |
+  | `PaymentAssignmentHelper.js` | sí | 2 | +1 |
+
+  **13 de los 20 entran en archivos que hoy viven limpios en `main`.** Eso es una regresión de
+  higiene sobre código productivo existente, no "una feature nueva que trae logs". Uno de los 7
+  del archivo nuevo vuelca la URL de eligibility —con `clientOrgId`, `respondentId` y
+  `userCreatedDate`— a la consola del usuario final. **IM-968 sigue en `Rechazado` por esto** y
+  el mismo código va ahora a `main`. AuctiferaDX "#2583" agrega solo 3. El lint no lo atrapa: `eslint --print-config` sobre `npsWidget.js` devuelve
   0 reglas activas y el script no cubre `payments` ni `ticketing`.
 
   ## Alcance que el veredicto NO cubre
@@ -354,9 +377,18 @@ results:
       entrega central de este release— no puede cortar nunca. Un usuario podría descartar el
       modal indefinidamente y volver a verlo en cada login.
 
+      **⚠️ ATRIBUCIÓN — el FAIL es del producto, NO de este release.** `routes/features.ts` es
+      byte-idéntico entre `main` y `staging` (20 601 bytes), `validateSurveyEvent` no cambia una
+      línea y el "#58" no toca ese archivo. El comportamiento **ya está vivo en producción**. El
+      AC sigue sin cumplirse, así que el veredicto del escenario es FAIL; pero no es una
+      regresión y **no debería frenar el merge de los tres PRs**.
+
+      QA reportó esto inicialmente como bloqueante sin haber contrastado antes contra `main` —el
+      paso pre/post que el propio flujo exige— y lo corrigió después en IM-1185.
+
       **RESET DE PERÍODO: no ejercitado.** Depende del paso del tiempo real (30/90/180/365 días
       según `Repeat window`) y no es observable en la ventana de ejecución. Se declara.
-    notes: "Defecto IM-1185, severidad High, asignado a David y enlazado como Blocks IM-969. El aislamiento que se le había pedido al dev —confirmar que el rechazo es específico del modo after-login— quedó CERRADO POR QA con la tabla de arriba. Comentado además en survey-tool #58 y NFPFundraising #2234."
+    notes: "Defecto IM-1185, severidad High. El aislamiento que se le había pedido al dev —confirmar que el rechazo es específico del modo after-login— quedó CERRADO POR QA con la tabla de arriba. ATRIBUCIÓN CORREGIDA: es deuda PREEXISTENTE, ya viva en main, no una regresión de este release; el vínculo Blocks contra IM-969 debería desvincularse y el defecto colgarse de la historia dueña del comportamiento. Corrección publicada en IM-1185 y en los comentarios de survey-tool #58 y NFPFundraising #2234."
     stepResults: []
     defects:
       - jiraKey: "IM-1185"
@@ -561,16 +593,17 @@ metadata:
   epic: "IM-970"
   prsUnderTest: "survey-tool #58 (staging->main, OPEN) · AuctiferaDX #2583 (->main, OPEN) · NFPFundraising #2234 (->main, OPEN)"
   changeType: "mixed — backend/API Node + admin UI React + Salesforce Aura/LWC/Apex en dos paquetes"
-  verdict: "7/13 PASS · 1 FAIL · 5 not-run. Corrida INCOMPLETA y declarada como tal. El FAIL es de release: en modo after-login las impresiones y dismissals se rechazan con 400, asi que maxImpressions y maxDismissals no pueden dispararse en la entrega que este release ships."
+  verdict: "7/13 PASS · 1 FAIL · 5 not-run. Corrida INCOMPLETA y declarada como tal. El FAIL de AC8/AC9 es real —en after-login las impresiones y dismissals se rechazan con 400 y los limites no pueden dispararse— pero es PREEXISTENTE: routes/features.ts es byte-identico entre main y staging y el #58 no toca ese archivo. No es regresion del release y no deberia frenar el merge. Lo que SI introduce el release son 13 console.log en archivos que hoy viven limpios en main, que es el motivo que sostiene el rebote."
   paso0: "dev y stg sirven el MISMO bundle byte-identico index-9Qd0lrHV.js md5 b98573f7941dba1270ad378d0aad79ed 362440B. prd sirve index-BjPoAuUb.js md5 2905d53660127f3178c6e77eb859a889 359509B y no contiene 'Load sample data'. Validar en dev SI valida el release candidate."
   isolationClosed: "El aislamiento que se le pidio al dev en IM-1185 lo cerro QA: misma survey, mismos endpoints, mismo contexto; con generalTrigger=afterLogin los recorders dan 400 y los contadores quedan en 0, con featureTrigger dan 201 y suben. El rechazo es especifico del modo after-login."
+  defectAttribution: "IM-1185 es PREEXISTENTE. server/src/routes/features.ts es byte-identico entre main y staging (20601 bytes en ambos), validateSurveyEvent no cambia una linea y el PR #58 no toca ese archivo. QA lo reporto primero como bloqueante de release sin haber hecho el contraste pre/post contra main; corregido despues en IM-1185 y en los dos comentarios de PR."
   suitesRun: "survey-tool staging 7324044: server 73/73 + client 32/32 = 105/105, 0 fail. Baseline TR-148 era 93."
   revertProof: "Revertir server/src a main con los tests de staging tumba dynamodbStore.test.ts y apiBoundary.test.ts. Revertir client/src tumba surveyDisplayRules.test.ts. Guards load-bearing."
-  releaseRisk: "NFPFundraising #2234 hacia main mantiene los 20 console.log medidos en TR-147 (7 npsWidget.js, 4 ExhibitionWizardHelper, 4 PaymentHelper, 2 PaymentController, 1+1+1). Uno vuelca la URL de eligibility con clientOrgId, respondentId y userCreatedDate a la consola del usuario final. IM-968 sigue en Rechazado por esto. AuctiferaDX #2583 agrega solo 3. El lint no lo atrapa: eslint --print-config sobre npsWidget.js devuelve 0 reglas activas y el script no cubre payments ni ticketing."
+  releaseRisk: "ESTO SI lo introduce el release, contrastado contra main. El #2234 agrega 20 console.log y el desglose importa: npsWidget.js es archivo NUEVO (7); pero PaymentHelper, ExhibitionWizardHelper, PaymentController, JournalEntryUpdateController y BoxMembershipDonationHelper YA EXISTEN en main con CERO console.log y el PR les agrega 12; PaymentAssignmentHelper tiene 2 en main y le agrega 1. O sea 13 de los 20 entran en archivos que hoy viven limpios en main: es regresion de higiene sobre codigo productivo existente, no una feature nueva que trae logs. Uno de los 7 del archivo nuevo vuelca la URL de eligibility con clientOrgId, respondentId y userCreatedDate a la consola del usuario final. IM-968 sigue en Rechazado por esto. AuctiferaDX #2583 agrega solo 3. El lint no lo atrapa: eslint --print-config sobre npsWidget.js devuelve 0 reglas activas y el script no cubre payments ni ticketing."
   scopeGap: "La scratch de VNFP tiene desplegado un paquete ANTERIOR al #2234: vnfp.NpsWidgetController.getOrganizationId() no compila y el iframe del after-login sale sin salesforceOrgId. El PASS parcial del AC3 vale para el contrato vigente en la org, NO para el del release. Esa org expira el 2026-08-14."
   secondaryFindings: "(1) El gate 409 es mas amplio de lo documentado: una General activa con audiencia global bloquea crear otra activa incluso si es organization-scoped. (2) respondent-state devuelve reason='general_client_org_missing' para generales org-scoped porque no recibe contexto de organizacion, incluso cuando la survey SI se entrega; la causa solo se distingue por contadores. (3) La respuesta persiste clientOrgId lowercased y no conserva salesforceOrgId como campo propio. (4) Vigente desde TR-146: el endpoint publico devuelve audienceDetails y GSI1SK, o sea la lista de organizaciones objetivo, a clientes anonimos."
   environmentState: "NADA BORRADO por decision del dueno de la historia: las surveys de prueba son evidencia. La General del entorno (id 1) quedo RESTAURADA A ACTIVA con su configuracion original. La QA TC-143 (id 2) queda presente e INACTIVA. La respuesta id 1 generada por QA se conserva. Organizations Auctifera (00DEm00000V5eRWMAZ, Salesforce Org ID) y VNFP (flow-site-19432-dev-ed, Subdomain), ambas activas."
-  qaSelfCorrections: "Tres sondas de QA salieron mal y se descartaron antes de emitir veredicto: (1) mandar el Org Id dentro de clientOrgId, que devolvia [] para Auctifera; (2) esperar el patron de triesBetweenShows en 0-based cuando es 1-based; (3) una primera tanda de AC8/AC9/AC10 corrida sobre POSTs que devolvian 400 sin advertirlo, cuya conclusion sobre AC10 fue un artefacto. Las tres se rehicieron."
+  qaSelfCorrections: "CUATRO correcciones. La mas grave: se reporto IM-1185 como bloqueante de release sin contrastar contra main; al hacerlo despues resulto PREEXISTENTE, y ademas el primer intento de esa comparacion dio IDENTICO sobre dos archivos VACIOS porque la ruta estaba mal (se detecto por md5 d41d8cd9, hash de cadena vacia). Las otras tres son sondas que se descartaron antes de emitir veredicto: (1) mandar el Org Id dentro de clientOrgId, que devolvia [] para Auctifera; (2) esperar el patron de triesBetweenShows en 0-based cuando es 1-based; (3) una primera tanda de AC8/AC9/AC10 corrida sobre POSTs que devolvian 400 sin advertirlo, cuya conclusion sobre AC10 fue un artefacto. Las tres se rehicieron."
   notCovered: "AC1 persistencia por UI del admin. AC3 con captura paso a paso y la mitad Auctifera Giftshop. AC11 re-consulta en secuencia. AC12 Summary, detalle y export CSV. AC14 dossier y pasos de rollback. Scan OWASP Top 10. Suites sfdx-lwc-jest de los dos paquetes y validacion de los permission sets del #2583."
 
 history:
