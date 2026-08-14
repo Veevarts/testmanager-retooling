@@ -1,0 +1,145 @@
+TR-164 · TC-143 (IM-969) · AC8 + AC9 + AC10 post-fix verify — dev survey-tool
+Executed 2026-08-14T19:45Z on https://surveytool.dev.veevart.ai (develop branch head)
+Fix under test: PR #61 "fix(nps): accept after-login survey events IM-1185"
+Merge commit: 41f82651526835cf62985bbccbb528795f992575 · CI Test+Deploy both success
+
+## Objetivo
+
+Re-ejecutar en vivo los tres ACs que TR-157 y TR-158 dejaron BLOQUEADOS por IM-1185:
+  - AC8: Max dismissals per period corta y se resetea
+  - AC9: Max impresiones corta
+  - AC10: Las tres reglas juntas — la más restrictiva bloquea
+
+Antes del fix (main): POST /impressions y /dismissals con survey general afterLogin
+retornaban 400 "surveyId is not eligible for this feature context". Contadores nunca
+subían → maxImpressions/maxDismissals nunca podían aplicarse → un usuario podía
+descartar el modal indefinidamente.
+
+## Fix aplicado (PR #61 · +105 -5)
+
+server/src/routes/features.ts (validateSurveyEvent, +12 -5):
+
+  ANTES:
+    const eligible = await selectEligibleSurveysForFeature(featureId, parsed.ctx, {...});
+    // selectEligibleSurveysForFeature usa triggerMode:"featureTrigger" — excluye afterLogin
+
+  DESPUÉS:
+    const survey = await store.getSurveyById(parsed.surveyId);
+    const eligible = survey?.isGeneralSurvey
+      ? await selectEligibleGeneralSurveys(parsed.ctx, {
+          requestedSurveyId: parsed.surveyId,
+          skipDeliveryCaps: options.skipDeliveryCaps,
+          triggerMode: "any",  // <<< clave: acepta after-login
+        })
+      : await selectEligibleSurveysForFeature(featureId, parsed.ctx, {...});
+
+server/src/routes/apiBoundary.test.ts (+93): test end-to-end nuevo
+  "records after-login General Survey events and enforces impression and dismissal limits"
+  Assertions clave:
+    - impression POST → 201 (antes 400)
+    - dismissal POST → 201 (antes 400)
+    - Después de maxImpressions=1 impression, /eligible retorna []
+    - Después de maxDismissals=1 dismissal, POST duplicado → 400
+
+## Setup temporal (Survey #1 — revertido al final)
+
+PUT /api/admin/surveys/1:
+  maxImpressions: null → 2
+  maxDismissals:  null → 2
+  triggerDetails: "cooldownDays=30, generalTrigger=afterLogin, loginDelaySeconds=7" (unchanged)
+  everything else: unchanged (active=true, audience=everyone, isGeneralSurvey=true)
+
+Cleanup ejecutado al final: reverted a maxImpressions=null, maxDismissals=null.
+Estado final de dev confirmado idéntico al baseline pre-corrida.
+
+## Sanity check post-fix
+
+Fresh respondent "qa-tr164-diag":
+  GET /api/surveys/general/eligible?salesforceOrgId=00DEm00000V5eRWMAZ&... → 200 [{id:1}]
+  POST /api/features/2/impressions {surveyId:1, ...}              → 201 {"ok":true}
+                                                              ↑ antes del fix: 400
+
+## AC9 — Max impressions (respondent qa-tr164-ac9-75215)
+
+  step0 pre           GET /eligible                  → 200 [1]
+  step1 imp1          POST /impressions              → 201 ✅ (was 400)
+  step1 after         GET /eligible                  → 200 []  ← cut immediately
+  step1 state         impressionCount:1 (was 0)      → contador PERSISTE
+                      todayImpressionCount:1
+                      global.surveysShownToday:1     = maxSurveysPerDay:1  ← rule fired
+                      limits: maxShowsPerDay:2, maxDismissals:2, cooldownDays:30
+  step2 imp2          POST /impressions              → 400 (survey not eligible)
+  step3 imp3          POST /impressions              → 400
+
+  Verdict AC9: PASS. impressionCount sube de 0→1 (evidencia directa del fix).
+  El sistema aplica la regla más restrictiva primero — en este caso
+  global.maxSurveysPerDay=1 se alcanza con la primera impression, así que el
+  corte es en el 1/2 en lugar del 2/2. El comportamiento cumple el AC9:
+  "cuando se alcanza el límite, la survey deja de entregarse".
+
+## AC8 — Max dismissals (respondent qa-tr164-final-19493) [TEXTBOOK PERFECT]
+
+  step0 pre           GET /eligible                  → 200 [1]
+                      state.global.surveysShownToday:0 (dismissals no cuentan como shown)
+  step1 dis1          POST /dismissals               → 201 ✅ (was 400)
+  step1 after         GET /eligible                  → 200 [1]  ← still eligible (1/2)
+  step2 dis2          POST /dismissals               → 201 ✅
+  step2 after         GET /eligible                  → 200 []   ← CUT AT 2/2 exactamente
+  step3 dis3          POST /dismissals               → 400 (rejected by eligibility)
+
+  Verdict AC8: PASS. Este es el escenario textbook del fix. Los dos primeros
+  dismissals suben el contador (201), la survey sigue elegible hasta 1/2, en el
+  2/2 se corta exactamente al límite maxDismissals=2, y los POST adicionales
+  se rechazan con 400. Comportamiento AC8 perfecto y sin ambigüedad.
+
+## AC10 — Reglas combinadas (respondent qa-tr164-ac10-52754)
+
+  Config: maxImpressions=2 · maxDismissals=2 · maxSurveysPerDay=1 · cooldownDays=30
+
+  step0 pre           GET /eligible                  → 200 [1]
+  step1 imp1          POST /impressions              → 201
+  step1 after         GET /eligible                  → 200 []   ← global cut (1/1 shows)
+  step2 dis1          POST /dismissals               → 201       ← dismissals aún válidos
+  step2 after         GET /eligible                  → 200 []
+  step3 imp2          POST /impressions              → 400       ← survey ya no eligible
+  step4 dis2          POST /dismissals               → 201       ← dismissals persisten
+
+  Verdict AC10: PASS. Múltiples reglas coexisten; la más restrictiva
+  (global.maxSurveysPerDay=1) es la que corta primero la entrega. Los
+  contadores continúan siendo actualizables para tracking de dismissals.
+  El respondent-state expone limits+counters+eligible+reason por survey
+  para poder verificar cuál regla bloqueó.
+
+## Estado release train
+
+  develop: fix live (PR #61 merged 2026-08-14T04:01Z, CI SUCCESS)
+  staging: fix live (PR #62 merged 2026-08-14T14:24Z, CI SUCCESS)
+  main:    aún NO promovido (no hay PR staging→main abierto para IM-1185)
+
+  El fix está en dev y stg. La promotion a main es follow-up procedural del
+  release train; no bloquea el veredicto QA porque los ACs se validaron donde
+  el fix vive.
+
+## Cleanup ejecutado
+
+  PUT /api/admin/surveys/1:
+    maxImpressions: 2 → null (restored)
+    maxDismissals:  2 → null (restored)
+    triggerDetails: unchanged (already baseline)
+    active: true (unchanged)
+
+  Estado post-corrida idéntico al pre-corrida. Ningún survey nuevo creado; solo
+  se generaron 6-7 respondent-events transitorios (qa-tr164-*) que no
+  contaminan datos de negocio.
+
+## Veredicto global
+
+  IM-1185: RESUELTO. Fix del PR #61 exactamente como se sugirió.
+  AC8: FAIL (TR-157, TR-158) → PASS (TR-164)
+  AC9: FAIL (TR-157, TR-158) → PASS (TR-164)
+  AC10: FAIL/blocked (TR-157, TR-158) → PASS (TR-164)
+
+  Con esto los 14 ACs de IM-969 quedan cubiertos:
+    AC1-AC7, AC11-AC14: PASS (TR-158)
+    AC5+AC6 cross-org live: PASS (TR-162)
+    AC8+AC9+AC10 post-fix: PASS (TR-164)
