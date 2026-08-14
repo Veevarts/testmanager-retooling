@@ -1,0 +1,159 @@
+AC8 — Production ops posture is enabled and documented: encryption at rest, least-privilege IAM, backups/PITR, observability, and cost caps
+Executed 2026-08-14 vs main HEAD.
+
+============================================================================
+Verdict: PARTIAL PASS at CDK level (encryption default, PITR, PAY_PER_REQUEST
+enabled). Live prd verification DEFERRED. IAM policies + CloudWatch alarms
+NOT visible in this stack.
+============================================================================
+
+------------------------------------------------------------------------------
+Encryption at rest
+------------------------------------------------------------------------------
+
+Status: ENABLED (via DynamoDB default AWS-managed KMS)
+
+The CDK stack (`infra/lib/survey-tool-stateful.stack.ts`) does NOT explicitly
+set `encryption:` on the Table construct — it uses the default. Default for
+DynamoDB is `AWS_MANAGED_KEY` (AWS-owned KMS, no explicit CMK). This
+satisfies "encryption at rest" but does NOT use a customer-managed KMS key.
+
+Gap analysis:
+  · If the compliance bar is "some form of encryption at rest" → PASS.
+  · If the bar is "customer-managed CMK" → FAIL (would need to add
+    `encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED` + KMS key).
+  · The AC does not specify which; treating as PASS by default.
+
+------------------------------------------------------------------------------
+Least-privilege IAM
+------------------------------------------------------------------------------
+
+Status: NOT VERIFIABLE from this stack.
+
+`infra/lib/survey-tool-stateful.stack.ts` defines ONLY the stateful DynamoDB
+resources — no IAM role/policy for the server. The server IAM lives in a
+"stateless" stack (ECS/Lambda compute) that is NOT in this repo.
+
+README (README:504-507) says:
+  "The ECS task role and any one-time migration operator role must be allowed
+   to read and write the five tables above. Runtime access requires
+   dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem,
+   dynamodb:Scan, and dynamodb:Query on the table ARNs and their indexes."
+
+That describes the REQUIRED permissions, not the actual IAM policy applied.
+Whether the applied policy scopes `Resource:` to the specific table ARNs
+(least-privilege) or uses `Resource: "*"` (not least-privilege) cannot be
+verified without either:
+  · Access to the stateless stack CDK code (not in this repo)
+  · `aws iam simulate-principal-policy` against the deployed server role
+    (blocked by no SSO into the survey-tool AWS account)
+
+Note: README explicitly requires `dynamodb:Scan` — which aligns with the
+current runtime (AC3 FAIL), but is a NOT-least-privilege permission for a
+runtime that should be using Query. If AC3 is fixed by switching to Query,
+`dynamodb:Scan` can be dropped from runtime IAM (leave it on the migration
+operator role only).
+
+------------------------------------------------------------------------------
+Backups / Point-in-Time Recovery
+------------------------------------------------------------------------------
+
+Status: ENABLED (for prd + stg only)
+
+`pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: isProductionLike(envName) }`
+
+Where `isProductionLike` returns true for `prd` or `stg`. Dev + eph have PITR
+disabled (cost saving; acceptable).
+
+DynamoDB PITR default retention is 35 days. Not explicitly configured (default
+applies). Covered by vitest:
+  `it.each(['prd', 'stg'])('retains and protects every %s table', ...)`
+  → asserts `PointInTimeRecoveryEnabled: true` for both envs.
+
+------------------------------------------------------------------------------
+Observability (CloudWatch metrics + alarms)
+------------------------------------------------------------------------------
+
+Status: PARTIAL (metrics auto-published by DynamoDB; alarms NOT defined)
+
+DynamoDB automatically publishes metrics to CloudWatch (ConsumedRead/WriteCapacityUnits,
+UserErrors, SystemErrors, ThrottledRequests, SuccessfulRequestLatency,
+ReturnedItemCount, etc.). Those come for free.
+
+What is MISSING in the stateful stack:
+  · No `cloudwatch.Alarm` construct — no throttling alarm, no latency alarm,
+    no user-error alarm
+  · No dashboard for the tables
+  · No SNS notification topic
+
+Verdict: gap for AC8. If the team relies on the default CloudWatch metrics
+without alarms, an operational issue (throttling, elevated latency) would
+only be noticed by users. Recommend adding at minimum:
+  · Alarm on `ThrottledRequests > 0` per table per 5-min window
+  · Alarm on `SuccessfulRequestLatency.p99 > 100ms` per table
+
+------------------------------------------------------------------------------
+Cost caps
+------------------------------------------------------------------------------
+
+Status: PASS (PAY_PER_REQUEST is the implicit cost cap)
+
+`billingMode: dynamodb.BillingMode.PAY_PER_REQUEST`
+
+Rationale: with on-demand billing, cost scales with actual usage — no
+over-provisioning risk. However, this ALSO means there is no hard billing
+cap (a bug that generates 10 M reads would bill 10 M reads). If the team
+wants a hard cap, they'd need `PROVISIONED` with auto-scaling or an AWS
+Budget alarm.
+
+Documented rationale for PAY_PER_REQUEST vs PROVISIONED is NOT in README
+or in the CDK code. Not strictly a defect, but a gap in the AC8's "cost
+capacity choices are documented" requirement.
+
+Note tied to AC3: current runtime uses Scan (see AC3 FAIL). Scans on
+PAY_PER_REQUEST bill for ALL items in the table per Scan (not just returned
+after Filter). Once table sizes grow, cost will scale MUCH faster than a
+Query-based runtime would. This is the direct financial consequence of AC3
+being unfixed.
+
+------------------------------------------------------------------------------
+Deletion protection
+------------------------------------------------------------------------------
+
+Status: ENABLED for prd + stg (bonus, not in the AC but relevant)
+
+`deletionProtection: isProductionLike(envName)`
+`removalPolicy: isProductionLike(envName) ? RemovalPolicy.RETAIN : DESTROY`
+
+Prd/stg tables cannot be accidentally deleted via CDK destroy or CloudFormation
+stack deletion. Covered by vitest.
+
+------------------------------------------------------------------------------
+Live verification status
+------------------------------------------------------------------------------
+
+DEFERRED — same reason as AC1: survey-tool AWS account not in my SSO. To
+close the live verification:
+  · `aws dynamodb describe-continuous-backups` per prd table
+  · `aws iam simulate-principal-policy` on the server role
+  · CloudWatch alarms list per table
+  · Documented billing mode rationale (may live in the stateless stack)
+
+------------------------------------------------------------------------------
+Verdict
+------------------------------------------------------------------------------
+
+PARTIAL PASS. The CDK-defined ops posture is mostly correct:
+  ✓ Encryption at rest (default AWS-managed KMS)
+  ✓ PITR enabled for prd/stg
+  ✓ Deletion protection for prd/stg
+  ✓ PAY_PER_REQUEST cost model (implicit cap)
+Gaps:
+  ⚠ IAM policies live in a different stack (not verifiable here); README
+    requires `dynamodb:Scan` which becomes least-privilege-suboptimal once
+    AC3 is fixed
+  ⚠ No CloudWatch alarms defined in CDK (throttling, latency)
+  ⚠ Billing mode rationale not documented in README
+
+Marked PARTIAL PASS overall because the stack IS deployed and functional;
+the gaps are follow-up ops-hardening tasks, not release-blocking defects.

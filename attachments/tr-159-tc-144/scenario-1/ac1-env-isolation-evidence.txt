@@ -1,0 +1,73 @@
+AC1 — Prod persistence uses only its configured DynamoDB tables and never mixes with dev/test data
+Executed 2026-08-14 vs main HEAD.
+
+------------------------------------------------------------------------------
+Code-level evidence (README + resource-naming.ts + app.ts + stateful stack)
+------------------------------------------------------------------------------
+
+1. `SURVEY_TOOL_ENV` is intentionally SEPARATE from `NODE_ENV` (README:259).
+   Accepted values: `development | staging | production`. The Docker image always
+   runs with `NODE_ENV=production`.
+
+2. Env vars per table (README:482-486):
+     SURVEY_TOOL_SURVEYS_TABLE_NAME       or  SURVEYS_TABLE_NAME
+     SURVEY_TOOL_RESPONSES_TABLE_NAME     or  RESPONSES_TABLE_NAME
+     SURVEY_TOOL_RESPONDENT_STATE_TABLE_NAME or RESPONDENT_STATE_TABLE_NAME
+     SURVEY_TOOL_ORGANIZATIONS_TABLE_NAME or  ORGANIZATIONS_TABLE_NAME
+     SURVEY_TOOL_SETTINGS_TABLE_NAME      or  SETTINGS_TABLE_NAME
+
+3. Naming convention (infra/lib/resource-naming.ts):
+     `veev-<region-code>-<env>-<domain>-[<suffix>-]<app>`
+     region codes: ue1, ue2, uw1, uw2, ew1, ew2, ec1, as1, as2, an1, cc1
+     envs: eph | dev | stg | prd (strictly limited, no aliases)
+     domain: `survey-tool`
+     apps: surveys, responses, respondent-state, organizations, settings
+   Prd expected names (us-east-1):
+     veev-ue1-prd-survey-tool-surveys
+     veev-ue1-prd-survey-tool-responses
+     veev-ue1-prd-survey-tool-respondent-state
+     veev-ue1-prd-survey-tool-organizations
+     veev-ue1-prd-survey-tool-settings
+
+4. Prd protection (infra/bin/app.ts):
+     · `terminationProtection: true` when envName is prd|stg
+     · stackSuffix REJECTED for prd|stg ("only allowed for env=eph|dev")
+
+5. Alias rejection (resource-naming.ts + spec):
+     `parseVeevartEnv('prod')` THROWS: "Invalid CDK context 'env' value 'prod'.
+     Expected one of: eph|dev|stg|prd. Use 'prd' for production; aliases such
+     as 'prod' are intentionally rejected."
+   Covered by vitest: `it('rejects unsupported environment aliases before synthesis')`.
+
+Verdict at code level: PASS.
+
+------------------------------------------------------------------------------
+Live check status
+------------------------------------------------------------------------------
+
+Ran `aws --profile veevart-tooling --region us-east-1 dynamodb list-tables`
+against the tooling account (287043460717). Result: NO tables containing
+`survey-tool` found (see aws-list-tables.json). Tried us-east-2, us-west-2,
+eu-west-1 — all empty.
+
+The tooling account has 25+ tables (MigrationApp, SalesRooms, VeevartHub,
+release-manager, sf-package-pusher, etc.) but the survey-tool tables are
+NOT there.
+
+Interpretation: the survey-tool AWS account is separate from the tooling
+account. My local SSO config only lists `veevart-tooling` (Administrator on
+287043460717) and `veevart-logs` (AdminCloudWatch on 756575401676). Neither
+appears to host survey-tool.
+
+Live cross-env check is therefore DEFERRED to a session with SSO into the
+survey-tool AWS account. The CDK-code + vitest verification (AC2) is strong
+evidence that the naming/isolation logic is correct — the live listing would
+only confirm the applied stack matches synth.
+
+Verdict: PASS at code level (documented and vitest-covered). Live confirmation
+DEFERRED to a session with survey-tool AWS SSO configured.
+
+------------------------------------------------------------------------------
+Files
+------------------------------------------------------------------------------
+  · aws-list-tables.json — output of list-tables in tooling account

@@ -1,0 +1,34 @@
+OWASP Top 10 (2021) applicability scan — TR-159 / IM-1147 DynamoDB migration
+Executed 2026-08-14.
+Surfaces: survey-tool #35 (CDK infra, 14 files +3049/-0) + #45 (runtime, 27 files +2177/-4851)
++ promotion PRs #48/#49/#51/#52 (mechanical).
+
+| ID  | Risk                        | Applicable | Check method                                       | Verdict | Evidence / Justification |
+|-----|-----------------------------|------------|----------------------------------------------------|---------|--------------------------|
+| A01 | Broken Access Control       | Yes        | Cross-env write isolation + admin/public split.    | PASS | Env naming forces separate tables per env; alias rejection prevents accidental prd deploy from dev config. Public routes remain 200 anonymous; admin routes remain 401 anonymous (TR-158 evidence, no code changed in auth this PR). |
+| A02 | Cryptographic Failures      | Yes        | Encryption at rest + KMS choice + TLS.             | PASS | DynamoDB default AWS-managed KMS at rest; AWS SDK v3 uses TLS 1.2+ by default. No credential material in the diff. |
+| A03 | Injection                   | Yes        | DynamoDB adapter for expression-attribute injection. | PASS | `dynamodbStore.ts` uses parametrized `ExpressionAttributeValues` (`:entityType`, `:slug`, `:featureId`, etc.) — no user input concatenated into KeyConditionExpression or FilterExpression. |
+| A04 | Insecure Design             | Yes        | Access-pattern design vs runtime behavior.         | FAIL — Med | The CDK data model DEFINES 12 GSIs for the correct access patterns, but the runtime store USES Scan on the base table (with FilterExpression) for 5 public endpoints and 5 admin endpoints. This is the AC3 defect — an insecure/insustainable design where the store contradicts the data model. Cost + latency will scale linearly with table size; DoS surface amplified. |
+| A05 | Security Misconfiguration   | Yes        | CDK config + env vars + IAM.                       | PASS | CDK defines PITR + deletion protection + termination protection for prd/stg. Env vars scoped per env. IAM (README) requires the 5 CRUD verbs + Scan/Query — no wildcard verbs. |
+| A06 | Vulnerable/Outdated Comps   | Yes        | Dep diff PR #35 + #45.                             | PASS | PR #45 removes `better-sqlite3` + drizzle stack; adds `@aws-sdk/*` (mature). Net delta -1079 lockfile lines. PR #35 adds `aws-cdk-lib` + `constructs` + `vitest` for the infra package. No known-CVE deps added. |
+| A07 | Auth Failures               | No         | -                                                  | N/A | No login/session/MFA/token surface touched by IM-1147. Cognito auth stack unchanged. |
+| A08 | Integrity Failures          | Yes        | CI/CD, deserialization, plugin.                    | PASS | CDK synth is deterministic; `infra-ci.yml` runs the CDK vitest on every PR. JSON snapshot importer (`importSnapshot.ts`) validates array-ness of each section before deserializing — no arbitrary object graphs. No plugin/package-signing surface changed. |
+| A09 | Logging Failures            | Yes        | New/removed log emitters, PII exposure.            | PASS | Adapter has NO console.log statements. Removed drizzle migration logs. The importer prints `{section: count}` after import — no PII. |
+| A10 | SSRF                        | No         | -                                                  | N/A | No new outbound HTTP call introduced. AWS SDK connects to DynamoDB endpoint via AWS credentials, constrained to the resolved region. |
+
+Summary:
+  · 8 Applicable + PASS
+  · 1 Applicable + FAIL (Med) — A04 Insecure Design → AC3 defect
+  · 2 N/A (A07, A10)
+  · 0 High/Critical OWASP blockers
+
+Notes:
+  · A04 FAIL severity is Medium (not High) because:
+      · The current data volume in prd is small (the migration just landed);
+        the latency/cost impact is not yet felt.
+      · The fix path is well-scoped: swap `.scan(...)` for `.query(...)` on the
+        existing GSIs.
+      · No exploitable security consequence today; the DoS amplification is a
+        theoretical risk that grows with data.
+  · Fixing A04 also removes the runtime need for `dynamodb:Scan` IAM
+    permission, tightening AC8's least-privilege posture (compound win).

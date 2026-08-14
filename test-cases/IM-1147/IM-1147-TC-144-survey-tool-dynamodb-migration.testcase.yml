@@ -1,0 +1,249 @@
+schemaVersion: "1.0"
+
+id: 100ddeb8-4e21-4eca-989a-5ea5fc15ad2c
+key: "TC-144"
+title: "Survey Tool persistence migration to DynamoDB — infra, runtime contracts, cutover, and prod-ops posture"
+description: |
+  Cobertura QA para IM-1147 (Migrate Survey Tool persistence to DynamoDB), del epic
+  IM-970 NPS Survey Tool delivery. QA Sub-task: IM-1186.
+
+  El PR runtime principal es survey-tool #45 (2026-08-04, MERGED a `main`) y su tren de
+  promoción #48 → #49 → #51 → #52. La infraestructura CDK vive en #35 (MERGED a
+  `epic/nps-survey-delivery-and-metrics` → main vía #36).
+
+  Este TC valida el trabajo POST-MERGE: las tres orgs (dev/stg/prd) ya sirven contra
+  DynamoDB y los contratos públicos + admin ya cambiaron de SQLite/Drizzle a
+  `DynamoSurveyStore`. QA verifica:
+  · aislamiento por entorno (AC1),
+  · CDK-managed infra sin AWS CLI (AC2),
+  · access patterns sin broad scan (AC3),
+  · contratos públicos preservados (AC4),
+  · contratos admin y export CSV preservados (AC5),
+  · migración validada por contadores + relaciones + muestra + export (AC6),
+  · rollback recuperable sin corromper prod (AC7),
+  · postura ops en prod: encryption, IAM least-privilege, backups/PITR, observabilidad,
+    cost caps (AC8).
+
+  Contexto ya conocido (TR-158): el bundle `index-9Qd0lrHV.js` es idéntico entre dev y
+  staging (y distinto en prd); las rutas admin devuelven 401 sin sesión; el CSV export
+  responde en text/csv con 28 columnas; el eligible endpoint funciona con corte
+  (respondent, org). Esa evidencia se reusa donde aplica, no se re-ejecuta.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-14T13:25:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-14T13:25:00Z"
+  version: 1
+  parentIssue: "IM-1147"
+  qaSubTask: "IM-1186"
+  epic: "IM-970"
+  prsUnderReview:
+    - "survey-tool #35 (infra CDK, MERGED 2026-07-30)"
+    - "survey-tool #45 (runtime migration, MERGED 2026-08-04)"
+    - "survey-tool #48 (promote runtime to staging, MERGED 2026-08-04)"
+    - "survey-tool #49 (promote runtime to production, MERGED 2026-08-04)"
+    - "survey-tool #51 (develop → staging DynamoDB runtime + infra deploy, MERGED 2026-08-05)"
+    - "survey-tool #52 (staging → main creates prd DynamoDB tables, MERGED 2026-08-05)"
+
+type: integration
+priority: medium
+status: active
+format: gherkin
+estimatedDurationMinutes: 360
+
+tags:
+  - im-1147
+  - im-970
+  - im-1186
+  - survey-tool
+  - dynamodb
+  - cdk
+  - infrastructure
+  - persistence
+  - migration
+  - aws
+  - nps
+
+preconditions:
+  - "Acceso `aws` CLI y perfil autorizado sobre la cuenta AWS que hospeda los stacks de Survey Tool (dev, stg, prd) — para AC1, AC2 y AC8."
+  - "Repo `Veevarts/survey-tool` clonado localmente en el HEAD de `main`."
+  - "Repo/paquete CDK que define los stacks stateful/stateless del Survey Tool a mano — la ubicación se resuelve al empezar (repo separado o directorio dentro de survey-tool)."
+  - "Admin del Survey Tool alcanzable en dev y stg via Google SSO (`https://surveytool.dev.veevart.ai/admin/...`, `https://surveytool.stg.veevart.ai/admin/...`). Prd puede quedar limitado a lectura sobre CloudTrail + describe-table."
+  - "Node/npm disponible para correr `npm test` sobre el repo `survey-tool` (paquetes server y client)."
+
+scenarios:
+  - title: "IM-1147 AC1 — Prod persistence uses only its configured DynamoDB tables and never mixes with dev/test data"
+    tags:
+      - ac-1
+      - happy-path
+      - env-isolation
+    given: |
+      Given los tres entornos del Survey Tool están desplegados (dev, stg, prd)
+      And cada entorno resuelve `SURVEY_TOOL_ENV` o `APP_ENV` distinto (`dev`, `stg`, `prd`)
+      And las tablas por defecto siguen el patrón `veev-<region>-<env>-survey-tool-*`
+    when: |
+      When se listan las tablas DynamoDB reales por entorno con `aws dynamodb list-tables --region <region>`
+      And se leen las variables de entorno efectivas del contenedor del server en cada entorno
+      And se cruza contra el mapeo de env vars `SURVEY_TOOL_*_TABLE_NAME`
+    then: |
+      Then cada entorno apunta EXCLUSIVAMENTE a sus tablas `veev-<region>-<env>-survey-tool-*`
+      And prd no referencia tablas `dev` ni `stg` (y viceversa)
+      And una escritura de prueba en `dev` (crear survey QA) NO aparece consultando la tabla de `stg` ni de `prd` con `aws dynamodb scan --projection-expression id --max-items 1`
+      And el reverso también se cumple: crear un registro en stg no filtra a dev ni prd
+
+  - title: "IM-1147 AC2 — Tables, indexes, IAM, encryption and backups are all defined by CDK, not by manual AWS CLI resources"
+    tags:
+      - ac-2
+      - happy-path
+      - infra
+    given: |
+      Given el repo/paquete CDK que define los stacks stateful/stateless de Survey Tool está identificado
+      And las tablas DynamoDB de dev/stg/prd están vivas
+    when: |
+      When se leen las definiciones CDK (`Table`, `GlobalSecondaryIndex`, `IAM policies`, `BillingMode`, `PointInTimeRecovery`, `Encryption`, naming prefijo `veev-`) y se corre `cdk synth`
+      And se describe cada tabla real con `aws dynamodb describe-table --table-name <name>` y `aws dynamodb describe-continuous-backups --table-name <name>`
+      And se cotejan tags de CloudFormation en cada tabla (`aws-cloudformation:stack-name`, `logical-id`) contra los stacks del CDK
+    then: |
+      Then TODAS las tablas devuelven tags de CloudFormation propios del stack CDK y ninguna aparece sin `aws-cloudformation:stack-name`
+      And el naming coincide byte a byte con lo que emite `cdk synth` para cada entorno
+      And la configuración de encryption at rest, indexes, y billing/capacity coincide entre CDK y describe-table
+      And no aparece ninguna tabla `veev-<region>-<env>-survey-tool-*` que no esté declarada en CDK
+
+  - title: "IM-1147 AC3 — Every runtime application view has a documented DynamoDB query path and does not rely on broad Scan for normal traffic"
+    tags:
+      - ac-3
+      - happy-path
+      - access-patterns
+    given: |
+      Given `server/src/data/dynamodbStore.ts` (646 líneas) es el único adapter runtime
+      And existen tests API-boundary en `server/src/routes/apiBoundary.test.ts`
+    when: |
+      When se enumeran los métodos públicos de `DynamoSurveyStore` y para cada uno se identifica si usa `GetCommand`, `QueryCommand` (PK/GSI) o `ScanCommand`
+      And se cruza la lista contra las rutas admin y públicas que los consumen (features, surveys, responses, organizations, analytics, settings, integrationsSalesforce)
+      And se documenta el par (vista de aplicación → método → primary key / GSI usados)
+    then: |
+      Then ninguna operación de lectura en el camino público (`/api/surveys/general/eligible`, `/api/features/:id/surveys`, `/api/features/:id/respondent-state/:respondentId`, submit de `/api/responses`) usa `ScanCommand`
+      And las rutas admin de lectura (`/api/admin/surveys`, `/api/admin/organizations`, `/api/admin/responses`, `/api/admin/analytics/summary`) usan Query/Get y sus GSI declarados
+      And si aparece un `ScanCommand`, su llamador está restringido a operaciones batch/exports (nunca en el request-path público) y así queda documentado
+      And el diccionario final `vista → PK/GSI` está persistido como evidencia de la corrida
+
+  - title: "IM-1147 AC4 — Public widget contracts (eligibility, render, submit, impression, dismissal) survive the migration byte-for-byte on the wire"
+    tags:
+      - ac-4
+      - happy-path
+      - contract-fidelity
+      - public-api
+    given: |
+      Given los cinco endpoints públicos del widget están en `main` post-migración
+      And existen respuestas y organizations en dev con datos reales de las corridas previas (Auctifera 00DEm00000V5eRWMAZ, VNFP flow-site-19432-dev-ed)
+    when: |
+      When se ejercitan las 5 rutas contra dev/stg y se capturan status + estructura de respuesta:
+        · `GET /api/surveys/general/eligible?salesforceOrgId=...&respondentId=...&usageCount=...`
+        · `GET /api/features/:featureId/surveys?...` (contexto por feature)
+        · `POST /api/responses` con `{surveyId, respondentId, score, comment, ...}`
+        · `POST /api/features/:featureId/impressions` (con general en modo featureTrigger, para evitar IM-1185)
+        · `POST /api/features/:featureId/dismissals` (idem)
+      And se compara el shape del JSON devuelto contra el shape declarado en `apiBoundary.test.ts`
+    then: |
+      Then los 5 endpoints devuelven exactamente los mismos campos (nombres, tipos, orden semántico) que documenta el test
+      And los códigos de estado siguen el contrato: 200 para lecturas, 201 para /responses OK, 400 sólo cuando el contexto lo justifica (IM-1185 preexistente en after-login)
+      And ninguna nueva llave aparece ni ninguna existente desaparece en las respuestas
+      And el submit persiste y es recuperable en la siguiente lectura por `respondent + org`
+
+  - title: "IM-1147 AC5 — Admin CRUD, filtering, dashboard views and CSV export return accurate data over DynamoDB"
+    tags:
+      - ac-5
+      - happy-path
+      - admin-api
+      - dashboard
+      - csv-export
+    given: |
+      Given el admin del Survey Tool en dev tiene surveys y respuestas reales de las corridas previas (survey #1 General NPS, survey #2 QA TC-143 inactive, survey #3 AC1 TR-158 round-trip Rentals, 2 responses)
+      And existe el estado post-TR-158 conocido (Dashboard = 2 responses, NPS 100, 2 promoters, 0 detractors)
+    when: |
+      When se navega el admin y se ejercitan:
+        · Subjects list + Add subject flow
+        · Surveys list + Add survey + Edit + Delete gates
+        · Organizations list con búsqueda y paginación (10/25/50/100)
+        · Dashboard Summary (counts, NPS, distribution)
+        · Responses list (filtros por Subject / Organization / Search)
+        · Response detail (drawer)
+        · Bulk quality actions (Approve/Flag/Reject/Spam)
+        · CSV export (`GET /api/admin/responses/export.csv`)
+      And se contrasta el conteo/valores mostrados vs una lectura directa `aws dynamodb scan` restringida a `--projection-expression id --max-items 100` sobre la tabla `responses`
+    then: |
+      Then todas las vistas responden con datos correctos (conteos coinciden, ordenamientos consistentes)
+      And el CSV export mantiene sus 28 columnas y el conteo de filas coincide con el que muestra la lista
+      And las acciones bulk quality se persisten con `qualityUpdatedAt` en la tabla y quedan visibles al recargar
+      And no aparece regresión funcional respecto al comportamiento observado en TR-158 (mismo detalle por response, misma coherencia cross-view)
+
+  - title: "IM-1147 AC6 — Migration/backfill of existing dev/test data is validated by record counts, key relationships, representative samples, and response export parity"
+    tags:
+      - ac-6
+      - happy-path
+      - migration
+      - backfill
+    given: |
+      Given `server/src/data/importSnapshot.ts` (37 líneas) es el importer JSON one-time del cutover
+      And el PR #45 documenta que preserva IDs numéricos y sube el counter al máximo importado sin bajar counters existentes
+    when: |
+      When se toma el snapshot JSON usado como input del import (o se re-genera desde la data histórica documentada)
+      And se corre el import contra un ambiente de prueba (dev sacrificial o table QA-específica)
+      And se compara PRE vs POST:
+        · Conteos por tabla (surveys, responses, organizations, feature_states, survey_events)
+        · Relaciones clave (survey.id ↔ responses.survey_id; organization.id ↔ surveys.audienceDetails)
+        · Muestra representativa (10 surveys aleatorias con todos sus campos)
+        · Export CSV de responses PRE y POST (mismos 28 columnas, misma cardinalidad, mismo checksum sobre columnas ordenadas)
+    then: |
+      Then los conteos por tabla POST-import son iguales o mayores que PRE (ID collisions manejadas por preservación)
+      And ninguna relación se rompe (todos los `responses.survey_id` resuelven a un `surveys.id` existente)
+      And la muestra representativa devuelve exactamente los mismos campos con los mismos valores
+      And el checksum del export CSV (rows sorted by response_id) es idéntico
+      And si el import se corre dos veces seguidas, no genera duplicados (idempotencia)
+
+  - title: "IM-1147 AC7 — Rollback path recovers the previous persistence or a known-good deployment without corrupting prod data"
+    tags:
+      - ac-7
+      - happy-path
+      - rollback
+      - safety
+    given: |
+      Given existe un procedimiento de rollback documentado (en README, runbook o commit body del PR #49)
+      And prd tiene backups PITR habilitados (verificado en AC8)
+    when: |
+      When se ejecuta el rollback teórico sobre un ambiente sacrificial (dev o clone de stg):
+        · Si el rollback es por `git revert` de la promoción runtime + redeploy → validar que el server vuelve a arrancar (aunque el path SQLite no exista más, debe fallar limpio o levantar la ruta anterior si existe)
+        · Si el rollback es por PITR a t-1h → restaurar tabla desde snapshot, apuntar el server a la tabla restaurada, validar lecturas
+        · Si el rollback es por switch de feature flag → cambiar la env var / secret y redeploy
+      And se verifica el estado de prd DESPUÉS del rollback: no hay corrupción, no hay writes fantasma
+    then: |
+      Then existe AL MENOS UNA de las tres vías de rollback ejecutable y documentada paso-a-paso
+      And ejecutarla en el ambiente sacrificial no destruye datos ni deja el sistema en estado inconsistente
+      And si el procedimiento no está documentado, se declara como GAP y se levanta un follow-up
+      And prd nunca es tocado por la validación de este AC — sólo dev/stg
+
+  - title: "IM-1147 AC8 — Production ops posture is enabled and documented: encryption at rest, least-privilege IAM, backups/PITR, observability, and cost caps"
+    tags:
+      - ac-8
+      - happy-path
+      - security
+      - ops
+      - cost
+    given: |
+      Given prd está desplegado y sirviendo tráfico
+      And los stacks CDK definen las políticas ops
+    when: |
+      When se corre sobre cada tabla de prd:
+        · `aws dynamodb describe-table --table-name <name>` → chequear `SSEDescription.Status=ENABLED` (encryption at rest) y `KMSMasterKeyArn` (KMS gestionado o propio)
+        · `aws dynamodb describe-continuous-backups --table-name <name>` → `PointInTimeRecoveryStatus=ENABLED`
+        · `aws iam simulate-principal-policy` sobre el role del Lambda/ECS del server → confirmar que sólo tiene `dynamodb:GetItem/Query/PutItem/UpdateItem/DeleteItem/BatchWriteItem` sobre las tablas del entorno correspondiente (no `*`)
+        · Métricas de CloudWatch por tabla: throttling, consumed-capacity, latencia; alarmas activas para throttling > umbral
+        · Billing mode (`PROVISIONED` con auto-scaling o `PAY_PER_REQUEST`) y su rationale documentado en README/CDK
+      And se cruza cada resultado con la documentación operativa
+    then: |
+      Then todas las tablas prd tienen encryption at rest + PITR habilitados
+      And el role del server tiene permisos mínimos por tabla (no `Resource: "*"`)
+      And existen alarmas de throttling y latencia por tabla
+      And el billing mode y el rationale de cost caps están escritos en README o runbook
+      And ningún requisito ops queda "TBD" — si algo no está, se levanta como defecto con severidad acorde

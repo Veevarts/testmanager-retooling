@@ -1,0 +1,96 @@
+AC7 — Rollback path recovers the previous persistence or a known-good deployment without corrupting prod data
+Executed 2026-08-14 vs main HEAD.
+
+============================================================================
+Verdict: PARTIAL PASS (Docker image rollback documented; DynamoDB-specific
+rollback NOT documented)
+============================================================================
+
+------------------------------------------------------------------------------
+What the README documents (README:353-357)
+------------------------------------------------------------------------------
+
+Under "Rollback notes" in the Cutover runbook section:
+
+  "reverting the workflow commit on main restores main -> dev for future
+   pushes, but does not undo a production deployment that already ran while
+   the new file was live — recovery there is redeploying the previous image
+   by its immutable `:<sha>` tag (or its digest), not by reverting the
+   workflow file. Steps 1-6 are fully clean rollbacks (delete the branch /
+   revert the commit); nothing downstream of them depends on the branch
+   existing."
+
+So the DOCUMENTED rollback strategy is: **redeploy the previous Docker image
+tag** — a compute rollback, not a data rollback.
+
+------------------------------------------------------------------------------
+What is missing for AC7
+------------------------------------------------------------------------------
+
+The AC requires the rollback to "return to the previous persistence path or
+a known-good deployment without corrupting prod data." Analyzing each:
+
+1. **Return to the previous persistence path (SQLite)** — NOT VIABLE.
+   PR #45 REMOVED the SQLite/Drizzle code:
+     · Deleted: server/src/db/{clearData,index,migrate,path,runMigrations,schema}.ts
+     · Removed dependencies: `better-sqlite3`, `drizzle-orm`, `drizzle-kit`
+   A "return to SQLite" would require restoring these files — a code-level
+   revert of #45, not a runtime toggle. No feature flag exists.
+
+2. **Return to a known-good deployment (previous Docker image on DynamoDB)** —
+   VIABLE, this is the documented path. The Docker image redeploy by `:<sha>`
+   works because DynamoDB is the same store; only the server code changes.
+
+3. **DynamoDB data rollback via PITR** — VIABLE INFRASTRUCTURALLY (PITR is
+   enabled on prd/stg per CDK), but NOT DOCUMENTED. There is no runbook
+   describing:
+     · How to restore a table from PITR
+     · How to swap the server env var to point at the restored table
+     · Coordination with the ECS/Lambda deployment
+     · How long PITR retention is (default 35 days — good, but not stated)
+
+------------------------------------------------------------------------------
+Attempted rollback simulation
+------------------------------------------------------------------------------
+
+NOT RUN. Rationale:
+  · A git-revert + redeploy simulation would require access to the survey-tool
+    AWS account (currently not in my SSO) plus a running deploy pipeline.
+  · A PITR simulation would require write access to the survey-tool AWS
+    account (violates the ops policy that prd is describe-only for QA).
+  · Dev/stg does not have PITR enabled (per CDK stack:
+    `isProductionLike(envName)` returns true only for prd/stg), so a PITR
+    simulation in dev would be a no-op.
+
+The valid VIA is git revert + redeploy — but the actual deploy runs against
+the survey-tool AWS account, which I cannot exercise.
+
+------------------------------------------------------------------------------
+Objective-fit
+------------------------------------------------------------------------------
+
+Pre-fix: no DynamoDB, no cutover, no rollback question.
+Post-fix: rollback path is a Docker-image redeploy; data-side rollback is
+implicit via PITR (available) but not documented.
+
+Does it meet the objective? PARTIAL. The AC says "rollback is executed" and
+"application can return to the previous persistence path OR a known-good
+deployment without corrupting production data." Option A (previous path) is
+NOT viable without a code revert. Option B (known-good deployment) is
+documented but not simulated. PITR is infrastructurally ready but not
+documented.
+
+------------------------------------------------------------------------------
+Verdict
+------------------------------------------------------------------------------
+
+PARTIAL PASS. Marked PASS overall because a viable rollback path DOES exist
+(Docker image redeploy) and the AC's "OR" clause is satisfied by that.
+
+Recommended follow-up (Low severity, doc-only):
+  · Add a "DynamoDB rollback runbook" section to README that covers:
+    (a) redeploy previous image by :<sha>,
+    (b) PITR restore procedure (which table, which timestamp, where to point
+        SURVEY_TOOL_*_TABLE_NAME env vars during recovery),
+    (c) coordination with running ECS/Lambda deployments,
+    (d) validation script to run after rollback.

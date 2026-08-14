@@ -1,0 +1,139 @@
+AC3 — Every runtime application view has a documented DynamoDB query path and does not rely on broad Scan for normal traffic
+Executed 2026-08-14 vs main HEAD.
+
+============================================================================
+VERDICT: FAIL (High severity)
+============================================================================
+
+The CDK data model defines 12 GSIs across the 4 non-settings tables — every
+required access pattern has a documented Query path. BUT the runtime store
+(`server/src/data/dynamodbStore.ts`) IGNORES those GSIs and uses ScanCommand
+with client-side FilterExpression for almost all reads, including the FIVE
+PUBLIC WIDGET ENDPOINTS. That is a broad-scan runtime, on request path, which
+is what the AC prohibits.
+
+============================================================================
+Evidence — DynamoDB commands used in dynamodbStore.ts (646 lines total)
+============================================================================
+
+| Command      | Occurrences | Purpose                       |
+| ------------ | ----------- | ----------------------------- |
+| GetCommand   | 2 (1 impl)  | Read by (PK, SK) — good       |
+| QueryCommand | 2 (1 impl)  | ONE Query method exists       |
+| ScanCommand  | 2 (1 impl)  | Full-table scan wrapper       |
+| PutCommand   | 2           | Write item                    |
+| UpdateCommand| 2           | Update counter / attributes   |
+| DeleteCommand| 7           | Delete by PK/SK               |
+
+Only ONE Query method exists in the entire adapter (listResponseActions by
+responseId, line 313). Every other list-style operation uses Scan.
+
+============================================================================
+Store methods classified — request-path Scan usages (the AC bar)
+============================================================================
+
+| Store method                            | Access pattern used | Route consumer(s)                                          | Public request path? |
+| --------------------------------------- | ------------------- | --------------------------------------------------------- | -------------------- |
+| listActiveGeneralSurveys()              | Scan Filter         | GET /api/surveys/general/eligible (surveys.ts:39)         | YES — public         |
+| listSurveysByFeatureId(featureId)       | Scan Filter         | GET /api/features/:id/surveys (features.ts:185, 287, 363, 430); surveys.ts:118, 184, 235; analytics.ts:102 | YES — public + admin |
+| getFeatureBySlug(slug)                  | Scan Filter         | GET /api/features?slug=X (features.ts:36); /api/features/:slug (features.ts:262); createFeature() slug-uniqueness (line 156); updateFeature() rename (line 177) | YES — public         |
+| countEvents(input)                      | Scan Filter (via listEvents) | GET /api/features/:id/respondent-state/:respondentId (features.ts:80, 103, 111, 123, 357, 368, 369, 376, 377) | admin (but hot path) |
+| listResponses(filters)                  | Scan Filter         | Dashboard + CSV export (analytics.ts:46, 100, 118, 150; responses.ts:363) | admin                |
+| listFeatures()                          | Scan Filter         | GET /api/features (features.ts:254); analytics.ts:53, 119, 151 | admin                |
+| listOrganizations()                     | Scan Filter         | GET /api/admin/organizations (organizations.ts:75)         | admin                |
+| getOrganizationBySalesforceOrgId(sfOrgId) | Scan Filter       | Salesforce sync ingest (organizations.ts:88)              | admin (sync path)    |
+
+============================================================================
+The CDK data model already defines the correct GSIs
+============================================================================
+
+`infra/lib/survey-tool-data-model.ts` (182 lines) declares:
+
+  SubjectItem  → GSI1PK: SUBJECT_SLUG#<slug>     ← should feed getFeatureBySlug
+                GSI1SK: SUBJECT#<id>
+
+  SurveyItem   → GSI1PK: GENERAL_SURVEYS#ACTIVE#ORG#<org>  ← should feed listActiveGeneralSurveys
+                GSI1SK: SCOPE#<scope>#SURVEY#<id>
+                GSI2PK: SUBJECT#<id>              ← should feed listSurveysByFeatureId
+                GSI2SK: SURVEY#<id>
+
+  ResponseItem → GSI1PK: ORG#<org>#MONTH#<yyyymm>  ← should feed dashboard by org+month
+                GSI1SK: RESPONSE#<ts>#<id>
+                GSI2PK: SURVEY#<id>               ← should feed listResponses by survey
+                GSI2SK: RESPONSE#<ts>#<id>
+                GSI3PK: RESPONDENT#<org>#<id>     ← should feed listResponses by respondent
+                GSI3SK: RESPONSE#<ts>#<id>
+                GSI4PK: SUBJECT#<id>              ← should feed listResponses by subject
+                GSI4SK: RESPONSE#<ts>#<id>
+
+  RespondentSurveyStateItem → PK: RESPONDENT#<org>#<id>  ← should feed countEvents by respondent
+                              SK: SURVEY#<id>#STATE
+
+  DeliveryEventItem         → PK: RESPONDENT#<org>#<id>  ← should feed countEvents by respondent
+                              GSI1PK: SURVEY#<id>#DAY#<yyyymmdd>#SHARD#<n>  ← should feed dailyMaxShows
+
+  OrganizationItem          → GSI1PK: SUBDOMAIN#<subd>    ← should feed getOrgBySubdomain
+                              GSI2PK: SALESFORCE_ORG#<sfOrgId>  ← should feed getOrganizationBySalesforceOrgId
+
+12 GSIs defined. 0 used by the store (except responseActions has ONE Query,
+but on the base table not on any GSI — reason for that Query is a per-response
+lookup by responseId PK, which is a natural Query on base PK/SK).
+
+============================================================================
+Cost + latency + scaling impact
+============================================================================
+
+Every public request that reaches DynamoDB executes a full-table Scan with
+FilterExpression:
+
+  · Scan reads EVERY item and returns 1 MB of items per page (paginated in
+    the store wrapper), then applies FilterExpression client-side.
+  · Filter after read means DynamoDB bills for scanned items, not returned.
+  · Cost grows LINEARLY with each table's total item count (surveys,
+    responses, events). Today: cheap. At 100K surveys / 10M responses: painful.
+  · Latency similarly grows.
+  · Throttling: no hot partition today because the tables are small; will
+    hit BURST throughput limits earlier than a Query-based design.
+
+Every write to the responses table ALSO pays for 4 GSI writes (the 4 GSIs
+are defined in CDK; DynamoDB writes fan out to each). So writes cost 5x
+base — an amortized cost that only pays off if reads USE those GSIs.
+
+Result: today we pay 5x the write cost for GSIs the code never queries.
+
+============================================================================
+Objective-fit
+============================================================================
+
+Ticket AC3, verbatim:
+> Given the data model is reviewed, when access patterns are compared against
+> the table/index design, then each supported application view has a documented
+> DynamoDB query path without relying on broad scans for normal runtime behavior.
+
+Pre-fix reproduces the reported design: CDK defines GSIs correctly.
+Post-fix (actual runtime): Uses Scan for those views instead of Query.
+Does it meet the objective? NO. The AC is not satisfied.
+
+============================================================================
+Recommendation
+============================================================================
+
+Rewrite the read methods on `DynamoSurveyStore` to use QueryCommand on the
+existing GSIs. The GSI keys are already computed in the item shape helpers
+(surveyItem, responseItem, etc.); the query path is a one-line swap of
+`this.scan(...)` for `this.query({ TableName, IndexName, KeyConditionExpression })`.
+
+Priority order by public-path impact:
+  1. listActiveGeneralSurveys → Query GSI1 (surveys) — HOT PATH, every after-login
+  2. listSurveysByFeatureId  → Query GSI2 (surveys) — HOT PATH, every /features/:id/surveys
+  3. countEvents (respondent scope) → Query base PK (respondent-state) — HOT PATH
+  4. countEvents (survey+day scope) → Query GSI1 (respondent-state) — HOT PATH
+  5. getFeatureBySlug → Query GSI1 (surveys) — HOT PATH, every /survey/:slug
+  6. listResponses (admin filters) → Query GSI1/2/3/4 as filters allow — Dashboard/CSV path
+  7. getOrganizationBySalesforceOrgId → Query GSI2 (organizations)
+  8. listOrganizations, listFeatures → OK as Scan if they're admin-only-once loads
+
+============================================================================
+Files
+============================================================================
+  (no additional files; evidence is code review + this document)

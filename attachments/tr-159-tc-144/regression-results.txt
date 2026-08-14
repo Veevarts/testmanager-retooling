@@ -1,0 +1,20 @@
+Regression results — TR-159 / TC-144 / IM-1147, executed 2026-08-14
+
+| # | Item                                                                     | Type      | Verdict | Evidence |
+|---|--------------------------------------------------------------------------|-----------|---------|----------|
+| 1 | Runtime store uses GSIs (not Scan) on public request paths                | Technical | FAIL    | ONE Query in 646 lines; 8 store methods use Scan with FilterExpression on 5 public + 5 admin endpoints (see scenario-3/ac3-access-patterns-audit.txt). 12 GSIs defined in CDK are unused at runtime. → defect to raise. |
+| 2 | Public API contracts preserved byte-for-byte                              | Technical | PASS    | Live probe: /api/surveys/general/eligible, /api/features/:id/surveys, /api/features/:id/respondent-state/:respondentId, /api/responses, /api/features/:id/impressions|/dismissals all respond with correct shapes. IM-1185 400 in after-login is preexisting. |
+| 3 | Admin API + Dashboard + CSV                                               | Technical | PASS    | 3 surveys, 2 responses, 2 orgs served correctly from DynamoDB. TR-158 cross-view coherence (Summary=List=Detail=CSV) reused. |
+| 4 | CDK vitest suite comprehensive                                            | Technical | PASS    | 6 vitest tests cover 5 tables + all GSIs + prd/stg deletion protection + PITR + alias rejection + naming shape. CI wired via `.github/workflows/infra-ci.yml`. |
+| 5 | Import snapshot idempotent + preserves IDs                                | Technical | PASS    | `setCounter` guards against lowering; PUTs are deterministic upserts keyed by source id. Live run deferred (no snapshot available in repo). |
+| 6 | Rollback via Docker image redeploy                                        | Technical | PARTIAL | README covers Docker image :<sha> rollback; NO DynamoDB-specific runbook (PITR restore path missing). Sufficient for a functional rollback of the compute; data-side rollback assumed intact because DynamoDB is stable. → follow-up log, not defect. |
+| 7 | Secrets / PII in the diff                                                 | Security  | PASS    | `git diff` PR #45 + #35 scanned; zero matches for password/secret/token/API-key/-----BEGIN/.env patterns. |
+| 8 | Injection surfaces in the adapter                                         | Security  | PASS    | `dynamodbStore.ts` uses `ExpressionAttributeValues` with parametrized names (`:entityType`, `:featureId`, etc.). No string interpolation of user input into ExpressionAttributes. |
+| 9 | Vulnerable deps                                                            | Security  | PASS    | PR #45 removes `better-sqlite3` (CVE surface) and adds `@aws-sdk/*` (mature, well-maintained). Dep churn is 1435 removed / 356 added lines in server/package-lock.json — a NET reduction. |
+|10 | IAM least-privilege                                                        | Security  | PARTIAL | README requires `dynamodb:Scan` in runtime IAM — least-privilege-suboptimal ONCE AC3 is fixed. Actual applied policy Resource scoping not verifiable from this repo (stateless stack elsewhere). Live simulate-principal-policy deferred (no survey-tool AWS SSO). |
+|11 | Encryption + PITR + deletion protection in CDK                            | Security  | PASS    | Default AWS-managed KMS encryption; PITR + deletion protection ON for prd/stg per CDK; vitest asserts both. |
+|12 | Env isolation (prd/stg/dev)                                                | Technical | PASS    | Code-level: alias rejection, per-env table naming, stackSuffix rejected outside eph/dev. Live cross-env write deferred (no survey-tool AWS SSO). |
+
+Summary:
+  · 9 PASS · 1 FAIL (item #1: AC3 Scan-on-public-path, High severity) · 2 PARTIAL (items #6 doc-only, #10 IAM live-check deferred)
+  · 1 defect to raise: AC3 Scan on public path (see scenario-3 evidence).

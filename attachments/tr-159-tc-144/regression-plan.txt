@@ -1,0 +1,18 @@
+Regression matrix — TR-159 / TC-144 / IM-1147 DynamoDB migration
+
+Executed 2026-08-14 against main HEAD. See regression-results.txt for verdicts.
+
+| # | Item                                                                     | Type      | Risk  | Check method                                                                                          |
+|---|--------------------------------------------------------------------------|-----------|-------|------------------------------------------------------------------------------------------------------|
+| 1 | Runtime store uses GSIs (not Scan) on public request paths                | Technical | High  | Enumerate `dynamodbStore.ts` methods, classify Get/Query/Scan, map to route consumers.               |
+| 2 | Public API contracts preserved byte-for-byte after migration              | Technical | High  | Live probe of 5 endpoints against dev; verify JSON shape and status codes match `apiBoundary.test.ts`.|
+| 3 | Admin API + Dashboard + CSV export continue to return accurate data       | Technical | High  | Live probe /api/admin/* + CSV export; cross-view coherence check (TR-158 reused).                    |
+| 4 | CDK vitest suite covers 5 tables + all GSIs + prd protection              | Technical | High  | Read `infra/test/survey-tool-stateful.stack.spec.ts` + `infra-ci.yml` workflow.                       |
+| 5 | Import snapshot is idempotent + preserves IDs                             | Technical | Med   | Read `importSnapshot.ts` + `dynamodbStore.importSnapshot` + `setCounter` logic.                       |
+| 6 | Rollback procedure viable via Docker image redeploy                       | Technical | Med   | Read README rollback notes; check if docker image :<sha> tagging is intact in CI.                     |
+| 7 | Secrets / PII exposure in the diff                                        | Security  | High  | `git diff` PR #35 + PR #45 for `password|secret|token|api[_-]?key|-----BEGIN|\\.env`.                 |
+| 8 | Injection surfaces in new adapter                                         | Security  | High  | Read `dynamodbStore.ts` for string interpolation into ExpressionAttributeValues.                     |
+| 9 | Vulnerable deps (aws-sdk v3 introduced)                                   | Security  | Med   | `npm audit` on server package.json; check that removed SQLite CVEs are gone and new AWS SDK is clean. |
+|10 | IAM policies (server role) at least-privilege                             | Security  | Med   | README requires GetItem/PutItem/UpdateItem/DeleteItem/Scan/Query on 5 table ARNs — verify Resource is scoped, not `*`. LIVE check deferred (no AWS access to survey-tool account). |
+|11 | Encryption at rest + PITR + deletion protection defined in CDK            | Security  | Med   | Read `survey-tool-stateful.stack.ts`; assert PITR + deletion-protection are conditional on prd/stg.  |
+|12 | Env isolation between prd/stg/dev (no cross-env writes)                   | Technical | High  | Code-level: `resourceName()` + `parseVeevartEnv` rejects aliases. LIVE cross-env write deferred.     |
