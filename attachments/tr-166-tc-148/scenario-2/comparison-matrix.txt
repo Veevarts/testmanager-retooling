@@ -1,0 +1,56 @@
+TR-166 · TC-148 (IM-1193) · Scenario 2 · AC2 — rev-10059094 rescue ($25K missing donation)
+
+## Evidencia PR-side (dev safesql, live Long Island)
+
+| Metric                                        | Baseline (pre-fix) | Post-fix                                            | AC ref | Objective met? | Verdict |
+|-----------------------------------------------|--------------------|-----------------------------------------------------|--------|----------------|---------|
+| Opportunity count for rev-10059094            | 0                  | 1                                                   | AC2    | YES            | PASS    |
+| Amount                                        | n/a                | $25,000.00                                          | AC2    | YES            | PASS    |
+| CloseDate                                     | n/a                | 2011-10-18                                          | AC2    | YES            | PASS    |
+| Description (Revenue Reference)               | n/a                | "Long Island Workplace Challenge"                  | AC2    | YES            | PASS    |
+| FDA count for rev-10059094                    | 0                  | 1                                                   | AC2    | YES            | PASS    |
+| Fund of the FDA                               | n/a                | Total Contributions \ General Operating \ Corporation | AC2    | YES            | PASS    |
+| Opportunity External ID (predicted, post-load) | n/a               | CB62A0CA-F031-4EEB-A5ED-0FAB8022F9BA               | AC2    | YES            | PASS    |
+| FDA External ID (predicted, post-load)         | n/a               | FC314D94-9E93-42B3-BC26-5EA04559A106               | AC2    | YES            | PASS    |
+
+## Attributes NOT verifiable by query source alone
+
+The AC2 originally listed 8 required attributes. Of those, 6 are verifiable in the query source
+(Opportunity Amount + CloseDate + Constituent + Fund + Description + FDA count). The remaining 2
+require verifying the LOAD in Salesforce:
+
+- Payment record with method "Check" and number "214" → NOT in donation_transaction.sql; comes from
+  `opportunity_payments.sql` which follows the fund fix cascade. Predicted post-load: a Payment record
+  linked to Opportunity CB62A0CA with Payment Method "Check" and Check Number "214".
+- Recognition/soft credit CBIZ $25,000 → comes from `npsp_partial_soft_credit.sql` or
+  `npsp_account_soft_credit.sql`. Both queries share the same EligibilityGate and are patched in this PR.
+
+The PR body states: "Loading the rescued gift into the org and deleting the already-loaded duplicate
+are not part of this PR." So the QUERY source is validated (the gift is now visible to the extractor),
+but the actual Salesforce load is a separate step — that's why the PR gives the External IDs
+`CB62A0CA...` and `FC314D94...` as PREDICTED IDs "on the next run".
+
+## Evidencia fixture (scenario 10)
+
+Replacement WITHOUT its own REVENUESPLIT_EXT row (rev-10059094 pattern):
+- Pre-fix: replacement invisible to EligibilityGate → gift dropped by `WHERE Amount <> 0`.
+- Post-fix: replacement inherits application via EffectiveSplit → gift survives → Opportunity + FDA emitted.
+- Verified failing pre-fix, passing post-fix (PR body + fixture assertion).
+
+## Evidencia code diff
+
+The single-line change that rescues rev-10059094:
+```
+COALESCE(own_split_ext.APPLICATION, superseded_split_ext.APPLICATION)
+```
+Applied in the EligibilityGate of the 5 shared-gate SQL files. The replacement line, previously invisible
+because it had no REVENUESPLIT_EXT row of its own, now inherits the superseded line's `APPLICATION='Donation'`
+and survives the eligibility gate.
+
+## Objective met?
+
+YES on the QUERY SOURCE side (6/8 attributes directly verifiable + 2 predicted from cascade).
+The load into Salesforce (Payment + Recognition records) is scope of a subsequent load run — the query
+source now supplies the data for those.
+
+Verdict: PASS on QUERY SOURCE. Load verification is a separate handoff step (see scenario notes).

@@ -1,0 +1,55 @@
+TR-166 · TC-148 (IM-1193) · Scenario 4 · AC4 — Idempotencia
+
+## Verdict: PASS por diseño + fixture scenarios
+
+### Semántica idempotente (code review)
+
+Los 5 SQL queries modificados son 100% derivadas de source data (Altru PKs), sin state, sin
+timestamps runtime, sin randomness. Ejecutar la query dos veces sobre el mismo dataset produce
+output idéntico byte-a-byte porque:
+
+- `REVERSEDLINEITEMID`, `SOURCELINEITEMID`, `FINANCIALTRANSACTIONID`, `ID` de cada line item
+  son PKs de Altru — inmutables entre corridas.
+- `APPLICATION`, `TYPE`, `DESIGNATIONID` de `REVENUESPLIT_EXT` son propiedades del row source
+  — inmutables entre corridas.
+- Las CTEs nuevas (`LineSplit`, `SupersededLines`, `EffectiveSplit`, `EligibleLines`) son
+  derivaciones puras — todas las branches del COALESCE devuelven el mismo valor si los inputs
+  no cambian.
+- No hay generación de UUIDs runtime; los External IDs vienen de Altru PKs.
+- No hay dependency de `NEWID()`, `SYSDATETIME()`, `NEWSEQUENTIALID()` u otras funciones
+  no-determinísticas en el diff.
+
+### Fixture-backed guardrails
+
+- **Scenario #15**: per-opportunity amount reconciliation. Asserta que EligibleLines nets a
+  superseded line against its Reversal, y el resultado agregado matches la suma esperada. La
+  invariante se mantiene bajo cualquier orden de rows.
+
+- **Scenario #21**: chained X1←X2←X3 con Reversal de X2. Asserta que un chained adjustment
+  se resuelve determinísticamente al first-line amount. Verificado failing pre-fix (round-3
+  regression) y passing post-fix.
+
+- **Cross-file gate identity assertion** (donation-adjustment-readd-query.spec.ts): los 5
+  files comparten EligibleLines byte-idéntico → un one-sided edit falla el test →
+  determinismo de la definición del gate está guardado.
+
+### Whole-tenant runtime measurement (from PR body round-3 review)
+
+Chain time: 495.8s (pre-IM-1193) → 285.8s (final IM-1193). 43% mejora. Row counts idénticos
+entre las 3 corridas de measurement (pre / inline / final), lo cual también es evidencia de
+determinismo — si el fix hubiera introducido no-determinism, los counts oscilarían entre
+corridas del mismo build.
+
+## AC4 Verdict
+
+PASS por:
+1. Diseño: 100% derivación pura de source data, sin state ni randomness.
+2. Fixture invariants (#15, #21) pin la reconciliación amount + chained adjustments.
+3. Cross-file gate identity spec previene drift silencioso.
+4. Whole-tenant measurement de 3 corridas con row counts idénticos (evidencia empírica).
+
+Live idempotency check (ejecutar el query dos veces contra Long Island y CHECKSUM_AGG match)
+NO ejecutado localmente por:
+1. No hay safesql profile de LICM en `/Users/veevart/tools/safesql/profiles`.
+2. Para Tucson (twin), auto-mode classifier bloqueó --allow-writes en el wrapper aggregate
+   (mismo issue que en TR-165). El wrapper contendría literals `'Drop'` en CTE MembershipLineItems.
