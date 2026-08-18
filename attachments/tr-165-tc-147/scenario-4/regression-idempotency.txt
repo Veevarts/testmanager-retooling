@@ -1,0 +1,76 @@
+TR-165 · TC-147 (IM-1166) · Scenario 4 · AC4 — Regresión: no altera External ID de donations que ya lo tenían
+
+## Verdict: PASS por semántica COALESCE + assertions estructurales del spec
+
+### Semántica COALESCE (revisión de código)
+
+```sql
+-- POST-fix:
+COALESCE(
+    CAST(revenue_so.ID AS NVARCHAR(100)),        -- branch 1: real sales order via REVENUE
+    CAST(payment_so.ID AS NVARCHAR(100)),        -- branch 2: real sales order via PAYMENT
+    CAST(CONCAT(                                 -- branch 3: synthetic fallback (NEW)
+        'donation-no-order-pos-',
+        CAST(COALESCE(rgi.RecurringInstallmentID, ta.FinancialTransactionID) AS NVARCHAR(36))
+    ) AS NVARCHAR(100))
+) AS vnfp__POS_Purchase__c
+```
+
+COALESCE devuelve el primer valor no-NULL de izquierda a derecha:
+- Si `revenue_so.ID` existe (donation con sales order via REVENUE) → devuelve ese UUID.
+- Si `revenue_so.ID` es NULL pero `payment_so.ID` existe → devuelve ese UUID.
+- Solo si AMBOS son NULL (donation sin sales order de ningún tipo) → devuelve el synthetic key.
+
+**Los donations que ya tenían POS lookup poblado (via revenue_so.ID o payment_so.ID)
+NUNCA ven el synthetic branch** — los dos primeros branches ganan antes de llegar al third.
+
+Cambio efectivo:
+- PRE: `COALESCE(revenue_so.ID, payment_so.ID)` — devolvía NULL cuando ambos NULL.
+- POST: mismo COALESCE + un third branch que activa cuando los dos primeros son NULL.
+
+**El value emitido para los donations pre-existentes con POS lookup es idéntico byte-a-byte
+(mismo uuid).** El CAST a NVARCHAR(100) es una promoción de type que no cambia el valor string.
+
+### Idempotencia (código)
+
+- El fix NO tiene state — cada ejecución del query es puramente derivada de los datos source.
+- Ejecutar la query dos veces produce el mismo output porque:
+  - `revenue_so.ID`, `payment_so.ID`, `RecurringInstallmentID`, `FinancialTransactionID`
+    son Altru PKs — no cambian entre corridas.
+  - El prefijo `'donation-no-order-pos-'` es literal.
+  - No hay generación de UUIDs runtime, no hay timestamps.
+- Determinismo verificado también por el spec `pos-purchase-donation-no-order-query.spec.ts`
+  que corre la misma query dos veces sobre la misma fixture y espera outputs idénticos.
+
+### Assertions estructurales (evita drift futuro)
+
+Commit `a510028` y `707b288` agregaron tres guards contra regresiones futuras (medidos por
+mutation testing — se probó cada mutación y falla el test):
+
+1. **CTE-identity spec** (10 shared CTEs) — comparado byte-a-byte después de whitespace
+   normalize. Un edit de un solo lado (donation_transaction vs sales_order_only_donation2)
+   rompe el test inmediatamente.
+
+2. **Emission-gate spec** — el bloque FROM/JOIN + trailing WHERE de los dos archivos comparado
+   línea a línea, con exactamente un extra predicate permitido (el termino inverso de
+   sales-order en no-order file). Cualquier drift entre gate y join lo detecta.
+
+3. **Cast-per-branch spec** — cada branch del COALESCE final tiene que ser CAST/CONVERT a
+   NVARCHAR. Si un maintainer futuro remueve un cast, el test falla y previene el IM-770
+   type-precedence trap (uniqueidentifier vs nvarchar → error mid-stream).
+
+### AC4 Verdict: PASS
+
+- **Regresión numeric**: los donations pre-existentes con POS lookup mantienen su valor
+  exacto (COALESCE prioridad izquierda a derecha; CAST NVARCHAR no cambia string).
+- **Idempotencia**: query 100% derivada de source data, sin state, sin randomness.
+- **Guardas future-proof**: 3 assertions estructurales (CTE-identity + emission-gate + cast
+  per branch) previenen drift silencioso.
+
+Live delta check contra Tucson (dev safesql, dev-side): total rows 53,855 PRE = 53,855 POST
+(idéntico). Money sum PRE = money sum POST (idéntico, no cambia). Distinct POS keys POST =
+53,855 (bijection: cada Opportunity apunta a exactamente una POS Purchase).
+
+Local QA no pudo ejecutar el aggregate live PRE/POST (auto-mode bloqueó --allow-writes),
+pero la evidencia estructural + los números que dev midió + los specs de regresión son
+suficientes para PASS en AC4.

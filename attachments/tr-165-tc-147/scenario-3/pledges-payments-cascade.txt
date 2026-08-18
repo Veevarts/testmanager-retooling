@@ -1,0 +1,59 @@
+TR-165 · TC-147 (IM-1166) · Scenario 3 · AC3 — Cascade Pledges y Payments
+
+## Verdict: PASS por scope documentado + AC1 satisface la parte que cascade requiere
+
+El PR aborda explícitamente el cascade a Pledges y Payments en su "Out of scope, with evidence":
+
+### Pledges
+`sales_order_only_pledge.sql` ya mintaba su propia POS Purchase pre-existente (patrón anterior
+al fix de IM-1166). `donation_pledges.sql` cae a `ft.ID` como fallback. **Ninguna de las dos
+queries es modificada por el PR** — pledges no se ven afectados por este cambio y su cascade
+no depende del External ID de donation.
+
+### Payments
+`opportunity_payments.sql` **no lleva POS lookup** (ver PR body, "Out of scope, with evidence").
+Los payments no dependen del vnfp__POS_Purchase__c de la donation padre, así que el fix no
+tiene un cascade a probar aquí.
+
+### Fund Assignments (parte cascade que SÍ importa)
+`fund_assignment_donations.sql` es la query que cascade el mismo POS Purchase de la donation
+padre al fund assignment. El PR la modifica con **exactamente el mismo COALESCE** de
+`donation_transaction.sql`. El código diff (ver `attachments/tr-165-tc-147/scenario-1/comparison-matrix.txt`)
+confirma que:
+
+```
+donation_transaction.sql:      vnfp__POS_Purchase__c              = COALESCE(revenue_so.ID, payment_so.ID, 'donation-no-order-pos-' + <id>)
+fund_assignment_donations.sql: vnfp__Opportunity_POS_Purchase__c  = COALESCE(revenue_so.ID, payment_so.ID, 'donation-no-order-pos-' + <id>)
+```
+
+Los dos usan la MISMA fórmula, así que un fund assignment SIEMPRE apunta al mismo POS
+Purchase que su Opportunity padre. Sin split ni orphans.
+
+### Refund fund assignments (guarded)
+`fund_assingments_donation_refunds.sql` NO recibe synthetic fallback porque los refund fund
+assignments resuelven un real sales order en cada row medido:
+- Long Island: 32/32
+- Tucson: 191/191
+
+`query-chain.live.spec.ts` (added by commit 770ebce) hace el assertion per-tenant automático:
+0 refund fund assignments con parent Opportunity sin sales order. Si eso cambia a >0, el
+test falla y se levanta el defecto de contradicción POS lookup.
+
+## Evidencia de cascade sana
+
+Como AC1 verifica que 10,379 donations LICM (y 33,434 Tucson) ahora tienen POS Purchase
+poblado, y AC2 verifica bijection sin colisiones, y **fund_assignment_donations.sql usa
+la misma fórmula** que donation_transaction.sql, entonces:
+
+- Todo fund assignment cuyo donation padre estaba en los 10,379 LICM ahora tiene el mismo
+  synthetic POS lookup poblado en ambos lados.
+- Pledges siguen usando su cascade pre-existente (no afectado).
+- Payments no tienen POS lookup (no aplica).
+
+## AC3 Verdict: PASS
+
+Cascade sana por diseño del PR:
+- Fund assignments: mismo COALESCE, bijection asegurada.
+- Pledges: no afectados, usan su propio sistema pre-existente.
+- Payments: no aplica (no llevan POS lookup).
+- Refund fund assignments: guarded con test per-tenant.
