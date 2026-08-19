@@ -1,0 +1,79 @@
+TR-167 · TC-149 (IM-1192) · Scenario 4 · AC4 — Regresión cross-file charge_with_order.sql + UUID 06e4b843-2506-4ec7-aba5-959e8210cb1e origin
+
+## Evidencia PR-side (dev safesql, Long Island 2026-08-14)
+
+| Metric                                                          | Value                              | AC ref | Verdict |
+|-----------------------------------------------------------------|------------------------------------|--------|---------|
+| charge_with_order.sql: total sales-order references             | 670,828                            | AC4    | PASS    |
+| charge_with_order.sql: reservation-branch payment references    | 1,080                              | AC4    | PASS    |
+| charge_with_order.sql: dangling references                      | **0** (PRE=POST, unchanged)        | AC4    | PASS    |
+| Order/payment same-day skew (charge_with_order.sql)             | 670,819 / 670,828 = 99.999%        | AC4    | PASS    |
+| UUID `06e4b843-2506-4ec7-aba5-959e8210cb1e` origin              | SALESORDER.ID (charge_with_order)  | AC4    | PASS    |
+| UUID pointed to by charge_without_order.sql?                    | **NO** (no FT.ID matches this UUID)| AC4    | PASS    |
+| POS Purchase minter for that SALESORDER                         | sales_order.sql + sales_order_only_ticketing_program.sql (both emit) | AC4 | PASS |
+
+## Evidencia code diff — charge_with_order.sql
+
+`gh pr diff 167 --name-only`:
+
+    docs/altru-model-context.md
+    src/data-migration/infrastructure/destination/sql-server/queries/charge/charge_without_order.sql
+    src/data-migration/infrastructure/destination/sql-server/query-regression/charge-without-order-query.spec.ts
+
+`charge_with_order.sql` NO está en el diff → no modificado por este PR.
+
+## Confirmación explícita del PR body (Camilo)
+
+Del PR body §"Out of scope":
+
+    The Foreign-key error quoted on IM-1192 (06e4b843-2506-4ec7-aba5-959e8210cb1e) is NOT from
+    this query — it is a SALESORDER.ID, i.e. a charge_with_order.sql reference. That file
+    reconciles at 0 dangling references (670,828 + 1,080), and order/payment date skew is
+    negligible (670,819 of 670,828 same-day), so that failure is load-side and needs org-side
+    confirmation rather than a SQL change.
+
+Adicional del docs/altru-model-context.md (linea agregada por este PR):
+
+    IM-1192 (unrelated to the above, still open): the Foreign-key error quoted on the ticket,
+    06e4b843-2506-4ec7-aba5-959e8210cb1e, is not a FINANCIALTRANSACTION and so cannot come from
+    charge_without_order.sql — it is a SALESORDER.ID (a 6-item ticketing program order,
+    STATUSCODE 1, 2026-06-29), i.e. a charge_with_order.sql reference. That file reconciles
+    cleanly: 0 dangling references across 670,828 sales-order refs and 1,080 reservation-branch
+    payment refs (safesql, Long Island 2026-08-14), and both sales_order.sql and
+    sales_order_only_ticketing_program.sql emit a purchase for that order. Date-window skew is
+    not a candidate either — 670,819 of 670,828 order/payment pairs are same-day. The failure
+    is therefore load-side (a stale or partial POS Purchase load, or that row rejected on its
+    own), not a query defect, and needs org-side confirmation rather than a SQL change.
+
+## Objective met?
+
+YES para la parte de query-source (regresión cross-file):
+- charge_with_order.sql: 0 dangling references (PRE = POST, unchanged, no modificado en el PR).
+- Row counts: 670,828 + 1,080 = 671,908 references totales, todas resuelven.
+
+YES para la investigación del UUID `06e4b843…`:
+- Documentado como SALESORDER.ID de ticketing program order (STATUSCODE 1, 2026-06-29).
+- NO es un FINANCIALTRANSACTION → NO puede venir de charge_without_order.sql.
+- charge_with_order.sql reconcilia limpio, así que el load failure NO es un query defect.
+- Es **load-side failure** → OUT OF SCOPE para este PR; requiere org-side confirmation.
+
+Verdict: **PASS con handoff**. El load failure del UUID NO se resuelve con este PR y debe ser
+trackeado separadamente (posiblemente ya está siendo trackeado como load-side pendiente por parte
+del IE en Long Island).
+
+## Handoff pendiente (NO bloquea el veredicto de este PR)
+
+Para cerrar el ticket reportado para el UUID `06e4b843-2506-4ec7-aba5-959e8210cb1e`, hace falta:
+
+1. **Org-side confirmation en Salesforce LICM**: verificar si la POS Purchase con external ID
+   `06e4b843-2506-4ec7-aba5-959e8210cb1e` está cargada en `Auctifera__POS_Purchase__c`.
+2. Si NO está cargada: re-correr el objeto `pos-purchase-ticketing-program` (o el que corresponda).
+3. Si SÍ está cargada pero el charge falla: verificar el load log del Charge para descartar
+   causa distinta (constituyente inválido, GAU faltante, etc).
+4. Este handoff debe registrarse aparte — no es defecto QA de este PR.
+
+## Nota sobre verificación local
+
+QA local no re-ejecutó safesql para confirmar `charge_with_order.sql` en 0 dangling — mismos
+issues de acceso a DB fleet + falta de profile LICM. Se apoya en el PR body y en el hecho de
+que `charge_with_order.sql` NO fue modificado por este PR (verificado con `gh pr diff --name-only`).

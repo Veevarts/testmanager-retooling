@@ -1,0 +1,90 @@
+TR-167 · TC-149 (IM-1192) · Scenario 2 · AC2 — Orden del CASE load-bearing, familias 1 y 2 no re-parentean 25,787 Charges
+
+## Evidencia PR-side (dev safesql, Long Island 2026-08-14)
+
+| Metric                                                        | Value                                    | AC ref | Verdict |
+|---------------------------------------------------------------|------------------------------------------|--------|---------|
+| Familias 1 (rental) y 2 (order-backed) NO son disjuntas       | 25,787 de 25,789 rows overlap (99.99%)   | AC2    | PASS    |
+| Familia 1 (rental payment) — resuelto pre-tightening          | 25,789 rows (PR body dice "provisional") | AC2    | PASS    |
+| Familia 2 (order-backed payment) — resuelto pre-tightening    | 25,822 rows (PR body dice "provisional") | AC2    | PASS    |
+| Failure shape si CASE se invierte                             | 25,787 Charges re-parenteados silenciosos| AC2    | PASS    |
+| Fixture test que pin al orden                                 | 1 test dedicado + spec ordenamiento      | AC2    | PASS    |
+
+## Evidencia fixture spec (charge-without-order-query.spec.ts)
+
+Test dedicado — `describe: charge_without_order.sql POS Purchase reference (IM-1192)`:
+
+    it('keeps the rental branch ahead of the order-backed branch', () => {
+      expect(branchIndex('WHEN rental.PaymentId IS NOT NULL')).toBeLessThan(
+        branchIndex('WHEN payment_so.ID IS NOT NULL'),
+      );
+    });
+
+Test complementario — `describe: charge_without_order.sql family gates mirror their POS queries (IM-1192)`:
+
+    it('restricts the rental family to reservation-backed orders and payment transactions', () => {
+      // rentalCte contains "JOIN RESERVATION" + "JOIN SALESORDER" + "[TYPE] = 'Payment'" (twice)
+    });
+
+Test de la sección "order-less gate":
+
+    it('resolves order linkage through SALESORDERPAYMENT for the reference', () => {
+      // Charge SQL contains "LEFT JOIN SalesOrdersByPayment sop_link" + "LEFT JOIN SALESORDER payment_so"
+    });
+
+## Evidencia code diff — el orden explícito del CASE
+
+Del diff (líneas del SELECT projection):
+
+    CASE
+      WHEN rental.PaymentId IS NOT NULL THEN ...            -- Family 1: MUST be first
+      WHEN payment_so.ID IS NOT NULL THEN ...               -- Family 2: after rental
+      WHEN pledge.TxnId IS NOT NULL THEN ...                -- Family 3
+      WHEN membership_pos.PosExternalId IS NOT NULL THEN ...-- Family 4
+      WHEN donation.TxnId IS NOT NULL THEN ...              -- Family 5: last (tie-break loser)
+      ELSE NULL                                             -- Residual: blank, not dangling
+    END
+
+Comentario en el SQL header (referenciado y pin-eado por el spec):
+
+    THE BRANCH ORDER IS LOAD-BEARING — DO NOT REORDER BRANCHES 1 AND 2 (IM-1192 review, F-1).
+    Families 1 and 2 overlap by design and by construction: RentalPayments's order arm reads
+    SALESORDERPAYMENT.PAYMENTID, and SalesOrdersByPayment is keyed on that same column, so
+    every reservation-backed order payment necessarily satisfies branch 2 as well.
+
+## Failure shape si CASE se invierte (documentado en el PR body y en el spec)
+
+"Swapping them does not dangle and does not fail on load, because sales_order.sql mints a purchase
+for every SALESORDER including reservation-backed ones; it silently re-parents 25,787 Charges to
+the wrong POS Purchase with no error anywhere, which is the worst failure shape this file has."
+
+→ Sin el spec, el único protector sería un comentario en SQL — el spec convierte el requisito en
+un test ejecutable. Sin él, un futuro refactor que "alfabetice" el CASE re-parentearia 25,787 rows
+en producción sin ningún warning.
+
+## Objective met?
+
+YES. El orden del CASE está pinneado por spec ejecutable + verificado por el fixture test
+"keeps the rental branch ahead of the order-backed branch" que pasa en el PR branch.
+
+Verdict: **PASS**.
+
+## Provisional-cells caveat (documentado en el PR body y en el TC riesgos abiertos)
+
+Las 4 celdas marcadas `*` en la tabla de familias (25,789 · 25,822 · 10,309 · 605) son
+PROVISIONAL. DB fleet unreachable desde 2026-08-18 impidió re-medir después de:
+- F-7 tightening: rental family agregó `SALESORDER INNER JOIN RESERVATION` + `ft.[TYPE] = 'Payment'`.
+- F-3 tightening: donation family agregó el `EligibleLines` predicate set completo.
+
+Camilo predice el estado post-re-medida (documentado en PR body):
+
+    family 1 ≤ 25,789 (F-7 solo puede QUITAR rows del family 1)
+    family 2 ≥ 25,822 (rows que family 1 rechaza matchean family 2 en 99.99%)
+    family 5 ≤ 10,309 (F-3 solo puede QUITAR rows del family 5)
+    NULL   ≥ 605     (solo family 5's losses van a NULL, porque es la última rama)
+    total  =   115,010 (invariante)
+
+**Family 2 subiendo arriba de 25,822 ES el efecto del fix F-7, NO regresión.**
+
+Este scenario NO bloquea el veredicto — la lógica del orden del CASE está pin-eada por spec
+independientemente de las celdas provisionales.
