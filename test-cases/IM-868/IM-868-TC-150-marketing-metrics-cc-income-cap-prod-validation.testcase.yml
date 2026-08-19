@@ -1,0 +1,184 @@
+schemaVersion: "1.0"
+
+id: "9e1ccd29-bcb0-4a12-85ea-10928c4e82d4"
+key: "TC-150"
+title: "Marketing Metrics · POS Purchase Credit Card Income Cap · Production validation April 2026 (IM-868)"
+description: |
+  Test case para IM-868 (Historia · Medium · In QA Review) — QA Sub-task IM-1199.
+  PR bajo prueba: Veevarts/VeevartAnalytics #34 (branch task/investigate-marketing-metrics-anomalies-IM-868 → base main).
+  Status del PR al momento de generar el bundle: **OPEN (Draft) · NOT merged**.
+
+  Scope: valida el fix de "credit card transactions income cap por POS Purchase Total" que se
+  ejecuta directamente contra **PRODUCCIÓN** (VeevartTooling, us-east-1) sobre 3 orgs específicas
+  para el período 2026-04-01 → 2026-04-30. La ejecución dispara un manual-run del endpoint
+  analytics/manual-runs que refresh Marketing_Metrics__c en Salesforce production.
+
+  Cambios del PR:
+    - `extract-raw-source-rows.queries.ts`: agrega `Auctifera__POS_Purchase__r.Auctifera__Total__c`
+      a la Charge extraction.
+    - `metric-fact-computation.service.ts`: capea `credit_card_transactions_income` por POS Purchase
+      Total, preservando `credit_card_transactions_count` y `total_payment_value_adyen`.
+    - Unit tests: +134 lines (23 suites / 149 tests PASS al momento del bundle).
+    - docs/im-868-qa-validation.md: baseline prod + rollback notes.
+
+  Deltas esperados post-manual-run (April 2026):
+    - Textile Museum of Canada (00D2E00000139NKUAY): `Credit_Card_Income_Onsite__c` 8857.63 → 8760.33 (Δ −97.30)
+    - Danish Architecture Center (00D09000007vAJCEA2): `Credit_Card_Income_Onsite__c` 1797052.22 → 1796926.22 (Δ −126.00)
+    - London Children's Museum (00DHr000001s53CMAQ): `Amount_Credit_Card_Transactions_Online__c` 147968.42 → 146149.11 (Δ −1819.31)
+
+  Invariantes que DEBEN preservarse:
+    - Canal opuesto sin cambio: Textile online 8440.59 · DAC online 180811.00 · London onsite 103927.85.
+    - Transaction counts sin cambio: Textile 226/446 · DAC 705/8074 · London 1895/1833.
+    - `Total_Payment_Value_Adyen__c` (raw processor volume) sin cambio: Textile 0.00 · DAC 1977863.22 · London 251896.27.
+
+  Riesgos abiertos:
+    - **PR #34 sigue OPEN (Draft) · NOT merged al momento del bundle**. El TC no puede ejecutarse
+      hasta que el PR sea merged + deployed a producción. Todos los escenarios quedan `not-run`
+      hasta entonces.
+    - **Ejecución escribe a PRODUCCIÓN**. El manual-run refresca `Marketing_Metrics__c` records en
+      Salesforce prod para April 2026 de las 3 orgs listadas. No es reversible en frío — un rollback
+      requiere restaurar desde el baseline capturado ANTES del run.
+    - **Precondición crítica: capturar baseline ANTES de disparar el manual-run**. Si el run
+      publica valores incorrectos, hay que restaurar desde el baseline (rollback code NO restaura
+      valores publicados en VeevartHub).
+    - **`x-api-key`** para el endpoint prod es SECRETO. Obtener del approved secure source y
+      **NUNCA** commit a Jira, logs, screenshots, ni source control.
+    - **Feb 2026 NO es período válido** para regresión de este bug — las orgs elegidas no tuvieron
+      overages en Feb. April 2026 es el período correcto y contiene los overages reproducibles.
+    - **HTTP 202 solo confirma acknowledge** — hay que esperar a que la Step Functions execution
+      alcance `SUCCEEDED` antes de re-consultar los valores. Un 202 no confirma que extraction +
+      publication completaron.
+    - **Original spike scope**: los 5 ACs originales del spike (clasificar 6+ anomalías de
+      Marketing Metrics) NO están cubiertos por este TC — este PR resuelve UNA anomalía específica
+      (credit card income cap). Los otros hallazgos del spike (Current_Members__c frozen, GiftCards
+      always-zero, Vizcaya channel-mix delta, etc.) requieren tickets separados de implementación.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "PR Veevarts/VeevartAnalytics #34 MERGED a main + DEPLOYED a producción. Sin esto los escenarios NO pueden ejecutarse (todos not-run hasta merge+deploy)."
+  - "Acceso lectura a Salesforce production para las 3 orgs objetivo: Textile Museum of Canada (00D2E00000139NKUAY), Danish Architecture Center (00D09000007vAJCEA2), London Children's Museum (00DHr000001s53CMAQ)."
+  - "`x-api-key` del endpoint prod POST /analytics/manual-runs obtenido del approved secure source (NEVER commit a Jira/logs/screenshots/source)."
+  - "Método SOQL/tooling para consultar `Marketing_Metrics__c` en las 3 orgs para el período 2026-04-01 → 2026-04-30, campos: Credit_Card_Income_Onsite__c, Amount_Credit_Card_Transactions_Online__c, Credit_Card_Transactions_Online__c, Credit_Card_Transactions_Onsite__c, Total_Payment_Value_Adyen__c."
+  - "Baseline capturado ANTES de disparar el manual-run (procedimiento step 1 del ticket)."
+  - "Herramienta para monitorear Step Functions execution (AWS Console us-east-1 o `aws stepfunctions describe-execution`) — HTTP 202 NO confirma que la publicación completó."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Los 3 campos de Credit Card Income objetivo alcanzan los valores post-fix esperados tras Step Functions SUCCEEDED"
+    tags:
+      - ac-1
+      - production
+      - happy-path
+      - cc-income-cap
+    given:
+      - "PR #34 mergeado + deployed a producción"
+      - "Baseline pre-run capturado para Marketing_Metrics__c de las 3 orgs, campos: Credit_Card_Income_Onsite__c (Textile + DAC), Amount_Credit_Card_Transactions_Online__c (London), + counts + Total_Payment_Value_Adyen__c"
+      - "`x-api-key` obtenido del approved secure source"
+    when:
+      - "el QA dispara manualmente POST https://dcaxoa4js4.execute-api.us-east-1.amazonaws.com/prod/analytics/manual-runs con payload {periodStart: 2026-04-01, periodEnd: 2026-04-30, subscriberOrgIds: [Textile, DAC, London]} y reason 'QA Review IM-868 credit card POS Purchase cap validation'"
+      - "el QA registra el HTTP 202 response + executionArn devuelto"
+      - "el QA espera hasta que la Step Functions execution alcance `SUCCEEDED` (no re-consultar valores solo con el 202)"
+      - "el QA re-consulta los mismos campos de Marketing_Metrics__c para las 3 orgs"
+    then:
+      - "Textile Museum of Canada `Credit_Card_Income_Onsite__c` = 8760.33 (delta −97.30 vs baseline 8857.63)"
+      - "Danish Architecture Center `Credit_Card_Income_Onsite__c` = 1796926.22 (delta −126.00 vs baseline 1797052.22)"
+      - "London Children's Museum `Amount_Credit_Card_Transactions_Online__c` = 146149.11 (delta −1819.31 vs baseline 147968.42)"
+      - "los 3 deltas son NEGATIVOS (nunca positivos ni cero — el cap solo puede REDUCIR income)"
+      - "los valores POST son EXACTOS a los expected — cualquier delta distinto es FAIL"
+
+  - title: "AC2 · No-regresión en el canal OPUESTO — los 3 valores del canal opuesto permanecen exactamente iguales"
+    tags:
+      - ac-2
+      - production
+      - regression-check
+      - opposite-channel
+    given:
+      - "Baseline pre-run capturado también para los canales opuestos: Textile online CC income, DAC online CC income, London onsite CC income"
+      - "El manual-run ha alcanzado Step Functions `SUCCEEDED`"
+    when:
+      - "el QA re-consulta el canal OPUESTO de cada org en Marketing_Metrics__c April 2026"
+    then:
+      - "Textile Museum of Canada online credit card income = 8440.59 (unchanged vs baseline)"
+      - "Danish Architecture Center online credit card income = 180811.00 (unchanged vs baseline)"
+      - "London Children's Museum onsite credit card income = 103927.85 (unchanged vs baseline)"
+      - "cualquier cambio en el canal opuesto es FAIL — el cap debe afectar SOLO el canal con overage"
+
+  - title: "AC3 · Transaction counts sin cambio en ambos canales de las 3 orgs (el cap afecta income, no counts)"
+    tags:
+      - ac-3
+      - production
+      - invariant
+      - transaction-counts
+    given:
+      - "Baseline pre-run capturado para transaction counts: Credit_Card_Transactions_Online__c + Credit_Card_Transactions_Onsite__c en las 3 orgs"
+      - "El manual-run ha alcanzado Step Functions `SUCCEEDED`"
+    when:
+      - "el QA re-consulta los transaction counts de Marketing_Metrics__c April 2026 para las 3 orgs"
+    then:
+      - "Textile: online = 226, onsite = 446 (ambos unchanged)"
+      - "DAC: online = 705, onsite = 8074 (ambos unchanged)"
+      - "London: online = 1895, onsite = 1833 (ambos unchanged)"
+      - "cualquier cambio en counts es FAIL — el cap opera sobre income, NUNCA cuenta rows"
+
+  - title: "AC4 · `Total_Payment_Value_Adyen__c` (raw processor volume) sin cambio — invariante crítico"
+    tags:
+      - ac-4
+      - production
+      - invariant
+      - adyen-raw-volume
+    given:
+      - "Baseline pre-run capturado para Total_Payment_Value_Adyen__c en las 3 orgs"
+      - "El manual-run ha alcanzado Step Functions `SUCCEEDED`"
+    when:
+      - "el QA re-consulta `Total_Payment_Value_Adyen__c` de Marketing_Metrics__c April 2026 para las 3 orgs"
+    then:
+      - "Textile Museum of Canada `Total_Payment_Value_Adyen__c` = 0.00 (unchanged, no Adyen activity en April)"
+      - "Danish Architecture Center `Total_Payment_Value_Adyen__c` = 1977863.22 (unchanged)"
+      - "London Children's Museum `Total_Payment_Value_Adyen__c` = 251896.27 (unchanged)"
+      - "cualquier cambio en Adyen raw volume es FAIL — el cap NO debe tocar el raw processor volume"
+
+  - title: "AC5 · Protocolo de ejecución + failure handling — HTTP 202 recibido, executionArn capturado, Step Functions SUCCEEDED confirmado; en caso de FAIL registrar ARN + valores observados + iniciar rollback via baseline"
+    tags:
+      - ac-5
+      - production
+      - execution-protocol
+      - rollback-preparedness
+    given:
+      - "Baseline pre-run capturado completamente (todos los campos de los ACs 1-4)"
+      - "`x-api-key` disponible desde secure source"
+      - "Endpoint prod y payload definidos según el ticket"
+    when:
+      - "el QA dispara el POST y registra el executionArn del response"
+      - "el QA monitorea la Step Functions execution hasta uno de los estados terminales: SUCCEEDED, FAILED, TIMED_OUT, ABORTED"
+    then:
+      - "el HTTP response es 202 con executionArn no-vacío"
+      - "el estado final Step Functions es `SUCCEEDED` — si NO es SUCCEEDED, el QA registra el ARN + estado + timestamp + cause y NO marca el TC como PASS"
+      - "si el run publica valores incorrectos (los ACs 1-4 fallan), el QA inicia el rollback: restaurar los campos afectados desde el baseline capturado ANTES de re-run — el code rollback NO restaura valores publicados en VeevartHub, el restore es MANUAL desde el baseline"
+      - "el executionArn queda documentado en el TR como evidencia del run (PASS o FAIL)"
+
+tags:
+  - im-868
+  - im-1199
+  - analytics
+  - marketing-metrics
+  - veevarthub
+  - production
+  - credit-card-income
+  - pos-purchase-cap
+  - manual-run
+  - april-2026
+  - textile-museum-of-canada
+  - danish-architecture-center
+  - london-childrens-museum
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-19T10:35:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-19T10:35:00Z"
+  version: 1
