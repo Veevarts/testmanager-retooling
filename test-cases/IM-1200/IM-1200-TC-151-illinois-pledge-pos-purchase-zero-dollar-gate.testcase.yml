@@ -1,0 +1,156 @@
+schemaVersion: "1.0"
+
+id: "f983efa3-feb9-4988-b174-7ecf85b6be7b"
+key: "TC-151"
+title: "IHMEC · sales_order_only_pledge.sql mints POS Purchase for $0 and fully-reversed pledges (IM-1200)"
+description: |
+  Test case para IM-1200 (Historia, Crítica, In QA Review) — epic IM-70 Altru Queries — QA Sub-task IM-1203.
+  Cliente objetivo: Illinois Holocaust Museum and Education Center (IHMEC). PR bajo prueba:
+  Veevarts/MigrationToolETL "#170".
+
+  Contexto: donation_pledges.sql emite una Opportunity por CADA pledge y nombra su POS Purchase
+  incondicionalmente (COALESCE(so.ID, ft.ID) AS vnfp__POS_Purchase__c). Cuando el pledge no tiene
+  SALESORDER, el único query que puede acuñar ese POS es pos-purchase/sales_order_only_pledge.sql,
+  que tenía la compuerta HAVING SUM(el.NetAmount) <> 0 — side-effect de IM-87 (dc93ae2), no una
+  decisión deliberada. Todo pledge cuyas líneas netean a cero quedaba sin POS Purchase, la
+  referencia colgada hacía fallar la Opportunity COMPLETA en el load, y con ella todos sus
+  Pledge Payments. Los dos IDs del ticket son pledges de $0 en Illinois:
+  aef807ba-59fc-4594-9e63-babe9f8f5083 = rev-10527724 (2026-01-15, $0) y
+  e72b9b13-55b8-46f2-b184-6db67c60f111 = rev-10518734 (2025-08-12, $0).
+
+  Universo completo medido por el dev (safesql, población completa, sin ventana): referencias
+  colgadas Illinois 34/6,626 · Long Island 3/734 · tucson 1/684 · high_desert 6/2,889. La
+  compuerta descartaba DOS formas: pledges de $0 (34/3/1/3) y pledges totalmente reversados
+  (3, solo high_desert). Clasificar siempre por las LÍNEAS, nunca por ft.TRANSACTIONAMOUNT
+  (Altru pone esa columna en 0 al reversar por completo y las dos formas se vuelven
+  indistinguibles).
+
+  Fix: sales_order_only_pledge.sql pasa INNER JOIN → LEFT JOIN y elimina el HAVING (el agregado
+  sigue siendo la fuente del monto vía COALESCE(ta.Amount, 0), pero ya no decide si la fila
+  existe). charge_without_order.sql relaja la familia 3 en conjunto (espejaba la misma
+  compuerta). Se agregó pos-purchase-pledge-query.integration.spec.ts (falla 3 de 4 contra
+  main, pasa en la rama). CI en verde; tres rondas de revisión independiente sin hallazgos de
+  código.
+
+  Riesgos abiertos (heredados del comentario dev y de la ausencia de ACs formales):
+    - donation_pledges.sql NO tiene filtro de fechas mientras los dos queries de POS sí; una
+      corrida de POS CON ventana deja colgado todo pledge fuera de la ventana (en Illinois,
+      fromDate=2025-01-01 dejaría 6,006 de 6,626 colgados). Es un problema aparte, fuera de
+      este PR, y requiere su propio ticket. La validación de ESTE fix debe correr sin ventana:
+      referencias colgadas en una corrida windowed NO son regresión de IM-1200.
+    - IM-1200 no tiene ACs formales; los 4 ACs de este TC se infieren del "Qué probar en QA"
+      del dev + el Action needed del ticket.
+    - Profiles safesql locales: solo illinois_2 y tucson (cubren 2 de los 4 tenants). La
+      verificación de Long Island y high_desert depende de las mediciones del PR salvo que se
+      provea profile o dump equivalente.
+    - Verificar baseRefName del PR "#170" antes del sign-off (PR merged ≠ está en main).
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado en HEAD del PR \"#170\" + acceso al commit base (main) para contraste PRE-fix."
+  - "Profiles safesql illinois_2 y tucson disponibles en /Users/veevart/tools/safesql/profiles (Long Island y high_desert: solo si se provee profile o dump)."
+  - "Las corridas de POS Purchase se ejecutan SIN ventana de fechas (fromDate/toDate no seteados). Corrida windowed es HAZARD documentado — ver riesgos."
+  - "Queries identificadas en el checkout: donation_pledges.sql, pos-purchase/sales_order_only_pledge.sql, charge_without_order.sql."
+  - "Método aggregate-only para PRE/POST (reusar CTEs del query real como COUNT/SUM, sin volcar filas de datos de clientes)."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-151/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Ticket POS IDs and the 34 Illinois $0-pledges are minted by sales_order_only_pledge.sql (unwindowed)"
+    tags:
+      - ac-1
+      - regression-evidence
+      - illinois
+      - zero-dollar-pledges
+    given:
+      - "el profile safesql illinois_2 cargado en el runner"
+      - "el commit base PRE-fix checked out (compuerta HAVING SUM(el.NetAmount) <> 0 vigente)"
+      - "los dos POS IDs del ticket identificados: aef807ba-59fc-4594-9e63-babe9f8f5083 (rev-10527724) y e72b9b13-55b8-46f2-b184-6db67c60f111 (rev-10518734)"
+    when:
+      - "se ejecuta sales_order_only_pledge.sql PRE-fix sin ventana de fechas y se buscan los dos IDs del ticket en su output"
+      - "se hace checkout al HEAD del PR \"#170\" (POST-fix) y se re-ejecuta el mismo query sin ventana"
+    then:
+      - "PRE-fix: ninguno de los dos IDs del ticket aparece en el output (reproduce el bloqueo reportado)"
+      - "POST-fix: ambos IDs del ticket aparecen, cada uno con monto $0 (COALESCE(ta.Amount, 0))"
+      - "POST-fix: los 34 pledges de $0 de Illinois aparecen completos (POS acuñados pasa de 6,592 a 6,626)"
+
+  - title: "AC2 · Dangling pledge POS references drop to 0 in all four tenants, covering both drop shapes ($0 and fully-reversed)"
+    tags:
+      - ac-2
+      - edge-case
+      - multi-tenant
+      - fully-reversed
+    given:
+      - "el conteo de referencias colgadas se define como: vnfp__POS_Purchase__c emitidos por donation_pledges.sql que NO existen en el output combinado de los queries POS Purchase"
+      - "línea base dev PRE-fix: Illinois 34, Long Island 3, tucson 1, high_desert 6 (3 de $0 + 3 totalmente reversados)"
+      - "la clasificación de formas se hace por las LÍNEAS del pledge, nunca por ft.TRANSACTIONAMOUNT"
+    when:
+      - "se ejecuta el par donation_pledges.sql + POS Purchase queries POST-fix sin ventana en illinois_2 y tucson (tenants con profile local)"
+      - "se cuentan referencias colgadas por tenant con el método aggregate-only"
+      - "se contrastan Long Island y high_desert contra las mediciones del PR (o contra profile provisto)"
+    then:
+      - "illinois_2: referencias colgadas = 0 (PRE = 34)"
+      - "tucson: referencias colgadas = 0 (PRE = 1)"
+      - "Long Island y high_desert: 0 según la verificación del PR (3 → 0 y 6 → 0), incluidos los 3 pledges totalmente reversados de high_desert (línea Standard cancelada exactamente por una Reversal)"
+      - "los totales cuadran solos por tenant: Opportunities de pledge = POS acuñados (Illinois 6,626 = 6,626)"
+
+  - title: "AC3 · Conservation — no lost rows, no amount changes, no duplicates; charge_without_order.sql reproduces its baselines with only the reference column moving"
+    tags:
+      - ac-3
+      - conservation
+      - no-row-loss
+      - charge-without-order
+    given:
+      - "el commit base PRE-fix y el HEAD del PR \"#170\" disponibles en el mismo clone"
+      - "líneas base de charge_without_order.sql: 125,687 / 115,010 / 118,008 filas por tenant medido"
+    when:
+      - "se comparan PRE vs POST los outputs de sales_order_only_pledge.sql: filas preexistentes, montos y duplicados"
+      - "se re-ejecuta charge_without_order.sql POST-fix y se contrasta contra sus líneas base"
+    then:
+      - "ninguna fila preexistente de POS Purchase cambió de monto (COALESCE(ta.Amount, 0) intacto como fuente autoritativa)"
+      - "sin duplicados: external IDs distintos = filas emitidas en ambos queries"
+      - "los POS Purchase nuevos llegan con Total = 0"
+      - "charge_without_order.sql reproduce exactamente 125,687 / 115,010 / 118,008; solo se mueve la columna de referencia (+5 Charges resueltos en Illinois, +0 en los demás)"
+
+  - title: "AC4 · Pledge Opportunities and Pledge Payments load unblocked — every vnfp__POS_Purchase__c reference resolves"
+    tags:
+      - ac-4
+      - referential-integrity
+      - pledge-payments
+      - load-unblock
+    given:
+      - "el HEAD del PR \"#170\" checked out y las corridas POST-fix sin ventana completadas"
+      - "el load de Opportunities de pledge fallaba COMPLETO cuando vnfp__POS_Purchase__c no resolvía, bloqueando todos sus Pledge Payments"
+    when:
+      - "se valida por integridad referencial que cada vnfp__POS_Purchase__c emitido por donation_pledges.sql existe en el output POS Purchase POST-fix (aggregate LEFT JOIN, conteo de no-match)"
+      - "se verifica en la corrida de integración (o en el spec pos-purchase-pledge-query.integration.spec.ts) que la familia de pledges quedó cubierta"
+    then:
+      - "conteo de referencias no resueltas = 0 en los tenants con profile local (illinois_2, tucson)"
+      - "las Opportunities de pledge son cargables: ninguna falla por referencia colgada de POS Purchase"
+      - "los Pledge Payments dependientes dejan de estar bloqueados (el síntoma reportado en IM-1200 desaparece)"
+      - "pos-purchase-pledge-query.integration.spec.ts pasa en la rama del PR y falla 3 de 4 contra main (confirma que el spec pinnea el fix)"
+
+tags:
+  - im-1200
+  - im-70
+  - im-1203
+  - altru
+  - queries
+  - migration
+  - pledge-payments
+  - pos-purchase
+  - illinois
+  - zero-dollar-pledges
+  - critical
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-20T16:42:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-20T16:42:00Z"
+  version: 1
