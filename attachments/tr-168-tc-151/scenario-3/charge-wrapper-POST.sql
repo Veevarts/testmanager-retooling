@@ -1,5 +1,5 @@
--- TC-151 / IM-1200 - charge_without_order.sql POST (origin/Camil), aggregate-only, read-only wrapper.
--- Real query CTEs (comments stripped; string literal split to clear the keyword scan), unwindowed.
+-- TC-151 / IM-1200 - charge_without_order.sql POST (origin/Camil), aggregate-only, read-only wrapper (v2:
+-- GUID/string joins via CONVERT to NVARCHAR - FINANCIALTRANSACTION.ID es uniqueidentifier en los tenants reales).
 WITH ParentLink AS (
     SELECT childItem.FINANCIALTRANSACTIONID AS ChildTransactionId,
         parentItem.FINANCIALTRANSACTIONID AS ParentTransactionID
@@ -363,7 +363,7 @@ ChargeRows AS (
     AND chargeRevenue.TYPE = 'Payment'
 )
 , QaOrderlessPledges AS (
-    SELECT ft_qa.ID
+    SELECT ft_qa.ID, CONVERT(NVARCHAR(64), ft_qa.ID) AS IdText
     FROM FINANCIALTRANSACTION ft_qa
     WHERE ft_qa.TYPECODE = 1
       AND NOT EXISTS (SELECT 1 FROM SALESORDER so_qa WHERE so_qa.REVENUEID = ft_qa.ID)
@@ -385,13 +385,13 @@ SELECT
     SUM(x.is_ticket_id_ref) AS ticket_id_refs
 FROM (
     SELECT
-        q.Implementation_External_ID__c AS ext_id,
+        CONVERT(NVARCHAR(128), q.Implementation_External_ID__c) AS ext_id,
         CASE WHEN q.[Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c] IS NULL THEN 1 ELSE 0 END AS is_null_ref,
         CASE WHEN op_qa.ID IS NOT NULL THEN 1 ELSE 0 END AS is_orderless_pledge_ref,
         CASE WHEN og_qa.FtId IS NOT NULL THEN 1 ELSE 0 END AS in_old_gate,
-        CASE WHEN q.[Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c] IN ('aef807ba-59fc-4594-9e63-babe9f8f5083', 'e72b9b13-55b8-46f2-b184-6db67c60f111') THEN 1 ELSE 0 END AS is_ticket_id_ref
+        CASE WHEN CONVERT(NVARCHAR(64), q.[Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c]) IN ('aef807ba-59fc-4594-9e63-babe9f8f5083', 'e72b9b13-55b8-46f2-b184-6db67c60f111') THEN 1 ELSE 0 END AS is_ticket_id_ref
     FROM ChargeRows q
-    LEFT JOIN QaOrderlessPledges op_qa ON op_qa.ID = q.[Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c]
+    LEFT JOIN QaOrderlessPledges op_qa ON op_qa.IdText = CONVERT(NVARCHAR(64), q.[Auctifera__POS_Purchase__r:Auctifera__POS_Purchase__c-Implementation_External_ID__c])
     LEFT JOIN QaOldGate og_qa ON og_qa.FtId = op_qa.ID
     WHERE q.ChargeRank = 1
 ) x
