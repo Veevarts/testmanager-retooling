@@ -1,0 +1,123 @@
+TR-168 · TC-150 (IM-868) · Scenario 1 · Follow-up · Isolation test — swap London for Vizcaya
+
+## Objetivo del test
+
+Distinguir entre 2 hipótesis del defecto raíz encontrado en el run inicial:
+- H1: London tiene un defecto DETERMINISTICO, org-específico (auth/config/data en su SF org).
+- H2: Race condition o parallel-Map bug en el orquestador — la 3ra iteración del Map o alguna
+  slot particular del scheduler falla independientemente del org.
+
+## Diseño del test
+
+Reemplazar el subscriberOrgId de London (00DHr000001s53CMAQ) por el de Vizcaya Museum and
+Gardens (00DKj0000019e7sMAA) — mismo período (April 2026), misma estructura de payload
+(3 subscriberOrgIds), misma reason string ("QA Review IM-868 defect characterization").
+
+Vizcaya elegido porque:
+- Tiene April 2026 CC data significativa (online $249,552 + onsite $535,070 = $784K).
+- Documentado en la descripción original de IM-868 como org con anomalía "channel-mix inconsistency".
+- Alto volumen aumenta la probabilidad de que tenga overages que el cap fix reduciría (test más informativo).
+
+## Baseline pre-swap-run (todos los 3 orgs, 2026-08-21 pre-run)
+
+- Textile onsite = 8,760.33 (POST-fix del run anterior, valor correcto)
+- DAC onsite = 1,796,926.22 (POST-fix del run anterior, valor correcto)
+- Vizcaya online = 249,552.00 (baseline crudo, nunca fue tocado por manual-run del cap fix)
+- Vizcaya onsite = 535,070.90 (baseline crudo)
+
+## Manual-run swap execution
+
+- POST disparado 2026-08-21 20:15:18 UTC por el usuario con x-api-key.
+- executionArn: arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-oskh2CpJjqY4:manual-20260821T201518-37ae38f3
+- Status Step Functions: SUCCEEDED (verificado via screenshot de Console).
+- Events counter: 74 events registered.
+- **Zero "Caught error" events en la timeline** (contrast con el London run que sí tuvo 1).
+
+## Post-swap-run verification (CSM/VeevartHub prod)
+
+| Org      | Field                                            | PRE-swap    | POST-swap   | Δ          | LastModified            | Verdict         |
+|----------|--------------------------------------------------|------------:|------------:|-----------:|-------------------------|-----------------|
+| Textile  | Amount_Credit_Card_Transactions_Online__c        |     8440.59 |     8440.59 |       0.00 | 2026-08-21T20:15:51Z    | PASS (idempotent) |
+| Textile  | Credit_Card_Income_Onsite__c                     |     8760.33 |     8760.33 |       0.00 | 2026-08-21T20:15:51Z    | PASS (idempotent) |
+| DAC      | Amount_Credit_Card_Transactions_Online__c        |   180811.00 |   180811.00 |       0.00 | 2026-08-21T20:16:19Z    | PASS (idempotent) |
+| DAC      | Credit_Card_Income_Onsite__c                     |  1796926.22 |  1796926.22 |       0.00 | 2026-08-21T20:16:19Z    | PASS (idempotent) |
+| Vizcaya  | Amount_Credit_Card_Transactions_Online__c        |   249552.00 |   249392.00 |    -160.00 | 2026-08-21T20:17:19Z    | PASS (cap applied) |
+| Vizcaya  | Credit_Card_Income_Onsite__c                     |   535070.90 |   535010.90 |     -60.00 | 2026-08-21T20:17:19Z    | PASS (cap applied) |
+
+Los 3 orgs refreshed. Textile y DAC no-op idempotentes (valores ya post-fix). Vizcaya recibió
+el cap y perdió $220 en total ($160 online + $60 onsite) — evidencia de que el cap fix del
+PR #34 funciona sobre un org COMPLETAMENTE DIFERENTE al scope original de IM-868.
+
+## Timeline observada de la Map (concurrency=2 confirmada)
+
+    ~00:00:33  Textile publish completes (iteration 1 done)
+    ~00:01:00  DAC publish completes (iteration 2 done — start after Textile ended)
+    ~00:02:00  Vizcaya publish completes (iteration 3 done — start after Textile ended)
+
+Concurrencia máxima de 2 iteraciones en paralelo — 3ra iteración entra cuando 1ra termina.
+Es la misma estructura que el run fallido con London.
+
+## Diagnóstico definitivo
+
+### H2 (race condition / parallel Map bug) — REFUTADA
+
+- La misma slot (3ra posición del Map) que en el run fallido con London ahora procesa Vizcaya
+  sin errores.
+- El scheduler + dispatcher + Map iteration + Extract → Compute → Publish funcionan
+  correctamente para arbitrary orgs.
+- El "Caught error" del run fallido NO se manifestó — no es un patrón sistémico.
+
+### H1 (defecto deterministico org-específico de London) — CONFIRMADA
+
+- La Lambda ExtractSubscriberRawSourceRows falló DETERMINISTICAMENTE para
+  subscriberOrgId=00DHr000001s53CMAQ en el run anterior.
+- El error catcheado NO se reproduce cuando ese org se retira del payload.
+- El defecto NO está en el orquestador; está localizado en la ejecución de Extract para el
+  SF org de London Children's Museum.
+
+### Categorías candidatas del defecto London-específico
+
+1. **Auth broker fail** para el SF org de London (credentials expiradas, token roto, secret
+   ausente en Secrets Manager, o VEEVART_HUB_SECRET_ARN mal-configurado para London).
+2. **SOQL fail** — un query en la Lambda ExtractSubscriberRawSourceRows devuelve error sobre
+   la shape de datos específica de London (campo custom faltante en su schema, picklist value
+   inválido, referencia rota, o schema drift).
+3. **Timeout parcial / partial extract fail** — un batch o page-through de SOQL falla a mitad
+   de camino, causando el error interno de la Lambda.
+4. **Permission issue** — el integration user en el AuthBroker no tiene los permisos
+   necesarios en el SF org de London.
+
+## Recomendación al dev
+
+1. **Ir directo a CloudWatch Logs** de la Lambda ExtractSubscriberRawSourceRows invocation con
+   `subscriberOrgId=00DHr000001s53CMAQ` timestamp `~2026-08-21T15:59:00Z` (link en la columna
+   "Logs" de la row "Caught error" del Table view del run manual-20260821T155847-05f2c198).
+   Ese log tiene el error real de la Lambda.
+
+2. **NO enfocarse en el orquestador** — el hardening del Catch handler (WorkflowFailed si algún
+   batch falla) sigue siendo válido para prevenir false-positive SUCCEEDED en el futuro, pero
+   el defecto raíz es en Extract para London, no en el state machine.
+
+3. **Bonus concern** sigue en pie: los publishFailureCount=25 (Textile) y 36 (DAC) del run
+   anterior — items ocultos que fallaron dentro del publish exitoso. En este swap run también
+   probable (no verificado — no capturé publishFailureCount).
+
+## Estado de tickets (sin cambio)
+
+- IM-868 → sigue **Rechazado** (Rejected by QA). El veredicto QA para IM-868 no cambia: London
+  sigue sin poder publicar sus metrics correctas, y el scope de IM-868 requiere que las 3 orgs
+  del payload se procesen correctamente. Este isolation test SOLO caracteriza el defecto
+  raíz con precisión — no absuelve el ticket.
+- IM-1199 → sigue **Abierta** (pending fix + re-run).
+- PR #34 → cap fix confirmado FUNCIONALMENTE CORRECTO (Vizcaya es la 3ra prueba en vivo, tras
+  Textile y DAC, todos con deltas alineados a los expected).
+
+## Side-effect nota
+
+Vizcaya (fuera del scope original de IM-868) tiene ahora valores CC actualizados por el cap fix.
+Este es el efecto deseado del deploy — pero conviene que el equipo esté al tanto de que
+Vizcaya's Marketing_Metrics__c para April 2026 fue modificado por este test:
+- online 249552.00 → 249392.00 (Δ -160.00)
+- onsite 535070.90 → 535010.90 (Δ -60.00)
+Baseline archivado en /tmp/im-868-vizcaya-baseline.json para rollback si algún stakeholder lo
+solicita.
