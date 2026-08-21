@@ -1,0 +1,238 @@
+schemaVersion: "1.0"
+id: tr-906ec74a-fba1-4219-8898-e129752f1c46
+key: TR-168
+title: >-
+  TR-168 · IM-868 · TC-150 · Marketing Metrics POS Purchase CC Income Cap · Prod validation April 2026 —
+  2/3 PASS · 1 FAIL (London silently skipped by orchestrator, Step Functions SUCCEEDED with partial publish)
+status: completed
+environment:
+  name: >-
+    Production: VeevartTooling (AWS account 287043460717, us-east-1) · CSM/VeevartHub prod (Salesforce org
+    00D60000000KdOJEA0, alias csm-prod). Validation triggered via POST /analytics/manual-runs from user's
+    terminal (x-api-key handled by user, never exposed to Claude session). Step Functions state machine
+    MonthlyKpiExtractionStateMachine-oskh2CpJjqY4 (Standard). Deploy of PR #34 to prod confirmed by dev
+    before manual-run.
+  url: https://github.com/Veevarts/VeevartAnalytics/pull/34
+  buildVersion: >-
+    Classification: post-deploy prod validation of a fix that caps credit_card_transactions_income by
+    parent POS Purchase Total. PR #34 merged to main + deployed. Fix code correctness verified on 2/3 orgs
+    (Textile + DAC show exact expected deltas). Third org (London) NOT processed by orchestrator despite
+    being in the payload → orchestrator/dispatcher defect surfaces as SUCCEEDED with partial publish.
+  notes: |
+    ## Solution understood
+
+    PR #34 caps `credit_card_transactions_income` by `Auctifera__POS_Purchase__r.Auctifera__Total__c`
+    when accumulated Charge amounts for a single POS Purchase exceed the purchase total.
+    `credit_card_transactions_count` and `total_payment_value_adyen` remain uncapped (raw counts and
+    raw processor volume).
+
+    The fix ships with the extractor query change (add Auctifera__Total__c to Charge SELECT) and the
+    metric-fact-computation service change (per-period cap tracking). Dev unit tests: 149 PASS.
+    Dev pre-deploy prod validation (in docs/im-868-qa-validation.md) used
+    `scripts/run-extraction-with-cli-token.ts` — reads real prod Charges + processes locally with the
+    branch code + compares against prod baseline. That method produced the 3 expected deltas:
+    Textile −97.30, DAC −126.00, London −1819.31.
+
+    ## Inferred technical tests
+
+    - **QA-side baseline capture (pre-run)** → auto-executed. Baseline snapshot from CSM/VeevartHub prod
+      for the 3 orgs / April 2026 taken 2026-08-20. All 15 fields (5 per org × 3) matched byte-a-byte
+      with the dev baseline in docs/im-868-qa-validation.md. Re-check 2026-08-21 pre-run also confirmed
+      no drift.
+    - **Manual-run POST** → user-executed with their x-api-key (never in Claude session). HTTP 202 +
+      executionArn captured.
+    - **Step Functions monitoring** → status verified as SUCCEEDED in AWS Console by user (screenshot).
+      Duration 00:01:13.464.
+    - **Post-run snapshot + delta computation** → auto-executed. Textile PASS, DAC PASS, London FAIL
+      (LastModifiedDate stuck at 2026-08-12, value stuck at baseline).
+    - **Dev pre-deploy reproduction (`scripts/run-extraction-with-cli-token.ts`)** → NOT executed
+      locally by QA: requires `sf` auth to the 3 subscriber source orgs (Textile, DAC, London) which
+      QA does not have (they are customer production Salesforce orgs). Confirmed via `sf org list`.
+
+    ## Root cause hypothesis (for the dev to investigate)
+
+    Textile refreshed at 51s into execution, DAC at 73s (just before end). London never refreshed
+    despite being in the payload's subscriberOrgIds array. Possible causes:
+    1. Dispatcher / Map iterator lost the 3rd item silently.
+    2. London's extraction branch caught an error → SUCCEEDED with silent skip.
+    3. Extractor returned 0 rows for London April 2026 (unlikely: dev doc has real overages).
+    4. Publish gate found no diff and skipped upsert (but SF LastModified would still update if any
+       upsert happens — no upsert means the publish step was skipped or never called for London).
+
+    Recommend: fetch ExecutionHistory for arn:aws:states:us-east-1:287043460717:execution:MonthlyKpi\
+    ExtractionStateMachine-oskh2CpJjqY4:manual-20260821T155847-05f2c198 and check Map iterations,
+    extract lambdas per subscriberOrgId, and publish outputs.
+
+results:
+  - testCaseId: 9e1ccd29-bcb0-4a12-85ea-10928c4e82d4
+    testCaseKey: TC-150
+    scenarioTitle: >-
+      AC1 · Los 3 campos de Credit Card Income objetivo alcanzan los valores POST-fix esperados tras
+      Step Functions SUCCEEDED
+    scenarioIndex: 1
+    status: failed
+    executedAt: "2026-08-21T16:10:00Z"
+    duration: 900
+    stepResults: []
+    actual: |
+      Baseline pre-run (2026-08-20, matched dev doc byte-a-byte):
+        Textile Credit_Card_Income_Onsite__c        = 8857.63
+        DAC     Credit_Card_Income_Onsite__c        = 1797052.22
+        London  Amount_Credit_Card_Transactions_Online__c = 147968.42
+
+      Manual-run POST fired 2026-08-21 15:58:47 UTC, HTTP 202, executionArn:
+        arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-oskh2CpJjqY4:manual-20260821T155847-05f2c198
+
+      Step Functions SUCCEEDED, duration 00:01:13.464 (end 2026-08-21T16:00:01Z), verified via AWS Console screenshot.
+
+      Observed POST (2026-08-21T16:10 CLT re-query):
+        Textile Credit_Card_Income_Onsite__c        = 8760.33  (delta -97.30, EXPECTED, PASS)   LastModified 2026-08-21T15:59:38Z
+        DAC     Credit_Card_Income_Onsite__c        = 1796926.22 (delta -126.00, EXPECTED, PASS) LastModified 2026-08-21T16:00:00Z
+        London  Amount_Credit_Card_Transactions_Online__c = 147968.42 (delta 0.00, expected -1819.31, FAIL) LastModified 2026-08-12T04:23:45Z (SIN CAMBIO)
+
+      Polling adicional 11:00:17 → 11:10:46 CLT (10+ min post-execution) NO detectó ningún cambio en London.
+    notes: >-
+      **FAIL**. Textile y DAC alcanzan los deltas esperados EXACTOS al centavo, confirmando que el cap
+      del PR #34 está funcionalmente correcto. London NO fue procesado por el orquestador — LastModifiedDate
+      sigue en la fecha pre-baseline. El AC1 requiere los 3 valores post-fix; con 1/3 sin cambio, no se
+      satisface. Defecto raíz probable en el dispatcher del Step Functions o silent skip para el
+      subscriberOrgId 00DHr000001s53CMAQ. Bounce IM-868 → Rejected by QA.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-168-tc-150/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 3600
+    defects:
+      - jiraKey: IM-868
+        url: https://veevart.atlassian.net/browse/IM-868
+        severity: high
+        summary: "London Marketing_Metrics__c not refreshed by manual-run POST despite Step Functions SUCCEEDED — orchestrator silently skips 1 of 3 orgs in payload"
+
+  - testCaseId: 9e1ccd29-bcb0-4a12-85ea-10928c4e82d4
+    testCaseKey: TC-150
+    scenarioTitle: >-
+      AC2 · No-regresión en el canal OPUESTO — los 3 valores del canal opuesto permanecen exactamente iguales
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-08-21T16:10:00Z"
+    duration: 60
+    stepResults: []
+    actual: |
+      Comparison de canales opuestos PRE=POST:
+        Textile online (Amount_Credit_Card_Transactions_Online__c)  8440.59 → 8440.59  (delta 0)  PASS
+        DAC     online (Amount_Credit_Card_Transactions_Online__c) 180811.00 → 180811.00 (delta 0) PASS
+        London  onsite (Credit_Card_Income_Onsite__c)              103927.85 → 103927.85 (delta 0) PASS (parcial — ver notes)
+    notes: >-
+      **PASS** para Textile y DAC — el cap del PR #34 respeta el canal opuesto. **PARCIAL para London**:
+      el canal opuesto no se movió, pero como el pipeline no procesó a London (scenario 1), este "no cambio"
+      no es evidencia positiva del fix. En un re-run donde London sí se procese, este AC deberá re-validarse.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-168-tc-150/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1400
+
+  - testCaseId: 9e1ccd29-bcb0-4a12-85ea-10928c4e82d4
+    testCaseKey: TC-150
+    scenarioTitle: >-
+      AC3 · Transaction counts sin cambio en ambos canales de las 3 orgs (el cap afecta income, no counts)
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-08-21T16:10:00Z"
+    duration: 60
+    stepResults: []
+    actual: |
+      Counts PRE=POST en los 6 campos (2 por org):
+        Textile online=226   onsite=446   (unchanged)
+        DAC     online=705   onsite=8074  (unchanged)
+        London  online=1895  onsite=1833  (unchanged — parcial)
+    notes: >-
+      **PASS** para Textile y DAC — el cap opera sobre income, nunca cuenta rows. **PARCIAL para London**:
+      counts sin cambio, pero por la misma razón del scenario 2 (London no procesado).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-168-tc-150/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1200
+
+  - testCaseId: 9e1ccd29-bcb0-4a12-85ea-10928c4e82d4
+    testCaseKey: TC-150
+    scenarioTitle: >-
+      AC4 · `Total_Payment_Value_Adyen__c` (raw processor volume) sin cambio — invariante crítico
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-08-21T16:10:00Z"
+    duration: 60
+    stepResults: []
+    actual: |
+      Total_Payment_Value_Adyen__c PRE=POST en las 3 orgs:
+        Textile 0.00 → 0.00
+        DAC     1977863.22 → 1977863.22
+        London  251896.27 → 251896.27 (parcial)
+    notes: >-
+      **PASS** para Textile y DAC — el cap del PR #34 opera solo sobre `credit_card_transactions_income`,
+      nunca sobre `total_payment_value_adyen` (raw processor volume). **PARCIAL para London** (mismo caveat
+      que scenarios 2 y 3).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-168-tc-150/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+        size: 900
+
+  - testCaseId: 9e1ccd29-bcb0-4a12-85ea-10928c4e82d4
+    testCaseKey: TC-150
+    scenarioTitle: >-
+      AC5 · Protocolo de ejecución + failure handling — HTTP 202 recibido, executionArn capturado,
+      Step Functions SUCCEEDED confirmado; en caso de FAIL registrar ARN + valores observados + iniciar
+      rollback via baseline
+    scenarioIndex: 5
+    status: failed
+    executedAt: "2026-08-21T16:10:00Z"
+    duration: 300
+    stepResults: []
+    actual: |
+      Protocolo mecánico OK:
+        HTTP 202 recibido con executionArn.
+        executionArn = arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-oskh2CpJjqY4:manual-20260821T155847-05f2c198
+        Step Functions terminal state = SUCCEEDED (verificado en AWS Console).
+        Baseline pre-run capturado ANTES del disparo.
+
+      Failure handling: **FALLA IMPLÍCITA** — la ejecución reportó SUCCEEDED cuando 1/3 orgs no publicó.
+      El orquestador debería FAIL o al menos emitir PARTIAL_SUCCESS con detalle por subscriberOrgId.
+      Actualmente el status SUCCEEDED induce un false-positive downstream (dashboards, alerts, etc).
+
+      Rollback preparedness: OK. Baseline capturado y validado; Textile+DAC quedaron con valores correctos
+      (no requieren rollback); London quedó sin cambio (no hay valor incorrecto que restaurar, solo un
+      valor esperado no materializado).
+    notes: >-
+      **FAIL parcial** en failure handling: el protocolo de ejecución mecánico OK, pero el status
+      SUCCEEDED de Step Functions con partial publish silencioso es un false-positive que compromete
+      integridad operacional (OWASP A04 + A08 + A09, ver owasp-top10-scan.txt).
+    attachments:
+      - name: execution-evidence.txt
+        path: attachments/tr-168-tc-150/scenario-5/execution-evidence.txt
+        mimeType: text/plain
+        size: 2400
+
+summary:
+  totalScenarios: 5
+  executedScenarios: 5
+  passed: 3
+  failed: 2
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 60
+  defectsRaised: 1
+
+history:
+  - at: "2026-08-21T15:58:00Z"
+    from: "planned"
+    to: "in-progress"
+    by: "codex"
+    reason: "Manual-run POST triggered by user with x-api-key. HTTP 202 + executionArn captured. Baseline pre-run captured 2026-08-20 (byte-a-byte match with dev doc)."
+  - at: "2026-08-21T16:15:00Z"
+    from: "in-progress"
+    to: "completed"
+    by: "codex"
+    reason: "3/5 PASS · 2/5 FAIL. AC1 y AC5 FAIL. Root cause: London Marketing_Metrics__c not upserted despite being in payload; Step Functions reports SUCCEEDED with silent partial publish. IM-868 bounced to Rejected by QA. IM-1199 stays Abierta pending fix + re-execution."

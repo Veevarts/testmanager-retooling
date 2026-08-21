@@ -1,0 +1,54 @@
+TR-168 · TC-150 (IM-868) · Scenario 5 · AC5 — Protocolo de ejecución + failure handling
+
+## Ejecución del POST
+
+- Endpoint: POST https://dcaxoa4js4.execute-api.us-east-1.amazonaws.com/prod/analytics/manual-runs
+- Timestamp POST: 2026-08-21 15:58:47 UTC (10:58:47 CLT)
+- HTTP response: 202 (acknowledge — confirmado por el usuario)
+- Payload:
+    {
+      "periodStart": "2026-04-01",
+      "periodEnd": "2026-04-30",
+      "subscriberOrgIds": [
+        "00D2E00000139NKUAY",
+        "00D09000007vAJCEA2",
+        "00DHr000001s53CMAQ"
+      ],
+      "reason": "QA Review IM-868 credit card POS Purchase cap validation"
+    }
+
+## Execution details (verificado en AWS Console por el usuario)
+
+- ARN: arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-oskh2CpJjqY4:manual-20260821T155847-05f2c198
+- Status: **SUCCEEDED**
+- Start: 2026-08-21 10:58:47 CLT (15:58:47 UTC)
+- End:   2026-08-21 11:00:01 CLT (16:00:01 UTC)
+- Duration: 00:01:13.464
+- State machine: MonthlyKpiExtractionStateMachine-oskh2CpJjqY4 (Standard)
+- Account: 287043460717 (VeevArt Tooling)
+
+## Baseline capture
+
+El baseline fue capturado el 2026-08-20 (antes del deploy) contra el mismo csm-prod alias. Los 15 campos (5 por org × 3 orgs) matchearon byte-a-byte con el snapshot del dev en docs/im-868-qa-validation.md (fecha del snapshot dev: 2026-08-18). Un re-check el 2026-08-21 pre-run también confirmó no-drift. Baseline JSONs guardados localmente en /tmp/im-868-baseline/*.json y /tmp/im-868-baseline-recheck/*.json.
+
+## Verdict scenario 5 — protocolo
+
+**PASS parcial** para el protocolo mecánico:
+- HTTP 202 recibido ✓
+- executionArn capturado ✓
+- Step Functions terminal state alcanzado = SUCCEEDED ✓
+- Baseline pre-run capturado ANTES del disparo ✓
+
+**FAIL para la parte de failure handling (implícita)**: la execution reportó SUCCEEDED pero uno de los 3 subscriberOrgIds del payload no produjo cambio observable. Esto significa que el orquestador reporta success cuando NO logró procesar 100% del payload — un false-positive success. El failure handling debería haber marcado la ejecución como FAILED o al menos como partial/warning si un org no se procesó.
+
+## Rollback preparedness
+
+- Baseline capturado y validado — si Textile/DAC hubieran quedado con valores incorrectos, tenemos el snapshot para restaurar.
+- Textile y DAC quedaron con los valores CORRECTOS (los expected del dev). No necesitan rollback.
+- London quedó sin cambio (valor pre-run = baseline). No hay nada que restaurar; el defecto es que no publicó el valor correcto, no que publicó uno equivocado.
+
+## Nota de escalamiento
+
+El defecto tiene 2 caras que el dev debe investigar:
+1. **Data-side / London specifica**: por qué el pipeline no produjo cambio para 00DHr000001s53CMAQ. Puede ser dispatcher, extractor, publish gate, o cambio en source data.
+2. **Reporting-side / Step Functions**: por qué SUCCEEDED cuando 1 de 3 orgs no publicó. Necesita un failure-mode más estricto: la ejecución debería FAIL si algún subscriberOrgId del payload no completa su ciclo extract→compute→publish, o al menos emitir un warning explícito en el output del state machine.
