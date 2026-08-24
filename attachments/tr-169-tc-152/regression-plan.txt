@@ -1,0 +1,32 @@
+TR-169 · TC-152 (IM-1204) · Regression plan
+
+Change scope: SQL-only fix to membership_transactions.sql (2 ON-clauses changed to COALESCE;
++40 lines of comments + 5 static specs + 1 integration test + 1 fixture entry + 1 docs update).
+
+Technical regression matrix
+| Item                                                              | Type     | Risk   | Check method                                     | Verdict |
+|-------------------------------------------------------------------|----------|--------|--------------------------------------------------|---------|
+| Row grain (SALESORDERITEMMEMBERSHIP 1:1 with MT)                  | Tech     | Med    | COUNT(*) vs COUNT(DISTINCT mt.ID) in aggregate   | PASS    |
+| Inclusion gate (no WHERE touches ml/mlt/prog)                     | Tech     | Med    | Diff line-by-line + wrapper distinct_mt_ids check| PASS    |
+| Fallback branch (MT with no soim keeps reading mt.*)              | Tech     | Med    | fallback-count on tucson: 103,051/122,668 (84%)  | PASS    |
+| IM-1106 preserved (0 dangling program keys PRE = POST)            | Tech     | High   | im-1106-gate on tucson: 0/0/0/0                  | PASS    |
+| Other consumers of MEMBERSHIPLEVEL (recurring_membership,         | Tech     | Med    | git grep: no other file uses mt.MEMBERSHIP*ID -> | PASS    |
+|    all_recurring, fund_assignment, etc.) unchanged                |          |        | ml/mlt in an ON key; PR body audit confirmed     |         |
+| Order-backed UNION ALL branch untouched                           | Tech     | Low    | Spec "leaves the order-backed branch sourcing    | PASS    |
+|                                                                   |          |        | its own sales-order line" PASS                   |         |
+| Program name column (vnfp__Membership_Program__c)                 | Tech     | Med    | wrapper: program_name_changed=0 in tucson        | PASS    |
+| 5 static IM-1204 specs (membership-transactions-query.spec.ts)    | Tech     | High   | jest static: 44/44 PASS on PR branch             | PASS    |
+| Revert-proof: reverting COALESCE fails specific tests             | Tech     | High   | 3/44 FAIL on revert (drift + fallback + program) | PASS    |
+| Full query-regression suite (556 tests)                           | Tech     | High   | npm test query-regression: 556 PASS              | PASS    |
+| Docker integration (12/12 membership-program-linkage)             | Tech     | Med    | RUN_DOCKER_SQL_QUERY_TESTS=1: DEFERRED locally   | DEFERRED|
+|                                                                   |          |        | (colima startup >60s + spec has no               |         |
+|                                                                   |          |        | withStartupTimeout override; dev claim 12/12)    |         |
+
+Security regression matrix
+| Item                                                     | Type | Risk | Check method                          | Verdict |
+|----------------------------------------------------------|------|------|---------------------------------------|---------|
+| SQL injection surface                                    | Sec  | Low  | Diff: no new param/interpolation      | PASS    |
+| Secret / credential leak                                 | Sec  | Low  | grep secret/key/pwd on diff: none     | PASS    |
+| PII exposure (level names, prices)                       | Sec  | Low  | safesql redacts strings by default    | PASS    |
+| RBAC / auth surface                                      | Sec  | N/A  | No auth code touched                  | N/A     |
+| Dependency addition                                      | Sec  | N/A  | package.json untouched                | N/A     |

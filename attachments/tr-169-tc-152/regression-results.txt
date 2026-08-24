@@ -1,0 +1,51 @@
+TR-169 · TC-152 (IM-1204) · Regression results
+
+## Static + query-regression (PR branch cf301528)
+- npm test -- --runInBand --testPathPatterns='query-regression'
+  → 556 passed · 150 skipped · 46 of 62 suites passed · 16 skipped (docker-only).
+- npm test -- --runInBand --testPathPatterns='membership-transactions-query'
+  → 44 passed (of 44). Includes 5 IM-1204 static assertions under
+     "membership level source (IM-1204)":
+       ✓ resolves the level and term from the sales-order line before the transaction
+       ✓ no longer keys either join on the membership transaction alone
+       ✓ keeps the transaction as the fallback so unsold-through-POS memberships still resolve
+       ✓ derives the program name from the same level the two joins resolved
+       ✓ leaves the order-backed branch sourcing its own sales-order line
+
+## Revert-proof (mutation check)
+Reverted only the 2 COALESCE ON-clauses back to `mt.MEMBERSHIPLEVELID = ml.ID` and
+`mt.MEMBERSHIPLEVELTERMID = mlt.ID`. Re-ran membership-transactions-query.spec.ts:
+  → 3 FAILED · 41 PASSED (of 44).
+The 3 failures are exactly the tests pinning the COALESCE presence + program-name derivation +
+fallback keying — evidence that the tests catch the bug. Other tests remain green under the
+revert, as expected for invariants the revert doesn't break.
+
+## Dockerized integration (RUN_DOCKER_SQL_QUERY_TESTS=1)
+- membership-program-linkage-query.integration.spec.ts (12 tests including 4 new IM-1204):
+    Local result: 12/12 FAIL — all with "Log stream ended and message '/.*Started.*/' was not received".
+    Root cause: SQL Server 2022 container needs ~90s to boot on colima; testcontainers default
+    log-wait times out at 60s. Manual container boot proof this session: reached "SQL Server is
+    now ready" at T+90s.
+    Verdict: DEFERRED (local env limit, not a defect). Dev-reported result on PR body: 12/12 PASS.
+- pos-purchase-membership-no-order integration: same env constraint, dev-reported 15/15 PASS.
+
+## safesql PRE vs POST (contract-safe aggregate wrapper, tucson)
+Wrapper counts what the fix would change on the 4 corrected columns, matches dev evidence exactly:
+  order_anchored_txns   = 19,617   ✓ dev: 19,617
+  any_divergent         = 627      ✓ dev: 627 (3.20%)
+  level_divergent       = 627
+  term_divergent        = 627
+  program_key_changed   = 627      ✓ dev: 627
+  level_name_changed    = 627      ✓ dev: 627
+  term_price_changed    = 16       ✓ dev: 16
+  program_name_changed  = 0        ✓ dev: 0 (invariant across all measured tenants)
+  distinct_mt_ids       = 19,617   ✓ grain 1:1 preserved
+Fallback population (tucson): 103,051 / 122,668 MT with no soim line (84%) — unaffected by fix.
+
+## IM-1106 gate (tucson)
+0 dangling MEMBERSHIPLEVELTERM lookups PRE-fix and POST-fix; 0 dangling term-owner-level PRE-fix
+and POST-fix. IM-1106 invariant preserved 100%.
+
+## Verdicts summary
+- Technical:  10 PASS · 0 FAIL · 1 DEFERRED (local docker env; dev-side pass on PR body)
+- Security:   3 PASS · 0 FAIL · 2 N/A
