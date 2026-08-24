@@ -1,0 +1,50 @@
+            ON rgi.FinancialTransactionID = rmft.FinancialTransactionID
+        LEFT JOIN SALESORDERITEMMEMBERSHIP soim
+            ON mt.ID = soim.MEMBERSHIPTRANSACTIONID
+        LEFT JOIN SALESORDERITEM soi
+            ON soim.ID = soi.ID
+        LEFT JOIN SALESORDER so
+            ON soi.SALESORDERID = so.ID
+        LEFT JOIN SALESORDER revenue_so
+            ON revenue_so.REVENUEID = rmft.FinancialTransactionID
+        LEFT JOIN SalesOrdersByPayment sop
+            ON sop.PAYMENTID = rmft.FinancialTransactionID
+        LEFT JOIN SALESORDER payment_so
+            ON payment_so.ID = sop.SalesOrderID
+    ) ranked
+    WHERE
+            ranked.SplitReceiptingRank = 1
+            -- Pending/unconfirmed carts (status 0, 6, 7) suppress the membership
+            -- opportunity in membership_transactions.sql, so the donation-portion
+            -- fund assignment is suppressed with it; the donation queries also keep
+            -- the line excluded (the membership transaction exists), so the amount
+            -- intentionally follows the membership home's emission semantics.
+            AND (
+                ranked.ResolvedSalesOrderID IS NULL
+                OR ranked.ResolvedSalesOrderStatusCode NOT IN (0, 6, 7)
+            )
+            AND (
+                @useDateFrom = 0
+                OR CAST(ranked.WindowDate AS DATE) >= @filterDateFrom
+            )
+            AND (
+                @useDateTo = 0
+                OR CAST(ranked.WindowDate AS DATE) <= @filterDateTo
+            )
+    "
+
+      243 |       // the installment date still wins and mt.TRANSACTIONDATE is still the
+      244 |       // final fallback, so the branch keeps mirroring the membership gates.
+    > 245 |       expect(branch).toContain(
+          |                      ^
+      246 |         'COALESCE(rgi.InstallmentDate, own_ft.CALCULATEDDATE, rmft.FinancialTransactionDate, mt.TRANSACTIONDATE) AS PostedDate',
+      247 |       );
+      248 |       // IM-1205: the gate moved off PostedDate onto a dedicated WindowDate so
+
+      at Object.<anonymous> (data-migration/infrastructure/destination/sql-server/query-regression/donation-split-receipting-query.spec.ts:245:22)
+
+Test Suites: 2 failed, 2 total
+Tests:       5 failed, 29 passed, 34 total
+Snapshots:   0 total
+Time:        0.243 s, estimated 1 s
+Ran all test suites matching (fund-assignment-memberships|donation-split-receipting)-query.spec.

@@ -1,0 +1,253 @@
+schemaVersion: "1.0"
+
+id: "b6fcd053-5337-4cd4-9e46-189607961440"
+key: "TC-153"
+title: "fund_assignment_memberships.sql anchors Auctifera__Posted_Date__c on the financial transaction that OWNS the membership revenue line (order/membership) instead of the Payment child that outranked it — 33 Long Island rows corrected, 0 recurring memberships regressed, IM-904 preserved (IM-1205)"
+description: |
+  Test case para IM-1205 (Historia, priority High, severity 3-High, "In QA Review") — epic IM-70 Altru
+  Queries — QA Sub-task IM-1210. Cliente reportante: Long Island Children's Museum. PR bajo prueba:
+  Veevarts/MigrationToolETL #172 (draft).
+
+  Contexto: `fund_assignment_memberships.sql` derivaba `Auctifera__Posted_Date__c` desde el resolver
+  `ResolvedMembershipFinancialTransactions`, que rankea una fila con `SOURCELINEITEMID` (línea child)
+  antes (rank 0) que la fila membership propia (rank 1). Ese ranking existe para refund/adjustment
+  children — pero un POS Payment aplicado a un sales order tiene la MISMA shape: una línea con
+  `APPLICATION = 'Order'` en la transacción Payment que apunta de vuelta a la línea de membership.
+  Resultado: en memberships order-backed la transacción Payment gana y el Fund Assignment hereda
+  la fecha de payment/processing en vez de la fecha de la Order. Es invisible cuando order y payment
+  caen el mismo día (casi siempre), lo cual explica por qué solo unos pocos registros lo muestran.
+
+  El fix (del PR #172) — la posted date ahora se ancla en la financial transaction que OWNS la línea
+  de membership revenue, no en la que el resolver rankea primero. La instalment date de recurring
+  memberships sigue ganando (IM-904 preservado), y el valor previo queda como último fallback.
+  Espeja la convención que `fund_assignment_donations.sql` ya usa.
+
+  Defecto adicional encontrado por el dev (en el mismo PR): el tiebreaker Refund del resolver rankea
+  bajo el bucket principal, así que un Refund child TAMBIÉN outrankea la línea de membership. Esto
+  dató 10 fund assignments positivos de membership de Long Island sobre un refund. El mismo fix
+  corrige esas 10.
+
+  Impacto medido por el dev (live Altru source, 2026-08-24, todo tenant):
+    | Tenant       | Total rows | Blank posted PRE=POST | Rows con date change | Rows a mes distinto | Rows a año distinto | Recurring afectados |
+    | Long Island  | 97,014     | 0                     | 33 (34 line-item)   | 10                  | 2                   | 0                   |
+    | Tucson       | —          | —                     | 17 (line-item)      | —                   | —                   | 0                   |
+    | High Desert  | —          | —                     | 20 (line-item)      | —                   | —                   | 0                   |
+    | Illinois     | —          | —                     | 4 (line-item)       | —                   | —                   | 0                   |
+
+  Row grain LI: 97,014 = 97,014 PRE=POST (nothing added, nothing dropped, no blank dates). Después
+  del fix 33 de 34 rows coinciden con la fecha que Altru muestra en la membership; la que no
+  coincide es una row sin membership transaction subyacente (add-on / order-backed shape que la
+  fecha de membership no describe).
+
+  Rev-examples verificados por el dev en Long Island:
+    - rev-11390769 (2024): PRE=2024-08-31 (Payment) → POST=2024-09-01 (Order rev-11391043) —
+      coincide con Altru "Go to membership" 2024-09-01. **Reproduce EXACTO el reporte** (agosto en SF,
+      septiembre en Altru).
+    - rev-10951808 (2021): PRE=2021-08-25 (Payment) → POST=2021-11-06 (Order rev-10964658) —
+      coincide con Altru 2021-11-06.
+    - rev-10863303 (2019): PRE=2019-11-29 = POST=2019-11-29 = Altru 2019-11-29 — **false positive
+      del ticket** (payment date, order date, membership transaction date todos iguales, la row ya
+      estaba correcta y nada cambia).
+
+  Consecuencia downstream: la Revenue ID del Fund Assignment queda INTACTA — sigue mostrando el id
+  del Payment (ej. rev-11390769), que es cómo se localizan estos registros en la org. Solo se
+  mueve la fecha.
+
+  Round-1 review finding (dev): la rama split-receipting filtra sobre la misma columna que se
+  estaba corrigiendo; sin cuidado, un date-windowed run habría silently cambiado qué rows esa
+  rama emite. Fix: la rama split-receipting recibió una window column separada — solo se mueve
+  el exported date; la compuerta de inclusión queda exactamente donde estaba.
+
+  Round-1 review finding (dev): los tests originales solo matchean query text. Reemplazados por
+  tests reales que corren la query contra un SQL Server dockerizado y assertan el exported date.
+
+  Round-2 review finding (dev): la regla recurring-membership (IM-904) no tenía test real
+  guardándola en este path. Añadido test real.
+
+  Round-3 review finding (dev): la lista de columnas exportada es IDÉNTICA a producción — solo la
+  fecha corregida cambia. Verificado con 4 mutation tests (deliberately re-breaking the query
+  four different ways, todos capturados).
+
+  Validation dev: lint + 558 unit tests + 41/41 live-database tests PASS.
+
+  Riesgos abiertos + dependencias:
+    - **CloseDate del Opportunity queda con la vieja fecha**: `membership_transactions.sql` lee el
+      mismo resolver viejo y en las mismas 10 rows de Long Island la CloseDate viene de una
+      transacción Refund. Out of scope de IM-1205; el dev pide decisión del stakeholder si abrir
+      ticket separado (dev/comment #24186 flags "Refund-dated CloseDate" para decisión).
+    - **IM-1206 comparte esta root cause**: ese ticket puede requerir cambiar el ANCHOR del record
+      (Revenue ID / CloseDate), no solo la fecha. IM-1205 solo corrige el Fund Assignment date;
+      IM-1206 debe decidir el scope más amplio.
+    - **Notion sync pre-existing**: la "Altru Model Context Artifacts" Notion page está detrás
+      (IM-1192 y IM-1193 también faltan); no introducido por este PR pero se declara.
+    - **PR #172 está en DRAFT**, base branch main, no merged, no deploy.
+    - **safesql profile de longisland NO disponible localmente** (aspen/illinois_2/tucson son los
+      alcanzables). La validación cuantitativa Long Island depende del re-run del dev; en Tucson
+      (17 line-item changes) se puede validar localmente.
+    - **rev-10863303 es un false positive documentado**: el TC lo incluye deliberadamente para
+      pinnear el no-op invariant (fix no debe alterar rows donde las 3 fechas ya coinciden).
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado en HEAD del PR #172 (branch fix del dev) + acceso al commit base (main) para contraste PRE-fix."
+  - "Al menos un profile safesql alcanzable en /Users/veevart/tools/safesql/profiles. Tucson es el candidato preferido: 17 line-item changes es la señal más grande medible localmente. longisland NO está disponible; su validación depende del re-run del dev en el mismo PR body."
+  - "Docker/colima levantado para `npm run test:queries:docker` (41/41 live-database tests). Si docker no arranca en <60s, se marca DEFERRED y se sustituye con revert-proof estático sobre query-regression."
+  - "npm ci limpio para correr lint:check, query-regression (558 tests) y build."
+  - "Los 3 rev del ticket accesibles vía safesql. Si el profile alcanzable no es longisland, se verifican rev equivalentes en Tucson o los reportados por el dev."
+  - "Repo testmanager-retooling clonado para escribir el TR + evidencias bajo attachments/tr-<NN>-tc-153/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · fund_assignment_memberships.sql resuelve Auctifera__Posted_Date__c desde la financial transaction que OWNS la línea de membership revenue — 33 fund assignments cambian de fecha en Long Island (10 a mes distinto, 2 a año distinto), 97,014 rows totales invariantes"
+    tags:
+      - ac-1
+      - regression-evidence
+      - longisland
+      - fund-assignment
+      - posted-date
+      - membership-line-owner
+    given:
+      - "el query fund_assignment_memberships.sql del PR #172 y el commit base (PRE-fix, main) disponibles"
+      - "un profile safesql alcanzable — idealmente longisland (dev-run) o tucson/high-desert como cross-tenant"
+      - "el resolver ResolvedMembershipFinancialTransactions y su ranking (SOURCELINEITEMID children en rank 0, membership line en rank 1)"
+    when:
+      - "se ejecuta fund_assignment_memberships.sql PRE-fix y POST-fix contra el mismo profile"
+      - "se cuenta el total de filas emitidas + filas con Auctifera__Posted_Date__c distinto entre PRE y POST"
+      - "se desglosa cuántas mueven a un mes distinto y cuántas a un año distinto"
+      - "se verifica que Fund Assignment.Revenue ID queda IDÉNTICO PRE=POST (solo la fecha cambia, no el anchor)"
+    then:
+      - "en Long Island: 97,014 rows totales PRE = 97,014 POST (nothing added, nothing dropped)"
+      - "0 blank posted dates PRE = 0 blank POST"
+      - "33 rows cambian Auctifera__Posted_Date__c POST-fix (34 a nivel line-item grain)"
+      - "10 de esas 33 rows mueven a un mes distinto; 2 mueven a un año distinto"
+      - "de las 34 rows a nivel line-item que cambian, 33 coinciden EXACTO con la fecha que Altru muestra en la membership; la 1 que no matchea es una row sin membership transaction subyacente (add-on / order-backed shape que la fecha de membership no describe)"
+      - "Revenue ID del Fund Assignment queda IDÉNTICO PRE=POST — solo la fecha se mueve, no el anchor del registro (así los stakeholders siguen ubicándolos por el mismo Revenue ID)"
+
+  - title: "AC2 · los 3 rev del ticket verificados — rev-11390769 (2024) mueve de 2024-08-31 a 2024-09-01 reproduciendo EXACTO el reporte, rev-10951808 (2021) mueve de 2021-08-25 a 2021-11-06, y rev-10863303 (2019) queda INVARIANTE porque las 3 fechas ya coincidían (false positive documentado)"
+    tags:
+      - ac-2
+      - regression-evidence
+      - longisland
+      - rev-examples
+      - false-positive-documented
+    given:
+      - "los 3 rev nombrados en el ticket: rev-11390769, rev-10951808, rev-10863303"
+      - "para cada rev disponibles: la fila Payment, la fila Order (si existe), la fila MembershipTransaction, y la fecha 'Go to membership' de Altru"
+    when:
+      - "se ejecuta fund_assignment_memberships.sql PRE-fix y POST-fix para cada rev en Long Island"
+      - "se compara Auctifera__Posted_Date__c contra el 'Go to membership' date de Altru"
+    then:
+      - "rev-11390769 PRE = 2024-08-31 (Payment); POST = 2024-09-01 (Order rev-11391043) — coincide con Altru 2024-09-01. Reproduce EXACTO el reporte (agosto→septiembre)."
+      - "rev-10951808 PRE = 2021-08-25 (Payment); POST = 2021-11-06 (Order rev-10964658) — coincide con Altru 2021-11-06."
+      - "rev-10863303 PRE = 2019-11-29 = POST = 2019-11-29 — INVARIANTE porque Payment date, Order date y MembershipTransaction date son todos 2019-11-29. Documented false positive del ticket."
+      - "en los 3 casos, el Revenue ID en el Fund Assignment queda EXACTAMENTE igual — solo cambia la fecha en los 2 primeros; el 3ro no cambia nada."
+
+  - title: "AC3 · defecto adicional del Refund tiebreaker — 10 fund assignments positivos de membership de Long Island que estaban dated on un Refund transaction quedan corregidos por el mismo fix"
+    tags:
+      - ac-3
+      - refund-tiebreaker
+      - longisland
+      - additional-defect
+      - regression-evidence
+    given:
+      - "el resolver ResolvedMembershipFinancialTransactions con su tiebreaker Refund que rankeaba bajo el bucket principal antes del fix"
+      - "10 rows específicas de Long Island reportadas por el dev que datan de un Refund transaction"
+    when:
+      - "se ejecuta fund_assignment_memberships.sql PRE-fix y POST-fix"
+      - "se identifican las rows positivas de membership Fund Assignment cuya Posted Date PRE viene de una transacción TYPECODE = Refund"
+    then:
+      - "10 rows de LI PRE tienen Posted Date que viene de una transacción Refund"
+      - "POST-fix: 10 rows corregidas — Posted Date ahora viene de la financial transaction que OWNS la membership revenue line (Order/Membership), no del Refund child"
+      - "esas 10 rows son subconjunto de las 33 totales que cambian; están reflejadas en el conteo total"
+      - "el mismo fix (anchor sobre membership line owner) cubre tanto el Payment child como el Refund child sin lógica adicional"
+
+  - title: "AC4 · impacto cross-tenant medido + IM-904 preservado — Long Island 34 line-item, Tucson 17, High Desert 20, Illinois 4; 0 recurring memberships afectados en ningún profile (recurring-installment date sigue ganando)"
+    tags:
+      - ac-4
+      - cross-tenant
+      - im-904-preserved
+      - tucson
+      - high-desert
+      - illinois
+      - recurring-membership
+    given:
+      - "profiles safesql alcanzables — mínimo tucson (17 line-item changes, señal más grande medible localmente)"
+      - "los conteos dev-reportados line-item grain: Long Island 34 / Tucson 17 / High Desert 20 / Illinois 4"
+      - "la regla IM-904: recurring-installment date debe seguir ganando para recurring memberships (comportamiento preservado)"
+    when:
+      - "se ejecuta fund_assignment_memberships.sql PRE-fix y POST-fix contra cada profile alcanzable"
+      - "se cuenta line-item level: cuántas Posted Dates cambian POST-fix"
+      - "se cuenta cuántas recurring memberships cambian de Posted Date (debe ser 0 en todos los profiles)"
+    then:
+      - "Tucson: 17 line-item Posted Date changes POST-fix; 0 recurring memberships cambian"
+      - "High Desert: 20 line-item changes; 0 recurring memberships cambian"
+      - "Illinois: 4 line-item changes; 0 recurring memberships cambian"
+      - "Long Island (dev-run): 34 line-item changes; 0 recurring memberships cambian"
+      - "IM-904 preservado en todos: para recurring memberships la installment date sigue ganando sobre el nuevo anchor de membership line — 0 regresión"
+      - "el re-run de producción se planea con conteos por tenant, no solo con el de Long Island"
+
+  - title: "AC5 · invariantes de seguridad + gates de regresión — 97,014 rows PRE=POST (compuerta de inclusión intacta, incluida la rama split-receipting con su window column separada), 0 blank dates, revert-proof positivo con 4 mutations, 558 unit tests + 41/41 live-database tests PASS, output column list IDÉNTICA a producción"
+    tags:
+      - ac-5
+      - safety-invariants
+      - inclusion-gate
+      - split-receipting-window
+      - revert-proof
+      - integration-docker
+      - query-regression
+      - mutation-testing
+    given:
+      - "el HEAD del PR #172 checked out"
+      - "docker/colima levantado (o degradación documentada a revert-proof estático)"
+      - "el commit base (main) para el revert-proof"
+    when:
+      - "se corre el suite de live-database tests dockerizado (41 tests), lint:check, query-regression (558 tests), build"
+      - "se cuenta la salida total de fund_assignment_memberships.sql PRE vs POST (row conservation)"
+      - "se cuentan blank posted dates PRE y POST (0 en ambos)"
+      - "se cuenta cuántas rows la rama split-receipting emite PRE vs POST (debe ser exactamente igual — Round-1 finding del dev)"
+      - "se compara la lista de columnas exportadas PRE vs POST (Round-3: identical)"
+      - "se revierten deliberadamente 4 mutaciones del query (el mismo protocolo del dev) y se verifica que los tests capturan cada mutación"
+    then:
+      - "row conservation: 97,014 PRE = 97,014 POST en Long Island; 0 blank posted dates en ambos"
+      - "compuerta de inclusión split-receipting intacta: la window column separada previene que la corrección de la posted date cambie qué rows la rama emite"
+      - "lista de columnas exportadas: IDÉNTICA a producción PRE vs POST"
+      - "41/41 live-database tests PASS incluyendo el test dedicado al escenario del bug"
+      - "558 unit tests (query-regression) PASS; lint:check limpio; build OK"
+      - "mutation testing: las 4 rebreaks deliberadas del query son capturadas por al menos un test cada una"
+      - "IM-904 test real añadido en esta iteración (Round-2 finding) — pin del comportamiento recurring-membership en este path"
+
+tags:
+  - im-1205
+  - im-70
+  - im-1210
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - pr-172
+  - fund-assignment
+  - fund-assignment-memberships
+  - posted-date
+  - resolved-membership-financial-transactions
+  - im-904-preserved
+  - im-1206-related
+  - longisland
+  - tucson
+  - high-desert
+  - illinois
+  - source-side
+  - safesql
+  - sql-only
+  - high
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-24T17:05:36Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-24T17:05:36Z"
+  version: 1
