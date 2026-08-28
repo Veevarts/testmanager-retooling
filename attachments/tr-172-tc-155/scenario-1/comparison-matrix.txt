@@ -1,0 +1,30 @@
+Scenario 1 — windowed WHERE anchors on never-null FilterDate
+
+Source: dev PR body (safesql 2026-08); safesql local DEFERRED.
+
+Structural evidence (diff review):
+| CTE                   | Pre-fix                    | Post-fix                                           | Verdict |
+| PaymentPerInstallment | (no InstallmentDate)       | JOIN INSTALLMENT + `MIN(ins.[DATE]) AS InstallmentDate` | PASS |
+| WriteOffAgg           | (no InstallmentDate)       | JOIN INSTALLMENT + `MIN(ins.[DATE]) AS InstallmentDate` | PASS |
+| UnpaidSplits          | (no InstallmentDate)       | JOIN INSTALLMENT + `ins.[DATE] AS InstallmentDate`     | PASS |
+
+Per-branch FilterDate expression:
+| Branch    | FilterDate                                                    | Verdict |
+| Paid      | COALESCE(pa.PostedDate, CAST(pa.InstallmentDate AS DATE))     | PASS    |
+| WriteOff  | COALESCE(wo.PostedDate, CAST(wo.InstallmentDate AS DATE))     | PASS    |
+| Unpaid    | CAST(us.InstallmentDate AS DATE)                              | PASS    |
+
+WHERE gate:
+| Pre-fix                                                                | Post-fix                                              | Verdict |
+| q.Auctifera__Posted_Date__c IS NOT NULL AND CAST(...) >= @filterDateFrom | q.FilterDate >= @filterDateFrom                       | PASS    |
+
+Top-level projection (hides FilterDate from CSV):
+| Pre-fix          | Post-fix                                          | Verdict |
+| SELECT *         | Explicit list of 12 columns (no FilterDate)       | PASS    |
+
+Illinois 2026 windowed run (dev PR body):
+| Metric        | Pre-fix | Post-fix | Verdict |
+| unpaid_rows   | 0       | 141      | PASS (dev — 100% recovery) |
+| paid_rows     | invariant | invariant | PASS (dev — no regression on paid arm) |
+
+Verdict: PASS by diff-review + static spec + dev evidence.
