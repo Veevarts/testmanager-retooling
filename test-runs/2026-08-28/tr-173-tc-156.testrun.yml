@@ -1,0 +1,344 @@
+schemaVersion: "1.0"
+id: tr-52621400-9a49-451b-bf63-ecbf5f33f736
+key: TR-173
+title: >-
+  TR-173 · IM-1206 · TC-156 · membership_transactions.sql + fund_assignment_memberships.sql +
+  sales_order_only_membership2.sql anclan CloseDate + Revenue_ID_legacy__c en owning transaction
+  (no en la que el resolver rankea primero) — 5/5 PASS + 2 DEFERRED. Static specs 98/113 (5
+  IM-1206 groups) + query-regression 577/577 + revert-proof 2/53 capturados. rev-10970978
+  (2021→2022) + rev-10059401 (2011→2012) corregidos (dev-verified). Reverses IM-1205 preference.
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/MigrationToolETL clonado local en HEAD del PR #175 (branch
+    CamiloSalgueroMarin/IM-1206-revenue-report-date, commit d34a338f, base main). Node 25.4
+    + npm 11.7. safesql tool silent tunnel fail esta sesión (mismo pattern que TR-171/172).
+    Colima corriendo pero mssql-server startup >60s → docker integration 15/113 FAIL con
+    log-wait timeout.
+  url: https://github.com/Veevarts/MigrationToolETL/pull/175
+  buildVersion: >-
+    Classification: SQL-only query fix (+249/-12). 7 files: 3 SQL principales
+    (membership_transactions.sql +44/-5, fund_assignment_memberships.sql +11/-2,
+    sales_order_only_membership2.sql +7/-1), 1 docs (altru-model-context.md +7/-1),
+    3 spec files (membership-transactions-query.spec.ts +125 nuevo, fund-assignment-memberships-query.spec.ts
+    +36/-3, pos-purchase-membership-no-order-query.spec.ts +19 nuevo). PR OPEN draft, mergeable,
+    base main.
+  notes: |
+    ## Solution understood
+
+    Bug: la hipótesis del ticket (Altru's Revenue Report usa fecha incorrecta) está disprobed.
+    rev-10970978 es genuinamente un 2021 record (Payment $85 dated 2021-11-29); su ausencia
+    del 2022 Report es correcta. La membresía SÍ está en el 2022 Report como rev-11019841
+    (Order dated 2022-03-14, 105 días después) — es un deferred/layaway order donde el sales
+    order se abre y paga en 2021 pero se convierte en revenue transaction en 2022.
+
+    Root cause real: MISMO mecanismo que IM-1205. El ranking CASE en membership_transactions.sql
+    y fund_assignment_memberships.sql rankea SOURCELINEITEMID children antes que la membership
+    line's OWN transaction. Una Payment aplicada a un sales order produce EXACTAMENTE la misma
+    shape que un refund child (APPLICATION = 'Order' line en la Payment apuntando back a la
+    membership line) → el Payment gana el ranking, y la Opportunity/Fund Assignment hereda el
+    Payment's ID y date en vez del Order's.
+
+    Fix (complementario a IM-1205 PR #172, que fijó Auctifera__Posted_Date__c):
+      1. Añadir `ft.CALCULATEDDATE AS OwnFinancialTransactionDate` a #MembershipLineItems CTE.
+      2. Añadir `own_src_ft.CALCULATEDUSERDEFINEDID AS OwnRevenueIdLegacy` a
+         #OrderBackedMembershipFinancialCandidates CTE (nueva LEFT JOIN own_src_ft ON FK→PK).
+      3. Main SELECT Revenue_ID_legacy__c: `COALESCE(rgi.RevenueId, NULLIF(mli.Revenue_ID_legacy__c, ''), rmft.Revenue_ID_legacy__c)`
+         — NULLIF wrap (Round 1 finding: Altru stores blank rev ids como '' NOT NULL).
+      4. Main SELECT CloseDate: añade `mli.OwnFinancialTransactionDate` at position #2 en ambas
+         branches (recurring: entre rgi.InstallmentDate y rmft; non-recurring: al frente).
+      5. fund_assignment_memberships.sql: alinea Revenue_ID_legacy__c con la date que IM-1205
+         ya movió.
+      6. sales_order_only_membership2.sql: emite el Order id (contract fix — 0 orderless
+         anchors move en LI).
+
+    Reverses IM-1205's stated preference: Revenue_ID_legacy sigue al Order (lo que Altru's
+    Revenue Report muestra); spec assertion de IM-1205 se rewrite (no delete).
+
+    Impacto dev-medido (safesql, Long Island whole population):
+      - Opportunity: 97,047/97,047 rows PRE=POST; blank rev IDs 68→31
+      - Fund Assignment: 97,014/97,004 rows PRE=POST; blank rev IDs 37→0
+      - Orderless POS: 51,482/51,482 PRE=POST
+      - 33 CloseDates cambian, todos landing exacto en MEMBERSHIPTRANSACTION.TRANSACTIONDATE
+      - 42,610 Revenue_ID_legacy__c cambian — 42,573 payment→order + 37 blank→populated
+
+    Ejemplos end-to-end (dev-verified prod, read-only):
+      - rev-10970978: CloseDate 2021-11-29 → 2022-03-14; Rev ID Payment→Order (rev-11019841)
+      - rev-10059401: 2011 membership dated 2012 vía Refund child; POST 2011-11-09 + rev-10059401
+
+    ## Inferred technical tests
+
+    - **jest static specs (3 archivos, 113 tests, 98 PASS + 15 docker skipped)** → auto-ejecutado.
+      IM-1206 groups en cada spec (membership-transactions-query.spec.ts nuevo +125 con 53 tests
+      totales incluyendo owning-transaction anchor pins).
+    - **jest full query-regression suite (577 tests)** → auto-ejecutado. 577/577 PASS. Matches
+      dev PR body exactamente.
+    - **Revert-proof** → auto-ejecutado. Revertir SOLO las 2 líneas del CloseDate anchor
+      (recurring + non-recurring branches, removiendo `mli.OwnFinancialTransactionDate` del
+      COALESCE): 2/53 tests FAIL exactamente donde se esperan (pinnean la string
+      `mli.OwnFinancialTransactionDate, rmft.FinancialTransactionDate, mt.TRANSACTIONDATE`).
+      51/53 PASS bajo revert. Confirma que los tests atrapan el bug.
+    - **safesql aggregate wrapper** → PREPARADO pero NO ejecutable esta sesión. Mismo pattern
+      que TR-171/172 (safesql silent tunnel fail; bastion sí up via SSH directo). Wrapper en
+      scenario-1/aggregate-wrapper.sql — corre cuando el tool restaure.
+    - **Docker integration (RUN_DOCKER_SQL_QUERY_TESTS=1)** → DEFERRED. Local 15/113 FAIL con
+      "Log stream ended" — colima resource contention. Dev PR body: PASS.
+
+results:
+  - testCaseId: d2ccdb39-0abe-4e6f-8560-18809357b63b
+    testCaseKey: TC-156
+    scenarioTitle: >-
+      AC1 · CloseDate + Revenue_ID_legacy__c ahora se anclan en la financial transaction que
+      OWNS la membership revenue line (no en la que el resolver rankea primero) — 33 CloseDates
+      cambian, 42,610 Revenue_ID_legacy__c corrigen (42,573 payment→order + 37 blank→populated)
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-08-28T20:53:00Z"
+    duration: 240
+    stepResults: []
+    actual: |
+      Diff review (git diff origin/main d34a338f):
+        membership_transactions.sql +44/-5:
+          - #MembershipLineItems: ft.CALCULATEDDATE AS OwnFinancialTransactionDate
+          - #OrderBackedMembershipFinancialCandidates: own_src_ft.CALCULATEDUSERDEFINEDID +
+            new LEFT JOIN own_src_ft ON own_src_ft.ID = source_line.FINANCIALTRANSACTIONID
+          - Main SELECT Revenue_ID_legacy__c:
+              COALESCE(rgi.RevenueId, NULLIF(mli.Revenue_ID_legacy__c,''), rmft.Revenue_ID_legacy__c)
+          - Main SELECT CloseDate (non-recurring): COALESCE(mli.OwnFinancialTransactionDate, rmft.*, mt.*)
+          - Main SELECT CloseDate (recurring): COALESCE(rgi.InstallmentDate, mli.OwnFinancialTransactionDate, rmft.*, mt.*)
+
+        fund_assignment_memberships.sql +11/-2: Revenue_ID_legacy__c alineado con date IM-1205 movió.
+        sales_order_only_membership2.sql +7/-1: emite Order id (bijection AGENTS.md).
+
+      Dev-measured (LI whole population, safesql):
+        33 CloseDates cambian, all landing exacto en MEMBERSHIPTRANSACTION.TRANSACTIONDATE
+        42,610 Revenue_ID_legacy__c cambian (42,573 payment→order + 37 blank→populated)
+
+      Static specs (jest, 3 archivos, 98/113 PASS + 15 docker skipped) pinnean cada uno de los
+      cambios estructurales.
+
+      safesql local wrapper: DEFERRED (tool silent tunnel fail).
+    notes: >-
+      **PASS**. Diff + 98 static specs + 577 query-regression + dev PR body coinciden.
+      Mecánica del owning-transaction anchor verificada estructuralmente. Complementa a IM-1205
+      (PR #172) — reverses la preferencia declarada allí (Revenue_ID_legacy sigue Order).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-173-tc-156/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1200
+      - name: aggregate-wrapper.sql
+        path: attachments/tr-173-tc-156/scenario-1/aggregate-wrapper.sql
+        mimeType: text/plain
+        size: 2300
+      - name: safesql-deferred.txt
+        path: attachments/tr-173-tc-156/scenario-1/safesql-deferred.txt
+        mimeType: text/plain
+        size: 700
+
+  - testCaseId: d2ccdb39-0abe-4e6f-8560-18809357b63b
+    testCaseKey: TC-156
+    scenarioTitle: >-
+      AC2 · los 2 examples end-to-end — rev-10970978 (ticket, 2021 layaway) CloseDate
+      2021-11-29→2022-03-14 y Revenue_ID_legacy__c Payment→Order (rev-11019841); rev-10059401
+      (2do, 2011 membership vía Refund child) también corregido
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-08-28T20:53:30Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      Dev-verified against Illinois production (read-only access, comment del dev):
+
+        rev-10970978 (Payment rev-10970978 + Order rev-11019841):
+          PRE : CloseDate 2021-11-29 (Payment date) + Revenue_ID_legacy__c rev-10970978 (Payment)
+          POST: CloseDate 2022-03-14 (Order date)   + Revenue_ID_legacy__c rev-11019841 (Order)
+          Altru's 2022 Revenue Report: lists rev-11019841 (matching POST-fix state)
+          Sales order 87078F16-... opened 2021-11-29, revenue transaction converted 2022-03-14
+          (105 días después). Membership revenue split ($85, APPLICATION='Membership') cuelga
+          del Order rev-11019841, no del Payment.
+
+        rev-10059401 (2011 membership dated 2012 vía Refund child):
+          PRE : dated into 2012 con blank rev id
+          POST: 2011-11-09 + rev-10059401 populated
+          Refund child ya no gana sobre own transaction (mismo mechanism que rev-10970978).
+
+      safesql local: DEFERRED (tool silent tunnel fail). LI profile no local anyway.
+    notes: >-
+      **PASS** by dev-verified prod. Los 2 rev-examples cubren los 2 shapes del defecto
+      (Payment child + Refund child), ambos corregidos por el mismo owning-transaction anchor.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-173-tc-156/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 800
+
+  - testCaseId: d2ccdb39-0abe-4e6f-8560-18809357b63b
+    testCaseKey: TC-156
+    scenarioTitle: >-
+      AC3 · NULLIF wrap defensive — todas las owning-transaction projections wrapea con
+      NULLIF(..., '') porque Altru stores blank rev ids como empty-string, no NULL; bare
+      COALESCE devuelve '' y no reach el fallback tail
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-08-28T20:54:00Z"
+    duration: 120
+    stepResults: []
+    actual: |
+      Diff review: main SELECT Revenue_ID_legacy__c ahora usa
+        COALESCE(rgi.RevenueId, NULLIF(mli.Revenue_ID_legacy__c, ''), rmft.Revenue_ID_legacy__c)
+
+      Dev-measured account-wide: 9,702 de 9,703 Refund transactions carry empty string en
+      CALCULATEDUSERDEFINEDID (dev comment 1). Sin NULLIF wrap, un bare COALESCE devuelve ''
+      y no alcanza el rmft tail.
+
+      Round 1 review finding: first cut del PR no tenía NULLIF wrap; fix aplicado y re-medido.
+
+      Long Island impact (dev): 37 blank rev IDs en Fund Assignment pasan a populated POST-fix
+      (via NULLIF + owning-transaction anchor combinados).
+
+      Static specs pinnean el NULLIF wrap.
+    notes: >-
+      **PASS**. NULLIF wrap defensive verificado structuralmente. 37 blank→populated en FA
+      confirms el mecanismo funciona.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-173-tc-156/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 700
+
+  - testCaseId: d2ccdb39-0abe-4e6f-8560-18809357b63b
+    testCaseKey: TC-156
+    scenarioTitle: >-
+      AC4 · impacto cross-export + grain preservado — Opportunity 97,047/97,047, fund
+      assignment 97,014/97,004, orderless POS 51,482/51,482 PRE=POST; blank revenue ids
+      68→31 (Opp) y 37→0 (FA); no row grain drift
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-08-28T20:54:30Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      Dev PR body (safesql, LI whole population, before vs after twice each):
+
+        Opportunity export       : 97,047 rows / 97,047 distinct ext IDs PRE=POST
+        Fund Assignment export    : 97,014 / 97,004 PRE=POST
+        Orderless POS export      : 51,482 / 51,482 PRE=POST (0 orderless anchors move —
+                                    contract fix, no row fix)
+
+        Blank rev IDs Opportunity : 68 → 31 (37 pasan a populated)
+        Blank rev IDs Fund Assign  : 37 → 0
+
+      Residual 31 blank ids en Opportunity: memberships que resuelven ninguna financial
+      transaction (no-financial-anchor lifetime path — no Altru revenue record to name).
+
+      Pre-existing nondeterminism en FA export (distinct ext-id count varía 97,003-97,005 mientras
+      total stays 97,014) dev-flagged; bracketed antes/después a 97,004/97,004 para no confound.
+      Deserves own ticket (out of scope).
+
+      safesql local wrapper: DEFERRED. Dev-inherited counts.
+    notes: >-
+      **PASS**. Grain preservado en los 3 exports; blank IDs corrigen. Row grain preservation
+      es structural (nuevo LEFT JOIN es FK→PK, no fan-out; NO WHERE nuevo).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-173-tc-156/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1100
+
+  - testCaseId: d2ccdb39-0abe-4e6f-8560-18809357b63b
+    testCaseKey: TC-156
+    scenarioTitle: >-
+      AC5 · invariantes de seguridad + gates de regresión + revert-proof + mutations — lint +
+      build verdes, 577 query-regression tests PASS, 11 mutations caught (dev), revert de una
+      owning-transaction anchor line captura al menos 1 test, no join added on membership
+      branch (order-backed branch got a join in Round 1 — verified in diff)
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-08-28T20:55:00Z"
+    duration: 240
+    stepResults: []
+    actual: |
+      Static + regression (PR branch d34a338f):
+        3 archivos spec: 98/113 PASS + 15 docker-skipped.
+        Full query-regression: 577/577 PASS · 162 skipped · 46/63 suites.
+
+      Revert-proof (mutation check — revert BOTH CloseDate anchor lines):
+        Test Suites: 1 failed, 1 total
+        Tests:       2 failed, 51 passed, 53 total (of membership-transactions-query.spec)
+
+        Los 2 failing tests pinnean exactamente
+        `mli.OwnFinancialTransactionDate, rmft.FinancialTransactionDate, mt.TRANSACTIONDATE`
+        en el CloseDate. Los otros 51 pasan bajo revert (JOINs, columns, structure — solo la
+        línea del anchor cambió).
+
+      Docker integration (RUN_DOCKER_SQL_QUERY_TESTS=1):
+        Local: 15/113 FAIL (todos docker-gated) con "Log stream ended" — colima resource
+        contention. Dev PR body: PASS.
+
+      11 mutations caught (dev-run author + reviewer combinado — cada uno caught by at least
+      1 test).
+
+      Row grain: PR NO agrega WHERE nuevo; los nuevos LEFT JOINs son sobre FK→PK (no fan-out).
+      Long Island grain unchanged en los 3 exports.
+
+      lint + build: dev PR body PASS.
+
+      OWASP Top 10: 4 Applicable / 4 PASS / 6 N/A. Fix CLOSES A08 gap (donor reconciliation
+      alineado con Altru's Revenue Report).
+    notes: >-
+      **PASS**. Revert-proof captura las 2 líneas del anchor exactamente. Full regression +
+      static suite verdes. Docker + safesql DEFERRED son env limits (colima + safesql tool),
+      no defectos.
+    attachments:
+      - name: revert-proof.txt
+        path: attachments/tr-173-tc-156/scenario-0-unit-tests/revert-proof.txt
+        mimeType: text/plain
+        size: 1300
+      - name: im-1206-specs.txt
+        path: attachments/tr-173-tc-156/scenario-0-unit-tests/im-1206-specs.txt
+        mimeType: text/plain
+        size: 900
+      - name: query-regression-run.txt
+        path: attachments/tr-173-tc-156/scenario-0-unit-tests/query-regression-run.txt
+        mimeType: text/plain
+        size: 300
+      - name: docker-integration-deferred.txt
+        path: attachments/tr-173-tc-156/scenario-0-unit-tests/docker-integration-deferred.txt
+        mimeType: text/plain
+        size: 400
+      - name: comparison-matrix.txt
+        path: attachments/tr-173-tc-156/scenario-5/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1500
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-08-28T20:53:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecución de TC-156. PR #175 checked out (commit d34a338f), static specs
+      98/113 PASS (15 docker skipped), full query-regression 577/577 PASS. Aggregate wrapper
+      preparado.
+  - at: "2026-08-28T20:59:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS. Static + regression verdes; revert-proof captura 2/53 tests exactamente donde
+      se esperan. Docker integration + safesql wrapper DEFERRED por env limits (colima resource
+      contention + safesql tool silent tunnel fail — mismo pattern que TR-171/172). Numeric
+      evidence (LI 97,047/97,014/51,482 grain preserved, 33 CloseDates cambian, 42,610 Revenue
+      IDs corrigen, 37 blank→populated) heredada del dev PR body. Sub-tarea QA IM-1216 lista
+      para pasar a Resuelta. Reverses IM-1205's stated preference — Revenue_ID_legacy sigue
+      Order; spec assertion rewrite verificado en el diff.
