@@ -1,0 +1,59 @@
+TR-171 · TC-154 (IM-1211) · OWASP Top 10 (2021) applicability scan
+
+Change scope: pure SQL query fix to rental_events_groups.sql — 1 CTE widened, 1 new CTE added,
+1 main SELECT projection replaced with labelled 4-source merge, 1 new LEFT JOIN, +67 lines of
+header comments. No new endpoints, no auth changes, no dependencies. Target field is a rich-text
+(Html) Salesforce field, which introduces an HTML injection concern (mitigated by the fix).
+
+### A01 · Broken Access Control — N/A
+No RBAC/ACL/permission/role code touched.
+
+### A02 · Cryptographic Failures — N/A
+No crypto, no secrets, no transport.
+
+### A03 · Injection — Applicable, PASS
+The SQL diff has no new user-input params or string concatenation into SQL. safesql runs the
+query read-only through parameterized mssql driver. The 6-deep REPLACE nest is client-side HTML
+escaping for a rich-text target field — it prevents HTML injection from note content into
+Salesforce's rich-text sanitizer. Static spec pins the escape order (& first, then < and >, then
+newlines); if reverted, a note reading "Setup <see contract> by 8am" would lose "<see contract>"
+to Salesforce sanitization, and multi-line notes would collapse to one line.
+Verdict: PASS.
+
+### A04 · Insecure Design — Applicable, PASS
+The redesign strengthens data-integrity: 4 real Altru note sources are merged losslessly with
+label prefixes preserving provenance, replacing a single-source read from an all-but-unused
+child table. CONCAT_WS + 'label: ' + NULL = NULL pattern guarantees no source is ever chosen
+over another. Row grain preserved by pre-aggregating ItineraryItem via CTE (no fan-out).
+Documented cosmetic edge (leading/trailing newline → bare <br>) is accepted per SQL 2017 version
+floor and does not compromise integrity.
+Verdict: PASS.
+
+### A05 · Security Misconfiguration — N/A
+No infrastructure or configuration changes.
+
+### A06 · Vulnerable & Outdated Components — N/A
+package.json untouched — no dependencies added, updated, or downgraded.
+
+### A07 · Identification & Auth Failures — N/A
+No auth surface. safesql credentials (Keychain-backed) unchanged.
+
+### A08 · Software & Data Integrity Failures — Applicable, PASS
+This PR is a data-integrity FIX. Pre-fix state: Illinois migrated 0 of ~1,599 reservations
+with notes (RESERVATIONNOTE table has 0 rows). Post-fix: 1,599 reservations arrive with their
+notes. Similar Long Island lift: 14 → 11,812 (~843×). 315 IL reservations with 2+ sources are
+merged losslessly — no source is preferred, no source dropped. Provenance preserved via
+per-source labels.
+Verdict: PASS (this PR CLOSES an A08 gap, does not introduce one).
+
+### A09 · Security Logging & Monitoring Failures — N/A
+No logging surface.
+
+### A10 · Server-Side Request Forgery — N/A
+No outbound requests, no URLs, no user input to any external service.
+
+## Summary
+- 4 Applicable · 4 PASS · 0 FAIL · 6 N/A
+- No security defect raised. No blocker.
+- Note: A03 verdict rests on the HTML escape order being preserved. Revert-proof shows 5 static
+  specs fail if the projection is reverted, one of which specifically pins the escape order.

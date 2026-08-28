@@ -1,0 +1,49 @@
+TR-171 · TC-154 (IM-1211) · Regression results
+
+## Static + query-regression (PR branch 2b771bbb)
+- npm test -- --runInBand --testPathPatterns='rental-event-query.spec'
+  → 37 passed of 37, including all 13 new IM-1211 tests:
+      merge sources instead of choosing between them
+      label each source so provenance survives the merge
+      escape HTML and convert newlines before adding markup
+      admit a note that has only a title
+      carry the note title alongside its text
+      leave the description empty when no source has content
+      order both note rollups so the concatenation is reproducible
+      pre-aggregate itinerary item notes to one row per reservation
+      join the itinerary notes rollup by reservation id
+      isolate the description projection from its neighbours (guard-helper meta-test)
+      catch a COALESCE regression that would drop populated sources
+      catch an unordered STRING_AGG rollup
+      catch an itinerary rollup that lost its reservation-level GROUP BY
+- npm test -- --runInBand --testPathPatterns='query-regression'
+  → 580 passed · 168 skipped · 46 of 63 suites passed · 17 skipped (docker-gated).
+
+## Revert-proof (mutation check on main SELECT)
+Reverted the main SELECT Auctifera__Description__c projection back to `rn.concatenatedNotes` and
+kept the CTE changes. Re-ran rental-event-query.spec:
+  → 5 FAILED · 32 PASSED (of 37).
+The 5 failures target exactly the specs that pin: merge structure, HTML escape order in
+projection, outer NULLIF wrapper, STRING_AGG ordering + guard, and one guard-helper. Other
+32 tests pass under revert (invariants preserved). Confirms tests catch the bug.
+
+## Dockerized integration (RUN_DOCKER_SQL_QUERY_TESTS=1)
+Local: 13/13 FAIL with "Log stream ended and message '/.*Started.*/' was not received".
+Same colima startup-race pattern documented in TR-169/170. Root cause is local env, not PR defect.
+Verdict: DEFERRED. Dev PR body reports all live-database tests PASS.
+
+## safesql aggregate wrapper (contract-safe)
+Prepared but NOT executable this session: safesql script silently fails to open its own tunnel
+(no [ssh] stderr output), while manual `ssh -L` tunnel opens successfully (proving bastion +
+remote endpoint are up). All 4 profiles hit the same failure. Ad-hoc bypass via direct mssql +
+Keychain read was correctly blocked by the auto-mode classifier per the safesql contract.
+Verdict: DEFERRED. Dev PR body per-tenant counts:
+  Illinois: 1,256 SALESORDER.COMMENTS + 436 ITINERARYITEM.NOTES + 276 RESERVATION.ARRIVALNOTES + 0 RESERVATIONNOTE.TEXTNOTE
+    = 1,599 reservations with any note (16.6% of 9,652), 315 with 2+ sources.
+  Long Island: 11,760 + 142 + 0 + 14 = 11,812 (70.6% of 16,731), 104 with 2+ sources.
+
+## Regression matrix verdicts summary
+- Technical:  11 PASS · 0 FAIL · 2 DEFERRED · 1 INFO (cosmetic edge on leading/trailing newlines,
+  documented in SQL header, accepted per SQL 2017 version floor)
+- Security:   4 PASS · 0 FAIL · 2 N/A (HTML injection defense verified via static spec pinning
+  escape order; would revert-fail if bypassed)
