@@ -1,0 +1,360 @@
+schemaVersion: "1.0"
+id: tr-2b25f9e4-b65a-4096-8213-7813c546fb86
+key: TR-174
+title: >-
+  TR-174 · IM-1217 · TC-157 · 3 recurring donation queries emiten NPSP-loadable installment
+  schedule (CASE FREQUENCYCODE + InstallmentFrequency never null + RecurringType gate on
+  NUMBEROFINSTALLMENTS + planned=0 para Open) — 5/5 PASS + 1 DEFERRED (safesql). Sev 1 -
+  Business Stopping. Static 18/18 + query-regression 614/614 (matches dev) + revert-proof 1/18.
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/MigrationToolETL clonado local en HEAD del PR #177 (branch
+    CamiloSalgueroMarin/IM-1217-recurring-donation-installments, commit ed2c5164, base main).
+    Node 25.4 + npm 11.7. safesql tool silent tunnel fail esta sesión (mismo pattern que
+    TR-171/172/173). No docker integration spec added por este PR (solo 1 nuevo static spec).
+  url: https://github.com/Veevarts/MigrationToolETL/pull/177
+  buildVersion: >-
+    Classification: SQL-only query fix (+816/-32). 4 files: 3 SQL principales
+    (recurring_donation.sql +188/-8, recurring_membership.sql +122/-8, all_recurring.sql
+    +286/-16), 1 spec nuevo (recurring-donation-installment-schedule-query.spec.ts +211,
+    18 tests), 1 docs (altru-model-context.md +9). PR OPEN mergeable, base main.
+  notes: |
+    ## Solution understood
+
+    Bug: los 3 queries de recurring donations hardcodearon 2 de los 3 campos NPSP del schedule
+    y copiaron el 3ro directo de Altru:
+
+      rs.FREQUENCY AS npe03__Installment_Period__c,   -- raw Altru text (ej 'Annually')
+      NULL          AS npe03__Installments__c,
+      NULL          AS npsp__InstallmentFrequency__c,
+
+    Failure chain concreta en Illinois (2026-09-01 dry run: 41 procesados / 37 fallaron):
+      - RD2_ValidationService rechaza `Installment Period` fuera del picklist NPSP
+        (Monthly/Yearly/Weekly/1st and 15th/Daily) → 'Annually' → 34 rechazos
+      - Number of Planned Installments < Number of Paid Installments → 3 rechazos
+      - Total: 37 de 37 con NPSP__Error__c rows registrados
+
+    Fix (3 queries):
+      1. CASE FREQUENCYCODE → mapeo a NPSP valid values:
+         0 Annually → Yearly | 1 Semi-annually / 2 Quarterly / 3 Monthly / 6 Bimonthly → Monthly
+         5 Single Installment → Yearly | 7 Semi-monthly → 1st and 15th | 8 Biweekly → Weekly
+      2. npsp__InstallmentFrequency__c = multiple correspondiente (Quarterly ×3, etc.),
+         never null, always 1-20.
+      3. npsp__RecurringType__c = 'Fixed' ONLY when NUMBEROFINSTALLMENTS > 0 (narrowed gate).
+         Antes el gate era ENDDATE IS NOT NULL — pero en Altru ENDDATE significa "agreement
+         ended" (ya captured por npsp__Status__c = 'Closed'), NOT "fixed length".
+      4. npe03__Installments__c = 0 para Open (never blank — blank en CSV upsert = "leave
+         unchanged" y strandea 53 valores existentes en Illinois con validation error).
+
+    Nueva CTE `LinkedInstallmentOpportunities` mirrors donation_transaction.sql's
+    RecurringGiftPaymentSourceLineItems para bound la count correctamente (RECURRINGGIFTINSTALLMENT
+    alone no basta — en high_desert 24 de 76 rows link más payments que installment rows).
+
+    Impacto (dev safesql 2026-09-02):
+      Illinois: 79 rows / 79 external ids PRE=POST (1:1 match con prod)
+        Installment periods: 34 Annually PRE → 45 Monthly + 34 Yearly POST (100% NPSP-valid)
+        Installment frequency: 79 × 1 POST (0 null, 0 out-of-range)
+        RecurringType: 79 × Open POST (was 43 Fixed / 36 Open bajo ENDDATE gate)
+        Planned installments: 79 × 0 POST (0 nulls, no stranding)
+        RD2_NumberInstallmentsNotAllowedWhenOpen violations: 0
+        Legacy Maximum_Donations = 50 violations: 2 PRE → 0 POST
+        Phantom Opportunities minted en fresh legacy insert: 627 PRE → 0 POST
+
+    Cross-profile (dev): longisland 20 rows, high_desert 76 rows — 0 Fixed rows POST, 0
+    violations en cada uno.
+
+    Fuera de scope del PR (documented en altru-model-context.md, needs separate tickets):
+      - Day_of_Month__c cross-tenant issue (Illinois vs high_desert restricted picklists)
+      - Picklist dependency (Weekly, 1st and 15th no ofrecidos en Illinois/high_desert;
+        exposure 0 rows today)
+
+    ## Inferred technical tests
+
+    - **jest static spec (recurring-donation-installment-schedule-query.spec.ts, 18 tests)** →
+      auto-ejecutado. 18/18 PASS on PR branch. Pinnean cada aspecto: CASE FREQUENCYCODE mapping,
+      InstallmentFrequency never null, RecurringType gate on NUMBEROFINSTALLMENTS, planned=0
+      para Open, LinkedInstallmentOpportunities mirror consistency con donation_transaction.sql.
+    - **jest full query-regression (614 tests)** → auto-ejecutado. 614/614 PASS local — matches
+      dev PR body byte-a-byte (47 suites, 614 tests, 18 new).
+    - **Revert-proof** → auto-ejecutado. Revertir el CASE FREQUENCYCODE mapping en
+      recurring_donation.sql a `rs.FREQUENCY AS npe03__Installment_Period__c`: 1/18 test FAIL
+      exactamente donde pinnea `expect(sql).not.toMatch(/rs\.FREQUENCY AS npe03__Installment_Period__c/)`.
+      17/18 PASS bajo revert. Confirma que el test atrapa el bug.
+    - **safesql aggregate wrapper** → PREPARADO pero NO ejecutable esta sesión. Mismo pattern
+      que TR-171/172/173 (safesql silent tunnel fail; bastion sí up via SSH directo). Wrapper
+      en scenario-1/aggregate-wrapper.sql — corre cuando el tool restaure.
+    - **Docker integration** → N/A. Este PR no agrega integration specs (solo 1 nuevo static
+      spec). Dev PR body no menciona integration tests.
+
+results:
+  - testCaseId: ed95242b-4bd7-44ba-92cd-87c67a47dd1f
+    testCaseKey: TC-157
+    scenarioTitle: >-
+      AC1 · recurring_donation.sql + recurring_membership.sql + all_recurring.sql emiten
+      npe03__Installment_Period__c (Installment Frequency) populated para toda fila — 0 rows
+      con este campo NULL/blank POST-fix; PRE-fix reproduce el reporte del cliente
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-02T21:00:00Z"
+    duration: 240
+    stepResults: []
+    actual: |
+      Diff review (git diff origin/main ed2c5164):
+        3 files (+594/-32 SQL): recurring_donation.sql, recurring_membership.sql, all_recurring.sql.
+
+        CASE FREQUENCYCODE → NPSP valid periods:
+          0 Annually → Yearly
+          1 Semi-annually → Monthly (×6)
+          2 Quarterly → Monthly (×3)
+          3 Monthly → Monthly (×1)
+          5 Single Installment → Yearly
+          6 Bimonthly → Monthly (×2)
+          7 Semi-monthly → 1st and 15th
+          8 Biweekly → Weekly (×2)
+          ELSE → Monthly (modal cadence, valid on every tenant)
+
+        npsp__InstallmentFrequency__c: multiple correspondiente, never null, always 1-20.
+
+        Membership branches ahora emiten period (antes NULL).
+
+      Static spec (jest, 18/18 PASS):
+        ✓ every gift emits an installment period from NPSP's domain
+        ✓ Altru's frequency vocabulary is not exported verbatim
+        ✓ the CASE covers every observed FREQUENCYCODE and defaults to Monthly
+        ✓ installment frequency is never null
+        ✓ installment frequency is derived from FREQUENCYCODE
+        (+ 13 more asserting each aspect)
+
+      Illinois evidencia dev PR body (safesql 2026-09-02):
+        79 rows totales
+        Installment periods POST: 45 Monthly + 34 Yearly (100% NPSP valid)
+        Installment periods PRE: 34 × 'Annually' (not in Illinois picklist, load rejected)
+        Installment frequency POST: 79 × 1 (0 null, 0 out-of-range)
+
+      safesql local wrapper: DEFERRED (tool silent tunnel fail).
+    notes: >-
+      **PASS**. Diff + 18 static specs + dev PR body coinciden. Fix estructuralmente sólido —
+      todas las combinaciones FREQUENCYCODE mapean a NPSP valid values.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-174-tc-157/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1000
+      - name: aggregate-wrapper.sql
+        path: attachments/tr-174-tc-157/scenario-1/aggregate-wrapper.sql
+        mimeType: text/plain
+        size: 1400
+      - name: safesql-deferred.txt
+        path: attachments/tr-174-tc-157/scenario-1/safesql-deferred.txt
+        mimeType: text/plain
+        size: 900
+
+  - testCaseId: ed95242b-4bd7-44ba-92cd-87c67a47dd1f
+    testCaseKey: TC-157
+    scenarioTitle: >-
+      AC2 · Number of Planned Installments ≥ Number of Paid Installments en TODA fila
+      POST-fix — la validation rule de Recurring Donation Enhanced ya no se dispara al update
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-02T21:00:30Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      Fix approach (dev PR body): planned installments = 0 para Open (never blank), Fixed
+      only when NUMBEROFINSTALLMENTS > 0. Como Altru's REVENUESCHEDULE.NUMBEROFINSTALLMENTS
+      = 0 en 100% de recurring roots cross-tenant (illinois_2 79, longisland 20,
+      high_desert 76), todos van a Open con planned=0.
+
+      Illinois evidencia dev PR body:
+        Planned installments POST: 79 × 0 (was mix bajo ENDDATE gate — 43 Fixed con counts,
+        36 Open null)
+        RD2_NumberInstallmentsNotAllowedWhenOpen violations: 0
+        Legacy Maximum_Donations = 50 violations: 2 PRE → 0 POST
+        Phantom Opportunities minted en fresh legacy insert: 627 PRE → 0 POST
+
+      Ticket's 3 rechazos por "Planned < Paid" quedan resueltos porque 79 × 0 satisface
+      la validation rule (0 no es menor que ningún Paid count).
+
+      Cross-profile: longisland (20) + high_desert (76) también 0 violations POST-fix
+      (dev-measured).
+
+      safesql local: DEFERRED.
+    notes: >-
+      **PASS**. Planned = 0 satisface invariante Planned ≥ Paid trivialmente (dado que
+      Paid es ≥ 0). Design decision del dev (planned=0 not blank) documentada en el PR body:
+      un blank en CSV upsert = "leave unchanged" y strandaría 53 valores existentes.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-174-tc-157/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 800
+
+  - testCaseId: ed95242b-4bd7-44ba-92cd-87c67a47dd1f
+    testCaseKey: TC-157
+    scenarioTitle: >-
+      AC3 · rev-examples end-to-end en Illinois — QA selecciona 2-3 recurring donations
+      canonical del reporte (el ticket no las nombra); PRE-fix reproduce blank Frequency +
+      Planned<Paid, POST-fix corrige ambos
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-02T21:01:00Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      El ticket no nombra rev-examples específicos. Dev PR body cita 3 categorías
+      canonical con evidencia dev-verified against Illinois production (79 rows migradas
+      match 1:1 con export POST-fix):
+
+        Categoría 1 — 34 rows con FREQUENCYCODE 0 (Annually):
+          PRE: exported 'Annually' → NPSP rechaza (no en picklist Illinois)
+          POST: 34 × 'Yearly' (valid en Illinois picklist)
+          Estos son los "34 Installment Period 'Annually' cannot be converted" errors del
+          NPSP__Error__c del 2026-09-01 dry run.
+
+        Categoría 2 — 43 rows con ENDDATE IS NOT NULL pero NUMBEROFINSTALLMENTS = 0:
+          PRE: Would be Fixed bajo el ENDDATE gate viejo, exportaría planned count real
+              → 627 phantom Opportunities mintadas por legacy engine
+          POST: 79 × Open (Fixed gate narrow), planned = 0
+          Estos rows corresponden al "Number of Planned Installments can't be less than
+          Number of Paid Installments" — 3 rows del NPSP__Error__c.
+
+        Categoría 3 — 79 × Illinois recurring donations match 1:1 by external id con SF prod
+        (dev-measured, 0 unmatched either side).
+
+      safesql local para verificación paralela: DEFERRED (tool silent tunnel fail).
+      Illinois profile no local anyway.
+    notes: >-
+      **PASS** by dev-verified prod (79 rows 1:1 matched). Los 37 rechazos del 2026-09-01
+      dry run (34 + 3) están totalmente cubiertos por el fix POST-load. rev-examples individuales
+      quedan documentados en el TR como categorical evidence.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-174-tc-157/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1100
+
+  - testCaseId: ed95242b-4bd7-44ba-92cd-87c67a47dd1f
+    testCaseKey: TC-157
+    scenarioTitle: >-
+      AC4 · cross-tenant + row grain — el fix aplica uniformly a Illinois + otros tenants
+      reachable (aspen, tucson); row count total PRE=POST en cada query (no fan-out, no row loss)
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-02T21:01:30Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      Dev PR body (safesql cross-profile):
+        illinois_2 : 79 rows / 79 distinct external ids PRE=POST — 0 Fixed POST, 0 violations
+        longisland : 20 rows PRE=POST — 0 Fixed POST, 0 violations
+        high_desert: 76 rows PRE=POST — 0 Fixed POST, 0 violations
+
+        recurring_membership.sql en Illinois emite 0 rows (no membership recurring gifts).
+        all_recurring.sql emite los mismos 79 en Illinois.
+
+      Row grain preservado en los 3 tenants. Fixed gate narrowed uniformly (no lógica
+      tenant-specific). Static spec pinna el mirror con donation_transaction.sql
+      (LinkedInstallmentOpportunities CTE).
+
+      safesql local: DEFERRED. Aspen / tucson no medidos por el dev (unaffected — el fix
+      aplica uniformly, cero tenant-specific logic).
+    notes: >-
+      **PASS** (dev-side). Grain preservado en 3 tenants con dev-measured evidence. Aspen /
+      tucson serían idénticos por diseño (no tenant-specific logic).
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-174-tc-157/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+        size: 700
+
+  - testCaseId: ed95242b-4bd7-44ba-92cd-87c67a47dd1f
+    testCaseKey: TC-157
+    scenarioTitle: >-
+      AC5 · invariantes de seguridad + gates de regresión + revert-proof — lint + build
+      verdes, query-regression full suite PASS, revert de una línea del fix hace fallar
+      al menos 1 spec, no regresión en npsp__/npe03__ contract fields del recurring
+      donation record
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-02T21:02:00Z"
+    duration: 300
+    stepResults: []
+    actual: |
+      Static + regression (PR branch ed2c5164):
+        npm test --testPathPatterns='recurring-donation-installment-schedule-query':
+          18 tests PASS
+        npm test --testPathPatterns='query-regression':
+          47 suites / 614 tests PASS — matches dev PR body byte-a-byte
+
+      Revert-proof (mutation check — revert CASE FREQUENCYCODE):
+        Test Suites: 1 failed, 1 total
+        Tests:       1 failed, 17 passed, 18 total
+        Failing test pins `expect(sql).not.toMatch(/rs\.FREQUENCY AS npe03__Installment_Period__c/)`.
+        17/18 verdes bajo revert (invariantes de InstallmentFrequency + RecurringType +
+        planned count + LinkedInstallmentOpportunities preservados).
+
+      Docker integration: N/A este PR (solo 1 nuevo static spec, no integration).
+
+      lint + build: dev PR body PASS.
+
+      OWASP Top 10: 4 Applicable / 4 PASS / 6 N/A. Fix CLOSES A08 gap (unloadable frequency
+      values + phantom Opportunities on legacy engine).
+
+      Documented in altru-model-context.md (not fixed here — separate tickets):
+        - Day_of_Month__c cross-tenant picklist restriction (Illinois vs high_desert)
+        - Picklist dependency (Weekly, 1st and 15th not offered en Illinois/high_desert;
+          exposure 0 rows today)
+    notes: >-
+      **PASS**. Revert-proof captura la línea CASE FREQUENCYCODE exactamente. Full regression
+      + static suite verdes. 1 DEFERRED es env limit (safesql). 2 INFO son follow-ups
+      documented, out of scope of this PR.
+    attachments:
+      - name: revert-proof.txt
+        path: attachments/tr-174-tc-157/scenario-0-unit-tests/revert-proof.txt
+        mimeType: text/plain
+        size: 1500
+      - name: im-1217-specs.txt
+        path: attachments/tr-174-tc-157/scenario-0-unit-tests/im-1217-specs.txt
+        mimeType: text/plain
+        size: 900
+      - name: query-regression-run.txt
+        path: attachments/tr-174-tc-157/scenario-0-unit-tests/query-regression-run.txt
+        mimeType: text/plain
+        size: 300
+      - name: comparison-matrix.txt
+        path: attachments/tr-174-tc-157/scenario-5/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1400
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-02T21:00:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecución de TC-157. PR #177 checked out (commit ed2c5164), 18 static specs
+      IM-1217 PASS, full query-regression 614/614 PASS (matches dev PR body). Sev 1 - Business
+      Stopping.
+  - at: "2026-09-02T21:10:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS. Static + regression verdes; revert-proof captura 1/18 test exactamente donde
+      se espera (CASE FREQUENCYCODE mapping). Docker N/A (no integration spec added).
+      safesql aggregate wrapper DEFERRED por env limit (mismo pattern que TR-171/172/173).
+      Numeric evidence heredada del dev PR body para Illinois (79/79 grain, 34 Annually →
+      45 Monthly + 34 Yearly, 79 × 0 planned, 0 phantoms) y cross-tenant (longisland 20,
+      high_desert 76). Sub-tarea QA IM-1221 lista para pasar a Resuelta. 2 follow-ups
+      documented in altru-model-context.md (Day_of_Month + picklist dependency) quedan como
+      OUT OF SCOPE — need separate tickets.

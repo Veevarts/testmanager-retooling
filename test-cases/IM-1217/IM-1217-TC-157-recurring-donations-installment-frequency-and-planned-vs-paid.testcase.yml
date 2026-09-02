@@ -1,0 +1,235 @@
+schemaVersion: "1.0"
+
+id: "ed95242b-4bd7-44ba-92cd-87c67a47dd1f"
+key: "TC-157"
+title: "recurring_donation.sql (+ all_recurring.sql + recurring_membership.sql) emiten npe03__Installment_Period__c (Installment Frequency) populated y garantizan npe03__Total_Paid_Installments__c ≤ Number of Planned Installments para que la Recurring Donation Enhanced pase la validation rule y se pueda actualizar sin errores (IM-1217)"
+description: |
+  Test case para IM-1217 (Error, priority High, severity **1 - Business Stopping**, "In QA Review")
+  — epic IM-70 Altru Queries — QA Sub-task IM-1221. Cliente reportante: Illinois Holocaust Museum.
+  PR bajo prueba: **PENDIENTE** (dev aún no ha investigado ni abierto PR; único comment es
+  FYI de Alejandro creando el caso).
+
+  === CONTEXTO DEL REPORTE ===
+
+  El ticket describe 2 síntomas relacionados en los Recurring Donations cargados desde el query:
+
+    Síntoma 1 — Installment Frequency faltante
+      El campo `Installment Frequency` (probablemente `npe03__Installment_Period__c` en NPSP)
+      NO se está populando. Ese campo es REQUERIDO para poder cargar un registro de Recurring
+      Donation. Sin él, el load falla al insertar.
+
+    Síntoma 2 — Number of Planned Installments < Number of Paid Installments
+      El query emite `Number of Planned Installments` menor que `Number of Paid Installments`.
+      La Recurring Donation Enhanced tiene una validation rule que impide esto (Paid no puede
+      exceder Planned). Cualquier update posterior sobre el registro dispara el error de
+      validation, dejando la data incompleta.
+
+  Request del cliente (Illinois): alinear ambos campos (Planned = Paid), o al mínimo asegurar
+  Planned ≥ Paid para que la validation rule no se dispare y Installment Frequency se pueda
+  populate.
+
+  === QUERY FILES BAJO PRUEBA (baseline actual pre-PR) ===
+
+  3 archivos relevantes en MigrationToolETL:
+    - `recurring_donation.sql` — recurring donations standalone
+    - `recurring_membership.sql` — recurring memberships
+    - `all_recurring.sql` — merge de los dos anteriores
+
+  Cualquier fix probable toca uno o más de estos + los pipelines/mapper correspondientes
+  (recurring-donation-only.pipeline.ts, recurring-donation-membership-all.pipeline.ts,
+  recurring-membership.pipeline.ts, recurring-donation-membership.mapper.ts).
+
+  === QUÉ CUBRE ESTE TC ===
+
+  Este bundle es forward-looking. Cuando el PR aparezca, el executor validará que:
+    1. Los 3 queries emiten `npe03__Installment_Period__c` (Installment Frequency) populated
+       para toda recurring donation output — 0 rows con este campo NULL/blank POST-fix.
+    2. Los mismos queries emiten Planned Installments ≥ Paid Installments en TODA fila
+       (invariante que la validation rule requiere).
+    3. Idealmente Planned = Paid cuando la recurring donation está fully paid (cliente
+       request), pero al mínimo Planned ≥ Paid (validation rule gate).
+    4. Cross-tenant sanity — el fix aplica uniformly a Illinois + otros tenants reachable.
+    5. Ninguno de los otros campos del contrato cambia (row grain preservado, columnas
+       existentes intactas).
+
+  === RIESGOS ABIERTOS ===
+
+    - **NO HAY PR TODAVÍA** — el dev (Camilo) aún no ha investigado ni abierto PR. Este TC
+      quedará como planning ready-to-execute; el executor debe correr después de que el PR
+      aparezca. Alternativamente, el executor puede correr AHORA en modo baseline (safesql
+      sobre illinois_2) para confirmar el PRE-fix state (Installment Frequency blank + Planned
+      < Paid).
+    - **Sev 1 - Business Stopping**: el fix debe ser bulletproof — bloquea cargas de recurring
+      donations en Illinois. Cualquier row que quede sin Installment Frequency POST-fix o con
+      Planned < Paid es un defect blocker.
+    - **safesql profile illinois_2 alcanzable localmente** (dev-reportado en TR-171/172/173) —
+      validación cuantitativa PRE/POST posible en el tenant reportante. Bastion outages
+      recientes pueden afectar (safesql tool silent tunnel fail intermitente).
+    - **Docker integration** para specs nuevos que el PR agregue: mismo constraint colima
+      startup >60s puede caer a DEFERRED con dev PR body como fallback.
+    - **rev-examples FALTAN** en el ticket — no hay 1 recurring donation nombrada como
+      ejemplo. QA debe seleccionar 2-3 rows de illinois_2 (recurring donations con paid
+      installments > 0) como canonical examples para el TR.
+    - **Fix approach TBD** — hay 2 estrategias posibles:
+        (a) Populate Installment Frequency + set Planned = actual count of installments
+            desde INSTALLMENT table (query-side)
+        (b) Populate Installment Frequency + set Planned = MAX(Planned, Paid) para no
+            disparar validation rule (query-side conservador)
+        Cliente prefiere (a) explícitamente; dev decidirá. QA debe verificar cuál se aplicó.
+    - **NPSP field names** — el ticket usa nombres de UI ("Installment Frequency", "Number of
+      Planned Installments"). Los API names en NPSP Recurring Donation Enhanced (RD2) son:
+        Installment Frequency → `npe03__Installment_Period__c` (valores: Weekly, Monthly, Quarterly, Yearly, etc.)
+        Number of Planned Installments → `npe03__Installments__c`
+        Number of Paid Installments → `npe03__Total_Paid_Installments__c`
+      Verificar contra el schema del sandbox Illinois si difiere.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado. Cuando el PR de IM-1217 aparezca, checkout en HEAD del PR + acceso al commit base (main) para contraste PRE-fix."
+  - "Profile safesql **illinois_2** alcanzable en /Users/veevart/tools/safesql/profiles — el tenant reportante. Cross-tenant sanity con aspen/tucson si alcanzables."
+  - "Docker/colima levantado si el PR agrega integration specs (mismo constraint colima startup >60s puede caer a DEFERRED)."
+  - "npm ci limpio para lint:check + query-regression + build."
+  - "Acceso al schema del sandbox Illinois (trainings o prod read-only) para confirmar los API names de los campos NPSP mencionados en el ticket (Installment Frequency, Planned/Paid Installments)."
+  - "Repo testmanager-retooling clonado para escribir el TR + evidencias bajo attachments/tr-<NN>-tc-157/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · recurring_donation.sql + recurring_membership.sql + all_recurring.sql emiten npe03__Installment_Period__c (Installment Frequency) populated para toda fila — 0 rows con este campo NULL/blank POST-fix; PRE-fix reproduce el reporte del cliente"
+    tags:
+      - ac-1
+      - main-fix
+      - installment-frequency
+      - required-field
+      - illinois
+      - critical
+    given:
+      - "los 3 SQL files (recurring_donation.sql, recurring_membership.sql, all_recurring.sql)"
+      - "el commit base (PRE-fix) y el HEAD del PR (POST-fix) disponibles cuando el PR aparezca"
+      - "profile safesql illinois_2 alcanzable"
+      - "el API name confirmed del field (probablemente npe03__Installment_Period__c) contra el schema Illinois"
+    when:
+      - "se ejecuta cada query PRE-fix contra illinois_2 y se cuenta rows con Installment Frequency IS NULL o = ''"
+      - "se ejecuta el mismo query POST-fix y se cuentan las mismas rows"
+    then:
+      - "PRE-fix: > 0 rows con Installment Frequency NULL/blank (reproduce el reporte)"
+      - "POST-fix: 0 rows con Installment Frequency NULL/blank en los 3 queries"
+      - "los valores emitidos POST-fix son válidos según el picklist NPSP (Weekly, Monthly, Quarterly, Yearly, etc.) — no strings arbitrarios"
+      - "el field se derive from la source Altru data correctly (probablemente RECURRINGGIFT.FREQUENCY o similar) — mapping documentado en el PR"
+
+  - title: "AC2 · Number of Planned Installments ≥ Number of Paid Installments en TODA fila POST-fix — la validation rule de Recurring Donation Enhanced ya no se dispara al update"
+    tags:
+      - ac-2
+      - main-fix
+      - validation-rule
+      - planned-vs-paid
+      - illinois
+      - critical
+    given:
+      - "los 3 SQL files bajo prueba"
+      - "el schema Illinois — validation rule que requiere npe03__Installments__c >= npe03__Total_Paid_Installments__c"
+      - "profile safesql illinois_2"
+    when:
+      - "se ejecuta cada query PRE-fix contra illinois_2 y se cuenta rows con Planned < Paid"
+      - "se ejecuta POST-fix y se cuentan las mismas rows"
+      - "opcionalmente, se identifica una recurring donation Illinois cuyo update en SF disparó el error (canonical example)"
+    then:
+      - "PRE-fix: > 0 rows con Planned < Paid (reproduce el reporte del cliente)"
+      - "POST-fix: 0 rows con Planned < Paid en los 3 queries — invariante Planned ≥ Paid en TODA fila"
+      - "IDEALMENTE Planned = Paid cuando la recurring donation está fully paid (cliente explícito request), aunque Planned > Paid también es aceptable"
+      - "un update de prueba sobre una recurring donation POST-fix load no dispara la validation rule (verificable en el trainings sandbox si aplica)"
+
+  - title: "AC3 · rev-examples end-to-end en Illinois — QA selecciona 2-3 recurring donations canonical del reporte (el ticket no las nombra); PRE-fix reproduce blank Frequency + Planned<Paid, POST-fix corrige ambos"
+    tags:
+      - ac-3
+      - regression-evidence
+      - illinois
+      - rev-examples-selected-by-qa
+      - missing-doc
+    given:
+      - "el ticket NO nombra recurring donations específicas — QA debe seleccionar 2-3 canonical examples de illinois_2"
+      - "criterios de selección: recurring donations con paid_installments > 0 en Altru + Installment Frequency populated en Altru (para tener baseline correcto)"
+    when:
+      - "se seleccionan 2-3 recurring donations Illinois con el shape del defecto"
+      - "se ejecuta el query PRE-fix vs POST-fix para cada una"
+      - "se compara Installment Frequency + Planned + Paid contra la source Altru y contra lo que el SF post-load debería tener"
+    then:
+      - "los 2-3 rev seleccionados reproducen el defecto PRE-fix (blank Frequency + Planned < Paid)"
+      - "los 2-3 rev POST-fix tienen Installment Frequency populated con valor correcto y Planned ≥ Paid (idealmente Planned = Paid)"
+      - "los rev seleccionados quedan documentados en el TR como canonical evidence (para el cliente + para regresión futura)"
+
+  - title: "AC4 · cross-tenant + row grain — el fix aplica uniformly a Illinois + otros tenants reachable (aspen, tucson); row count total PRE=POST en cada query (no fan-out, no row loss)"
+    tags:
+      - ac-4
+      - cross-tenant
+      - row-grain
+      - illinois
+      - aspen
+      - tucson
+    given:
+      - "profiles safesql alcanzables — illinois_2 (primary) + aspen / tucson (cross-tenant sanity)"
+      - "el fix debe aplicar uniformly — no lógica tenant-specific"
+    when:
+      - "se ejecuta cada query PRE-fix vs POST-fix contra cada profile alcanzable"
+      - "se cuenta total rows emitidas + distinct external IDs en cada corrida"
+      - "se cuenta el mismo shape del defecto (blank Frequency + Planned<Paid) en cada tenant"
+    then:
+      - "row count total: PRE = POST en cada query en cada tenant (no fan-out, no row loss)"
+      - "distinct external IDs: PRE = POST en cada query en cada tenant"
+      - "el defect count baja a 0 en TODOS los tenants POST-fix (blank Frequency = 0, Planned<Paid = 0)"
+      - "cross-tenant deltas measured y documentados por-tenant en el TR (blast radius per-tenant)"
+
+  - title: "AC5 · invariantes de seguridad + gates de regresión + revert-proof — lint + build verdes, query-regression full suite PASS, revert de una línea del fix hace fallar al menos 1 spec, no regresión en npsp__/npe03__ contract fields del recurring donation record"
+    tags:
+      - ac-5
+      - safety-invariants
+      - revert-proof
+      - query-regression
+      - contract-fields
+    given:
+      - "el HEAD del PR checked out (cuando aparezca)"
+      - "el commit base para el revert-proof"
+      - "profile safesql alcanzable para el revert-proof cuantitativo"
+    when:
+      - "se corre lint:check + build + query-regression completo"
+      - "se revierte SOLO la línea del fix (probablemente el populate de Installment Frequency + MAX(Planned, Paid))"
+      - "se re-corren los specs post-revert"
+      - "se verifica que otros campos del contract (npe03__Amount__c, npe03__Date_Established__c, etc.) NO cambian PRE=POST"
+    then:
+      - "lint:check limpio, build OK, query-regression: TODOS PASS + N skipped (docker)"
+      - "revert-proof positivo: al menos 1 spec falla al revertir el fix"
+      - "otros campos del contract permanecen invariantes PRE=POST"
+      - "OWASP Top 10: 4 Applicable / 4 PASS (mismo shape que TR-171/172/173: sin injection surface, sin auth, sin deps nuevas)"
+
+tags:
+  - im-1217
+  - im-70
+  - im-1221
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - recurring-donations
+  - recurring-donation-enhanced
+  - installment-frequency
+  - planned-installments
+  - paid-installments
+  - validation-rule
+  - illinois
+  - source-side
+  - safesql
+  - sql-only
+  - high
+  - sev-1-business-stopping
+  - pr-pending
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-02T20:31:21Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-02T20:31:21Z"
+  version: 1
