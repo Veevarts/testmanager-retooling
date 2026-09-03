@@ -1,0 +1,383 @@
+schemaVersion: "1.0"
+id: tr-472ca1a3-fb95-46c3-9ff4-f030f857b5c3
+key: TR-175
+title: >-
+  TR-175 · IM-1220 · TC-158 · visitor_management.sql = UNION de los 3 ticketing date
+  sources — 5/5 PASS con validación LIVE sobre el tenant real (Long Island): 5 fechas del
+  ticket recuperadas (0 rows PRE), completeness 0 dangling / 0 surplus sobre 4,945 fechas,
+  diff 56 added / 3 removed / 4,889 intactas = contrato advertido exacto. Spec 24/24 +
+  suite 620 + revert-proof.
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/MigrationToolETL clonado local en HEAD del PR "#178" (branch
+    CamiloSalgueroMarin/IM-1220-visitor-mgmt-missing-dates, commit 85e0145, merge-base
+    fd87da7 = origin/main). Node + npm locales, jest estático (sin docker — el spec nuevo
+    no es integration). safesql live sobre profile nuevo qa_longisland →
+    migration-db.rtl.veevartapp.com:14772, DB Long-Island-Children-s-Museum_db_7 (el
+    tenant del ticket), read-only + CREATE TABLE tempdb (--allow-writes por los "#Vm*"
+    staging tables, trait advertido por el PR).
+  url: https://github.com/Veevarts/MigrationToolETL/pull/178
+  buildVersion: >-
+    Classification: SQL + spec + docs (+688/-48, 3 files): visitor_management.sql
+    reescrito como UNION de 3 brazos con staged temp extraction (MAIN FIX, +338),
+    visitor-management-query.spec.ts nuevo (+394, 24 assertions), docs/altru-model-context.md
+    (+4, contrato row-grain + lineage). PR OPEN, base main, "Do not merge - opened for
+    review only".
+  notes: |
+    ## Solution understood
+
+    Bug: visitor_management.sql (intacto desde IM-103) derivaba sus fechas con UNA regla
+    (sales orders con gate EXISTS SALESORDERITEMTICKET), mientras los 3 children de
+    Ticketing resuelven su lookup Auctifera__Visitor_Management__c sobre poblaciones que
+    el parent no veía:
+      - ticketing_only_program.sql: COALESCE(RESERVATION.ARRIVALDATE, earliest ticket
+        EVENT.STARTDATE, SALESORDER.TRANSACTIONDATE) — el parent nunca joineaba RESERVATION.
+      - ticketing_only_event.sql: misma expresión sobre orders sin ticket line — el gate
+        EXISTS del parent las excluía.
+      - ticketing_direct_registrant.sql: EVENT.STARTDATE de REGISTRANT directo — sin
+        SALESORDER en ninguna parte.
+    Toda fecha que un child deriva y el parent no emite = lookup dangling → el operador
+    la crea a mano (las 5 del ticket: 9/26/2024, 7/3/2026, 8/7/2026, 8/20/2026, 8/21/2026).
+
+    Fix: el parent pasa a ser el UNION de las expresiones de lookup de los 3 children,
+    cada brazo reproduciendo population gate, expresión y window de su child. Staged
+    "#Vm*" temp extraction (patrón membership_transactions.sql/IM-1161) porque la forma
+    single-statement no terminaba en 900s; ~27s vs 71.6s pre-change (2.6x más rápido
+    cubriendo 3 poblaciones). Brazo 1 deliberadamente unwindowed (el child neutered su
+    window en IM-791 — superset es la dirección segura: surplus inerte, missing rompe).
+    Contrato: 56 fechas added / 3 removed (4,892 → 4,945); las 3 removidas no las
+    referencia ningún child; External ID byte-idéntico en sobrevivientes; loads upsert
+    por Implementation_External_ID__c → los registros manuales de Paula simplemente
+    matchean, nada se borra en org.
+
+    ## Inferred technical tests
+
+    - **jest spec nuevo (visitor-management-query.spec.ts, 24 assertions)** → auto-ejecutado.
+      24/24 PASS en PR HEAD. Estático (parsea SQL con text anchors) — sin docker.
+    - **jest full query-regression** → auto-ejecutado. 620 passed / 169 skipped
+      (docker-gated) / 0 failed — matchea lo declarado por el dev.
+    - **Revert-proof (trampa event-arm)** → auto-ejecutado. Mutar el brazo event a la
+      window expression (el hazard del primer commit: 21 rows / 14 fechas dangling) rompe
+      "reproduces the child date expression verbatim" (1 failed / 23 passed); restaurado
+      24/24.
+    - **safesql PRE vs POST en el tenant real** → auto-ejecutado (tras crear el profile
+      qa_longisland con el endpoint vigente de la Migration App; los profiles
+      preexistentes apuntaban a hosts DB stale — causa raíz de los DEFERRED tipo
+      TR-150/170/171). PRE 4,892 / POST 4,945 / added 56 / removed 3 / kept 4,889.
+    - **Completeness parent↔children** → auto-ejecutado, verificación INDEPENDIENTE de QA:
+      los 3 children corridos verbatim (wrappers SELECT DISTINCT del lookup) → union
+      referenciada 4,945 = parent POST; DANGLING 0 / SURPLUS 0.
+    - **Mecanismo por brazo (verify-arms-a.sql)** → auto-ejecutado: las 4 fechas 2026
+      tienen exactamente 1 RESERVATION con ese ARRIVALDATE y 0 SALESORDER transactadas ese
+      día; 2024-09-26 la referencia SOLO el child direct-registrant. El conteo exacto de
+      291 rows queda con fuente dev + reviewer (el wrapper QA deduplica fechas).
+    - **lint + build** → auto-ejecutados, verdes.
+    - **UI / org load** → N/A: cambio SQL-only; el load a org es upsert del IE, fuera de
+      scope QA (no prod).
+
+results:
+  - testCaseId: 86a65831-a801-4b56-8dd4-82a065b7c56e
+    testCaseKey: TC-158
+    scenarioTitle: >-
+      AC1 · The five reported dates return parent rows POST-fix (0 rows PRE-fix): 9/26/2024
+      via the direct-registrant arm (291 eligible rows) and the four 2026 dates via
+      RESERVATION.ARRIVALDATE (1 ticketing row + 1 reservation each, 0 sales orders that day)
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-03T19:05:00Z"
+    duration: 25
+    stepResults: []
+    actual: |
+      Ejecutado LIVE por QA sobre el tenant del ticket (qa_longisland, unwindowed):
+
+      PRE-fix (merge-base fd87da7): 4,892 rows; filtro a las 5 fechas del ticket → 0 rows.
+      Reproduce el reporte exacto del cliente ("the full query was run and did not return
+      this value").
+
+      POST-fix (HEAD 85e0145): 4,945 rows; las 5 fechas presentes, exactamente 1 row cada
+      una (0 duplicados en todo el set).
+
+      Atribución por brazo (verificada por QA):
+        2024-09-26  → referenciada SOLO por ticketing_direct_registrant.
+        4 fechas 2026 → referenciadas SOLO por ticketing_only_program; verify-arms-a.sql
+        confirma el mecanismo: exactamente 1 RESERVATION con ese ARRIVALDATE por fecha y
+        0 SALESORDER con TRANSACTIONDATE ese día (group reservations pagadas otro día).
+
+      El conteo de 291 direct-registrant rows para 9/26/2024 queda con fuente dev +
+      reviewer del PR (el wrapper QA deduplica fechas; la membresía del brazo sí es QA-verified).
+
+      pre-fix → post-fix → ¿objetivo?: 0/5 fechas → 5/5 con brazo correcto → SÍ.
+    notes: >-
+      **PASS**. Evidencia primaria QA-generada en el tenant real, no re-cita del dev.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-175-tc-158/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2217
+      - name: pre-fix-longisland-dates.json
+        path: attachments/tr-175-tc-158/scenario-1/pre-fix-longisland-dates.json
+        mimeType: application/json
+        size: 631209
+      - name: post-fix-longisland-dates.json
+        path: attachments/tr-175-tc-158/scenario-1/post-fix-longisland-dates.json
+        mimeType: application/json
+        size: 638046
+      - name: verify-arms-a.sql
+        path: attachments/tr-175-tc-158/scenario-1/verify-arms-a.sql
+        mimeType: text/plain
+        size: 641
+      - name: verify-arms-notes.txt
+        path: attachments/tr-175-tc-158/scenario-1/verify-arms-notes.txt
+        mimeType: text/plain
+        size: 1097
+
+  - testCaseId: 86a65831-a801-4b56-8dd4-82a065b7c56e
+    testCaseKey: TC-158
+    scenarioTitle: >-
+      AC2 · Referential completeness: the parent's date set equals EXACTLY the union of the
+      three children's referenced dates on Long Island — 4,945 dates, 0 dangling, 0 surplus
+      (closes the systemic gap of 165 ticketing rows over 136 ARRIVALDATE values)
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-03T19:20:00Z"
+    duration: 20
+    stepResults: []
+    actual: |
+      Verificación INDEPENDIENTE de QA (misma metodología que el reviewer, re-ejecutada):
+      los 3 children corridos VERBATIM contra qa_longisland, wrapeados solo en
+      SELECT DISTINCT de su columna de lookup (WITH-chains y gates intactos):
+
+        ticketing_only_program.sql  → 4,894 fechas distintas referenciadas
+        ticketing_only_event.sql    → 135 fechas distintas
+        ticketing_direct_registrant → 53 fechas distintas
+        UNION                        → 4,945
+
+      Parent POST-fix: 4,945 fechas.
+      Comparación bidireccional (analyze_vm.py):
+        DANGLING (child referencia, parent no tiene): **0**
+        SURPLUS  (parent tiene, ningún child referencia): **0**
+
+      Las 5 fechas del ticket están en el set referenciado por los children — eran
+      dangling PRE-fix (por eso el lookup fallaba y se crearon a mano) y quedan resueltas.
+
+      pre-fix → post-fix → ¿objetivo?: >=5 dangling + 3 surplus → 0 / 0 (set-equality
+      exacta sobre 4,945) → SÍ.
+    notes: >-
+      **PASS**. El número 4,945 del PR body queda verificado por QA de forma independiente.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-175-tc-158/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2192
+      - name: child-program-dates.json
+        path: attachments/tr-175-tc-158/scenario-2/child-program-dates.json
+        mimeType: application/json
+        size: 362363
+      - name: child-event-dates.json
+        path: attachments/tr-175-tc-158/scenario-2/child-event-dates.json
+        mimeType: application/json
+        size: 10131
+      - name: child-direct-dates.json
+        path: attachments/tr-175-tc-158/scenario-2/child-direct-dates.json
+        mimeType: application/json
+        size: 4063
+      - name: wrapper-program.sql
+        path: attachments/tr-175-tc-158/scenario-2/wrapper-program.sql
+        mimeType: text/plain
+        size: 6318
+      - name: wrapper-event.sql
+        path: attachments/tr-175-tc-158/scenario-2/wrapper-event.sql
+        mimeType: text/plain
+        size: 7297
+      - name: wrapper-direct.sql
+        path: attachments/tr-175-tc-158/scenario-2/wrapper-direct.sql
+        mimeType: text/plain
+        size: 5865
+
+  - testCaseId: 86a65831-a801-4b56-8dd4-82a065b7c56e
+    testCaseKey: TC-158
+    scenarioTitle: >-
+      AC3 · No regression on the surviving output: every pre-existing date a child references
+      keeps a byte-identical Implementation_External_ID__c, the only removals are the 3
+      advertised unreferenced dates (56 added / 3 removed, 4,892 → 4,945), and the UNION
+      emits one row per date
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-03T19:22:00Z"
+    duration: 10
+    stepResults: []
+    actual: |
+      Diff completo PRE vs POST por Implementation_External_ID__c (QA-generado):
+
+        PRE : 4,892 rows = 4,892 fechas distintas (0 dup)
+        POST: 4,945 rows = 4,945 fechas distintas (0 dup — UNION dedup: 1 row por fecha)
+        kept: 4,889 · added: 56 · removed: 3
+
+      = EXACTO al contrato advertido por el PR ("56 dates added, 3 removed").
+
+      Removed: 2018-06-18, 2022-09-13, 2024-09-11. Por corolario del scenario 2
+      (dangling = 0), ninguna la referencia un child → surplus inerte; los loads son
+      upserts keyed por External ID, nada se borra en la org (los registros manuales de
+      Paula matchean por formato yyyy-mm-dd verificado en la salida).
+
+      Byte-identidad: el External ID ES el date string (CONVERT VARCHAR(10) style 23);
+      igualdad de set por string exacto en los 4,889 kept = byte-idéntico.
+
+      Los 56 added incluyen las 5 del ticket + 51 fechas históricas (2005-2020) del gap
+      sistémico que el parent viejo nunca pudo derivar.
+
+      pre-fix → post-fix → ¿objetivo?: solo agrega lo referenciado + remueve solo lo
+      advertido + preserva byte-idéntico lo demás → SÍ.
+    notes: >-
+      **PASS**. El TC original decía "ningún row desaparece" — se corrigió al contrato real
+      del PR (3 remociones advertidas e inertes) ANTES de ejecutar; ver v1 history del TC.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-175-tc-158/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 1685
+
+  - testCaseId: 86a65831-a801-4b56-8dd4-82a065b7c56e
+    testCaseKey: TC-158
+    scenarioTitle: >-
+      AC4 · The event-arm trap is pinned: the UNION arm for ticketing_only_event uses
+      ticket_dates.EarliestTicketDate (the lookup expression), never the Ticket_Date_Do_Not_Map
+      window expression — the 21-rows/14-dates first-commit hazard cannot regress silently
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-03T18:35:00Z"
+    duration: 8
+    stepResults: []
+    actual: |
+      SQL final verificado: el SELECT del brazo event (línea 246) usa
+      ticket_dates.EarliestTicketDate; la window expression
+      (event_registration_dates.EarliestEventRegistrationDate) vive SOLO en el predicado
+      de window (líneas 260-261), igual que en el child.
+
+      Revert-proof QA: mutación de la línea 246 a la window expression (reproduce el
+      hazard del primer commit del PR, que dejó 21 rows / 14 fechas dangling):
+        ✕ reproduces the child date expression verbatim
+        Tests: 1 failed, 23 passed
+      Restaurado (git checkout): 24/24 PASS.
+
+      La trampa queda pinneada por el spec — no puede reintroducirse en silencio.
+
+      pre-fix → post-fix → ¿objetivo?: hazard vivo en el primer commit → assertion lo
+      captura mecánicamente → SÍ.
+    notes: >-
+      **PASS**. Touch radius verificado además: solo 1 SQL + 1 spec + 1 doc; children
+      intactos (diff vacío sobre ticketing/attendance/rental/ticket_item/pos_purchase).
+    attachments:
+      - name: revert-proof.txt
+        path: attachments/tr-175-tc-158/scenario-4/revert-proof.txt
+        mimeType: text/plain
+        size: 1602
+      - name: touch-radius.txt
+        path: attachments/tr-175-tc-158/scenario-4/touch-radius.txt
+        mimeType: text/plain
+        size: 370
+
+  - testCaseId: 86a65831-a801-4b56-8dd4-82a065b7c56e
+    testCaseKey: TC-158
+    scenarioTitle: >-
+      AC5 · Regression gates: lint + build green, visitor-management-query.spec.ts passes on
+      PR HEAD, full query-regression suite unaffected, and docs/altru-model-context.md
+      documents the new UNION rule
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-03T18:32:00Z"
+    duration: 12
+    stepResults: []
+    actual: |
+      En PR HEAD 85e0145:
+        visitor-management-query.spec.ts: 24/24 PASS (estático, 0.2s, sin docker).
+        Full query-regression: 620 passed / 169 skipped (docker-gated) / 0 failed —
+        matchea el "620 passed" del dev.
+        npm run lint:check: limpio. npm run build (nest): OK.
+
+      docs/altru-model-context.md (+4): agrega la regla ARRIVALDATE-outranks (IM-1220),
+      el contrato row-grain de Visitor Management (parent = UNION de los 3 children;
+      cambiar un child obliga a cambiar el parent en el mismo commit; superset-safe) —
+      scope-fit exacto con el ticket, sin scope creep.
+
+      Seguridad (regression-results.txt + owasp-top10-scan.txt): secrets 0 hits; sin SQL
+      dinámico (params bindeados vía sp_executesql); write-audit re-ejecutado a mano — 0
+      verbos DML, todo INTO/DROP/CREATE target es "#Vm*" (el spec lo pinnea permanente);
+      deps sin cambios. OWASP: 2 Applicable (A03 Injection, A05 Misconfiguration por la
+      ampliación --allow-writes/tempdb) ambas PASS, 8 N/A, 0 FAIL.
+    notes: >-
+      **PASS**. Gates verdes + docs scope-fit + write-audit contenido a tempdb.
+    attachments:
+      - name: gates-log.txt
+        path: attachments/tr-175-tc-158/scenario-5/gates-log.txt
+        mimeType: text/plain
+        size: 470
+      - name: docs-diff.txt
+        path: attachments/tr-175-tc-158/scenario-5/docs-diff.txt
+        mimeType: text/plain
+        size: 5062
+      - name: test-run-log.txt
+        path: attachments/tr-175-tc-158/scenario-0-unit-tests/test-run-log.txt
+        mimeType: text/plain
+        size: 2667
+      - name: tests-found.txt
+        path: attachments/tr-175-tc-158/scenario-0-unit-tests/tests-found.txt
+        mimeType: text/plain
+        size: 1860
+      - name: coverage-matrix.txt
+        path: attachments/tr-175-tc-158/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+        size: 2279
+      - name: regression-plan.txt
+        path: attachments/tr-175-tc-158/regression-plan.txt
+        mimeType: text/plain
+        size: 2939
+      - name: regression-results.txt
+        path: attachments/tr-175-tc-158/regression-results.txt
+        mimeType: text/plain
+        size: 2957
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-175-tc-158/owasp-top10-scan.txt
+        mimeType: text/plain
+        size: 2099
+      - name: security-scan-static.txt
+        path: attachments/tr-175-tc-158/security-scan-static.txt
+        mimeType: text/plain
+        size: 366
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-03T18:30:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecución de TC-158. PR "#178" checked out (commit 85e0145), spec 24/24
+      PASS, query-regression 620/620, lint + build verdes, revert-proof capturado.
+      Validación live inicialmente bloqueada: los 4 profiles safesql apuntaban a hosts DB
+      stale (NLB/EC2 recyclados) — el mismo modo de falla detrás de los DEFERRED de
+      TR-150/170/171.
+  - at: "2026-09-03T19:31:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS con evidencia live QA-generada sobre el tenant real. Desbloqueo: el usuario
+      entregó el endpoint vigente desde la Migration App (migration-db.rtl.veevartapp.com,
+      puerto por tenant) → profile nuevo qa_longisland + password compartida en keychain +
+      allow rule para safesql. PRE 4,892 / POST 4,945 / +56 −3 / kept 4,889 byte-idénticos;
+      5 fechas del ticket recuperadas (0 PRE); completeness 0 dangling / 0 surplus
+      verificada independiente contra los 3 children verbatim; mecanismo por brazo
+      confirmado en el source (1 reserva + 0 sales orders por fecha 2026; 2024-09-26 solo
+      en direct-registrant). Sin defectos. IM-1222 lista para Resuelta. Riesgo trasladado
+      al IE (no defecto): reconciliación de los registros manuales de Paula es upsert-safe
+      por formato de External ID verificado.

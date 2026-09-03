@@ -1,0 +1,204 @@
+schemaVersion: "1.0"
+
+id: "86a65831-a801-4b56-8dd4-82a065b7c56e"
+key: "TC-158"
+title: "visitor_management.sql unions every ticketing date source so the parent emits exactly the dates its three children reference (recovers the 5 Long Island dates created manually, 0 dangling / 0 surplus over 4,945 dates) — IM-1220"
+description: |
+  Test case para IM-1220 (Historia, priority **High**, "In QA Review") — epic IM-70 Altru
+  Queries — QA Sub-task IM-1222. Cliente reportante: Long Island Children's Museum.
+  PR bajo prueba: Veevarts/MigrationToolETL "PR #178" (open, base main, 3 files, +688/-48).
+
+  === CONTEXTO ===
+
+  El ticket reporta 5 fechas que el lookup de Visitor Management necesitaba y que el export
+  del query original NO devolvió: 9/26/2024, 7/3/2026, 8/7/2026, 8/20/2026, 8/21/2026.
+  Paula las creó manualmente en el target como workaround temporal.
+
+  ROOT CAUSE (dev, verificado con safesql read-only sobre Long-Island-Children-s-Museum_db_7):
+  visitor_management.sql es el PARENT cuyo Implementation_External_ID__c (el date string) es
+  referenciado por los exports de Ticketing vía Auctifera__Visitor_Management__c. Sin tocar
+  desde IM-103, derivaba sus fechas con UNA sola regla (sales-order con gate
+  EXISTS SALESORDERITEMTICKET), mientras 3 queries hijas resuelven su lookup sobre
+  poblaciones que el parent no veía:
+    - ticketing_only_program.sql — COALESCE(RESERVATION.ARRIVALDATE, earliest ticket
+      EVENT.STARTDATE, SALESORDER.TRANSACTIONDATE); el parent nunca joineaba RESERVATION.
+    - ticketing_only_event.sql — misma expresión sobre orders sin ticket line; el gate
+      EXISTS del parent las excluía.
+    - ticketing_direct_registrant.sql — EVENT.STARTDATE de REGISTRANT directo elegible;
+      sin SALESORDER en ninguna parte.
+
+  Evidencia dev por fecha: las 5 fechas devolvían 0 rows en el query viejo. Las 4 fechas de
+  2026 tienen exactamente 1 ticketing row + 1 reservation cada una y 0 sales orders
+  transactadas ese día (group reservations reservadas antes de la transacción que las pagó
+  → el child apunta a ARRIVALDATE, el parent emitía la fecha del booking). 9/26/2024 tiene
+  291 direct-registrant ticketing rows elegibles, 0 de los brazos sales-order. Sistémico:
+  165 ticketing rows sobre 136 ARRIVALDATE distintos sin parent date derivable de su orden.
+
+  FIX: visitor_management.sql pasa a ser el UNION de las expresiones de lookup de los 3
+  children, cada brazo reproduciendo el population gate, la expresión y la ventana de su
+  child. POST-fix el parent emite 4,945 fechas = exactamente el set referenciado por los
+  children (0 dangling, 0 surplus), con External ID byte-idéntico al output previo en cada
+  row preexistente.
+
+  TRAMPA DOCUMENTADA EN EL PR: ticketing_only_event.sql lleva DOS expresiones de fecha; el
+  lookup usa ticket_dates.EarliestTicketDate, y la expresión event-registration pertenece a
+  Ticket_Date_Do_Not_Map y a la row window de ese file. Espejar la window column como si
+  fuera el lookup dejó 21 rows sobre 14 fechas dangling en el primer commit del PR.
+
+  Files del PR: docs/altru-model-context.md,
+  queries/visitor-management/visitor_management.sql (MAIN FIX),
+  query-regression/visitor-management-query.spec.ts.
+
+  === RIESGOS ABIERTOS ===
+
+    - **Sin ACs formales en el ticket** — el comportamiento esperado se infiere de los 5
+      ejemplos concretos + el PR body. Cobertura anclada a la evidencia del dev.
+    - **Profile safesql del tenant: RESUELTO en TR-175** — se creó qa_longisland con el
+      endpoint vigente de la Migration App (migration-db.rtl.veevartapp.com:14772). Los
+      profiles preexistentes apuntaban a hosts DB stale (NLB/EC2 recyclados), la causa del
+      bloqueo tipo TR-150.
+    - **Workaround manual de Paula sin plan de reconciliación**: las 5 fechas ya existen en
+      el target creadas a mano. Verificar colisión/duplicado al re-load requiere leer estado
+      de la org productiva del cliente — fuera de scope QA (policy: no prod). Riesgo
+      señalado al IE: si el External ID manual no coincide con el formato del query, el
+      upsert crea duplicados en vez de adoptar los registros manuales.
+    - **"PR #178" open, no merged** — validar contra HEAD del branch
+      CamiloSalgueroMarin/IM-1220-visitor-mgmt-missing-dates y confirmar base main.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado en HEAD del PR 178 (branch CamiloSalgueroMarin/IM-1220-visitor-mgmt-missing-dates) + commit base main para contraste PRE-fix."
+  - "Profile safesql qa_longisland alcanzable (migration-db.rtl.veevartapp.com:14772, DB Long-Island-Children-s-Museum_db_7 — endpoint vigente de la Migration App; los hosts NLB/EC2 de los profiles viejos están stale)."
+  - "npm ci limpio para correr lint:check, build y query-regression (visitor-management-query.spec.ts actualizado en el PR)."
+  - "Repo testmanager-retooling clonado para escribir el TR + evidencias bajo attachments/tr-<NN>-tc-158/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · The five reported dates return parent rows POST-fix (0 rows PRE-fix): 9/26/2024 via the direct-registrant arm (291 eligible rows) and the four 2026 dates via RESERVATION.ARRIVALDATE (1 ticketing row + 1 reservation each, 0 sales orders that day)"
+    tags:
+      - ac-1
+      - regression-evidence
+      - main-fix
+      - long-island
+      - missing-dates
+    given:
+      - "el query visitor_management.sql POST-fix (PR 178) y el commit base main (PRE-fix)"
+      - "profile safesql Long-Island-Children-s-Museum_db_7 alcanzable"
+      - "las 5 fechas del ticket: 9/26/2024, 7/3/2026, 8/7/2026, 8/20/2026, 8/21/2026"
+    when:
+      - "se ejecuta el query PRE-fix y se filtra la salida a las 5 fechas del ticket"
+      - "se ejecuta el query POST-fix y se filtra a las mismas 5 fechas"
+      - "para cada fecha 2026 se verifica en el source qué brazo del UNION la produce (reservation ARRIVALDATE sin sales order ese día)"
+      - "para 9/26/2024 se cuenta la población direct-registrant elegible que la respalda"
+    then:
+      - "PRE-fix: 0 rows para las 5 fechas — reproduce el reporte del ticket"
+      - "POST-fix: exactamente 1 parent row por cada una de las 5 fechas"
+      - "las 4 fechas 2026 provienen del brazo reservation/ARRIVALDATE (1 ticketing row + 1 reservation cada una, 0 SALESORDER.TRANSACTIONDATE ese día)"
+      - "9/26/2024 proviene del brazo direct-registrant con 291 rows elegibles que la referencian"
+
+  - title: "AC2 · Referential completeness: the parent's date set equals EXACTLY the union of the three children's referenced dates on Long Island — 4,945 dates, 0 dangling, 0 surplus (closes the systemic gap of 165 ticketing rows over 136 ARRIVALDATE values)"
+    tags:
+      - ac-2
+      - completeness
+      - systemic
+      - touch-radius
+    given:
+      - "los 3 children wired a extractores: ticketing_only_program.sql, ticketing_only_event.sql, ticketing_direct_registrant.sql"
+      - "cada child emite Auctifera__Visitor_Management__c apuntando al Implementation_External_ID__c del parent"
+      - "profile safesql de Long Island alcanzable"
+    when:
+      - "se ejecuta el query POST-fix y se materializa el set de fechas del parent"
+      - "se ejecutan los 3 children y se materializa el set UNION de sus fechas referenciadas"
+      - "se comparan ambos sets en las dos direcciones (referenced - parent = dangling; parent - referenced = surplus)"
+    then:
+      - "parent POST-fix emite 4,945 fechas en Long Island (medición dev, verificada independientemente por el reviewer)"
+      - "dangling = 0: ninguna fecha referenciada por un child falta en el parent"
+      - "surplus = 0: el parent no emite fechas que ningún child referencia"
+      - "las 165 ticketing rows sobre 136 ARRIVALDATE distintos del gap sistémico quedan todas con parent resolvible"
+
+  - title: "AC3 · No regression on the surviving output: every pre-existing date a child references keeps a byte-identical Implementation_External_ID__c, the only removals are the 3 advertised unreferenced dates (56 added / 3 removed, 4,892 → 4,945), and the UNION emits one row per date"
+    tags:
+      - ac-3
+      - no-regression
+      - external-id
+      - dedup
+    given:
+      - "la salida completa del query PRE-fix (baseline) y POST-fix sobre el mismo profile"
+      - "el External ID del parent es el date string que los children referencian"
+    when:
+      - "se hace el diff PRE vs POST del set completo de rows por Implementation_External_ID__c"
+      - "se cuenta el total de rows POST-fix vs el total de fechas distintas POST-fix"
+    then:
+      - "toda fecha PRE-fix que algún child referencia sigue presente POST-fix con External ID byte-idéntico"
+      - "las únicas remociones son las 3 fechas advertidas en el PR que ningún child referencia (surplus inerte: los loads son upserts keyed por External ID — nada se borra en la org)"
+      - "rows POST-fix = fechas distintas POST-fix — el UNION dedup entre brazos deja exactamente 1 row por fecha"
+      - "delta neto = el advertido por el PR: 56 fechas agregadas, 3 removidas (4,892 → 4,945)"
+
+  - title: "AC4 · The event-arm trap is pinned: the UNION arm for ticketing_only_event uses ticket_dates.EarliestTicketDate (the lookup expression), never the Ticket_Date_Do_Not_Map window expression — the 21-rows/14-dates first-commit hazard cannot regress silently"
+    tags:
+      - ac-4
+      - edge-case
+      - trap
+      - revert-proof
+      - ticketing-only-event
+    given:
+      - "ticketing_only_event.sql lleva dos expresiones de fecha: el lookup (ticket_dates.EarliestTicketDate) y la expresión event-registration de Ticket_Date_Do_Not_Map / row window"
+      - "el primer commit del PR espejó la window column y dejó 21 rows sobre 14 fechas dangling"
+      - "visitor-management-query.spec.ts actualizado en el PR"
+    when:
+      - "se verifica en el diff final que el brazo event del UNION usa la expresión del lookup del child (EarliestTicketDate), no la window expression"
+      - "se identifica qué spec del suite pinnea esa expresión o la completeness parent-vs-children"
+      - "se simula la regresión: brazo event apuntado a la window expression y se corre el spec (revert-proof)"
+    then:
+      - "el brazo event del UNION reproduce la expresión de lookup del child, alias verificado en el SQL"
+      - "al menos 1 test de visitor-management-query.spec.ts FALLA con la expresión equivocada (la trampa queda pinneada)"
+      - "con el diff final intacto el suite pasa completo"
+
+  - title: "AC5 · Regression gates: lint + build green, visitor-management-query.spec.ts passes on PR HEAD, full query-regression suite unaffected, and docs/altru-model-context.md documents the new UNION rule"
+    tags:
+      - ac-5
+      - safety-invariants
+      - lint-build
+      - docs
+    given:
+      - "HEAD del PR 178 checked out con npm ci limpio"
+      - "el suite query-regression completo del repo"
+    when:
+      - "se corre npm run lint:check + npm run build"
+      - "se corre npm test -- --testPathPatterns='visitor-management' en PR branch"
+      - "se corre el suite query-regression completo"
+      - "se revisa docs/altru-model-context.md para la regla nueva del parent (UNION de los 3 children)"
+    then:
+      - "lint:check limpio, build OK"
+      - "visitor-management-query.spec.ts: TODOS PASS en PR HEAD"
+      - "query-regression suite completo: PASS (el fix no toca otros queries — touch radius de 1 SQL + 1 spec + 1 doc)"
+      - "docs/altru-model-context.md refleja la regla nueva y la trampa del event-arm queda documentada"
+
+tags:
+  - im-1220
+  - im-70
+  - im-1222
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - pr-178
+  - visitor-management
+  - ticketing
+  - long-island
+  - safesql
+  - sql-only
+  - source-side
+  - high
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-03T17:13:23Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-03T18:25:00Z"
+  version: 1
