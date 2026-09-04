@@ -1,0 +1,38 @@
+Regression results — IM-1224 / TC-159 / TR-176 / PR #179 (HEAD 940af02, merge-base 51c84e7)
+=============================================================================================
+
+| # | Item | Verdict | Evidencia |
+|---|------|---------|-----------|
+| T1 | Grain 1:1 por reserva | PASS | live: TotalRows 16,731 == DistinctExternalIds 16,731 en PRE y POST; docker "emits exactly one row per seeded RESERVATION" PASS con el fixture de doble primary. scenario-2/comparison-matrix.txt |
+| T2 | Sin cambios de inclusión | PASS | live: TotalRows 16,731 PRE = 16,731 POST (delta 0). scenario-4/comparison-matrix.txt |
+| T3 | Client (Company/Household) sin regresión | PASS | **CHECKSUM_AGG idéntico: −784683126 PRE = POST** (byte-identidad fila por fila, no solo conteo); CompanyHouseholdFilled 12,558 = 12,558. Control: ContactChecksum SÍ cambia. scenario-3/comparison-matrix.txt |
+| T4 | Placeholder IM-539 | PASS | '[ANONYMOUS_CONTACT]' 0 PRE = 0 POST; 3 tests docker de placeholder PASS |
+| T5 | 0 dangling | PASS | source: 0 contactos org descartados por el guard (100% de los resueltos ya cumplen el shape de contact.sql) + docker "rejects a resolved contact/primary group member the Contact export would not emit" PASS y data-backed (mutación 3 los rompe) |
+| T6 | Otras queries intactas | PASS | scenario-4/touch-radius.txt — el diff toca 1 SQL + 3 test files + 1 doc; ninguna otra query; pos_purchase_only_rental_payments.sql NO tocado (follow-up confirmado fuera de scope) |
+| T7 | Suite query-regression | PASS | scenario-5/gates-log.txt — 621 passed / 175 skipped (docker-gated) / 0 failed. Coincide con lo declarado por el dev |
+| T8 | lint + build | PASS | scenario-5/gates-log.txt — lint:check sin findings; nest build OK |
+| T9 | Docker integration | PASS | 19/19 PASS en 60.5s contra SQL Server 2022 real (colima). Incluye las 4 combinaciones de cliente del ticket. Requirió patch LOCAL de startup timeout (revertido) |
+| T10 | Revert-proof + mutaciones | PASS (con gap declarado) | scenario-5/mutation-matrix.txt — revert del fix: 3 FAIL docker + 2 FAIL estático. Quitar ISORGANIZATION en ambas arms: 2 FAIL. Quitar ISGROUP+ISCONSTITUENT: NO detectado (gap que el propio PR declara; el spec estático sí asserta su presencia) |
+| T11 | Docs scope-fit | PASS | scenario-5/docs-diff.txt — altru-model-context.md suma la regla de contact-resolution, el hallazgo de household-absence y los counts medidos. Sin scope creep |
+| S1 | Secrets en diff | PASS | security-scan-static.txt — 0 hits (solo la password del contenedor de test, preexistente) |
+| S2 | SQL dinámico / inyección | PASS | security-scan-static.txt — sin EXEC/sp_executesql/concatenación; el CTE usa joins por PK con literales fijos |
+| S3 | Verbos DML/DDL | PASS | security-scan-static.txt — 0 verbos; el query es read-only puro (a diferencia de visitor_management.sql en TR-175, este NO usa staging #temp ni requiere --allow-writes) |
+| S4 | Cambios de deps | PASS | security-scan-static.txt — package*.json sin cambios |
+| S5 | PII en evidencias | PASS | el wrapper agregado proyecta solo contadores y checksums; los JSON comiteados no contienen ninguna fila de cliente ni nombre |
+| S6 | OWASP Top 10 | ver owasp-top10-scan.txt | 1 Applicable (A03) PASS · 9 N/A · 0 FAIL |
+
+Resumen: Technical 11/11 PASS (T10 con un gap de cobertura declarado, no defecto) ·
+Security 5/5 PASS + OWASP sin FAIL. Ningún High/Critical. 0 defectos levantados.
+
+GAPS Y MATICES REPORTADOS (ninguno bloquea el merge):
+  1. ISGROUP + ISCONSTITUENT de ambas arms: sin cobertura runtime (mutación 2 pasa). Declarado por
+     el PR; QA lo verificó en vez de asumirlo. Los commits ab66fca/940af02 SÍ hicieron data-backed
+     la cláusula ISORGANIZATION, así que el gap es más chico de lo que dice el PR body.
+  2. El ORDER BY gm.ID no es demostrable en runtime (limitación declarada y aceptada).
+  3. En Long Island los dos guards (anti-dangle y fan-out) son defensivos: 0 contactos descartados
+     y 0 grupos con >1 primary member. Quien los ejercita es el fixture del docker spec.
+  4. De los 4,170 individuos sin fila de household, 3 sí son miembros de algún grupo ISGROUP = 1
+     vía GROUPMEMBER; el PR afirma 0 alcanzables. Diferencia de alcance de la consulta, no afecta
+     el veredicto (el campo está byte-idéntico), pero conviene mirarlo al abrir el ticket del
+     post-load de Company/Household.
+  5. Follow-up sin ticket: pos_purchase_only_rental_payments.sql tiene la misma lógica either/or.

@@ -1,0 +1,414 @@
+schemaVersion: "1.0"
+id: tr-4f4930cf-632a-4bff-8d79-68aa135bd915
+key: TR-176
+title: >-
+  TR-176 · IM-1224 · TC-159 · rental_events_groups.sql resuelve Client (Contact) para todo tipo
+  de client de Altru — 5/5 PASS con validación LIVE del tenant: 6,790 (40.6%) → 15,962 (95.4%)
+  reconciliado contra el source, Company/Household byte-idéntico por checksum, grain 1:1 intacto.
+  Estático 44/44 + docker 19/19 + suite 621 + 3 mutaciones.
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/MigrationToolETL clonado local en HEAD del PR "#179" (branch
+    CamiloSalgueroMarin/IM-1224-rental-events-client-mapping, commit 940af02, merge-base
+    51c84e7 = origin/main). Node + npm locales; docker vía colima para el integration spec
+    (SQL Server 2022, testcontainers). safesql live sobre el profile qa_longisland →
+    migration-db.rtl.veevartapp.com:14772, DB Long-Island-Children-s-Museum_db_7 (el tenant
+    del ticket), read-only puro (este query NO requiere --allow-writes).
+  url: https://github.com/Veevarts/MigrationToolETL/pull/179
+  buildVersion: >-
+    Classification: SQL + specs + docs (+492/-7, 5 files). rental_events_groups.sql (+102) gana
+    el CTE ReservationClientContacts (2 arms) y la rama ELSE del CASE de
+    Auctifera__Client_Contact__c; rental-event-query-fixture.ts (+144),
+    rental-event-query.integration.spec.ts (+118, docker), rental-event-query.spec.ts (+98,
+    estático) y docs/altru-model-context.md (+37). PR OPEN, base main.
+  notes: |
+    ## Solution understood
+
+    El Client (Contact) de una reserva NO siempre es el constituent de la sales order. La regla
+    completa vive en el propio stored procedure de Altru `dbo.USP_RESERVATION_GETCONTACTINFO`
+    (leído por el dev desde sys.sql_modules en el backup de Long Island) y ramifica por el tipo
+    de constituent del CLIENT:
+      - individual   → el contacto es el client mismo;
+      - organisation → el contacto es obligatorio y se guarda en la orden como
+        SALESORDER.CONTACTRELATIONSHIPID, resuelto a RELATIONSHIP.RECIPROCALCONSTITUENTID;
+      - household/group → el contacto es el GROUPMEMBER primario (ISPRIMARY = 1).
+
+    rental_events_groups.sql implementaba SOLO la primera rama y emitía NULL para las otras dos;
+    SALESORDER.CONTACTRELATIONSHIPID no se referenciaba en NINGÚN lado del repo. Ese es el
+    Example 1 del ticket (CH poblado, Contact vacío) y es la mayoría del dato.
+
+    El fix agrega el CTE ReservationClientContacts con las 2 arms faltantes (mutuamente
+    excluyentes por ISORGANIZATION, joins por PK, CROSS APPLY TOP 1 ORDER BY gm.ID en la rama
+    household) y lo lee desde la rama ELSE del CASE con CAST a NVARCHAR(36) (IM-770: el CASE
+    mezcla el literal '[ANONYMOUS_CONTACT]' con uniqueidentifier; sin CAST la expresión resuelve
+    a uniqueidentifier y mata el export streamed en la primera fila placeholder). Ambas arms
+    filtran el contacto resuelto al shape exacto que exporta contact.sql para no colgar el
+    lookup, y el relationship se lee AS STORED (sin filtrar ISCONTACT ni rango de fechas, porque
+    Altru solo los valida al EDITAR el contacto y la reserva sigue mostrando lo que registró).
+
+    El Example 2 del ticket (Contact poblado, CH vacío) NO se corrige aquí, con justificación
+    medida: Client (Company/Household) es el propio org/grupo para clients no-individuales y
+    CONSTITUENTHOUSEHOLD.HOUSEHOLDID para los individuales, y viene vacío porque esos individuos
+    NO tienen household en Altru. account_households.sql solo exporta constituents ISGROUP = 1,
+    así que no hay Account con external ID derivable — emitir algo colgaría el lookup. Poblarlo
+    requiere un paso POST-LOAD desde el AccountId que NPSP crea al cargar el Contact.
+
+    ## Inferred technical tests
+
+    - **jest estático (rental-event-query.spec.ts, 7 assertions nuevas)** → auto-ejecutado.
+      44/44 PASS. Pinnea expresiones, guards, CAST y el LEFT JOIN por reservation id.
+    - **jest docker integration (rental-event-query.integration.spec.ts, 6 tests nuevos, 19 en
+      total)** → auto-ejecutado contra SQL Server 2022 real. 19/19 PASS. Cubre las 4
+      combinaciones de cliente del ticket con valores, no solo forma.
+    - **jest suite completo query-regression** → auto-ejecutado. 621 passed / 175 skipped
+      (docker-gated) / 0 failed — matchea lo declarado por el dev.
+    - **safesql PRE vs POST sobre el tenant real** → auto-ejecutado con un wrapper agregado: el
+      query REAL corre completo y solo se envuelve el SELECT final en una derived table que
+      proyecta contadores y CHECKSUM_AGG. Numérico, sin traer PII al repo.
+    - **Reconciliación source-side independiente** → auto-ejecutada: reparto de las 16,731
+      reservas por tipo de client, clasificación de las que siguen sin contacto, fan-out real,
+      contactos descartados por el anti-dangle, relationships no vigentes y composición de los
+      CH vacíos.
+    - **Matriz de mutaciones QA (3 mutaciones)** → auto-ejecutada, cada una revertida.
+    - **lint + build** → auto-ejecutados, verdes.
+    - **Carga a org / UI** → N/A: cambio SQL-only; el load es upsert del IE, fuera de scope QA.
+
+results:
+  - testCaseId: 3fdf419b-80e5-4d05-ae2c-c30ab83a7d19
+    testCaseKey: TC-159
+    scenarioTitle: >-
+      AC1 · Example 1 recovered: organisation-client reservations resolve Client (Contact) via
+      SALESORDER.CONTACTRELATIONSHIPID → RELATIONSHIP.RECIPROCALCONSTITUENTID — Long Island
+      contact-filled 6,790 (40.6%) → 15,962 (95.4%), Illinois 201 (2.1%) → 9,646 (99.9%); the 769
+      remaining are genuine source gaps
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-03T23:46:00Z"
+    duration: 20
+    stepResults: []
+    actual: |
+      Ejecutado LIVE por QA sobre el tenant del ticket (qa_longisland).
+
+      PRE-fix (merge-base 51c84e7): 16,731 filas, ContactFilled 6,790 (40.6%).
+      POST-fix (HEAD 940af02):      16,731 filas, ContactFilled 15,962 (95.4%).
+      Coincide dígito a dígito con la tabla del PR body.
+
+      RECONCILIACIÓN INDEPENDIENTE contra el source (verify-client-types.sql):
+        Reparto de las 16,731 reservas: 9,937 organisation (9,169 con CONTACTRELATIONSHIPID),
+        6,790 individual, 4 household/group, 0 sin constituent.
+
+        El POST-fix queda completamente explicado:
+             6,790 individuales (rama preexistente)
+        +    9,169 organisation resueltos por la rama nueva
+        +        3 households resueltos por primary GROUPMEMBER (4 − 1 sin primary exportable)
+        =   15,962  ✓ exactamente el número medido
+
+        Las 769 restantes, clasificadas una a una: 768 organisation sin CONTACTRELATIONSHIPID
+        (Altru tampoco registra contacto) + 1 household sin primary member exportable.
+        769 = 16,731 − 15,962 ✓
+
+      El Example 1 del ticket es exactamente el caso organisation: 9,937 reservas llevaban CH
+      poblado y Contact vacío PRE-fix; 9,169 quedan con ambos POST-fix.
+
+      Illinois (qa_illinois2) no se ejecutó: el profile apunta a un endpoint que no responde en
+      esta sesión y el tenant del ticket es Long Island. Los números de Illinois del PR body
+      quedan como evidencia del dev, no re-verificada por QA — no afecta el veredicto.
+
+      pre-fix → post-fix → ¿objetivo?: 40.6% con contacto, Example 1 reproducido → 95.4% con el
+      4.6% restante clasificado como ausencia real en Altru → SÍ.
+    notes: >-
+      **PASS**. Evidencia primaria QA-generada en el tenant real, reconciliada contra la
+      composición del source — no es re-cita del dev.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2914
+      - name: pre-fix-aggregate.json
+        path: attachments/tr-176-tc-159/scenario-1/pre-fix-aggregate.json
+        mimeType: application/json
+        size: 417
+      - name: post-fix-aggregate.json
+        path: attachments/tr-176-tc-159/scenario-1/post-fix-aggregate.json
+        mimeType: application/json
+        size: 419
+      - name: verify-client-types.sql
+        path: attachments/tr-176-tc-159/scenario-1/verify-client-types.sql
+        mimeType: text/plain
+        size: 5555
+      - name: verify-client-types.json
+        path: attachments/tr-176-tc-159/scenario-1/verify-client-types.json
+        mimeType: application/json
+        size: 1197
+      - name: wrapper-aggregate-prefix.sql
+        path: attachments/tr-176-tc-159/scenario-1/wrapper-aggregate-prefix.sql
+        mimeType: text/plain
+        size: 10013
+      - name: wrapper-aggregate-postfix.sql
+        path: attachments/tr-176-tc-159/scenario-1/wrapper-aggregate-postfix.sql
+        mimeType: text/plain
+        size: 11447
+
+  - testCaseId: 3fdf419b-80e5-4d05-ae2c-c30ab83a7d19
+    testCaseKey: TC-159
+    scenarioTitle: >-
+      AC2 · Household branch is deterministic: household/group clients resolve the primary
+      GROUPMEMBER with TOP 1 ORDER BY gm.ID — a group with two ISPRIMARY=1 members cannot
+      duplicate the reservation (IM-773 one-row-per-reservation intact: rows == distinct
+      external IDs)
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-03T23:52:00Z"
+    duration: 15
+    stepResults: []
+    actual: |
+      Grain verificado live: TotalRows 16,731 == DistinctExternalIds 16,731, en PRE y en POST.
+      El LEFT JOIN nuevo no multiplica: las 2 arms son mutuamente excluyentes por ISORGANIZATION,
+      arm 1 resuelve por PK y arm 2 usa CROSS APPLY TOP 1; SALESORDER es 1:1 con RESERVATION.
+
+      Docker integration spec (SQL Server 2022 real, 19/19 PASS), tests relevantes:
+        ✓ emits exactly one row per seeded RESERVATION (IM-773 completeness)
+        ✓ resolves a household client contact through the primary group member (IM-1224)
+        ✓ keeps the group contact stable across repeated runs (IM-1224)
+      El fixture trae deliberadamente un household con DOS miembros ISPRIMARY = 1, así que un
+      join directo a GROUPMEMBER habría duplicado la reserva y estos tests lo habrían atrapado.
+
+      MATIZ HONESTO (no defecto): en Long Island NO existe ningún grupo con más de un
+      ISPRIMARY = 1 (medido: 0), así que el TOP 1 ... ORDER BY gm.ID es DEFENSIVO en este
+      tenant — la data real no puede probar que sea load-bearing; quien lo ejercita es el
+      fixture sintético. Además el propio PR declara que el ORDER BY no es demostrable en
+      runtime (mismo plan y misma fila con o sin él sobre data estática) y queda pinneado por
+      text assertion, con el test nombrado por lo que realmente comprueba. QA confirma esa
+      lectura en vez de darla por buena.
+
+      pre-fix → post-fix → ¿objetivo?: grain 1:1 → grain 1:1 intacto con la rama household
+      activa y resolución estable entre corridas → SÍ.
+    notes: >-
+      **PASS**. Determinismo cubierto por el fixture; en data real el guard es defensivo, lo cual
+      queda explícito en la matriz.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2720
+
+  - testCaseId: 3fdf419b-80e5-4d05-ae2c-c30ab83a7d19
+    testCaseKey: TC-159
+    scenarioTitle: >-
+      AC3 · Example 2 is absent source data, not a defect: Client (Company/Household) is
+      byte-unchanged by the PR (12,558 Long Island / 9,525 Illinois) — the empty ones are
+      individuals with NO household row in Altru, and emitting anything would dangle the lookup
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-03T23:50:00Z"
+    duration: 15
+    stepResults: []
+    actual: |
+      BYTE-IDENTIDAD PROBADA, no solo mismo conteo:
+        CompanyHouseholdFilled: 12,558 PRE = 12,558 POST
+        CompanyHouseholdChecksum: **−784683126 PRE = −784683126 POST**
+      El checksum es CHECKSUM_AGG(CHECKSUM(external_id, CH)) — depende del PAR (id, valor) de
+      cada fila y es independiente del orden, así que un número idéntico prueba que NINGUNA fila
+      cambió su Company/Household. Control de sensibilidad: el ContactChecksum SÍ cambia
+      (−891088119 → −1252254579), que es justamente el fix.
+
+      COMPOSICIÓN DE LOS 4,173 CH VACÍOS (16,731 − 12,558), verificada en el source:
+        4,170 individuos SIN fila CONSTITUENTHOUSEHOLD
+            3 individuos CON fila pero HOUSEHOLDID NULL (la proyección usa chh.HOUSEHOLDID)
+        4,173 ✓ cuadra exactamente
+      Los clients organisation (9,937) y household/group (4) siempre traen CH poblado.
+
+      CONCLUSIÓN SOBRE EL EXAMPLE 2: es ausencia de dato en Altru, no defecto del query. No hay
+      household del cual derivar un External ID; account_households.sql solo exporta ISGROUP = 1,
+      así que emitir algo colgaría el lookup. Poblarlo es un paso POST-LOAD desde el AccountId
+      que NPSP crea al cargar el Contact.
+
+      MATIZ QA para el follow-up: de los 4,170 individuos sin fila de household, 3 SÍ son miembros
+      de algún constituent ISGROUP = 1 vía GROUPMEMBER. El PR afirma "0 of them reach a household
+      group through GROUPMEMBER" — la diferencia es de alcance (mi consulta mira cualquier grupo,
+      el PR probablemente solo los de tipo household). No cambia el veredicto porque el campo está
+      byte-idéntico y fuera del scope del PR, pero conviene mirarlo al abrir el ticket del
+      post-load.
+
+      pre-fix → post-fix → ¿objetivo?: CH poblado en 12,558 filas → exactamente las mismas 12,558
+      con los mismos valores, y los vacíos explicados por ausencia en el source → SÍ.
+    notes: >-
+      **PASS** en el sentido de "no regresiona y el Example 2 queda explicado con datos". El
+      ticket pedía ambos campos: la respuesta al reportante (post-load, no cambio de query) queda
+      como riesgo abierto a validar con Paula / el IE.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-3/comparison-matrix.txt
+        mimeType: text/plain
+        size: 3024
+
+  - testCaseId: 3fdf419b-80e5-4d05-ae2c-c30ab83a7d19
+    testCaseKey: TC-159
+    scenarioTitle: >-
+      AC4 · Safety invariants: no inclusion gate changes (fills a lookup only), no dangling
+      lookups (both arms filter to the exact contact.sql shape), CAST NVARCHAR(36) type
+      precedence (IM-770), relationship read as stored (36 ISCONTACT=0 + 20 past ENDDATE
+      preserved), '[ANONYMOUS_CONTACT]' count unchanged
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-03T23:53:00Z"
+    duration: 15
+    stepResults: []
+    actual: |
+      SIN CAMBIOS DE INCLUSIÓN: TotalRows 16,731 PRE = 16,731 POST. El SELECT final sigue
+      enraizado en RESERVATION con solo LEFT JOINs y sin WHERE; el CTE entra por LEFT JOIN.
+
+      0 DANGLING (medido en el source): 0 contactos de la rama organisation son descartados por
+      el guard de shape — o sea el 100% de los contactos resueltos ya cumplen ISCONSTITUENT = 1 /
+      ISGROUP = 0 / ISORGANIZATION = 0, así que ninguna de las 9,169 lookups nuevas puede colgar
+      en el load. Los 2 tests docker "rejects a resolved contact / a primary group member the
+      Contact export would not emit" PASAN y son data-backed (la mutación 3 los rompe).
+
+      AS-STORED verificado: 36 relationships con ISCONTACT = 0 y 20 con ENDDATE pasado siguen
+      resolviendo contacto — exactamente los números del PR body. Un filtro de vigencia los
+      habría descartado, perdiendo contactos que Altru sí muestra.
+
+      CAST / IM-770: la rama nueva lleva CAST(rcc.CONTACTCONSTITUENTID AS NVARCHAR(36)); el spec
+      estático lo pinnea y la mutación 1 lo confirma.
+
+      PLACEHOLDER IM-539: '[ANONYMOUS_CONTACT]' 0 PRE = 0 POST; los 3 tests docker de placeholder
+      PASAN.
+
+      TOUCH RADIUS: 1 SQL + 3 archivos de test + 1 doc. Ninguna otra query tocada;
+      pos_purchase_only_rental_payments.sql (el follow-up declarado) NO fue tocado.
+
+      pre-fix → post-fix → ¿objetivo?: mismas filas, mismo placeholder count, sin lookups colgados
+      y sin perder contactos que Altru muestra → SÍ.
+    notes: >-
+      **PASS**. Las invariantes que el PR declara quedan medidas en el tenant real, no asumidas.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-4/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2938
+      - name: touch-radius.txt
+        path: attachments/tr-176-tc-159/scenario-4/touch-radius.txt
+        mimeType: text/plain
+        size: 690
+
+  - testCaseId: 3fdf419b-80e5-4d05-ae2c-c30ab83a7d19
+    testCaseKey: TC-159
+    scenarioTitle: >-
+      AC5 · Regression gates + mutation matrix: lint/build/query-regression 621 green, docker
+      integration 19/19 covering the four client combinations, revert-proof (ELSE NULL → 3 tests
+      fail), and the two text-assertion-only guards flagged (ISGROUP+ISCONSTITUENT, ORDER BY)
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-03T23:40:00Z"
+    duration: 25
+    stepResults: []
+    actual: |
+      En PR HEAD 940af02:
+        rental-event-query.spec.ts (estático): 44/44 PASS (7 nuevas IM-1224), 0.26s.
+        rental-event-query.integration.spec.ts (docker, SQL Server 2022): 19/19 PASS, 60.5s.
+        Suite completo query-regression: 621 passed / 175 skipped (docker-gated) / 0 failed.
+        npm run lint:check: limpio. npm run build (nest): OK.
+
+      Las 4 combinaciones de cliente que pide el ticket están cubiertas por el docker spec:
+      contact+household, household only, contact only, y neither → '[ANONYMOUS_CONTACT]'.
+
+      MATRIZ DE MUTACIONES EJECUTADA POR QA (cada una revertida; repo limpio al final):
+        1. revert del fix (ELSE NULL):                estático 2 FAIL · docker 3 FAIL  ✓ pinneado
+        2. quitar relc.ISGROUP + relc.ISCONSTITUENT:  docker 19 PASS → NO detectado (gap)
+        3. quitar ISORGANIZATION en ambas arms:       docker 2 FAIL  ✓ data-backed
+
+      HALLAZGO sobre el gap: el PR body declara que quitar ISGROUP+ISCONSTITUENT "passes —
+      knowingly pinned by text assertion only", y QA lo confirmó ejecutándolo. PERO los dos
+      commits posteriores al cuerpo del PR (ab66fca, 940af02) SÍ hicieron data-backed la cláusula
+      ISORGANIZATION en ambas arms — la mutación 3 rompe 2 tests. O sea el gap real es MÁS CHICO
+      que lo que dice el PR body. Impacto práctico bajo: el guard está correcto en el query, el
+      spec estático asserta su presencia literal, y en Long Island 0 contactos dependen de esas
+      dos cláusulas hoy.
+
+      docs/altru-model-context.md (+37): agrega la regla de contact-resolution por tipo de client,
+      el hallazgo de household-absence y los counts medidos. Scope-fit exacto, sin scope creep.
+
+      Nota de entorno: el integration spec no declara .withStartupTimeout y el default de
+      testcontainers (60s) no alcanza para SQL Server 2022 en colima (~81s). Se aplicó un patch
+      LOCAL de 300s solo para poder correr y se revirtió; el repo quedó limpio. No es un hallazgo
+      del PR.
+    notes: >-
+      **PASS**. Gates verdes y fix pinneado por mutación; los 2 gaps de cobertura quedan
+      reportados con su alcance real, verificado y no asumido.
+    attachments:
+      - name: mutation-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-5/mutation-matrix.txt
+        mimeType: text/plain
+        size: 2575
+      - name: gates-log.txt
+        path: attachments/tr-176-tc-159/scenario-5/gates-log.txt
+        mimeType: text/plain
+        size: 470
+      - name: docs-diff.txt
+        path: attachments/tr-176-tc-159/scenario-5/docs-diff.txt
+        mimeType: text/plain
+        size: 3417
+      - name: test-run-log.txt
+        path: attachments/tr-176-tc-159/scenario-0-unit-tests/test-run-log.txt
+        mimeType: text/plain
+        size: 4087
+      - name: tests-found.txt
+        path: attachments/tr-176-tc-159/scenario-0-unit-tests/tests-found.txt
+        mimeType: text/plain
+        size: 3636
+      - name: coverage-matrix.txt
+        path: attachments/tr-176-tc-159/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+        size: 3339
+      - name: regression-plan.txt
+        path: attachments/tr-176-tc-159/regression-plan.txt
+        mimeType: text/plain
+        size: 3529
+      - name: regression-results.txt
+        path: attachments/tr-176-tc-159/regression-results.txt
+        mimeType: text/plain
+        size: 4512
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-176-tc-159/owasp-top10-scan.txt
+        mimeType: text/plain
+        size: 2438
+      - name: security-scan-static.txt
+        path: attachments/tr-176-tc-159/security-scan-static.txt
+        mimeType: text/plain
+        size: 384
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-03T23:35:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecución de TC-159. PR "#179" checked out (commit 940af02, merge-base 51c84e7).
+      Estático 44/44, suite query-regression 621/621, lint y build verdes. Acceso live disponible
+      desde TR-175 (profile qa_longisland) y colima arriba para el spec docker.
+  - at: "2026-09-03T23:58:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS con evidencia live QA-generada sobre el tenant del ticket. Client (Contact)
+      6,790 (40.6%) → 15,962 (95.4%), y el número queda RECONCILIADO contra la composición del
+      source (6,790 individuales + 9,169 organisation + 3 households = 15,962), con las 769
+      restantes clasificadas una a una como ausencia real en Altru. Company/Household
+      byte-idéntico por CHECKSUM_AGG (−784683126 PRE = POST), grain 1:1 intacto, 0 dangling,
+      as-stored confirmado (36 ISCONTACT=0 + 20 ENDDATE pasado). Docker 19/19 y 3 mutaciones QA
+      (revert rompe 3; ISORGANIZATION data-backed; ISGROUP+ISCONSTITUENT sin cobertura runtime,
+      gap declarado por el propio PR y verificado por QA). Sin defectos. IM-1225 lista para
+      Resuelta. Riesgos abiertos que van al ticket, no al PR: la respuesta al Example 2
+      (post-load desde Contact.AccountId, sin ticket) debe validarse con la reportante, y el
+      follow-up de pos_purchase_only_rental_payments.sql sigue sin ticket.

@@ -1,0 +1,230 @@
+schemaVersion: "1.0"
+
+id: "3fdf419b-80e5-4d05-ae2c-c30ab83a7d19"
+key: "TC-159"
+title: "rental_events_groups.sql resolves Client (Contact) for every Altru client type (individual / organisation via CONTACTRELATIONSHIPID / household via primary GROUPMEMBER) — Long Island 40.6% → 95.4% contact-filled with Company/Household untouched — IM-1224"
+description: |
+  Test case para IM-1224 (Historia, priority **High**, "In QA Review") — epic IM-70 Altru
+  Queries — QA Sub-task IM-1225. Cliente reportante: Long Island Children's Museum.
+  PR bajo prueba: Veevarts/MigrationToolETL "PR #179" (open, base main, 5 files, +492/-7).
+
+  === CONTEXTO ===
+
+  El ticket reporta que en el Rental Events query el Client (Contact) solo viene mapeado
+  para algunos rental events, cuando en Altru ambos campos (Contact y Company/Household)
+  están poblados. Dos shapes de ejemplo:
+    Example 1 — Company/Household con External ID, Contact vacío (pero Altru SÍ tiene contact).
+    Example 2 — Contact con External ID, Company/Household vacío (pero Altru SÍ lo muestra;
+                nota del ticket: sin Organization ID, el Household es el HH del Contact).
+
+  ROOT CAUSE (dev, leída del propio SP de Altru USP_RESERVATION_GETCONTACTINFO en el backup
+  de Long Island): el Client (Contact) de una reserva NO siempre es el constituent de la
+  sales order — la regla ramifica por tipo del client:
+    - individual  → el client mismo (única rama que rental_events_groups.sql implementaba)
+    - organisation → obligatorio; guardado en SALESORDER.CONTACTRELATIONSHIPID y resuelto a
+      RELATIONSHIP.RECIPROCALCONSTITUENTID. Esa columna no se referenciaba en NINGÚN lado
+      del repo. Es el Example 1 y es la MAYORÍA del dato: Long Island 9,169 de 16,731
+      reservas; Illinois 9,445 de 9,652.
+    - household/group → el GROUPMEMBER primario (ISPRIMARY = 1).
+
+  EXAMPLE 2 = AUSENCIA DE DATO FUENTE, NO DEFECTO (según el PR): Client (Company/Household)
+  no cambia en este PR. Viene vacío para 4,173 de 16,731 individuos de Long Island porque
+  esos constituents NO tienen household row en Altru (0 llegan a un household vía
+  GROUPMEMBER). account_households.sql solo exporta ISGROUP = 1, así que no existe Account
+  con external ID derivable — emitir algo aquí danglearía el lookup. NPSP crea el household
+  Account al cargar el Contact → poblar este campo es un paso POST-LOAD desde el AccountId
+  del Contact (166,101 de 297,004 individuos de Long Island no tienen household).
+
+  FIX: CTE ReservationClientContacts resuelve las 2 ramas faltantes; el CASE de
+  Auctifera__Client_Contact__c la lee en la rama que antes devolvía NULL. Invariantes
+  declaradas por el PR: row grain 1:1 intacto (arms mutuamente excluyentes por
+  ISORGANIZATION, joins por PK), sin cambios de inclusión (solo llena un lookup), sin
+  dangling (ambas arms filtran al shape que exporta contact/contact.sql), CAST NVARCHAR(36)
+  por type precedence (IM-770 — una rama sin cast mata el streamed export en el primer
+  '[ANONYMOUS_CONTACT]'), TOP 1 ORDER BY gm.ID para determinismo, y el relationship se lee
+  AS STORED (sin filtrar ISCONTACT ni date range — 36 rows de Long Island con ISCONTACT=0 y
+  20 con ENDDATE pasado se preservan, igual que Altru las muestra).
+
+  Evidencia live del dev (safesql 2026-09-03):
+    longisland: 16,731 rows = 16,731 external IDs; Contact 6,790 (40.6%) → 15,962 (95.4%);
+                Company/Household 12,558 SIN CAMBIO; '[ANONYMOUS_CONTACT]' 0 sin cambio.
+                Los 769 restantes son gaps genuinos del source (768 org orders sin
+                CONTACTRELATIONSHIPID + 1 household sin primary member).
+    illinois_2: 9,652 rows; Contact 201 (2.1%) → 9,646 (99.9%); CH 9,525 sin cambio.
+
+  Files del PR: docs/altru-model-context.md, queries/rental-event/rental_events_groups.sql
+  (MAIN FIX), query-regression/rental-event-query-fixture.ts,
+  rental-event-query.integration.spec.ts (docker, 19 tests),
+  rental-event-query.spec.ts (estático).
+
+  Guards MUTATION-TESTED por el dev (revert ELSE NULL → 3 fail; drop ISORGANIZATION guards
+  → fails nombrados; drop TOP 1 ORDER BY → 3 fail incl. el one-row-per-reservation de
+  IM-773). Fixture deliberado: el org relationship lleva ISCONTACT=0 + ENDDATE pasado
+  (re-agregar filtro de vigencia rompe el suite) y el household tiene DOS ISPRIMARY=1
+  (un join directo duplicaría la reserva).
+
+  === RIESGOS ABIERTOS ===
+
+    - **Sin ACs formales** — comportamiento inferido de los 2 ejemplos + el PR body.
+    - **Example 2 NO se corrige en este PR** (decisión justificada con datos: no hay
+      household en el source). El ticket pide ambos campos: la respuesta "ausencia de dato
+      fuente + post-load step" debe validarse con la reportante (Paula) / el IE antes del
+      cierre. El post-load desde Contact.AccountId NO tiene ticket aún.
+    - **2 guards pinned solo por text assertion** (declarado por el dev): ISGROUP +
+      ISCONSTITUENT en ambas arms, y el ORDER BY gm.ID (runtime no lo puede probar).
+    - **Follow-up fuera del PR sin ticket**: pos_purchase_only_rental_payments.sql lleva la
+      MISMA lógica either/or en Auctifera__Client__c / Auctifera__Client2__c (payments y
+      security-deposit arms) — mismo gap.
+    - **Docker integration spec** (19 tests, SQL Server 2022 real): en la máquina QA exige
+      colima gotchas (DOCKER_HOST + startup timeout patch local).
+    - **"PR #179" open, no merged** — validar contra HEAD del branch
+      CamiloSalgueroMarin/IM-1224-rental-events-client-mapping y confirmar base main.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado en HEAD del PR 179 (branch CamiloSalgueroMarin/IM-1224-rental-events-client-mapping) + commit base main para contraste PRE-fix."
+  - "Profile safesql qa_longisland alcanzable (migration-db.rtl.veevartapp.com:14772, DB Long-Island-Children-s-Museum_db_7); qa_illinois2 opcional para cross-tenant."
+  - "colima levantado con DOCKER_HOST y startup-timeout patch local para rental-event-query.integration.spec.ts (19 tests, SQL Server 2022)."
+  - "npm ci limpio para lint:check, build y query-regression (~621 tests con los 7 nuevos)."
+  - "Repo testmanager-retooling clonado para escribir el TR + evidencias bajo attachments/tr-<NN>-tc-159/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Example 1 recovered: organisation-client reservations resolve Client (Contact) via SALESORDER.CONTACTRELATIONSHIPID → RELATIONSHIP.RECIPROCALCONSTITUENTID — Long Island contact-filled 6,790 (40.6%) → 15,962 (95.4%), Illinois 201 (2.1%) → 9,646 (99.9%); the 769 remaining are genuine source gaps"
+    tags:
+      - ac-1
+      - regression-evidence
+      - main-fix
+      - organisation-branch
+      - long-island
+    given:
+      - "el query rental_events_groups.sql POST-fix (PR 179) y el commit base main (PRE-fix)"
+      - "profile safesql qa_longisland alcanzable (qa_illinois2 para cross-tenant si responde)"
+      - "la regla de Altru: para client organisation el contact es obligatorio y vive en SALESORDER.CONTACTRELATIONSHIPID"
+    when:
+      - "se ejecuta el query PRE-fix y se cuenta el total de rows y cuántas llevan Auctifera__Client_Contact__c poblado"
+      - "se ejecuta el query POST-fix con los mismos parámetros y se repiten los conteos"
+      - "se verifica el shape del Example 1: reservas con Client (Company/Household) poblado y Contact vacío PRE-fix que POST-fix quedan con ambos"
+      - "se cuentan las reservas que siguen sin contact POST-fix y se clasifican contra el source (CONTACTRELATIONSHIPID NULL / household sin primary)"
+    then:
+      - "PRE-fix reproduce el Example 1: la mayoría de reservas organisation llevan CH poblado y Contact vacío (Long Island ~6,790 de 16,731 con contact)"
+      - "POST-fix: 15,962 de 16,731 con Client (Contact) en Long Island (95.4%, medición dev a verificar live)"
+      - "las reservas aún sin contact POST-fix son exactamente los gaps genuinos del source: 768 org orders sin CONTACTRELATIONSHIPID + 1 household sin primary member"
+      - "cross-tenant Illinois si el profile responde: 201 → 9,646 de 9,652 (99.9%)"
+
+  - title: "AC2 · Household branch is deterministic: household/group clients resolve the primary GROUPMEMBER with TOP 1 ORDER BY gm.ID — a group with two ISPRIMARY=1 members cannot duplicate the reservation (IM-773 one-row-per-reservation intact: rows == distinct external IDs)"
+    tags:
+      - ac-2
+      - household-branch
+      - determinism
+      - row-grain
+    given:
+      - "la rama household del CTE ReservationClientContacts (GROUPMEMBER con ISPRIMARY = 1)"
+      - "el fixture del PR trae deliberadamente un household con DOS miembros ISPRIMARY = 1"
+      - "GROUPMEMBER no es único por grupo — un join directo emitiría la reserva dos veces"
+    when:
+      - "se verifica en el SQL que la rama usa TOP 1 ... ORDER BY gm.ID (orden total por PK)"
+      - "se corre rental-event-query.integration.spec.ts (docker) que incluye el check dinámico one-row-per-reservation de IM-773"
+      - "en la corrida live POST-fix se compara rows totales vs external IDs distintos"
+    then:
+      - "rows == distinct external IDs en la salida live (16,731 = 16,731 en Long Island) — el grain 1:1 de IM-773 queda intacto"
+      - "el spec dinámico de one-row-per-reservation PASS con el fixture de doble primario"
+      - "el ORDER BY queda pinned por text assertion (limitación declarada: runtime no puede probarlo — mismo plan con o sin él sobre data estática)"
+
+  - title: "AC3 · Example 2 is absent source data, not a defect: Client (Company/Household) is byte-unchanged by the PR (12,558 Long Island / 9,525 Illinois) — the empty ones are individuals with NO household row in Altru, and emitting anything would dangle the lookup"
+    tags:
+      - ac-3
+      - regression-evidence
+      - example-2
+      - source-absence
+      - no-regression
+    given:
+      - "el ticket reporta el Example 2 (Contact poblado, CH vacío) esperando que se llene"
+      - "el PR NO toca la lógica de Client (Company/Household), con justificación medida: 4,173 de 16,731 individuos de Long Island no tienen household row en Altru (0 vía GROUPMEMBER)"
+      - "account_households.sql solo exporta constituents ISGROUP = 1 — no hay Account external ID derivable para esos casos"
+    when:
+      - "se compara Client (Company/Household) PRE vs POST sobre la misma corrida (conteos y sample por external ID)"
+      - "se verifica en el source una muestra de reservas Example 2: el client individual no tiene CONSTITUENTHOUSEHOLD ni llega a household vía GROUPMEMBER"
+      - "se revisa que el PR documenta el paso post-load (poblar CH desde el AccountId del Contact que NPSP crea al cargar)"
+    then:
+      - "Client (Company/Household): 12,558 poblados PRE = POST en Long Island (byte-unchanged, 9,525 en Illinois) — el PR no regresiona este campo"
+      - "los CH vacíos corresponden a individuos sin household en el source — no hay dato que emitir sin danglear"
+      - "la respuesta al reportante queda explícita: Example 2 requiere el post-load step (sin ticket aún — riesgo abierto), no un cambio de query"
+
+  - title: "AC4 · Safety invariants: no inclusion gate changes (fills a lookup only), no dangling lookups (both arms filter to the exact contact.sql shape), CAST NVARCHAR(36) type precedence (IM-770), relationship read as stored (36 ISCONTACT=0 + 20 past ENDDATE preserved), '[ANONYMOUS_CONTACT]' count unchanged"
+    tags:
+      - ac-4
+      - safety-invariants
+      - no-dangling
+      - type-precedence
+      - as-stored
+    given:
+      - "las invariantes declaradas por el PR body"
+      - "la salida PRE y POST live sobre el mismo profile"
+      - "el shape que exporta contact/contact.sql: ISCONSTITUENT = 1, ISGROUP = 0, ISORGANIZATION = 0"
+    when:
+      - "se compara el total de rows PRE vs POST (esperado: idéntico — el fix no agrega ni quita filas)"
+      - "se verifica en el diff que ambas arms del CTE filtran el contact resuelto al shape de contact.sql"
+      - "se verifica el CAST(... AS NVARCHAR(36)) en la rama nueva del CASE (mezcla con el literal '[ANONYMOUS_CONTACT]')"
+      - "se confirma que NO se filtra por ISCONTACT ni por date range del relationship (as stored)"
+      - "se cuenta '[ANONYMOUS_CONTACT]' PRE vs POST"
+    then:
+      - "rows totales PRE = POST (16,731 en Long Island) — solo cambia el fill del lookup"
+      - "todo Client (Contact) poblado POST-fix tiene un Contact row exportable detrás (0 dangling)"
+      - "la rama nueva lleva el CAST — sin él, el streamed export moriría en la primera row placeholder (IM-770)"
+      - "las 36 rows ISCONTACT=0 y las 20 con ENDDATE pasado conservan su contact, igual que Altru las muestra"
+      - "'[ANONYMOUS_CONTACT]': 0 PRE = 0 POST en Long Island"
+
+  - title: "AC5 · Regression gates + mutation matrix: lint/build/query-regression 621 green, docker integration 19/19 covering the four client combinations, revert-proof (ELSE NULL → 3 tests fail), and the two text-assertion-only guards flagged (ISGROUP+ISCONSTITUENT, ORDER BY)"
+    tags:
+      - ac-5
+      - gates
+      - mutation-matrix
+      - revert-proof
+      - docker
+    given:
+      - "HEAD del PR 179 con npm ci limpio y colima configurado (DOCKER_HOST + startup timeout local)"
+      - "la matriz de mutaciones declarada por el dev en el PR body"
+    when:
+      - "se corre npm run lint:check + npm run build"
+      - "se corre npm test -- --runInBand query-regression (esperado 621 passed, 7 nuevos IM-1224)"
+      - "se corre el docker spec de rental-event (19 tests, las 4 combinaciones: contact+household / household only / contact only / neither → '[ANONYMOUS_CONTACT]')"
+      - "revert-proof QA: se revierte la rama nueva del CASE a ELSE NULL y se re-corre el spec (esperado >=3 fail); se restaura"
+      - "se revisa docs/altru-model-context.md (regla de contact-resolution + hallazgo de household-absence + counts)"
+    then:
+      - "lint:check limpio, build OK, query-regression 621/621"
+      - "docker integration 19/19 PASS (o DEFERRED con causa colima documentada)"
+      - "revert a ELSE NULL: >=3 tests FAIL — el fix queda pinneado"
+      - "los 2 guards text-assertion-only quedan señalados como gap conocido en el TR (declarados por el dev, no silenciados)"
+      - "docs con scope-fit: regla nueva + household-absence + counts medidos"
+
+tags:
+  - im-1224
+  - im-70
+  - im-1225
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - pr-179
+  - rental-events
+  - client-contact
+  - contact-relationship
+  - household
+  - long-island
+  - safesql
+  - sql-only
+  - source-side
+  - high
+
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-03T23:31:59Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-03T23:31:59Z"
+  version: 1

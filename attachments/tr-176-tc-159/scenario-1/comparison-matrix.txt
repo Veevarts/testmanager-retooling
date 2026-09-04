@@ -1,0 +1,49 @@
+Comparison matrix — Scenario 1 (AC1): Example 1 recuperado — IM-1224 / TC-159 / TR-176
+=======================================================================================
+Ejecutado por QA vía safesql (profile qa_longisland → migration-db.rtl.veevartapp.com:14772,
+DB Long-Island-Children-s-Museum_db_7 = el tenant del ticket, read-only).
+PRE-fix = rental_events_groups.sql en merge-base 51c84e7 (= origin/main).
+POST-fix = PR #179 HEAD 940af02.
+Método: el query REAL corre completo (CTEs intactos); solo se envuelve el SELECT final en una
+derived table que proyecta contadores + checksums (wrapper-aggregate-*.sql). Sin traer PII.
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| rental_events_groups.sql (Long Island) | TotalRows | 16,731 | 16,731 | 0 | AC1/AC4 | YES | PASS |
+| " | DistinctExternalIds | 16,731 | 16,731 | 0 | AC2 | YES | PASS |
+| " | **ContactFilled** | **6,790 (40.6%)** | **15,962 (95.4%)** | **+9,172** | AC1 / Objetivo | YES | PASS |
+| " | CompanyHouseholdFilled | 12,558 | 12,558 | 0 | AC3 | YES | PASS |
+| " | AnonymousContactRows | 0 | 0 | 0 | AC4 | YES | PASS |
+| " | reservas sin contact | 9,941 | **769** | −9,172 | AC1 | YES | PASS |
+
+Coincide dígito a dígito con la tabla del PR body (6,790 → 15,962; CH 12,558 sin cambio).
+
+RECONCILIACIÓN INDEPENDIENTE contra el source (verify-client-types.sql, recordsets [1] y [2]):
+
+  Reparto de las 16,731 reservas por tipo de client:
+    organisation      9,937  (de ellas 9,169 con CONTACTRELATIONSHIPID)
+    individual        6,790  (0 con CONTACTRELATIONSHIPID — no aplica)
+    household/group       4
+    sin constituent       0  (consistente con AnonymousContactRows = 0)
+    ------------------------
+    total            16,731  ✓
+
+  El POST-fix queda COMPLETAMENTE explicado por la composición del source:
+    6,790 individuales (rama preexistente: el client es su propio contacto)
+  + 9,169 organisation resueltos vía CONTACTRELATIONSHIPID (rama nueva)
+  +     3 households resueltos vía primary GROUPMEMBER (rama nueva; 4 − 1 sin primary exportable)
+  = 15,962  ✓ exactamente el ContactFilled medido POST-fix
+
+  Las 769 restantes son gaps genuinos del source, clasificados uno a uno:
+    768  organisation sin CONTACTRELATIONSHIPID  (Altru tampoco registra contacto)
+      1  household sin primary member exportable
+    ---
+    769  ✓ = 16,731 − 15,962
+
+  El Example 1 del ticket (CH poblado + Contact vacío) es exactamente el caso organisation:
+  9,937 reservas organisation llevaban CH poblado y Contact vacío PRE-fix; 9,169 de ellas
+  quedan con ambos POST-fix.
+
+pre-fix obtenido → post-fix obtenido → ¿objetivo cumplido?:
+  40.6% de reservas con Client (Contact), Example 1 reproducido →
+  95.4% con Client (Contact), y el 4.6% restante clasificado como ausencia real en Altru → SÍ.

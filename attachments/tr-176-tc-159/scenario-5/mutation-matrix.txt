@@ -1,0 +1,26 @@
+Matriz de mutaciones ejecutada por QA — Scenario 5 (AC5) — TR-176 / TC-159 / PR #179
+=====================================================================================
+Cada mutación se aplicó al query en el working tree, se corrió el suite indicado y se restauró
+con `git checkout --`. El repo quedó limpio al final (44/44 estático verde).
+
+| # | Mutación aplicada | Suite | Resultado | Lectura |
+|---|-------------------|-------|-----------|---------|
+| 1 | `ELSE CAST(rcc.CONTACTCONSTITUENTID AS NVARCHAR(36))` → `ELSE NULL` (revert del fix) | estático | **2 FAIL** / 42 pass | "resolves a contact in the non-individual branch" + "casts every uniqueidentifier branch" |
+| 1 | idem | docker (19) | **3 FAIL** / 16 pass | "resolves an organisation client contact through CONTACTRELATIONSHIPID", "resolves a household client contact through the primary group member", "keeps the group contact stable across repeated runs" |
+| 2 | quitar `relc.ISGROUP = 0` + `relc.ISCONSTITUENT = 1` (anti-dangle, arm organisation) | docker (19) | **19 pass — NO detectado** | gap declarado por el propio PR; esas cláusulas quedan pinneadas solo por text assertion en el spec estático |
+| 3 | quitar `ISORGANIZATION = 0` en AMBAS arms (relc y memc) | docker (19) | **2 FAIL** / 17 pass | "rejects a resolved contact the Contact export would not emit" + "rejects a primary group member the Contact export would not emit" — data-backed |
+
+RESULTADO DEL REVERT-PROOF: el fix está pinneado. Revertirlo rompe 3 tests de integración con
+datos reales en SQL Server 2022, más 2 estáticos.
+
+MATIZ SOBRE EL GAP DE COBERTURA (mutación 2) — verificado, no asumido:
+  El PR body declara honestamente que quitar ISGROUP + ISCONSTITUENT "passes — knowingly pinned by
+  text assertion only". QA lo CONFIRMÓ ejecutando la mutación: 19/19 pasan.
+  PERO los dos commits posteriores al cuerpo del PR (ab66fca "make the rental event contact
+  anti-dangle and fan-out guards data-backed" y 940af02 "cover the group-member arm of the contact
+  anti-dangle guard") SÍ hicieron data-backed la cláusula ISORGANIZATION en ambas arms: la
+  mutación 3 rompe 2 tests. O sea el gap real es más chico de lo que dice el PR body — quedan
+  fuera de cobertura runtime solo ISGROUP + ISCONSTITUENT.
+  Impacto práctico: bajo. El guard está correcto en el query, el spec estático asserta su
+  presencia literal, y en Long Island 0 contactos son descartados por él (scenario-4), así que
+  ninguna lookup real depende de esas dos cláusulas hoy. Se reporta como gap conocido, no defecto.

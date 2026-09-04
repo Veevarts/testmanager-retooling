@@ -1,0 +1,33 @@
+Comparison matrix — Scenario 2 (AC2): rama household determinista + grain 1:1 — TR-176 / TC-159
+================================================================================================
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| rental_events_groups.sql live (Long Island) | TotalRows vs DistinctExternalIds | 16,731 = 16,731 | 16,731 = 16,731 | 0 | AC2 / IM-773 | YES | PASS |
+| docker integration spec | "emits exactly one row per seeded RESERVATION (IM-773 completeness)" | n/a | PASS | — | AC2 | YES | PASS |
+| docker integration spec | "resolves a household client contact through the primary group member (IM-1224)" | n/a | PASS | — | AC2 | YES | PASS |
+| docker integration spec | "keeps the group contact stable across repeated runs (IM-1224)" | n/a | PASS | — | AC2 (idempotencia) | YES | PASS |
+| SQL estructura | `CROSS APPLY (SELECT TOP 1 gm.MEMBERID ... ORDER BY gm.ID)` | ELSE NULL (rama inexistente) | presente | — | AC2 | YES | PASS |
+| source (verify-client-types [3]) | grupos con >1 primary member en Long Island | — | **0** | — | AC2 | — | ver nota |
+
+FAN-OUT: el LEFT JOIN nuevo no puede multiplicar filas.
+  - Las 2 arms del CTE son mutuamente excluyentes por ISORGANIZATION
+    (arm 1: c.ISORGANIZATION = 1; arm 2: c.ISORGANIZATION = 0 AND c.ISGROUP = 1).
+  - Arm 1 resuelve por PK (rel.ID = so.CONTACTRELATIONSHIPID → relc.ID = rel.RECIPROCALCONSTITUENTID).
+  - Arm 2 usa CROSS APPLY TOP 1 → como máximo 1 fila por reserva.
+  - SALESORDER es 1:1 con RESERVATION (PK compartida).
+  Verificado live: TotalRows == DistinctExternalIds POST-fix (16,731 = 16,731).
+
+NOTA HONESTA sobre el determinismo (no es defecto):
+  En Long Island NO existe ningún grupo con más de un ISPRIMARY = 1 (recordset [3] = 0), así que
+  el `TOP 1 ... ORDER BY gm.ID` es DEFENSIVO en este tenant: la data real no puede probar que
+  sea load-bearing. Quien sí lo ejerce es el fixture del docker spec, que trae deliberadamente
+  un household con DOS ISPRIMARY = 1 — ahí el test "keeps the group contact stable across
+  repeated runs" y el check de una-fila-por-reserva sí cubren el caso.
+  El propio PR declara que el ORDER BY no es demostrable en runtime (dos corridas idénticas
+  sobre data estática devuelven el mismo plan y la misma fila con o sin él) y queda pinneado por
+  text assertion; el test está nombrado por lo que realmente comprueba. QA confirma esa lectura.
+
+pre-fix obtenido → post-fix obtenido → ¿objetivo cumplido?:
+  grain 1:1 (16,731 = 16,731) → grain 1:1 intacto con la rama household activa, y la resolución
+  es estable entre corridas → SÍ.

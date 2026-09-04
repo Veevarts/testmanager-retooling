@@ -1,0 +1,40 @@
+Comparison matrix — Scenario 3 (AC3): Example 2 = ausencia de dato fuente — TR-176 / TC-159
+============================================================================================
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| rental_events_groups.sql live | CompanyHouseholdFilled | 12,558 | 12,558 | 0 | AC3 | YES | PASS |
+| " | **CompanyHouseholdChecksum** (CHECKSUM_AGG por external id) | **−784683126** | **−784683126** | **0** | AC3 | YES | PASS |
+| " | ContactChecksum (control: debe cambiar) | −891088119 | −1252254579 | ≠ | AC1 | YES | PASS |
+| diff del PR | líneas tocadas en la proyección Auctifera__Client_Company_Household__c | — | 0 (CASE intacto) | 0 | AC3 | YES | PASS |
+
+BYTE-IDENTIDAD, NO SOLO MISMO CONTEO: el checksum agregado se calcula como
+CHECKSUM_AGG(CHECKSUM(Implementation_External_ID__c, Auctifera__Client_Company_Household__c)),
+o sea depende del PAR (id, valor) de cada fila y es independiente del orden. Que PRE y POST den
+el MISMO número (−784683126) prueba que ninguna fila cambió su Company/Household — no solo que
+el total coincide. El ContactChecksum sí cambia, lo que confirma que el checksum es sensible.
+
+COMPOSICIÓN DE LOS 4,173 CH VACÍOS (16,731 − 12,558), verificada en el source (recordset [6]):
+    4,170  clientes individuales SIN fila CONSTITUENTHOUSEHOLD
+        3  clientes individuales CON fila CONSTITUENTHOUSEHOLD pero HOUSEHOLDID NULL
+    -----   (la proyección usa chh.HOUSEHOLDID, no chh.ID)
+    4,173  ✓ cuadra exactamente
+  Los clientes organisation (9,937) y household/group (4) SIEMPRE traen CH poblado
+  (la rama del CASE devuelve so.CONSTITUENTID, el propio org/grupo).
+
+CONCLUSIÓN SOBRE EL EXAMPLE 2 DEL TICKET: es ausencia de dato en Altru, no defecto del query.
+No hay household del cual derivar un External ID para esas reservas, y account_households.sql
+solo exporta constituents ISGROUP = 1 — emitir algo ahí colgaría el lookup. Poblarlo requiere
+un paso POST-LOAD desde el AccountId que NPSP crea al cargar el Contact.
+
+MATIZ QA (no bloquea, para el follow-up): de los 4,170 individuos sin fila de household, **3**
+sí son miembros de algún constituent ISGROUP = 1 vía GROUPMEMBER. El PR afirma "0 of them reach
+a household group through GROUPMEMBER"; la diferencia es de alcance (mi consulta mira cualquier
+grupo, el PR probablemente solo grupos de tipo household). No cambia el veredicto — el campo está
+byte-idéntico y fuera del scope del PR — pero conviene mirarlo cuando se abra el ticket del
+post-load, porque podría haber un puñado de casos resolubles por esa vía.
+
+pre-fix obtenido → post-fix obtenido → ¿objetivo cumplido?:
+  CH poblado en 12,558 filas → EXACTAMENTE las mismas 12,558 filas con los mismos valores
+  (checksum idéntico), y los vacíos explicados por ausencia en el source → SÍ (el objetivo de
+  este escenario es NO regresionar el campo y documentar el Example 2).

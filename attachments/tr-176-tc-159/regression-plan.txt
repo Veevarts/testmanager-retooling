@@ -1,0 +1,30 @@
+Regression plan — IM-1224 / TC-159 / TR-176 / PR Veevarts/MigrationToolETL #179
+================================================================================
+Clasificación: SQL + specs + docs. rental_events_groups.sql gana un CTE
+(ReservationClientContacts, 2 arms) y la rama ELSE del CASE de Auctifera__Client_Contact__c;
+3 archivos de test (fixture + estático + docker) y 1 doc. Sin cambios de pipeline, mapper,
+dependencias ni superficies de servicio.
+
+| # | Item | Type | Risk | Check method | Verdict |
+|---|------|------|------|--------------|---------|
+| T1 | Grain 1:1 por reserva (IM-773): el LEFT JOIN nuevo no puede multiplicar filas | Technical | High | TotalRows vs DistinctExternalIds live PRE/POST + docker "emits exactly one row per seeded RESERVATION" | ver regression-results.txt |
+| T2 | Sin cambios de inclusión: ninguna reserva se agrega ni se pierde | Technical | High | TotalRows live PRE vs POST (esperado delta 0) | ver regression-results.txt |
+| T3 | Client (Company/Household) sin regresión (campo que el PR NO toca) | Technical | High | CHECKSUM_AGG por external id, PRE vs POST (esperado idéntico) | ver regression-results.txt |
+| T4 | Placeholder IM-539 sin regresión | Technical | Medium | conteo de '[ANONYMOUS_CONTACT]' live PRE/POST + 3 tests docker | ver regression-results.txt |
+| T5 | 0 dangling: todo contacto nuevo tiene Contact exportable detrás | Technical | High | consulta source de contactos que el guard descarta + 2 tests docker "rejects…" | ver regression-results.txt |
+| T6 | Otras queries intactas (touch radius) | Technical | Medium | git diff --name-only sobre queries/ | ver regression-results.txt |
+| T7 | Suite completo query-regression sin regresión (621 esperados) | Technical | High | npm test query-regression en PR HEAD | ver regression-results.txt |
+| T8 | lint:check + build | Technical | Medium | npm run lint:check && npm run build | ver regression-results.txt |
+| T9 | Docker integration (19 tests, SQL Server 2022 real) | Technical | High | test:queries:docker con colima | ver regression-results.txt |
+| T10 | Revert-proof + matriz de mutaciones | Technical | High | 3 mutaciones aplicadas y revertidas (ver scenario-5/mutation-matrix.txt) | ver regression-results.txt |
+| T11 | Docs scope-fit (altru-model-context.md) | Technical | Low | git diff de docs | ver regression-results.txt |
+| S1 | Secrets/credenciales en el diff | Security | High | grep password/key/token/BEGIN sobre el diff | ver regression-results.txt |
+| S2 | SQL dinámico / superficie de inyección | Security | Critical | grep EXEC/sp_executesql/concat-@ en el diff SQL | ver regression-results.txt |
+| S3 | Verbos DML/DDL (el query debe ser read-only) | Security | Critical | grep INSERT/UPDATE/DELETE/MERGE/TRUNCATE/ALTER/GRANT/DROP en el archivo | ver regression-results.txt |
+| S4 | Cambios de dependencias (vulnerable deps) | Security | Medium | git diff --name-only package*.json | ver regression-results.txt |
+| S5 | PII en las evidencias comiteadas | Security | Medium | el wrapper agregado proyecta solo contadores y checksums; ninguna fila de cliente sale al repo | ver regression-results.txt |
+| S6 | OWASP Top 10 applicability scan | Security | — | ver owasp-top10-scan.txt | ver owasp-top10-scan.txt |
+
+Nota de alcance heredada del bundle: el follow-up declarado por el dev
+(pos_purchase_only_rental_payments.sql con la misma lógica either/or) NO entra en este PR y no
+tiene ticket — se verifica que el archivo no fue tocado y se reporta como riesgo abierto.

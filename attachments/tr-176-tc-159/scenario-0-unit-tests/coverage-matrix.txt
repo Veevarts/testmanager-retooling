@@ -1,0 +1,27 @@
+AC ↔ test coverage matrix — IM-1224 / TC-159 / PR Veevarts/MigrationToolETL #179
+=================================================================================
+Specs del PR:
+  - rental-event-query.spec.ts (estático, +98): 7 assertions nuevas IM-1224 (44 en el archivo).
+  - rental-event-query.integration.spec.ts (docker, +118): 6 tests nuevos IM-1224 (19 en total).
+  - rental-event-query-fixture.ts (+144): fixture con org+relationship, household con DOS
+    ISPRIMARY = 1, y contactos que el export de Contact NO emitiría.
+Corridos en PR HEAD 940af02: estático 44/44 PASS · docker 19/19 PASS · suite query-regression
+621/621 PASS.
+
+| AC | Escenario TC-159 | Tests que lo cubren | Cobertura |
+|----|------------------|---------------------|-----------|
+| AC1 Example 1 / rama organisation | Scenario 1 | docker "resolves an organisation client contact through CONTACTRELATIONSHIPID"; estático "reads the organisation contact through the relationship the order stores" | CUBIERTO (valores por docker) + evidencia live QA (6,790 → 15,962 con reconciliación source) |
+| AC2 rama household determinista + grain | Scenario 2 | docker "resolves a household client contact through the primary group member", "keeps the group contact stable across repeated runs", "emits exactly one row per seeded RESERVATION (IM-773)"; estático "reads the household contact as the group primary member" (TOP 1 + ORDER BY) | CUBIERTO; el ORDER BY solo por text assertion (limitación declarada y verificada) |
+| AC3 Example 2 / CH sin cambios | Scenario 3 | docker "leaves the household empty for an individual client who has none"; "maps organisation constituent to Client_Company_Household" | CUBIERTO parcial (el PR no toca el campo) + evidencia live QA byte-idéntica (checksum agregado) |
+| AC4 invariantes (no dangling, CAST, as-stored) | Scenario 4 | docker "rejects a resolved contact the Contact export would not emit", "rejects a primary group member the Contact export would not emit", "outputs [ANONYMOUS_CONTACT]..." x2, "placeholder appears only for rows without a resolvable contact"; estático "casts every uniqueidentifier branch", "never fills the lookup with a constituent the contact export omits", "reads the stored relationship as stored, with no currency filter", "joins the contact resolution by reservation id so the grain is unchanged" | CUBIERTO; gap: ISGROUP+ISCONSTITUENT solo por text assertion (mutación 2 lo confirma) |
+| AC5 gates + mutation matrix | Scenario 5 | suite completo 621 + lint + build + docker 19 + matriz de mutaciones QA | CUBIERTO |
+
+GAPS DECLARADOS (ninguno es FAIL; se reportan por transparencia):
+  1. Las cláusulas `ISGROUP = 0` y `ISCONSTITUENT = 1` de ambas arms no están cubiertas por un
+     test de runtime — quitarlas deja el suite verde (mutación 2). El spec estático sí asserta
+     su presencia literal. El propio PR lo declara.
+  2. El `ORDER BY gm.ID` no es demostrable en runtime (mismo plan y misma fila con o sin él sobre
+     data estática); queda pinneado por text assertion y el test está nombrado en consecuencia.
+  3. En Long Island no hay grupos con >1 primary member ni contactos descartados por el
+     anti-dangle guard, así que ambos guards son defensivos en este tenant: quien los ejercita es
+     el fixture sintético del docker spec, no la data real.

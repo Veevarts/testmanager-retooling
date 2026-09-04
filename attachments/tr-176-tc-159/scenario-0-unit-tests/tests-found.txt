@@ -1,0 +1,51 @@
+Tests encontrados en PR Veevarts/MigrationToolETL #179 — IM-1224
+================================================================
+Branch CamiloSalgueroMarin/IM-1224-rental-events-client-mapping, HEAD 940af02,
+merge-base 51c84e7 (= origin/main). 3 commits:
+  4750141 fix(queries): resolve the rental event client contact for every Altru client type
+  ab66fca test(queries): make the rental event contact anti-dangle and fan-out guards data-backed
+  940af02 test(queries): cover the group-member arm of the contact anti-dangle guard
+
+1) rental-event-query.spec.ts (estático, +98 líneas) — 7 assertions nuevas bajo
+   describe('rental event client contact resolution (IM-1224)'):
+     ✓ resolves a contact in the non-individual branch instead of emitting NULL
+     ✓ casts every uniqueidentifier branch of the client contact CASE
+     ✓ reads the organisation contact through the relationship the order stores
+     ✓ reads the household contact as the group primary member  (TOP 1 + ORDER BY gm.ID)
+     ✓ never fills the lookup with a constituent the contact export omits  (relc + memc)
+     ✓ reads the stored relationship as stored, with no currency filter
+     ✓ joins the contact resolution by reservation id so the grain is unchanged
+   Archivo completo: 44/44 PASS en 0.26s (no requiere DB).
+
+2) rental-event-query.integration.spec.ts (docker, +118 líneas) — 6 tests nuevos IM-1224,
+   19 en total en el archivo. Corre contra SQL Server 2022 real (testcontainers):
+     ✓ resolves an organisation client contact through CONTACTRELATIONSHIPID (IM-1224)
+     ✓ resolves a household client contact through the primary group member (IM-1224)
+     ✓ keeps the group contact stable across repeated runs (IM-1224)
+     ✓ rejects a resolved contact the Contact export would not emit (IM-1224)
+     ✓ rejects a primary group member the Contact export would not emit (IM-1224)
+     ✓ leaves the household empty for an individual client who has none (IM-1224)
+   + los preexistentes de IM-539 (placeholder), IM-773 (una fila por reserva) e IM-1211 (notas).
+   19/19 PASS en 60.5s.
+
+3) rental-event-query-fixture.ts (+144 líneas) — decisiones deliberadas del fixture:
+   - el relationship de la organisation lleva ISCONTACT = 0 y un ENDDATE pasado, así que
+     re-agregar un filtro de vigencia rompería el suite;
+   - el household tiene DOS miembros ISPRIMARY = 1, así que un join directo a GROUPMEMBER
+     duplicaría la reserva;
+   - incluye contactos que el export de Contact NO emitiría, para ejercitar el anti-dangle.
+
+EJECUCIÓN EN LA MÁQUINA QA:
+  estático:  npm test -- --runInBand --testPathPatterns='rental-event-query.spec'   → 44/44
+  suite:     npm test -- --runInBand --testPathPatterns='query-regression'          → 621/621
+             (175 skipped = docker-gated)
+  docker:    DOCKER_HOST=unix:///Users/veevart/.colima/default/docker.sock
+             TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+             RUN_DOCKER_SQL_QUERY_TESTS=1 sh scripts/setup-testcontainers-docker-config.sh
+             npx jest --runInBand --testPathPatterns 'rental-event-query.integration'  → 19/19
+  Nota: el spec no declara .withStartupTimeout y el default de testcontainers (60s) no alcanza
+  para SQL Server 2022 en colima (~81s). Se aplicó un patch LOCAL .withStartupTimeout(300000)
+  solo para correr, y se revirtió al terminar (el repo quedó limpio: git status sin cambios
+  trackeados). No es un hallazgo del PR — es una limitación del entorno QA ya documentada.
+
+Ningún test falla en la rama del PR → no se levanta defecto por unit tests (regla 6 del skill).

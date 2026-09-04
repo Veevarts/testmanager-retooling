@@ -1,0 +1,37 @@
+Comparison matrix — Scenario 4 (AC4): invariantes de seguridad del cambio — TR-176 / TC-159
+============================================================================================
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| live | TotalRows (sin cambios de inclusión) | 16,731 | 16,731 | 0 | AC4 | YES | PASS |
+| live | AnonymousContactRows | 0 | 0 | 0 | AC4 / IM-539 | YES | PASS |
+| source [4] | contactos org que el guard anti-dangle descarta | — | **0** | — | AC4 | YES | PASS |
+| source [5] | relationships con ISCONTACT = 0 preservados | — | **36** | — | AC4 (as-stored) | YES | PASS |
+| source [5] | relationships con ENDDATE pasado preservados | — | **20** | — | AC4 (as-stored) | YES | PASS |
+| SQL | CAST(rcc.CONTACTCONSTITUENTID AS NVARCHAR(36)) en la rama nueva | ELSE NULL | CAST presente | — | AC4 / IM-770 | YES | PASS |
+| SQL | filtros de vigencia sobre el relationship (rel.ISCONTACT / ENDDATE / STARTDATE) | — | ausentes (as-stored) | — | AC4 | YES | PASS |
+| diff | touch radius | — | 1 SQL + 3 test files + 1 doc | — | AC4 | YES | PASS |
+
+SIN CAMBIOS DE INCLUSIÓN: el SELECT final sigue enraizado en RESERVATION con solo LEFT JOINs y
+sin WHERE; el CTE nuevo entra por `LEFT JOIN ReservationClientContacts rcc ON rcc.RESERVATIONID
+= r.ID`. Confirmado live: TotalRows idéntico PRE/POST. El fix solo LLENA una columna de lookup.
+
+0 DANGLING: ambas arms filtran el contacto resuelto al shape exacto que exporta contact.sql
+(ISCONSTITUENT = 1, ISGROUP = 0, ISORGANIZATION = 0). Medido en el source: 0 contactos de la rama
+organisation son descartados por ese guard en Long Island — es decir, el 100% de los contactos
+resueltos ya cumplen el shape exportable, así que ninguna de las 9,169 lookups nuevas puede
+colgar en el load. (El guard es correcto y defensivo; en este tenant no descarta nada.)
+
+AS-STORED (decisión de diseño, verificada): NO se filtra por ISCONTACT ni por rango de fechas del
+relationship. Altru solo valida eso cuando un usuario EDITA el contacto de la reserva; la reserva
+sigue mostrando lo que registró. Filtrar habría descartado 36 contactos con ISCONTACT = 0 y 20 con
+ENDDATE pasado que Altru sí muestra — ambos números confirmados live, coinciden con el PR body.
+
+CAST / IM-770: el CASE mezcla el literal '[ANONYMOUS_CONTACT]' con columnas uniqueidentifier. Sin
+el CAST, la precedencia de tipos resuelve toda la expresión a uniqueidentifier y el export
+streamed muere en la primera fila placeholder (Tucson: 13 de 1547 filas llegaron al CSV antes del
+fix de IM-770). El spec estático lo pinnea ("casts every uniqueidentifier branch") y la mutación 1
+lo confirma.
+
+pre-fix obtenido → post-fix obtenido → ¿objetivo cumplido?: mismas filas, mismo placeholder count,
+sin lookups colgados y sin perder los contactos que Altru muestra → SÍ.

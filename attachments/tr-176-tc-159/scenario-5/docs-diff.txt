@@ -1,0 +1,48 @@
+diff --git a/docs/altru-model-context.md b/docs/altru-model-context.md
+index 8ce39f8..4945252 100644
+--- a/docs/altru-model-context.md
++++ b/docs/altru-model-context.md
+@@ -322,6 +322,43 @@ graph TD
+     or leaves it untouched is a property of the load step's "Insert Null Values"
+     setting, not of the query: the CSV writer emits `''` either way
+     (`fast-csv-writer.adapter.ts`, `row[header] ?? ''`).
++  - IM-1224: **a reservation's Client (Contact) is not always the order's own
++    constituent.** Altru's own `dbo.USP_RESERVATION_GETCONTACTINFO` (read from
++    `sys.sql_modules`) branches on the client's constituent type: an individual
++    client is its own contact; an **organisation** client must carry a contact,
++    stored as `SALESORDER.CONTACTRELATIONSHIPID` and resolved to
++    `RELATIONSHIP.RECIPROCALCONSTITUENTID`; a **household/group** client's
++    contact is the group's primary `GROUPMEMBER` (`ISPRIMARY = 1`). Only the
++    individual branch was mapped, so the export left Client (Contact) empty on
++    every organisation-client reservation that has one: **9,169 of the 9,937
++    organisation-client reservations on longisland and 9,445 of 9,451 on
++    illinois_2** (of 16,731 and 9,652 reservations in total; safesql,
++    2026-09-03). The remaining organisation clients carry no
++    `CONTACTRELATIONSHIPID`, so Altru records no contact for them either --
++    769 longisland reservations still export an empty contact after the fix
++    (768 of them plus one household with no primary member). Measured on longisland,
++    100% of `CONTACTRELATIONSHIPID` rows have
++    `RELATIONSHIPCONSTITUENTID = SALESORDER.CONSTITUENTID` (the organisation)
++    and an **individual** on the reciprocal side, with no orphans on either
++    tenant. Read the relationship **as stored**: Altru validates `ISCONTACT`
++    and the date range (`UFN_RELATIONSHIP_ISCURRENTCONTACT`) only when a user
++    *edits* the contact, while the reservation keeps displaying what it
++    recorded — 36 longisland rows have `ISCONTACT = 0` and 20 a past `ENDDATE`.
++    After the fix: contact fill 6,790 -> 15,962 (longisland) and 201 -> 9,646
++    (illinois_2), row count and distinct external IDs unchanged at 16,731 /
++    9,652.
++  - IM-1224: **Client (Company/Household) has no source to fall back on for a
++    household-less individual.** It is the organisation/group itself for a
++    non-individual client and `CONSTITUENTHOUSEHOLD.HOUSEHOLDID` for an
++    individual one, and **4,173 of 16,731 longisland** (127 of 9,652
++    illinois_2) individual clients have no household row at all — 0 of them
++    reach a household group through `GROUPMEMBER`, 1 has a spouse relationship.
++    This is not a query defect: `account/account_households.sql` only exports
++    `ISGROUP = 1` constituents, so no Account with a derivable external ID
++    exists to point at, and NPSP mints the household Account itself when the
++    Contact loads. Filling the column from source would dangle the lookup;
++    populating it has to be a post-load step from the Contact's `AccountId`.
++    Context: **166,101 of 297,004** longisland individuals have no household.
+ - **`APPEAL / CONSTITUENTAPPEAL`** — Campaign and campaign member source. _Tucson row count sample: 144 / 359,025._
+ - **`INTERACTION / INTERACTIONTYPECODE`** — Tasks/interactions/fundraiser/exhibition follow-up. _Tucson row count sample: 63,782._
+ 
