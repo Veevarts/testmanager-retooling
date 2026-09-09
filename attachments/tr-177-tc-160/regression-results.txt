@@ -1,0 +1,37 @@
+Regression results — IM-1251 / TC-160 / TR-177 / PR 72 (POST 6caf29a, PRE 63402286)
+====================================================================================
+
+| # | Item | Verdict | Evidencia |
+|---|------|---------|-----------|
+| T1 | Analytics preexistente intacto | PASS | analytics.ts solo suma el handler nuevo (+86 lineas, sin borrados sobre summary); la suite de server pasa completa |
+| T2 | Suite de server | PASS | 88 tests / 15 suites / 88 pass / 0 fail (scenario-0-unit-tests/test-run-log.txt) |
+| T3 | Suite de client | PASS | 46 tests / 15 suites / 46 pass / 0 fail |
+| T4 | Cableado de rutas y auth | PASS | scenario-6/touch-radius.txt — index.ts y lib/auth.ts NO fueron tocados por el PR; el endpoint hereda requireAdminAuth ya montado en /api/admin |
+| T5 | Store | PASS | dynamodbStore.ts +41 lineas de lectura, con sus tests nuevos; suite completa verde |
+| T6 | Dashboard preexistente | PASS | DashboardPage.tsx +38/-x para sumar la tab; dashboard.ts extiende helpers; los 46 tests de cliente pasan |
+| T7 | Grain sin fan-out | PASS | tests QA: un respondent en 3 fuentes = 1 fila; 4 eventos del mismo respondent = 1 fila con 3 impressions y 1 dismissal |
+| T8 | Aislamiento org / survey | PASS | tests QA (00d-alpha vs 00d-beta = 2 filas) + apiBoundary (00d-other excluido del alcance de 00d-demo; All organizations = 3 filas) |
+| T9 | Alcance fuera de scope | PASS | scenario-6/touch-radius.txt — 0 archivos de integracion Salesforce, 0 referencias a LastLoginDate, ningun otro repo tocado |
+| S1 | Secretos en el diff | PASS | security-scan-static.txt — unico hit es un import de resetSalesforceTokenCacheForTests en un test (falso positivo) |
+| S2 | Inyeccion | PASS | las consultas nuevas usan KeyConditionExpression con ExpressionAttributeValues parametrizados; sin interpolacion de entrada de usuario en la expresion. Los valores de particion se construyen con datos ya validados por zod |
+| S3 | Control de acceso | PASS | scenario-5/auth-boundary-live.txt — servidor real en el commit del PR: 401 "Authentication required" sin credenciales, 401 sin params y 401 con cookie falsificada; identico al resto de endpoints admin. requireAdminAuth falla CERRADO (401 si no hay sesion) |
+| S4 | PII en la respuesta | PASS | el endpoint devuelve por fila: clientOrgId, respondentId, responded, impressions, dismissals, lastActivityAt. No expone email, nombre ni score individual. El respondentId ya es el identificador que el sistema almacena; no se agrega dato personal nuevo |
+| S5 | Dependencias vulnerables | PASS para este PR | security-npm-audit.txt — 4 vulnerabilidades (2 low, 1 moderate, 1 HIGH: path-to-regexp). El PR NO modifica package.json ni package-lock.json, asi que son PREEXISTENTES y no introducidas aqui. Se reporta como recomendacion de ticket aparte, no como defecto de esta historia |
+| S6 | OWASP Top 10 | ver owasp-top10-scan.txt | 3 Applicable (A01, A03, A06) — A01 y A03 PASS; A06 PASS para este PR con la observacion preexistente |
+
+Resumen: Technical 9/9 PASS · Security 5/5 PASS. 0 defectos atribuibles al PR 72.
+
+OBSERVACIONES REPORTADAS (ninguna bloquea el merge):
+  1. **AC7 sin cobertura automatizada**: el unico test que llama al endpoint sin credenciales
+     asserta 400, no 401, porque el harness inyecta el store y no ejerce el middleware real.
+     QA lo cubrio en vivo. Recomendacion: agregar un test que monte requireAdminAuth y asserte 401.
+  2. **4 vulnerabilidades de dependencias preexistentes**, incluida 1 HIGH (path-to-regexp).
+     Fuera del alcance de esta historia; conviene un ticket propio.
+  3. **El PR esta en `develop`, no en `main`.** Verificado: el merge commit 6caf29a esta contenido
+     solo en origin/develop. El repo promueve feature -> develop (staging) -> main (produccion),
+     asi que lo validado es el codigo de staging, pendiente de promocion.
+  4. **Follow-up de escalabilidad sin ticket**: el propio PR declara que el patron de acceso
+     escanea eventos para las consultas agregadas y se volvera caro con volumen historico.
+  5. **Observacion cosmetica**: el respondentId mostrado conserva el caso de la primera fuente
+     procesada (responses antes que eventos), asi que la columna puede mezclar minusculas y
+     caso original. Ver scenario-6/comparison-matrix.txt.

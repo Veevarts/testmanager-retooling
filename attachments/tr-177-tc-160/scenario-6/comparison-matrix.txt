@@ -1,0 +1,48 @@
+Comparison matrix — Scenario 6: edge cases y comportamientos fuera de los ACs
+==============================================================================
+IM-1251 / TC-160 / TR-177.
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| QA: responses sin respondentId | se presentan como usuario identificado? | n/a | NO — 0 filas, contadas en unattributedResponseCount | — | scope-fit | YES | PASS |
+| dev apiBoundary | unattributedResponseCount con 1 response anonima | n/a | 1 | — | scope-fit | YES | PASS |
+| codigo: dateBoundary() | limites de fecha date-only | n/a | 00:00:00.000Z / 23:59:59.999Z (fin de dia inclusivo) | — | scope-fit | YES | PASS |
+| dev apiBoundary | rango > 366 dias | n/a | 400 "Engagement date range cannot exceed 366 days" | — | validacion | YES | PASS |
+| codigo: handler | surveyId inexistente | n/a | 404 "Survey not found" | — | validacion | YES | PASS |
+| codigo: handler | survey.type != nps | n/a | 400 "Respondent engagement is available for NPS surveys only" | — | validacion | YES | PASS |
+| codigo: handler | from > to | n/a | 400 | — | validacion | YES | PASS |
+| codigo: zod schema | surveyId ausente o no positivo | n/a | 400 (dev test lo asserta) | — | validacion | YES | PASS |
+| touch radius | archivos fuera de alcance tocados | n/a | 0 (sin Salesforce sync, sin LastLoginDate, sin otros repos) | 0 | Out of Scope | YES | PASS |
+
+=== EL RIESGO DE NORMALIZACION QUE EL BUNDLE MARCO: RESUELTO, NO ES DEFECTO ===
+
+El TC-160 marco como riesgo que el agregador aplica trim().toLowerCase() a respondentId y
+clientOrgId, y que los IDs de Salesforce de 15 caracteres son case-sensitive, por lo que dos IDs
+distintos podrian fusionarse en una fila. QA lo investigo en el codigo en vez de asumirlo:
+
+  1. clientOrgId — el INGEST ya normaliza a minusculas antes de guardar, en las dos rutas:
+       responses.ts:265  clientOrgId: normalizeOrganizationKey(parsed.data)   -> toLowerCase
+       features.ts:328   clientOrgId: normalizedOrganizationKey(event.ctx)    -> toLowerCase
+     Es decir, el colapso de caso ocurre en la ingesta y es una decision del sistema ANTERIOR a
+     este PR. El toLowerCase del filtro en analytics.ts:140 es CONSISTENTE con lo almacenado
+     (si no lo hiciera, filtrar por un org con mayusculas no encontraria nada). No hay defecto.
+
+  2. respondentId — los dos ingests DIFIEREN:
+       responses.ts:229  respondentId: parsed.data.respondentId?.trim().toLowerCase()  -> minusculas
+       features.ts:328   respondentId: event.ctx.respondentId!                          -> tal cual
+     Por lo tanto la normalizacion del agregador NO es un riesgo: es la MITIGACION necesaria de
+     una inconsistencia real entre las dos rutas de ingesta. Sin ella, la response y las
+     impressions de la misma persona caerian en filas distintas — exactamente el doble conteo
+     que prohibe el AC4. Probado por QA:
+       qaTc160 "merges the same person into one row despite the ingest case mismatch (AC4 holds)"
+       -> response respondentId "005xx000001abcaaa" + evento "005Xx000001abcAAA" = 1 fila. PASS.
+
+  3. Observacion menor (cosmetica, no defecto): el respondentId que se MUESTRA es el de la
+     primera fuente procesada. Como las responses se procesan antes que los eventos, un
+     respondent que respondio muestra su id en minusculas, mientras que uno que solo tiene
+     eventos conserva el caso original. La columna puede verse mezclada. Probado por QA:
+       qaTc160 "shows the respondent ID of whichever source is processed first (responses win)".
+
+pre-fix obtenido -> post-fix obtenido -> objetivo cumplido?
+  El riesgo se planteo como hipotesis sin verificar -> verificado en el codigo y con tests:
+  no hay fusion indebida, y la normalizacion es necesaria -> SI (riesgo cerrado, no es defecto).

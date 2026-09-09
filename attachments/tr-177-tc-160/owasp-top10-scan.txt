@@ -1,0 +1,24 @@
+OWASP Top 10 (2021) applicability scan — IM-1251 / TC-160 / TR-177 / PR survey-tool 72
+=======================================================================================
+Superficie: endpoint HTTP admin de solo lectura + agregador puro + lecturas de DynamoDB + tab de
+dashboard en React. Sin escrituras nuevas, sin cambios de auth, sin cambios de dependencias.
+
+| Cat | Nombre | Aplica | Metodo / Justificacion | Verdict |
+|-----|--------|--------|------------------------|---------|
+| A01 | Broken Access Control | Applicable | El PR expone un endpoint admin NUEVO con datos por respondent. Verificado que hereda requireAdminAuth (index.ts:29 se monta antes del router en :33) y EJECUTADO en vivo contra el servidor real: 401 sin credenciales, 401 con cookie falsificada, identico al resto de /api/admin. El middleware falla cerrado. Ademas el endpoint fuerza scope por survey y opcionalmente por organizacion | PASS |
+| A02 | Cryptographic Failures | N/A | No maneja secretos, cifrado ni almacenamiento de credenciales; reutiliza la sesion firmada existente sin tocarla | — |
+| A03 | Injection | Applicable | Las consultas nuevas al store usan KeyConditionExpression con ExpressionAttributeValues parametrizados; los parametros de entrada pasan por un esquema zod (surveyId entero positivo; clientOrgId, from y to como strings validados) antes de llegar al store. Sin concatenacion de entrada de usuario en expresiones | PASS |
+| A04 | Insecure Design | N/A | El diseno separa un agregador puro de la capa de acceso a datos y mantiene el scope obligatorio por survey; el propio PR documenta el limite del dato (solo usuarios con eventos o responses) | — |
+| A05 | Security Misconfiguration | N/A | No cambia configuracion de despliegue, CORS, cabeceras ni variables de entorno. El endpoint reutiliza el pipeline existente | — |
+| A06 | Vulnerable and Outdated Components | Applicable | npm audit ejecutado: 4 vulnerabilidades (2 low, 1 moderate, 1 HIGH path-to-regexp). VERIFICADO que el PR no modifica package.json ni package-lock.json, por lo que son preexistentes y no introducidas por este cambio. Se reporta como recomendacion de ticket aparte | PASS para este PR (observacion preexistente) |
+| A07 | Identification and Authentication Failures | N/A | No toca el flujo de autenticacion (lib/auth.ts intacto); solo consume la sesion admin ya establecida | — |
+| A08 | Software and Data Integrity Failures | N/A | Sin pipelines de CI/CD, deserializacion insegura ni dependencias externas nuevas | — |
+| A09 | Security Logging and Monitoring Failures | N/A | No modifica logging ni auditoria; es una lectura sin efectos de estado | — |
+| A10 | SSRF | N/A | Sin peticiones salientes construidas con entrada del usuario | — |
+
+Resultado: 3 Applicable · 3 PASS · 0 FAIL · 7 N/A. Sin blockers.
+
+Nota de manejo de datos: el endpoint expone por fila clientOrgId, respondentId, responded,
+impressions, dismissals y lastActivityAt. No agrega datos personales nuevos (ni email, ni nombre,
+ni el score individual). Las evidencias comiteadas de esta corrida usan fixtures sinteticos
+(user-a, 00d-demo): no contienen datos de clientes reales.

@@ -1,0 +1,394 @@
+schemaVersion: "1.0"
+id: tr-419030df-ca72-48ea-872f-82a17dfe2f44
+key: TR-177
+title: >-
+  TR-177 · IM-1251 · TC-160 · Survey Tool respondent engagement summary — 5/6 PASS · 1 not-run
+  (empty state visual, sin entorno desplegado). Agregador probado con 11 tests propios de QA,
+  frontera de autenticación verificada EN VIVO (401), y el riesgo de normalización de IDs que
+  marcó el bundle queda cerrado como no-defecto tras leer los dos caminos de ingesta.
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/survey-tool clonado y checkeado en el merge commit del PR 72 (6caf29a, sobre
+    `develop`); PRE-fix 63402286. Node + npm locales; suites con node:test vía tsx. Servidor
+    Express levantado localmente en el puerto 4599 (AUTH_COOKIE_SECRET y Cognito con valores
+    dummy) para observar la frontera de autenticación real. Sin acceso a DynamoDB ni al
+    dashboard desplegado: las credenciales de administrador y la URL del entorno estaban
+    pendientes al momento de ejecutar.
+  url: https://github.com/Veevarts/survey-tool/pull/72
+  buildVersion: >-
+    Classification: Backend/API + Frontend (mixed), +929/-8 en 12 archivos. Endpoint nuevo
+    GET /api/admin/analytics/respondent-engagement, agregador puro
+    server/src/lib/respondentEngagement.ts, lecturas scoped en dynamodbStore.ts, y tab
+    Engagement en el Dashboard (EngagementDashboard.tsx, dashboard.ts, DashboardPage.tsx).
+    PR MERGEADO a `develop`, NO a `main`.
+  notes: |
+    ## Solution understood
+
+    La historia pide una vista de engagement por respondent que reúna las tres señales que
+    Survey Tool ya almacena — responses, impression events y dismissal events — sin sincronizar
+    usuarios de Salesforce ni inferir quién debió recibir la encuesta.
+
+    El PR resuelve eso en tres capas:
+      - **Endpoint** `GET /api/admin/analytics/respondent-engagement`, con query validada por zod
+        (`surveyId` entero positivo requerido; `clientOrgId`, `from` y `to` opcionales). Devuelve
+        400 con parámetros inválidos o `from > to`, 404 si el survey no existe, 400 si el survey
+        no es de tipo NPS, y 400 si el rango supera 366 días. Cuando no se pasan fechas, la
+        ventana va de `survey.createdAt` hasta ahora; las fechas date-only se expanden a límites
+        UTC inclusivos (00:00:00.000Z / 23:59:59.999Z).
+      - **Agregador puro** `buildRespondentEngagement(responses, events)`: agrupa por una clave
+        compuesta de organización y respondent (ambos normalizados con trim y minúsculas),
+        marca `responded` ante cualquier response, cuenta impressions y dismissals por tipo de
+        evento, y toma como `lastActivityAt` el máximo timestamp entre ambas fuentes. Las
+        responses sin respondentId no generan fila: incrementan `unattributedResponseCount`.
+      - **Cliente**: tab Engagement con alcance de una organización o `All organizations`,
+        búsqueda y orden.
+
+    El endpoint hereda la protección existente: `app.use("/api/admin", requireAdminAuth)` se
+    monta en index.ts:29, antes del router de analytics en :33, y el PR no toca index.ts ni
+    lib/auth.ts.
+
+    ## Inferred technical tests
+
+    - **Suites del repo en el commit del PR** → auto-ejecutadas. server 88/88, client 46/46.
+    - **Tests propios de QA contra el agregador puro (11 tests)** → auto-ejecutados. El agregador
+      es una función pura, así que los AC1..AC6 se prueban de forma determinista con fixtures
+      controlados, sin depender de un entorno desplegado. Creados, ejecutados y borrados: el repo
+      del producto quedó limpio.
+    - **Frontera de autenticación en vivo** → auto-ejecutada. Servidor real levantado en el commit
+      del PR: 401 sin credenciales, sin parámetros y con cookie falsificada.
+    - **Contraste PRE/POST** → auto-ejecutado. En 63402286 no existen ni la ruta ni el módulo del
+      agregador; en 6caf29a existen y responden.
+    - **Escaneos de seguridad y radio de impacto** → auto-ejecutados (secretos, inyección, npm
+      audit, archivos fuera de alcance).
+    - **Observación visual del dashboard** → NO ejecutable aquí: requiere el entorno desplegado y
+      credenciales de administrador, que estaban pendientes. Queda como escenario manual.
+
+results:
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC1 + AC4 · The respondent population is the union of responses, impressions and
+      dismissals, and a respondent present in several sources is combined into a single row
+      without double-counting
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-09T15:20:00Z"
+    duration: 12
+    stepResults: []
+    actual: |
+      PRE-fix (63402286): no existe ni la ruta respondent-engagement en analytics.ts (0
+      ocurrencias) ni el módulo server/src/lib/respondentEngagement.ts. No había ninguna vista
+      que uniera las tres fuentes.
+
+      POST-fix (6caf29a), probado por QA con fixtures controlados sobre el agregador puro:
+        - un respondent presente en las tres fuentes (response + impression + dismissal) más otro
+          con solo un evento producen exactamente 2 filas: una por respondent, no una por fuente.
+        - el respondent multi-fuente muestra impressions 1 y dismissals 1: cada evento se cuenta
+          una sola vez al combinar.
+        - con 4 eventos del mismo respondent (3 impressions + 1 dismissal) sigue habiendo 1 sola
+          fila, con los totales 3 y 1: no hay fan-out por número de eventos.
+
+      El test end-to-end del propio PR (apiBoundary, con store inyectado) confirma lo mismo a
+      través de la ruta real, incluyendo el shape completo de las filas devueltas.
+
+      pre-fix → post-fix → ¿objetivo cumplido?: no existía la unión de fuentes → una fila por
+      respondent con las tres señales combinadas sin doble conteo → SÍ.
+    notes: >-
+      **PASS** a nivel de dato (agregador y ruta). La observación visual de la tabla en el
+      dashboard desplegado no se ejecutó; ver la sección de pendientes.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-177-tc-160/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2748
+      - name: qaTc160.test.ts
+        path: attachments/tr-177-tc-160/scenario-1/qaTc160.test.ts
+        mimeType: text/plain
+        size: 7804
+      - name: qa-aggregator-tests-log.txt
+        path: attachments/tr-177-tc-160/scenario-1/qa-aggregator-tests-log.txt
+        mimeType: text/plain
+        size: 2368
+      - name: pre-fix-endpoint.txt
+        path: attachments/tr-177-tc-160/scenario-1/pre-fix-endpoint.txt
+        mimeType: text/plain
+        size: 561
+
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC2 · Responded is Yes when the respondent has at least one matching response and No
+      otherwise
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-09T15:21:00Z"
+    duration: 5
+    stepResults: []
+    actual: |
+      Test QA sobre el agregador: un respondent con una response y otro con solo una impression.
+        - el que respondió: responded = true
+        - el que solo tiene evento: responded = false
+      El agregador marca `responded` en cuanto procesa cualquier response del respondent, así que
+      una sola basta y el número de responses no altera el valor.
+
+      pre-fix → post-fix → ¿objetivo cumplido?: no existía la columna → Responded deriva
+      exactamente de la existencia de al menos una response → SÍ.
+    notes: >-
+      **PASS**. Cubierto además por los tests del dev en respondentEngagement.test.ts.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-177-tc-160/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2748
+
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC3 + AC5 · Impression and dismissal totals reflect exactly the selected organization and
+      survey, and activity from another organization or survey is excluded — including All
+      organizations, where the same respondent ID in two organizations stays in separate rows
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-09T15:22:00Z"
+    duration: 10
+    stepResults: []
+    actual: |
+      Totales por tipo de evento (test QA): 5 impressions y 3 dismissals del mismo respondent
+      producen exactamente impressions 5 y dismissals 3 en una sola fila.
+
+      Aislamiento entre organizaciones (test QA): el mismo respondentId con actividad en
+      00d-alpha y en 00d-beta produce DOS filas separadas, cada una con su propio evento
+      (impressions 1 cada una). La clave de agrupación incluye la organización, así que el
+      alcance `All organizations` no fusiona personas de orgs distintas.
+
+      Aislamiento end-to-end (test del PR, apiBoundary): con actividad sembrada en 00d-demo y en
+      00d-other, la consulta scoped a 00d-demo devuelve solo sus filas y
+      unattributedResponseCount 1; la consulta `All organizations` devuelve 3 filas e incluye
+      00d-other. El filtro por survey viaja como `surveyId` obligatorio en el propio query.
+
+      Sobre el scoping por organización: el filtro se pasa en minúsculas
+      (analytics.ts:140) y el ingest almacena clientOrgId ya normalizado a minúsculas en las dos
+      rutas (responses.ts:265 y features.ts:328), así que filtro y dato son consistentes.
+
+      pre-fix → post-fix → ¿objetivo cumplido?: no existían totales por respondent → totales
+      exactos por tipo de evento, aislados por organización y survey → SÍ.
+    notes: >-
+      **PASS**. La verificación con datos reales del cliente en el entorno desplegado no se
+      ejecutó (sin acceso); lo probado son fixtures controlados y el end-to-end del PR.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-177-tc-160/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2748
+      - name: qa-aggregator-tests-log.txt
+        path: attachments/tr-177-tc-160/scenario-1/qa-aggregator-tests-log.txt
+        mimeType: text/plain
+        size: 2368
+
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC6 · A selection with no matching activity shows a clear empty state instead of an error
+    scenarioIndex: 4
+    status: not-run
+    stepResults: []
+    actual: |
+      PROBADO a nivel de dato: con responses y events vacíos el agregador devuelve rows = [] y
+      unattributedResponseCount = 0, sin lanzar error (test QA). El handler responde 200 con la
+      colección vacía siempre que el survey exista y sea de tipo NPS, así que el camino de datos
+      no produce ni 4xx ni 5xx para una selección sin actividad.
+
+      NO PROBADO, y es la parte que define el AC: que el dashboard MUESTRE un empty state claro.
+      Eso exige el entorno desplegado y credenciales de administrador, que no estaban disponibles
+      en esta corrida. No se marca PASS a partir de leer el JSX: el texto del código no es
+      necesariamente lo que ve el usuario.
+    notes: >-
+      **Pendiente de tu parte.** Abrir el Dashboard con `develop` desplegado, entrar a la tab
+      Engagement y seleccionar una organización y un survey NPS sin actividad. Verificar que
+      aparece un mensaje de vacío claro (no una tabla rota, ni un error, ni un spinner infinito) y
+      capturar la pantalla como `attachments/tr-177-tc-160/scenario-4/empty-state.png`. Con esa
+      captura el escenario pasa a `passed` en un TR de seguimiento.
+
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC7 · The engagement endpoint denies unauthenticated access while the public survey
+      endpoints keep working unchanged
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-09T15:18:00Z"
+    duration: 15
+    stepResults: []
+    actual: |
+      Ejecutado EN VIVO contra el servidor real levantado en el commit del PR (puerto 4599, con
+      AUTH_COOKIE_SECRET y configuración de Cognito):
+
+        GET /api/admin/analytics/respondent-engagement?surveyId=1   sin credenciales  -> 401
+          {"error":"Authentication required"}
+        GET /api/admin/analytics/respondent-engagement              sin parámetros    -> 401
+        GET (mismo endpoint) con Cookie: admin_session=falsificada                    -> 401
+        Control, el resto de endpoints admin (responses, surveys, organizations, settings) -> 401
+        GET /api/health (no admin)                                                    -> 200
+
+      Estructura verificada: `app.use("/api/admin", requireAdminAuth)` en index.ts:29 se registra
+      ANTES de `app.use("/api/admin/analytics", analyticsRouter)` en index.ts:33, así que el
+      endpoint nuevo queda cubierto por el middleware sin necesidad de declararlo. Además
+      `requireAdminAuth` falla CERRADO: si no hay sesión devuelve 401, no continúa.
+
+      Endpoints públicos sin cambio: el PR no modifica index.ts ni lib/auth.ts ni los routers
+      públicos (verificado en el diff), así que el cableado que los expone es el preexistente.
+      La ejecución de un endpoint público con datos reales requiere DynamoDB, que no estaba
+      disponible; lo verificado es que su definición y su montaje no fueron tocados.
+
+      HALLAZGO DE COBERTURA: el único test automatizado que llama al endpoint sin credenciales
+      ("requires a survey for respondent engagement") asserta 400, no 401, porque el harness
+      inyecta el store y no ejerce el middleware real. Es decir el AC7 NO tiene cobertura
+      automatizada; el PR body lo declara como verificación manual local. QA lo cubrió en vivo.
+
+      pre-fix → post-fix → ¿objetivo cumplido?: el endpoint no existía → existe y deniega el
+      acceso no autenticado con 401, sin alterar el cableado de los públicos → SÍ.
+    notes: >-
+      **PASS** con evidencia en vivo. Recomendación al dev: agregar un test que monte
+      requireAdminAuth y asserte 401, para que el AC7 quede cubierto en CI.
+    attachments:
+      - name: auth-boundary-live.txt
+        path: attachments/tr-177-tc-160/scenario-5/auth-boundary-live.txt
+        mimeType: text/plain
+        size: 1036
+      - name: touch-radius.txt
+        path: attachments/tr-177-tc-160/scenario-6/touch-radius.txt
+        mimeType: text/plain
+        size: 1237
+
+  - testCaseId: 9c5a36d8-00f0-4e0b-8994-9faeedd92de9
+    testCaseKey: TC-160
+    scenarioTitle: >-
+      AC-adjacent · Edge cases and PR behaviours that the story does not specify: unattributed
+      responses, inclusive UTC date boundaries, endpoint validations, and the case-insensitive
+      normalisation of respondent and organization IDs
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-09T15:25:00Z"
+    duration: 18
+    stepResults: []
+    actual: |
+      Responses sin respondentId (test QA): dos responses sin identificador (una con null y otra
+      con espacios en blanco) más una identificada producen 1 sola fila y
+      unattributedResponseCount = 2. No se presentan como usuarios identificados, que es
+      justamente lo que el PR se propuso. Los eventos sin respondentId se ignoran.
+
+      Límites de fecha: `dateBoundary()` expande las fechas date-only a 00:00:00.000Z y
+      23:59:59.999Z, de modo que el día indicado en `to` queda incluido. El guard de rango
+      responde 400 "Engagement date range cannot exceed 366 days" (asserted por el test del PR).
+
+      Validaciones del endpoint verificadas en el handler: 404 "Survey not found" con surveyId
+      inexistente; 400 "Respondent engagement is available for NPS surveys only" si el survey no
+      es NPS; 400 con `from > to`; 400 por esquema zod si falta surveyId o no es entero positivo
+      (asserted por el test del PR).
+
+      EL RIESGO DE NORMALIZACIÓN QUE MARCÓ EL BUNDLE: CERRADO, NO ES DEFECTO.
+      El TC-160 planteó que aplicar minúsculas a respondentId y clientOrgId podría fusionar dos
+      IDs de Salesforce de 15 caracteres distintos. QA lo investigó en el código en lugar de
+      asumirlo:
+        - clientOrgId ya se normaliza a minúsculas EN LA INGESTA, en los dos caminos
+          (responses.ts:265 y features.ts:328). El colapso de caso es una decisión del sistema
+          anterior a este PR, y el filtro en minúsculas del endpoint es consistente con lo
+          almacenado.
+        - respondentId, en cambio, se guarda en minúsculas por el camino de responses
+          (responses.ts:229) pero TAL CUAL por el de eventos (features.ts:328). Es decir, la
+          normalización del agregador no es un riesgo: es la mitigación necesaria de una
+          inconsistencia real entre los dos ingests. Sin ella, la response y las impressions de
+          la misma persona caerían en filas distintas — el doble conteo que prohíbe el AC4.
+          Probado: response "005xx000001abcaaa" + evento "005Xx000001abcAAA" = 1 fila.
+
+      Observación menor (cosmética, no defecto): el respondentId que se muestra es el de la
+      primera fuente procesada. Como las responses se procesan antes que los eventos, quien
+      respondió aparece en minúsculas y quien solo tiene eventos conserva el caso original, así
+      que la columna puede verse mezclada.
+
+      Fuera de alcance respetado: 0 archivos de integración Salesforce, 0 referencias a
+      LastLoginDate, ningún otro repositorio tocado, y ni index.ts ni lib/auth.ts modificados.
+
+      pre-fix → post-fix → ¿objetivo cumplido?: el riesgo estaba planteado como hipótesis sin
+      verificar → verificado en el código y con tests, sin fusión indebida y con la normalización
+      justificada → SÍ.
+    notes: >-
+      **PASS**. El riesgo que el bundle marcó queda cerrado con evidencia, no descartado por
+      supuesto.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-177-tc-160/scenario-6/comparison-matrix.txt
+        mimeType: text/plain
+        size: 3893
+      - name: touch-radius.txt
+        path: attachments/tr-177-tc-160/scenario-6/touch-radius.txt
+        mimeType: text/plain
+        size: 1237
+      - name: tests-found.txt
+        path: attachments/tr-177-tc-160/scenario-0-unit-tests/tests-found.txt
+        mimeType: text/plain
+        size: 1969
+      - name: coverage-matrix.txt
+        path: attachments/tr-177-tc-160/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+        size: 2595
+      - name: test-run-log.txt
+        path: attachments/tr-177-tc-160/scenario-0-unit-tests/test-run-log.txt
+        mimeType: text/plain
+        size: 763
+      - name: regression-plan.txt
+        path: attachments/tr-177-tc-160/regression-plan.txt
+        mimeType: text/plain
+        size: 2992
+      - name: regression-results.txt
+        path: attachments/tr-177-tc-160/regression-results.txt
+        mimeType: text/plain
+        size: 4290
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-177-tc-160/owasp-top10-scan.txt
+        mimeType: text/plain
+        size: 3158
+      - name: security-scan-static.txt
+        path: attachments/tr-177-tc-160/security-scan-static.txt
+        mimeType: text/plain
+        size: 923
+      - name: security-npm-audit.txt
+        path: attachments/tr-177-tc-160/security-npm-audit.txt
+        mimeType: text/plain
+        size: 467
+
+summary:
+  totalScenarios: 6
+  passed: 5
+  failed: 0
+  notRun: 1
+  blocked: 0
+  skipped: 0
+  passRate: 83
+
+history:
+  - at: "2026-09-09T15:05:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecución de TC-160. Se clonó Veevarts/survey-tool (no existía copia local) y se
+      checkeó el merge commit del PR 72 (6caf29a). Verificado que ese commit está contenido solo
+      en origin/develop y NO en main. Suites del repo verdes: server 88/88, client 46/46.
+  - at: "2026-09-09T15:30:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/6 PASS y 1 not-run. Los AC1..AC5 y los edge cases quedaron probados con 11 tests propios
+      de QA contra el agregador puro más el end-to-end del PR; la frontera de autenticación del
+      AC7 se verificó EN VIVO con el servidor real (401 sin credenciales, con cookie falsificada
+      y sin parámetros). El riesgo de normalización de IDs que marcó el bundle se cerró como
+      no-defecto: la ingesta ya normaliza clientOrgId, y para respondentId la normalización del
+      agregador es la mitigación de una inconsistencia real entre los dos caminos de ingesta.
+      Sin defectos atribuibles al PR. Queda not-run el empty state visual del AC6, que exige el
+      dashboard desplegado y credenciales de administrador (pendientes al ejecutar). Reportado
+      además: el AC7 no tiene cobertura automatizada (el test del harness asserta 400, no 401),
+      4 vulnerabilidades de dependencias preexistentes (1 HIGH, path-to-regexp) no introducidas
+      por este PR, y que el cambio está en develop pendiente de promoción a main.

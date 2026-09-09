@@ -1,0 +1,207 @@
+schemaVersion: "1.0"
+
+id: "9c5a36d8-00f0-4e0b-8994-9faeedd92de9"
+key: "TC-160"
+title: "Survey Tool respondent engagement summary aggregates responses, impressions and dismissals into one row per respondent, scoped by organization and survey, behind the authenticated analytics endpoint — IM-1251"
+description: |
+  Test case para IM-1251 (Historia, priority **Medium**, "In QA Review") — epic IM-970
+  NPS Survey Tool delivery — QA Sub-task IM-1252. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 72" (**MERGED a `develop`** el 2026-09-08,
+  +929/-8, 12 archivos, branch task/add-nps-respondent-engagement-summary-IM-1251).
+
+  === QUE PIDE LA HISTORIA ===
+
+  Vista autenticada de "respondent engagement" en Survey Tool: una fila por respondent
+  con Respondent ID, Responded, número de impressions, número de dismissals y última
+  actividad NPS observada. La población sale de la UNION de tres fuentes que Survey Tool
+  ya almacena (responses, impression events, dismissal events), agregada por organización
+  y survey. Explícitamente NO sincroniza usuarios de Salesforce ni infiere quién debió
+  recibir la encuesta.
+
+  7 ACs formales en la historia (ver plan QA en IM-1252). Fuera de alcance declarado:
+  sincronizar usuarios/contactos de Salesforce, consultar o almacenar LastLoginDate,
+  identificar usuarios sin eventos NPS, afirmar que la ausencia de actividad significa
+  que la encuesta falló, cambios en AuctiferaDX / NFPFundraising / sf-bulk-org-operations,
+  y modificar reglas de entrega o elegibilidad de encuestas.
+
+  === QUE HACE EL PR (leído del diff) ===
+
+  Backend:
+    - `GET /api/admin/analytics/respondent-engagement` con query validada por zod:
+      `surveyId` (int positivo, requerido), `clientOrgId` (opcional), `from` / `to`
+      (opcionales). Devuelve 400 con params inválidos o si `from > to`, 404 si el survey
+      no existe, y 400 si `survey.type` no es "nps".
+    - Defaults de ventana: `eventFrom` = `survey.createdAt`, `eventTo` = ahora. Las fechas
+      date-only se expanden a límites UTC inclusivos (00:00:00.000Z / 23:59:59.999Z).
+    - Agregador puro `server/src/lib/respondentEngagement.ts`: agrupa por una clave
+      compuesta de clientOrgId más respondentId (unidos por un separador NUL), ambos
+      normalizados con `trim().toLowerCase()`. `responded` pasa a true ante cualquier
+      response; impressions y dismissals se cuentan por `event.type`; `lastActivityAt` es el
+      máximo timestamp entre responses y events. Las responses SIN respondentId no generan
+      fila: incrementan `unattributedResponseCount`.
+  Cliente:
+    - Tab Engagement en el Dashboard (EngagementDashboard.tsx), soporte de una organización
+      o `All organizations`, helpers reutilizables de búsqueda y orden (dashboard.ts).
+  Tests del dev: server 87 tests, client 46 tests, build OK (declarado en el PR).
+
+  === RIESGOS ABIERTOS ===
+
+    - **El PR está MERGEADO a `develop`, no a `main`.** Antes de dar por validado hay que
+      confirmar contra qué rama corre el entorno bajo prueba; "merged" no implica desplegado.
+    - **Normalización case-insensitive**: `respondentId` y `clientOrgId` se pasan a
+      minúsculas antes de agrupar. Los IDs de Salesforce de 15 caracteres SON
+      case-sensitive, así que dos IDs distintos que solo difieran en mayúsculas se
+      fusionarían en una sola fila (el inverso del doble conteo que pide el AC4). Hay que
+      verificar qué formato de ID llega realmente (15 vs 18 chars) antes de calificarlo.
+    - **Comportamientos del PR que NO están en los ACs** y necesitan confirmación de
+      scope-fit: el filtro de rango de fechas (`from` / `to`), el `unattributedResponseCount`
+      para responses sin respondentId, y las validaciones 400/404 más la restricción a
+      surveys de tipo NPS.
+    - **Follow-up de escalabilidad SIN ticket**: el PR declara que el patrón de acceso actual
+      escanea eventos para las consultas agregadas y se volverá caro con volumen histórico;
+      el índice agregado queda como seguimiento explícito, pero no hay ticket creado.
+    - **Epic IM-970 está Cerrada** mientras esta historia sigue In QA Review.
+    - **Sin clone local de survey-tool** y sin entorno/credenciales admin identificados: los
+      escenarios de UI se validan sobre la pantalla real, no sobre los labels del código.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 72 sobre `develop`, y el commit base para el contraste PRE-fix."
+  - "Entorno de Survey Tool con el código de `develop` desplegado, más credenciales de administrador para el Dashboard autenticado (Cognito)."
+  - "Una organización y un survey de tipo NPS con actividad conocida: al menos un respondent con response, uno con solo impressions o dismissals, y uno presente en varias fuentes."
+  - "Actividad de control en OTRA organización y en OTRO survey, para poder verificar el aislamiento del scoping."
+  - "npm instalado para correr `npm test --prefix server` (87 tests), `npm test --prefix client` (46 tests) y `npm run build`."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-160/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 + AC4 · The respondent population is the union of responses, impressions and dismissals, and a respondent present in several sources is combined into a single row without double-counting"
+    tags:
+      - ac-1
+      - ac-4
+      - happy-path
+      - aggregation
+    given:
+      - "un administrador autenticado con una organización y un survey NPS seleccionados"
+      - "en esa combinación existen respondents con solo response, con solo impressions o dismissals, y al menos uno presente en las tres fuentes"
+    when:
+      - "se carga la vista de engagement (o se llama al endpoint con surveyId y clientOrgId)"
+      - "se comparan las filas devueltas contra la unión de respondents distintos de las tres fuentes en el origen"
+    then:
+      - "se muestra exactamente una fila por cada respondent con al menos una response, impression o dismissal coincidente"
+      - "el respondent presente en varias fuentes aparece una sola vez, no una fila por fuente"
+      - "sus impressions y dismissals suman cada evento una única vez (sin doble conteo al combinar fuentes)"
+      - "el conteo de filas coincide con el número de respondents distintos de la unión en el origen"
+
+  - title: "AC2 · Responded is Yes when the respondent has at least one matching response and No otherwise"
+    tags:
+      - ac-2
+      - happy-path
+    given:
+      - "en la organización y survey seleccionados hay un respondent con al menos una response registrada"
+      - "y otro respondent que solo tiene impressions o dismissals, sin ninguna response"
+    when:
+      - "se muestran sus filas en la vista de engagement"
+    then:
+      - "el respondent con response muestra Responded = Yes"
+      - "el respondent sin response muestra Responded = No"
+      - "una sola response basta para marcar Yes (no depende de la cantidad de responses)"
+
+  - title: "AC3 + AC5 · Impression and dismissal totals reflect exactly the selected organization and survey, and activity from another organization or survey is excluded — including All organizations, where the same respondent ID in two organizations stays in separate rows"
+    tags:
+      - ac-3
+      - ac-5
+      - scoping
+      - all-organizations
+    given:
+      - "actividad conocida para un respondent en la organización y survey seleccionados"
+      - "actividad de control del mismo respondent en OTRA organización y en OTRO survey"
+    when:
+      - "se consulta el engagement de la organización y survey seleccionados"
+      - "se cuentan en el origen las impressions y dismissals que corresponden solo a esa combinación"
+      - "se repite la consulta con el alcance `All organizations` sobre el mismo survey"
+    then:
+      - "los totales de impressions y dismissals de cada fila coinciden exactamente con los del origen para esa organización y survey"
+      - "la actividad de la otra organización y la del otro survey no aparece ni suma en los totales"
+      - "en `All organizations` el mismo Respondent ID presente en dos organizaciones produce DOS filas separadas, una por organización, y no se fusiona"
+      - "la última actividad NPS mostrada es el timestamp más reciente entre responses y events dentro del alcance"
+
+  - title: "AC6 · A selection with no matching activity shows a clear empty state instead of an error"
+    tags:
+      - ac-6
+      - negative
+      - empty-state
+    given:
+      - "una combinación de organización y survey NPS sin ninguna response, impression ni dismissal"
+    when:
+      - "se carga la vista de engagement para esa selección"
+    then:
+      - "se muestra un empty state claro que comunica que no hay actividad"
+      - "no se presenta un mensaje de error ni un estado roto de la vista"
+      - "la respuesta del endpoint es exitosa con una colección vacía, no un 4xx ni un 5xx"
+
+  - title: "AC7 · The engagement endpoint denies unauthenticated access while the public survey endpoints keep working unchanged"
+    tags:
+      - ac-7
+      - security
+      - auth-boundary
+    given:
+      - "el endpoint GET /api/admin/analytics/respondent-engagement desplegado"
+      - "los endpoints públicos de encuestas que no requieren autenticación"
+    when:
+      - "se llama al endpoint de engagement SIN credenciales de administrador"
+      - "se llama a los endpoints públicos de encuestas sin credenciales"
+      - "se llama al endpoint de engagement CON credenciales válidas de administrador"
+    then:
+      - "la llamada sin credenciales es denegada (no devuelve datos de engagement)"
+      - "los endpoints públicos de encuestas siguen respondiendo igual que antes del cambio"
+      - "la llamada autenticada sí devuelve el resumen de engagement"
+      - "el test de frontera de API del PR (apiBoundary.test.ts) cubre este límite y pasa"
+
+  - title: "AC-adjacent · Edge cases and PR behaviours that the story does not specify: unattributed responses, inclusive UTC date boundaries, endpoint validations, and the case-insensitive normalisation of respondent and organization IDs"
+    tags:
+      - edge-case
+      - missing-doc
+      - validation
+      - scope-fit
+    given:
+      - "el agregador normaliza respondentId y clientOrgId con trim().toLowerCase() antes de agrupar"
+      - "las responses sin respondentId incrementan unattributedResponseCount en vez de generar fila"
+      - "las fechas date-only se expanden a límites UTC inclusivos y la ventana por defecto va desde survey.createdAt hasta ahora"
+    when:
+      - "se consulta una selección que incluye responses sin respondentId"
+      - "se consulta con from y to iguales a un día con actividad conocida, y con to igual al día de la última actividad"
+      - "se llama al endpoint con surveyId inexistente, con un survey que no es de tipo NPS, con params inválidos y con from posterior a to"
+      - "se verifica en el origen si los respondentId y clientOrgId reales son de 15 o de 18 caracteres"
+    then:
+      - "las responses sin respondentId no aparecen como usuarios identificados: se reportan aparte como unattributed"
+      - "la actividad del día indicado en to queda incluida (límite inclusivo) y la del día siguiente no"
+      - "surveyId inexistente devuelve 404; survey no-NPS devuelve 400; params inválidos y from posterior a to devuelven 400"
+      - "se documenta si los IDs reales son de 18 caracteres (la normalización a minúsculas es segura) o de 15 (dos IDs distintos podrían fusionarse en una fila, lo que debe reportarse como defecto)"
+      - "las áreas fuera de alcance no fueron tocadas: sin sincronización de usuarios de Salesforce, sin LastLoginDate, y sin cambios en AuctiferaDX, NFPFundraising ni sf-bulk-org-operations"
+
+tags:
+  - im-1251
+  - im-970
+  - im-1252
+  - survey-tool
+  - nps
+  - analytics
+  - respondent-engagement
+  - dashboard
+  - api
+  - dynamodb
+  - pr-72
+  - medium
+
+estimatedDuration: 60
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-09T14:57:15Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-09T14:57:15Z"
+  version: 1
