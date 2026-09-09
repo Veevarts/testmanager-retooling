@@ -1,0 +1,41 @@
+Observación O1 — el filtro de fechas evalúa en UTC y la UI renderiza en hora local
+==================================================================================
+IM-1251 / TC-160 / TR-177 (v2) · dev (develop) · navegador en UTC-5 · 2026-09-09
+
+QUÉ SE OBSERVA
+  Con el filtro From = 14/08/2026 (To = 20/08/2026), survey "General NPS" (id 1), All organizations,
+  la tabla devuelve 9 filas y la última muestra:
+
+     005Rt00000XjqlyIAB | VNFP (flow-site-19432-dev-ed) | Yes | 1 | 0 | 13 ago 2026, 10:53 p.m.
+
+  Una fila fechada "13 ago" dentro de un rango que el usuario pidió desde el 14 ago.
+  Captura: date-filter-utc-vs-local.png
+
+CAUSA (caracterizada, no inferida)
+  El registro es lastActivityAt = 2026-08-14T03:53:57.997Z.
+    · El filtro lo evalúa en UTC  → 14/08 → dentro de from=2026-08-14  → se incluye.
+    · La UI lo renderiza en la zona del navegador (UTC-5) → "13 ago 2026, 10:53 p.m." → se ve fuera.
+
+  Bordes medidos, ambos en UTC y coherentes entre sí (no hay asimetría from/to):
+    to=2026-08-13  → incluye 2026-08-13T23:01:05.757Z, excluye 2026-08-14T03:53:57.997Z
+                     ⇒ el corte de `to` es 13T23:59:59Z (fin del día UTC)
+    from=2026-08-14 → incluye 2026-08-14T03:53:57.997Z
+                     ⇒ el corte de `from` es 14T00:00:00Z (inicio del día UTC)
+
+IMPACTO
+  Para un admin en UTC-5, las 5 horas finales de cada día local (19:00–23:59) se contabilizan en
+  el día siguiente a efectos de filtrado. Filtrar "ayer" arrastra la noche de anteayer y pierde la
+  noche de ayer. Es un problema de precisión de reporte, no de integridad de datos: los agregados
+  del rango devuelto son correctos.
+
+ALCANCE — NO es regresión de este PR
+  El mismo comportamiento existe en el endpoint preexistente de la tab Responses:
+    GET /api/admin/responses?from=2026-08-14  → devuelve la response id=2 (2026-08-14T03:53:57.997Z),
+    que la tab Responses muestra como "13 ago 2026, 10:53 p.m.".
+  El PR #72 replicó el patrón ya vigente en el dashboard, que es lo correcto en cuanto a
+  consistencia. Corregirlo es una decisión de producto transversal (elegir zona de referencia para
+  todo el dashboard, o mostrar las fechas en UTC), no un arreglo de este ticket.
+
+RECOMENDACIÓN
+  Ticket propio de producto sobre el manejo de zona horaria del filtro de fechas del dashboard,
+  alcanzando las tres tabs. Sin severidad de bloqueo.

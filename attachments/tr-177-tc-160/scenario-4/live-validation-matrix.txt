@@ -1,0 +1,63 @@
+Validación live en el dashboard desplegado — IM-1251 / TC-160 / TR-177 (v2)
+===========================================================================
+Entorno : https://surveytool.dev.veevart.ai/admin/dashboard?tab=engagement (dev, rama develop)
+Fecha   : 2026-09-09
+Acceso  : sesión admin del usuario (Cognito + Google SSO). Navegación con Playwright.
+Método  : cada aserción contrasta lo RENDERIZADO en la tabla contra la respuesta cruda de
+          GET /api/admin/analytics/respondent-engagement llamada desde la misma sesión.
+Zona    : navegador en UTC-5 (getTimezoneOffset = 300).
+
+CATÁLOGO OBSERVADO
+  Surveys NPS  : 9 (ids 1..9), todos metric=nps. Los ids 1 y 2 están active=false y aun así
+                 son seleccionables en Engagement (correcto: permite ver histórico).
+  Organizaciones: 3 — Auctifera (00dem00000v5erwmaz), VNFP (flow-site-19432-dev-ed, active=false),
+                 VNFP Fund (00dec00000kkex1mac).
+  Responses    : 3 en total.
+
+MATRIZ survey × organización (filas devueltas por la API)
+  survey | ALL | Auctifera | VNFP | VNFP Fund
+     1   |  9  |     8     |  1   |     0
+     2   |  8  |     8     |  0   |     0
+     3   |  1  |     1     |  0   |     0
+     4   |  2  |     1     |  0   |     1
+     5   |  1  |     0     |  0   |     1
+     6   |  1  |     1     |  0   |     0
+     7   |  1  |     0     |  0   |     1
+     8   |  1  |     0     |  0   |     1
+     9   |  1  |     0     |  0   |     1
+  En los 9 surveys ALL == suma de las 3 organizaciones. La partición por organización es
+  disjunta y completa: ninguna fila se pierde ni se duplica al abrir el scope.
+
+| # | Aserción | Esperado | Obtenido | Verdict |
+|---|----------|----------|----------|---------|
+| L1 | AC6 — empty state (Fundraising + Auctifera, celda vacía de la matriz) | mensaje claro, no tabla rota / error / spinner | "No respondent activity matches the selected scope." + 4 tarjetas en 0 + "0 respondents" + contexto "Organization: Auctifera (...)"; 0 errores de consola | PASS |
+| L2 | Empty state de no-selección ≠ empty state de sin-actividad | dos mensajes distintos | sin survey: "Select an NPS survey to view respondent activity."; con survey sin actividad: "No respondent activity matches the selected scope." | PASS |
+| L3 | Fidelidad UI↔API, survey 1 + All orgs | 9 filas idénticas | 9/9 exactas en respondentId, organización, Responded, Impressions, Dismissals y Last activity | PASS |
+| L4 | Tarjetas agregadas vs suma de la API (survey 1, All orgs) | Respondents 9 / Responded 1 / Impressions 8 / Dismissals 9 | idénticas (impressions 0+1+0+1+1+0+1+1+3=8; dismissals 2+2+2+0+0+2+0+1+0=9) | PASS |
+| L5 | AC5 — aislamiento por organización | filtrar Auctifera deja solo sus filas | 8 filas, todas Auctifera; la fila de VNFP desaparece; api.clientOrgId eco = 00dem00000v5erwmaz | PASS |
+| L6 | Aritmética de la partición | ALL = Auctifera + VNFP en las 4 métricas | 9=8+1, 1=0+1, 8=5+3, 9=9+0 | PASS |
+| L7 | Normalización del clientOrgId | mismo resultado con cualquier casing | 4 variantes ("00dem...", "00DEm00000V5eRWMAZ" (casing real de Salesforce), "00DEM...", con espacios) → las mismas 8 filas y el mismo eco normalizado | PASS |
+| L8 | Normalización del respondentId en búsqueda | búsqueda case-insensitive | "005Rt00000XjqlyIAB", "005rt00000xjqlyiab", "005RT00000XJQLYIAB" → la misma única fila | PASS |
+| L9 | Filtro de fechas recorta ANTES de agregar | la fila se recalcula sobre el subconjunto | to=2026-08-12 → el respondente pasa de imp=3/responded=true a imp=1/responded=false, y lastActivityAt baja de 14T03:53Z a 12T15:01Z | PASS |
+| L10 | Borde inclusivo del rango | from y to inclusivos, coherentes entre sí | to=2026-08-13 incluye 13T23:01:05Z y excluye 14T03:53:57Z; from=2026-08-14 incluye 14T03:53:57Z. Ambos bordes en UTC, consistentes | PASS |
+| L11 | Límite de 366 días | rechazar solo lo que exceda | delta 365 (= 366 días calendario inclusive, un año bisiesto completo) → 200; delta 366 (= 367 calendario) → 400 "cannot exceed 366 days". Correcto, no hay off-by-one | PASS |
+| L12 | Validación de parámetros | 400 / 404 según el caso | sin surveyId → 400; surveyId=abc → 400; from inválido → 400; from>to → 400 "From date must be before or equal to To date"; surveyId=9999 → 404 "Survey not found" | PASS |
+| L13 | Búsqueda por respondente y organización | filtra la tabla | substring parcial ("XjqlyI") OK; por organización ("flow-site") OK; prefijo múltiple ("qa-tr164") → 7 filas; sin match → "0 respondents" + el mismo empty state | PASS |
+| L14 | Singular/plural del contador | concordancia | "1 respondent" vs "9 respondents" | PASS |
+| L15 | Ordenamiento por columna | asc/desc correcto con indicador | Impressions ▼ 3,1,1,1,1,1,0,0,0 / ▲ exacto inverso; Respondent ID y Responded correctos; el indicador se mueve a la columna activa. Orden natural: ac9 antes que ac10 | PASS |
+
+Resultado: 15/15 PASS. 0 defectos atribuibles al PR #72.
+
+OBSERVACIONES (ninguna bloquea el merge; ninguna es regresión del PR)
+  O1. Filtro en UTC, render en hora local — ver date-filter-timezone.txt y
+      date-filter-utc-vs-local.png. Con From=14/08/2026 la tabla muestra una fila cuya columna
+      "Last activity" dice "13 ago 2026, 10:53 p.m.". El mismo comportamiento existe en
+      /api/admin/responses (tab Responses), así que es un patrón preexistente del dashboard que
+      este PR replicó de forma consistente. Merece ticket propio de producto, no de este PR.
+  O2. Organización inactiva desaparece del selector — ver org-selector-inactive.txt.
+      VNFP tiene active=false; solo aparece en el selector mientras haya responses suyas en el
+      scope filtrado. Al filtrar por otra organización deja de ser seleccionable y solo se
+      recupera con "Clear". Es el filtro global del dashboard (preexistente), pero impacta a la
+      tab nueva: la actividad de VNFP en el survey 1 no es alcanzable desde la UI tras filtrar.
+  O3. Los 9 surveys del entorno son metric=nps, así que el rechazo 400 de un survey no-NPS no
+      pudo ejercitarse live; queda cubierto solo por los tests del dev.
