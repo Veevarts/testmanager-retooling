@@ -1,0 +1,54 @@
+IM-1253 / TC-168 — gating de Delivery Diagnostics verificado en el entorno desplegado
+=====================================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, develop, PR 71 merge 4458647c) · 2026-09-11
+
+CONTEXTO. El propio PR declara: "Delivery Diagnostics code remains present, but its tab and
+route are disabled through APP_FEATURE_FLAGS.diagnostics". O sea la funcionalidad viaja
+apagada a proposito. Lo que QA puede y debe validar hoy es que el apagado sea efectivo y que
+no quede superficie expuesta; la funcionalidad en si NO es verificable sin encender el flag.
+
+| # | Asercion | Obtenido | Verdict |
+|---|----------|----------|---------|
+| G1 | El flag esta apagado en el codigo desplegado | client/src/config/featureFlags.ts declara diagnostics: false, y featureFlags.test.ts asserta ese valor | PASS |
+| G2 | La ruta directa no es alcanzable | navegar a /admin/diagnostics REDIRIGE a /admin/features; no se renderiza la pagina | PASS |
+| G3 | No hay entrada en la navegacion | el nav solo ofrece Subjects, Surveys, Dashboard, Organizations y Settings | PASS |
+| G4 | No queda API nueva expuesta | ver analisis abajo | PASS |
+| G5 | La funcionalidad de diagnostico en si | NO EJERCITABLE sin encender el flag | NOT-RUN |
+
+--- G4: no hay superficie de API sin proteger ------------------------------------------
+
+Se reviso si el gating del cliente dejaba algun endpoint del servidor accesible pese a la UI
+apagada. Resultado: NO hay router de diagnostics montado en server/src/index.ts, y la pagina
+DiagnosticsPage no consume ningun endpoint propio: reutiliza api.features.list(),
+api.organizations.list() y la consulta de surveys por feature, que ya viven bajo /api/admin y
+por tanto detras del middleware requireAdminAuth.
+
+Es decir, el gating de UI es suficiente en este caso porque el PR no agrego superficie de API
+nueva que proteger. Si en el futuro se agrega un endpoint propio de diagnostics, el flag del
+cliente NO bastaria y habria que protegerlo tambien en el servidor.
+
+El gating se implementa en App.tsx como
+    {APP_FEATURE_FLAGS.diagnostics && <Route path="diagnostics" element={<DiagnosticsPage />} />}
+o sea la ruta ni siquiera se registra cuando el flag esta en false. Es un apagado real, no un
+simple ocultamiento visual del enlace.
+
+--- HALLAZGO: bug latente que se activara al encender el flag --------------------------
+
+client/src/pages/DiagnosticsPage.tsx linea 5:
+
+    function todayYmd(): string {
+      return new Date().toISOString().slice(0, 10);     // <- UTC
+    }
+
+Eso devuelve la fecha en UTC. En la misma entrega, SurveysPage usa el helper correcto que
+compensa el offset y devuelve la fecha LOCAL (verificado en TR-183). Son dos criterios
+distintos para la misma idea de "hoy" dentro del mismo admin.
+
+Consecuencia cuando enciendan el flag: para un usuario en UTC-5, entre las 19:00 y las 23:59
+hora local la pantalla de diagnosticos propondra MANANA como fecha por defecto, mientras el
+formulario de encuestas propone HOY. Son cinco horas de cada dia con dos fechas distintas en
+la misma sesion.
+
+No se levanta como defecto de esta entrega porque el codigo es inalcanzable con el flag
+apagado y por tanto no afecta a ningun usuario hoy. Se reporta para que se corrija ANTES de
+encender el flag, reutilizando localTodayDateInputValue de SurveysPage.

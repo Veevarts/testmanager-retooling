@@ -1,0 +1,44 @@
+IM-1258 / TC-166 — refinamientos de administracion verificados en el entorno desplegado
+=======================================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, develop, PR 71 merge 4458647c) · 2026-09-11
+Zona    : navegador en UTC-5 (getTimezoneOffset = 300)
+
+| # | Asercion | Esperado | Obtenido | Verdict |
+|---|----------|----------|----------|---------|
+| A1 | AC1 · orden por defecto Newest | el selector arranca en Newest | el combo "Sort by" trae "Newest" seleccionado al abrir la pagina, sin tocar nada | PASS |
+| A2 | AC1 · General disponible como filtro | existe la opcion General | el combo "Filter by category" ofrece "General" como segunda opcion, antes de "Features only" | PASS |
+| A3 | AC2 · Start Date por defecto = fecha LOCAL de hoy | la fecha local, no la UTC | el campo survey-start-date se inicializa en 2026-09-11, que es hoy | PASS |
+| A4 | AC2 · el helper resuelve la fecha local en los bordes | correcto aun cuando UTC ya cambio de dia | ver analisis abajo | PASS |
+| A5 | AC3 · Template a None restaura las preguntas por defecto | limpieza y restauracion | NO VERIFICADO en esta corrida | NOT-RUN |
+| A6 | AC4 · validacion bloqueante en modal visible | modal con errores accionables | NO VERIFICADO en esta corrida | NOT-RUN |
+| A7 | AC5 · separacion visual entre picklist y Next/Submit | espaciado visible | NO VERIFICADO en esta corrida | NOT-RUN |
+
+--- A4: por que el Start Date es realmente LOCAL y no UTC ------------------------------
+
+La observacion de A3 por si sola NO distingue local de UTC, porque al momento de medir
+(16:27 hora local, 21:27 UTC) ambas zonas caen el mismo dia. Para no dar un PASS de
+conveniencia se verifico el helper del codigo:
+
+    export function localTodayDateInputValue(now = new Date()): string {
+      const localTime = now.getTime() - now.getTimezoneOffset() * 60_000;
+      return new Date(localTime).toISOString().slice(0, 10);
+    }
+
+Compensa el offset ANTES de serializar, que es la tecnica correcta. Ejecutado contra cuatro
+instantes, dos de ellos en el borde donde una implementacion ingenua se equivocaria:
+
+  mediodia local                 local=2026-09-11  helper=2026-09-11  OK
+  19:00 local (00:00Z del dia 12) local=2026-09-11  helper=2026-09-11  OK   (UTC ingenuo daria el 12)
+  23:30 local (04:30Z del dia 12) local=2026-09-11  helper=2026-09-11  OK   (UTC ingenuo daria el 12)
+  00:30 local del dia 12          local=2026-09-12  helper=2026-09-12  OK
+
+El AC pide "the current local date" y eso es exactamente lo que entrega, incluso en las cinco
+horas finales del dia local donde UTC ya avanzo. Contrasta de forma favorable con el filtro de
+fechas del dashboard (observacion O1 de TR-177), que si evalua en UTC.
+
+--- Alcance no cubierto ----------------------------------------------------------------
+
+Los AC3, AC4 y AC5 son de interaccion profunda del formulario (transicion de template, modal de
+validacion bloqueante y espaciado entre controles). No se ejecutaron en esta corrida y se
+declaran NOT-RUN en vez de inferirlos del codigo: el texto del JSX no es lo que ve el usuario.
+Quedan para una corrida de seguimiento con recorrido manual del formulario y capturas por paso.

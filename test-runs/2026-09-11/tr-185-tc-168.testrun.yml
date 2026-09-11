@@ -1,0 +1,157 @@
+schemaVersion: "1.0"
+id: tr-4acbaad2-4a19-4a57-997f-8ebd6105bd7d
+key: TR-185
+title: >-
+  TR-185 · IM-1253 · TC-168 · Gated delivery diagnostics — 2/3 PASS · 1 not-run. El apagado por
+  feature flag es efectivo y no deja API expuesta; la funcionalidad no es verificable sin encender
+  el flag. Se reporta un bug latente que se activara junto con el.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
+    del PR 71 (4458647c) desplegado.
+  buildVersion: >-
+    Mixed. El PR 71 implementa nueve tickets a la vez; esta corrida valida unicamente la porcion
+    de IM-1253.
+testPlanId: null
+startedAt: "2026-09-11T22:45:00Z"
+completedAt: "2026-09-11T22:55:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El PR entrega la pagina y la logica de diagnosticos de entrega, pero deshabilitadas: la ruta
+  solo se registra si `APP_FEATURE_FLAGS.diagnostics` es verdadero, y ese flag es una constante
+  compilada en `client/src/config/featureFlags.ts` con valor falso, cubierta por su propio test.
+
+  ## Alcance honesto de esta corrida
+
+  Como el flag no es una variable de entorno, no se puede encender en el entorno desplegado sin
+  un rebuild. La funcionalidad de diagnostico NO es verificable en esta entrega y declararla
+  probada seria falsear la evidencia. Lo que si corresponde validar es que el apagado sea
+  efectivo y que no quede superficie de API sin proteger, que es el riesgo real de entregar
+  codigo apagado.
+
+results:
+  - testCaseId: "68888956-4d8e-4556-a759-6c0f4e8733cc"
+    testCaseKey: TC-168
+    scenarioTitle: "AC · The diagnostics route is unreachable and absent from navigation while the flag is off"
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-11T22:48:00Z"
+    stepResults: []
+    actual: |
+      Navegando directamente a /admin/diagnostics con sesion de administrador, la aplicacion
+      REDIRIGE a /admin/features: la pagina de diagnosticos no se renderiza.
+
+      La navegacion del area de administracion ofrece unicamente Subjects, Surveys, Dashboard,
+      Organizations y Settings. No hay enlace ni pestana de diagnosticos.
+
+      El apagado es real y no un simple ocultamiento visual: en App.tsx la ruta ni siquiera se
+      registra cuando el flag esta en falso. El valor del flag esta ademas cubierto por un test
+      propio que asserta que sigue deshabilitado para los usuarios de la aplicacion.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el codigo de diagnosticos viaja en la entrega ->
+      su ruta y su entrada de navegacion son inalcanzables -> SI.
+    notes: "**PASS**."
+    attachments:
+      - name: live-gating-matrix.txt
+        path: attachments/tr-185-tc-168/scenario-gating/live-gating-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "68888956-4d8e-4556-a759-6c0f4e8733cc"
+    testCaseKey: TC-168
+    scenarioTitle: "Security · The client-side flag does not leave server API surface exposed"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-11T22:51:00Z"
+    stepResults: []
+    actual: |
+      El riesgo al entregar codigo apagado desde el cliente es que el servidor si exponga la
+      superficie. Se verifico y NO ocurre:
+
+        - No hay ningun router de diagnosticos montado en server/src/index.ts. Los routers
+          montados son auth, features, surveys y responses publicos, mas los admin de features,
+          surveys, responses, analytics, integraciones de Salesforce, organizations y settings.
+        - La pagina de diagnosticos no consume ningun endpoint propio: reutiliza la lista de
+          features, la de organizaciones y la consulta de encuestas por feature, todas bajo
+          /api/admin y por tanto detras del middleware de autenticacion de administrador.
+
+      O sea el gating del cliente basta en este caso porque el PR no agrego superficie de API
+      nueva que proteger.
+
+      pre-fix -> post-fix -> objetivo cumplido?: podria haber quedado un endpoint accesible pese a
+      la UI apagada -> no existe endpoint nuevo y los reutilizados ya exigen autenticacion -> SI.
+    notes: >-
+      **PASS**. Se deja constancia para el futuro: si mas adelante se agrega un endpoint propio de
+      diagnosticos, el flag del cliente NO bastara y habra que protegerlo tambien en el servidor.
+    attachments:
+      - name: live-gating-matrix.txt
+        path: attachments/tr-185-tc-168/scenario-gating/live-gating-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "68888956-4d8e-4556-a759-6c0f4e8733cc"
+    testCaseKey: TC-168
+    scenarioTitle: "Diagnostics functionality itself, reachable only with the flag enabled"
+    scenarioIndex: 2
+    status: not-run
+    stepResults: []
+    actual: |
+      NO EJERCITABLE. El flag es una constante compilada, no una variable de entorno, asi que
+      encenderlo exige modificar el codigo y reconstruir el cliente. La funcionalidad de
+      diagnostico de entrega no se puede alcanzar desde el entorno desplegado.
+
+      HALLAZGO AL REVISAR EL CODIGO APAGADO — bug latente que se activara con el flag:
+
+      client/src/pages/DiagnosticsPage.tsx define su fecha por defecto como
+      `new Date().toISOString().slice(0, 10)`, que devuelve la fecha en UTC. En la misma entrega,
+      SurveysPage usa un helper que compensa el offset y devuelve la fecha LOCAL, verificado en
+      TR-183 incluso en el borde horario. Son dos criterios distintos para la misma idea de "hoy"
+      dentro del mismo panel de administracion.
+
+      Consecuencia cuando enciendan el flag: para un usuario en UTC-5, entre las 19:00 y las 23:59
+      hora local la pantalla de diagnosticos propondra MANANA como fecha por defecto mientras el
+      formulario de encuestas propone HOY. Son cinco horas de cada dia con dos fechas distintas en
+      la misma sesion.
+
+      No se levanta como defecto de esta entrega porque el codigo es inalcanzable con el flag
+      apagado y no afecta a ningun usuario hoy.
+    notes: >-
+      **Pendiente de entorno.** Cerrar este escenario exige encender el flag y reconstruir el
+      cliente. Recomendacion al dev: corregir la fecha por defecto de DiagnosticsPage para que use
+      el mismo helper local que SurveysPage ANTES de encender el flag, para no estrenar la pantalla
+      con una inconsistencia de fechas.
+    attachments:
+      - name: live-gating-matrix.txt
+        path: attachments/tr-185-tc-168/scenario-gating/live-gating-matrix.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 3
+  passed: 2
+  failed: 0
+  notRun: 1
+  blocked: 0
+  skipped: 0
+  passRate: 67
+
+history:
+  - at: "2026-09-11T22:45:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: "Arranca la ejecucion de TC-168 sobre el PR 71 desplegado en dev."
+  - at: "2026-09-11T22:55:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      2/3 PASS y 1 not-run. El apagado por feature flag es efectivo: la ruta redirige, no hay
+      entrada en la navegacion y la ruta ni siquiera se registra cuando el flag esta en falso.
+      Ademas se verifico lo que de verdad importa al entregar codigo apagado: que no quede API
+      expuesta. No hay router de diagnosticos en el servidor y la pagina reutiliza endpoints que ya
+      exigen autenticacion de administrador. La funcionalidad en si queda not-run porque el flag es
+      una constante compilada. Se reporta un bug latente: DiagnosticsPage calcula "hoy" en UTC
+      mientras SurveysPage lo calcula en hora local, lo que dara dos fechas distintas en la misma
+      sesion durante las ultimas cinco horas de cada dia local cuando enciendan el flag.
