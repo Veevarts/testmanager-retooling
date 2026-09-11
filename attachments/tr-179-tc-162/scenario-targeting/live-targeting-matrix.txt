@@ -1,0 +1,64 @@
+IM-967 / TC-162 — targeting de usuarios especificos verificado en el entorno desplegado
+========================================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, rama develop, PR 71 merge 4458647c)
+Fecha   : 2026-09-11
+Metodo  : POST /api/features/12/surveys con el contexto de entrega en el body. Es el mismo
+          endpoint publico que consume el widget, asi que lo medido es el runtime real.
+          Esta es una de las dos brechas que el PR declaraba SIN validar desplegado.
+
+DATOS DE PRUEBA CREADOS (aislados, prefijo "QA TC-162", NO borrar: son evidencia)
+  subject 12 "QA TC-162 Targeting" -> survey 18
+    audience        = specific_users
+    audienceDetails = "incluido@veevart.com, 005Em00000joJdDIAU"
+
+| # | Caso | Contexto enviado | Obtenido | Esperado | Verdict |
+|---|------|------------------|----------|----------|---------|
+| A | email exacto de la lista | respondentEmail=incluido@veevart.com | MOSTRAR | mostrar | PASS |
+| B | email en MAYUSCULAS | respondentEmail=INCLUIDO@VEEVART.COM | MOSTRAR | mostrar (los emails son case-insensitive en la practica) | PASS |
+| C | Salesforce ID exacto, 18 ch | respondentId=005Em00000joJdDIAU | MOSTRAR | mostrar | PASS |
+| D | mismo ID con el case alterado | respondentId=005em00000JOjDDiau | MOSTRAR | ver analisis abajo | PASS con observacion |
+| E | email que NO esta en la lista | respondentEmail=ajeno@veevart.com | no-mostrar | no mostrar | PASS |
+| F | ID que NO esta en la lista | respondentId=005Em00000ZZZZZZZZ | no-mostrar | no mostrar | PASS |
+| G | sin respondentId ni email | (ninguno) | no-mostrar | no mostrar | PASS |
+| H | ambos vacios | "" y "" | no-mostrar | no mostrar | PASS |
+| I | lista vacia al guardar | audienceDetails="" | HTTP 400 | rechazo | PASS |
+
+  Mensaje del rechazo de I: "Specific user audience requires at least one respondent ID or email."
+
+FAIL-CLOSED CONFIRMADO
+  Los casos G y H demuestran que sin identificadores la encuesta NO se entrega, y el caso I
+  que una lista vacia ni siquiera se puede guardar. El matcher devuelve false cuando la lista
+  esta vacia, o sea la ausencia de configuracion CIERRA la audiencia en vez de abrirla. Es la
+  decision correcta para un control de acceso.
+
+ANALISIS DEL CASO D — la comparacion de IDs es case-insensitive
+  Hecho verificado: `detailsTokens()` y el contexto normalizan con trim().toLowerCase(), asi
+  que la comparacion de respondentId NO es case-sensitive. Para Salesforce eso es
+  semanticamente incorrecto: los IDs de 15 caracteres SI son case-sensitive.
+
+  Que tan explotable es, medido y no supuesto:
+    - ID de 15 ch: dos IDs distintos que difieran solo en mayusculas COLISIONAN al bajar a
+      minusculas. Ahi el falso positivo es real y entregaria la encuesta a quien no debe.
+        005Em00000joJdD  y  005em00000JOjDD   ->  ambos "005em00000jojdd"
+    - ID de 18 ch: los 3 caracteres finales son un checksum que CODIFICA que letras del ID15
+      van en mayuscula, asi que dos IDs reales distintos NO colisionan:
+        005Em00000joJdD -> 005Em00000joJdDIAU -> "005em00000jojddiau"
+        005em00000JOjDD -> 005em00000JOjDDAA1 -> "005em00000jojddaa1"   (distintos)
+
+  El caso D de esta matriz usaba 005em00000JOjDDiau, que NO es un ID18 valido: su sufijo no
+  corresponde al case de sus propios 15 primeros caracteres. O sea, no representa a otro
+  registro real de Salesforce, y el MOSTRAR observado no es un falso positivo real.
+
+  Todos los respondentId observados en este entorno son de 18 caracteres
+  (005Rt00000XjqlyIAB, 005Em00000joJdDIAU, 005Ec00000d9n00IAA).
+
+  VEREDICTO: NO es un defecto de control de acceso con los datos actuales. Queda como
+  recomendacion de robustez: comparar los IDs de forma case-sensitive y reservar el
+  toLowerCase() para los emails, porque el widget recibe el respondentId de quien lo invoca
+  (client/public/survey-trigger.js) y no impone el formato de 18 caracteres. Una
+  implementacion que pase IDs de 15 caracteres materializaria el riesgo.
+
+DESVIO DE ALCANCE CONFIRMADO (no es defecto)
+  La historia dice "enter one or more email addresses". La implementacion acepta email O
+  Salesforce respondent ID en la misma lista, y el caso C demuestra que el match por ID
+  funciona. Es una ampliacion util sobre el AC escrito; se reporta para que quede explicita.

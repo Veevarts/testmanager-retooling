@@ -1,0 +1,186 @@
+schemaVersion: "1.0"
+
+id: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+key: "TC-161"
+title: "Tries Between Shows spaces repeat survey delivery as N skipped eligible interactions (cadence N+1), leaving every other delivery gate unchanged — IM-1260"
+description: |
+  Test case para IM-1260 (Error, priority **Medium**, "In QA Review") — epic IM-970
+  NPS Survey Tool delivery — QA Sub-task IM-1262. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 71" (**MERGED a `develop`** el 2026-09-11,
+  +3309/-596, 40 archivos, branch feature/survey-delivery-diagnostics). Ese PR implementa
+  nueve tickets a la vez; este test case cubre solo la porción de IM-1260.
+
+  === QUE REPORTA EL BUG ===
+
+  El runtime calculaba la cadencia de re-entrega como `usageCount % triesBetweenShows`.
+  Con `triesBetweenShows = 1` eso es `x % 1`, que es 0 siempre, así que la encuesta se
+  evaluaba como mostrable en CADA interacción elegible posterior al primer display en vez
+  de saltarse una. El valor configurado no representaba lo que el administrador esperaba.
+
+  Comportamiento esperado: un valor N salta N interacciones elegibles entre displays, o sea
+  la cadencia es N + 1. Un valor 0 permite cada interacción elegible, sujeto a los demás
+  límites de entrega. Los demás gates (max impressions, dismissals, ventanas de fecha,
+  one-time y audiencia) deben quedar intactos.
+
+  === QUE HACE EL PR (leído del diff) ===
+
+  `server/src/lib/surveyRuntime.ts` — el fix es una sola línea de semántica:
+
+    PRE : if (interactionsSinceFirstShow % triesBetweenShows !== 0) -> no mostrar
+    POST: const cadence = triesBetweenShows + 1;
+          if (interactionsSinceFirstShow % cadence !== 0) -> no mostrar
+
+  El resto del bloque no cambia: `firstEligibleInteraction` sigue siendo
+  `survey.triggerCounter ?? 1` cuando `triggerType === "counter"` y 1 en otro caso;
+  `interactionsSinceFirstShow = ctx.usageCount - firstEligibleInteraction`; un
+  `usageCount` nulo devuelve `usage_count_missing` y un valor por debajo del primer
+  display devuelve `trigger_counter_not_reached`. El bloque completo sigue saltándose
+  cuando `triesBetweenShows` es 0 o nulo, así que el AC1 se cumple por omisión y hay que
+  verificar que NO cambió.
+
+  Orden de evaluación de los gates en el runtime (relevante para la regresión), el gate de
+  cadencia es el sexto de ocho:
+    1. startDate -> start_date_not_reached
+    2. endDate -> ended
+    3. maxResponses -> max_responses_reached
+    4. onePerRespondent -> already_answered
+    5. cooldownDays -> cooldown_active
+    6. triesBetweenShows -> tries_between_shows_not_reached
+    7. maxShowsPerDay / maxImpressions -> max_shows_per_day_reached
+    8. maxDismissals -> max_dismissals_reached
+
+  Como la cadencia se evalúa ANTES de maxShowsPerDay y maxDismissals, que la cadencia
+  permita un display no garantiza que se muestre: el AC1 dice explícitamente "sujeto a los
+  demás límites" y eso hay que probarlo, no asumirlo.
+
+  === RIESGOS ABIERTOS ===
+
+    - **Riesgo declarado en el propio ticket**: los contadores de entrega ya tienen valores
+      históricos en respondentes existentes, así que la regresión debe incluir estado
+      preexistente y no solo contadores que arrancan en cero.
+    - **Cambio de semántica, no de bug aislado**: toda encuesta ya configurada con
+      `triesBetweenShows = N` pasa a entregarse con cadencia N+1. Un survey con N=1 pasa de
+      mostrarse siempre a mostrarse cada 2 interacciones. Es el arreglo pedido, pero cambia
+      el comportamiento observable de encuestas en curso y conviene dimensionarlo.
+    - **El PR está MERGEADO a `develop`, no a `main`.** Confirmar contra qué rama corre el
+      entorno bajo prueba antes de dar nada por validado.
+    - **`triesBetweenShows` viaja dentro de `triggerDetails`** como texto parseado
+      (`triesbetweenshows` o `tries_between_shows`). Un valor no numérico o negativo cae en
+      `toNonNegativeInt` y desactiva el gate en silencio; el ticket no documenta ese caso.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 71 sobre `develop` (4458647c), y el commit base 4458647c~1 para el contraste PRE-fix."
+  - "Entorno de Survey Tool con el código de `develop` desplegado (Deploy de develop en verde tras el merge del PR 71) y credenciales de administrador para el Dashboard."
+  - "Una organización de Salesforce con el widget de Survey Tool instalado, para poder disparar interacciones elegibles consecutivas y observar la cadencia real."
+  - "Un survey activo y elegible para un respondent conocido, con audiencia, ventana de fechas y límites configurados de forma que NO bloqueen antes del gate de cadencia."
+  - "Capacidad de fijar `triesBetweenShows` en 0, 1 y 2 sobre ese survey, y de observar o reiniciar el `usageCount` del respondent entre corridas."
+  - "npm instalado para correr `npm test --prefix server` (113 tests), `npm test --prefix client` (60 tests) y `npm run build`."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-161/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · A cadence of 0 leaves the survey eligible on every interaction, still subject to the remaining delivery limits"
+    tags:
+      - ac-1
+      - happy-path
+      - cadence
+    given:
+      - "un survey activo con `triesBetweenShows` configurado en 0 y un respondent elegible"
+      - "los demás gates de entrega (fechas, maxResponses, one-time, cooldown, impressions, dismissals) configurados de forma que no bloqueen"
+    when:
+      - "ocurren interacciones elegibles consecutivas para ese respondent"
+    then:
+      - "la encuesta se evalúa como mostrable en cada una de esas interacciones"
+      - "el gate de cadencia no devuelve `tries_between_shows_not_reached` en ninguna"
+      - "el comportamiento es idéntico al PRE-fix, o sea el valor 0 no sufrió regresión"
+      - "si se activa alguno de los otros límites, ese límite sigue bloqueando aunque la cadencia lo permita"
+
+  - title: "AC2 · A cadence of 1 skips exactly one eligible interaction between displays — the reported defect"
+    tags:
+      - ac-2
+      - regression-evidence
+      - cadence
+      - functional-ui
+    given:
+      - "un survey activo con `triesBetweenShows` configurado en 1 y un respondent elegible"
+      - "la encuesta ya se mostró una primera vez, de modo que las interacciones siguientes son las que definen la cadencia"
+    when:
+      - "ocurren interacciones elegibles consecutivas después de ese primer display"
+    then:
+      - "se salta exactamente una interacción elegible y la encuesta vuelve a ser mostrable en la siguiente, o sea el patrón es mostrar, saltar, mostrar, saltar"
+      - "en la interacción saltada el runtime devuelve el motivo `tries_between_shows_not_reached`"
+      - "contra el código PRE-fix la misma secuencia mostraba la encuesta en TODAS las interacciones, lo que reproduce el defecto reportado"
+      - "se capturan las pantallas del widget por paso de la secuencia, que evidencian el display, el salto y el display siguiente"
+
+  - title: "AC3 · A cadence of 2 skips two eligible interactions and the survey reappears on the third"
+    tags:
+      - ac-3
+      - happy-path
+      - cadence
+    given:
+      - "un survey activo con `triesBetweenShows` configurado en 2 y un respondent elegible"
+      - "la encuesta ya se mostró una primera vez"
+    when:
+      - "ocurren interacciones elegibles consecutivas después de ese primer display"
+    then:
+      - "las dos interacciones siguientes se saltan con el motivo `tries_between_shows_not_reached`"
+      - "la tercera interacción vuelve a ser mostrable"
+      - "la cadencia efectiva es 3, es decir `triesBetweenShows` + 1, y no 2"
+
+  - title: "AC1-AC3 regression · The remaining delivery gates keep blocking exactly as before the fix"
+    tags:
+      - regression
+      - delivery-gates
+    given:
+      - "un survey cuyo gate de cadencia permite el display en la interacción evaluada"
+      - "y escenarios separados donde se activa cada uno de los otros gates: ventana de fechas fuera de rango, maxResponses alcanzado, one-time con respuesta previa, cooldown activo, maxShowsPerDay alcanzado y maxDismissals alcanzado"
+    when:
+      - "se evalúa la elegibilidad en cada uno de esos escenarios"
+    then:
+      - "cada gate devuelve su propio motivo sin cambios: `start_date_not_reached`, `ended`, `max_responses_reached`, `already_answered`, `cooldown_active`, `max_shows_per_day_reached` y `max_dismissals_reached`"
+      - "los gates que se evalúan DESPUÉS de la cadencia (maxShowsPerDay y maxDismissals) siguen bloqueando aunque la cadencia haya dado paso"
+      - "la audiencia y las reglas de one-time siguen decidiendo igual que en el commit PRE-fix"
+      - "ninguna encuesta que antes se bloqueaba por otro motivo pasa ahora a mostrarse"
+
+  - title: "Edge case · Respondents carrying historical usage counters get the new cadence applied without breaking, including the missing and below-threshold counter paths"
+    tags:
+      - edge-case
+      - regression
+      - historical-state
+    given:
+      - "respondentes con `usageCount` histórico ya acumulado de antes del fix, no contadores que arrancan en cero"
+      - "y un survey con `triggerType` de tipo counter, donde el primer display elegible es `triggerCounter` y no 1"
+    when:
+      - "se evalúa la elegibilidad de esos respondentes con la nueva cadencia"
+    then:
+      - "la cadencia se calcula sobre `usageCount` menos el primer display elegible, así que el contador histórico no produce ni un display extra ni un bloqueo permanente"
+      - "un `usageCount` por debajo del primer display elegible devuelve `trigger_counter_not_reached` y no un falso `tries_between_shows_not_reached`"
+      - "un `usageCount` ausente devuelve `usage_count_missing` y la encuesta no se muestra"
+      - "se deja constancia de cuántas encuestas activas del entorno tienen `triesBetweenShows` mayor que 0, porque todas cambian su cadencia observable con este fix"
+
+tags:
+  - im-1260
+  - im-970
+  - im-1262
+  - survey-tool
+  - nps
+  - delivery
+  - cadence
+  - tries-between-shows
+  - survey-runtime
+  - bug-fix
+  - pr-71
+  - medium
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-11T16:05:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-11T16:05:00Z"
+  version: 1

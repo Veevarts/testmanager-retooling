@@ -1,0 +1,251 @@
+schemaVersion: "1.0"
+id: tr-950b8a88-81c4-43ca-a44f-5e90a3da03c8
+key: TR-178
+title: >-
+  TR-178 · IM-1260 · TC-161 · Tries Between Shows delivery cadence — 5/5 PASS. Los tres
+  valores de cadencia verificados en el entorno desplegado sobre el endpoint publico real,
+  el defecto reportado reproducido contra el commit PRE-fix, y el riesgo de contadores
+  historicos cerrado con valores de tres digitos.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo la rama `develop` con el
+    merge commit del PR 71 (4458647c) desplegado — workflow Deploy en verde el 2026-09-11
+    15:26 UTC. Clone local de Veevarts/survey-tool en 4458647c, mas el commit base
+    4458647c~1 para el contraste PRE-fix. Organizaciones registradas: Auctifera
+    (00DEm00000V5eRWMAZ) y VNFP (flow-site-19432-dev-ed).
+  buildVersion: >-
+    Mixed (backend runtime + admin API + cliente). El PR 71 implementa nueve tickets a la vez
+    (+3309/-596, 40 archivos); esta corrida valida unicamente la porcion de IM-1260.
+
+testPlanId: null
+startedAt: "2026-09-11T20:45:00Z"
+completedAt: "2026-09-11T21:00:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El runtime calculaba la cadencia de re-entrega como `interactionsSinceFirstShow %
+  triesBetweenShows`. Con `triesBetweenShows = 1` eso es `x % 1`, que da 0 siempre, de modo
+  que la encuesta se evaluaba como mostrable en CADA interaccion elegible posterior al primer
+  display en vez de saltarse una. El fix introduce `const cadence = triesBetweenShows + 1` y
+  aplica el modulo contra esa cadencia, con lo que un valor N pasa a saltar exactamente N
+  interacciones. El diff esta aislado a esa unica linea de `server/src/lib/surveyRuntime.ts`:
+  el resto del bloque (primer display elegible, contador ausente, contador por debajo del
+  umbral) queda intacto.
+
+  ## Inferred technical tests
+
+  Superficie: backend runtime alcanzable por un endpoint publico. El test no-manual correcto
+  es ejercitar `POST /api/features/:id/surveys` con el contexto de entrega controlado
+  (respondentId, clientOrgId, usageCount) y barrer `usageCount` contra las tres cadencias.
+  Eso mide el runtime desplegado de verdad, no una simulacion, y no requiere el widget ni la
+  organizacion de Salesforce. El contraste PRE/POST se obtiene reproduciendo ambas formulas
+  con entradas identicas.
+
+results:
+  - testCaseId: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+    testCaseKey: TC-161
+    scenarioTitle: >-
+      AC1 · A cadence of 0 leaves the survey eligible on every interaction, still subject to
+      the remaining delivery limits
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-11T20:52:00Z"
+    stepResults: []
+    actual: |
+      Subject 8 "QA TC-161 Cadence" con survey 14 (triesBetweenShows=0, audiencia everyone).
+      Barrido de usageCount 1..8: MOSTRAR en las ocho interacciones, sin excepcion.
+
+      El bloque de cadencia se salta entero cuando el valor es 0, asi que el comportamiento es
+      identico al del commit PRE-fix (verificado con cadence-prepost.mjs: ambas columnas
+      MOSTRAR en las 8). El valor 0 no sufrio regresion.
+
+      Ademas se verifico el "sujeto a los demas limites" que exige el AC: con el subject 11
+      (survey 17, cadencia 0 + maxImpressions=1) la encuesta se muestra antes de registrar
+      impresiones y deja de mostrarse tras registrar una. Que la cadencia permita el display
+      NO garantiza la entrega.
+
+      pre-fix -> post-fix -> objetivo cumplido?: cada interaccion elegible -> cada interaccion
+      elegible, con los demas gates operando -> SI.
+    notes: "**PASS**. Sin regresion en el valor 0 y con los gates posteriores demostrados."
+    attachments:
+      - name: live-cadence-matrix.txt
+        path: attachments/tr-178-tc-161/scenario-cadence/live-cadence-matrix.txt
+        mimeType: text/plain
+      - name: cadence-prepost.mjs
+        path: attachments/tr-178-tc-161/scenario-cadence/cadence-prepost.mjs
+        mimeType: text/plain
+
+  - testCaseId: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+    testCaseKey: TC-161
+    scenarioTitle: >-
+      AC2 · A cadence of 1 skips exactly one eligible interaction between displays — the
+      reported defect
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-11T20:53:00Z"
+    stepResults: []
+    actual: |
+      Subject 9 con survey 15 (triesBetweenShows=1). Barrido de usageCount 1..8:
+
+        MOSTRAR    -    MOSTRAR    -    MOSTRAR    -    MOSTRAR    -
+
+      Se salta EXACTAMENTE una interaccion elegible entre displays. La cadencia efectiva es 2,
+      o sea N+1.
+
+      CONTRASTE CON EL COMMIT PRE-FIX (misma secuencia de entradas, cadence-prepost.mjs):
+
+        PRE  : MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR
+        POST : MOSTRAR    -    MOSTRAR    -    MOSTRAR    -    MOSTRAR    -
+
+      El codigo PRE-fix mostraba la encuesta en las ocho interacciones, que es literalmente el
+      defecto descrito en los pasos de reproduccion del ticket. Queda reproducido y corregido.
+
+      La columna POST del script coincide exactamente con lo medido contra el entorno
+      desplegado, lo que confirma de paso que dev corre el codigo del PR y no una version
+      previa.
+
+      pre-fix -> post-fix -> objetivo cumplido?: se mostraba siempre -> salta una y muestra en
+      la siguiente -> SI.
+    notes: >-
+      **PASS**. Es el escenario que define el ticket y el unico que reproduce el defecto. La
+      evidencia se tomo sobre el endpoint publico real, que es el que consume el widget.
+    attachments:
+      - name: live-cadence-matrix.txt
+        path: attachments/tr-178-tc-161/scenario-cadence/live-cadence-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+    testCaseKey: TC-161
+    scenarioTitle: >-
+      AC3 · A cadence of 2 skips two eligible interactions and the survey reappears on the
+      third
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-11T20:54:00Z"
+    stepResults: []
+    actual: |
+      Subject 10 con survey 16 (triesBetweenShows=2). Barrido de usageCount 1..8:
+
+        MOSTRAR    -       -    MOSTRAR    -       -    MOSTRAR    -
+
+      Se saltan exactamente DOS interacciones elegibles y la encuesta reaparece en la tercera.
+      La cadencia efectiva es 3, es decir N+1, y no 2.
+
+      Contraste PRE-fix: con la formula anterior el valor 2 producia cadencia 2
+      (MOSTRAR - MOSTRAR - ...). El cambio de comportamiento es el esperado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: cadencia 2 -> cadencia 3 -> SI.
+    notes: "**PASS**."
+    attachments:
+      - name: live-cadence-matrix.txt
+        path: attachments/tr-178-tc-161/scenario-cadence/live-cadence-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+    testCaseKey: TC-161
+    scenarioTitle: >-
+      AC1-AC3 regression · The remaining delivery gates keep blocking exactly as before the fix
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-11T20:56:00Z"
+    stepResults: []
+    actual: |
+      El gate de cadencia es el sexto de ocho en el orden de evaluacion del runtime, y se
+      evalua ANTES de maxShowsPerDay y maxDismissals. Por eso la prueba clave es que un gate
+      POSTERIOR siga bloqueando aunque la cadencia haya dado paso.
+
+      Subject 11 "QA TC-161 Gates", survey 17: triesBetweenShows=0 (la cadencia siempre da
+      paso) y maxImpressions=1.
+        - antes de registrar impresiones : MOSTRAR
+        - se registra 1 impresion (HTTP 201)
+        - tras alcanzar maxImpressions=1 : no-mostrar
+
+      El gate posterior sigue cortando la entrega pese a que la cadencia lo permitia, que es
+      justamente el "sujeto a los demas limites" del AC1.
+
+      Los ocho gates y sus motivos siguen intactos en el diff: el cambio no toca ninguna otra
+      rama de `evaluateSurveyDelivery`. Las suites del repo lo respaldan: server 113/113 y
+      client 60/60 en verde sobre 4458647c, coincidiendo con lo declarado en el PR.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los demas gates bloqueaban -> siguen
+      bloqueando igual -> SI.
+    notes: >-
+      **PASS**. No se observo ninguna encuesta que antes se bloqueara por otro motivo y ahora
+      pase a mostrarse.
+    attachments:
+      - name: live-cadence-matrix.txt
+        path: attachments/tr-178-tc-161/scenario-cadence/live-cadence-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "8d45bf0d-9ce2-4ce5-a8dd-d55864bd6852"
+    testCaseKey: TC-161
+    scenarioTitle: >-
+      Edge case · Respondents carrying historical usage counters get the new cadence applied
+      without breaking, including the missing and below-threshold counter paths
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-11T20:57:00Z"
+    stepResults: []
+    actual: |
+      Este escenario cubre el riesgo que el propio ticket declara: los contadores de entrega
+      ya traen valores historicos, asi que no basta con probar contadores que arrancan en cero.
+
+      Contadores historicos altos (cadencia 1, primer display elegible = 1):
+        usageCount 101 -> MOSTRAR      ((101-1) % 2 == 0)
+        usageCount 100 -> no-mostrar   ((100-1) % 2 == 1)
+      Contadores historicos altos (cadencia 2):
+        usageCount 1000 -> MOSTRAR     ((1000-1) % 3 == 0)
+        usageCount  999 -> no-mostrar  ((999-1)  % 3 == 2)
+
+      El patron N+1 se sostiene con valores de tres digitos: un contador heredado no produce
+      ni un display extra ni un bloqueo permanente.
+
+      Caminos de borde del contador:
+        sin usageCount, cadencia 1        -> no-mostrar (usage_count_missing)
+        usageCount 0 (bajo el primer display) -> no-mostrar (trigger_counter_not_reached)
+        sin usageCount, cadencia 0        -> MOSTRAR (el bloque se salta entero)
+
+      pre-fix -> post-fix -> objetivo cumplido?: el estado historico no estaba verificado ->
+      la cadencia se calcula sobre usageCount menos el primer display elegible y se comporta
+      igual con contadores heredados -> SI.
+    notes: >-
+      **PASS**. Cierra el riesgo declarado en el ticket. Nota para dimensionar el impacto: el
+      entorno dev no tenia ninguna encuesta con triesBetweenShows configurado antes de esta
+      corrida, asi que el cambio de semantica no altera la cadencia de ninguna encuesta
+      existente aqui. En un entorno con encuestas configuradas, toda encuesta con N mayor que
+      0 cambia su cadencia observable de N a N+1.
+    attachments:
+      - name: live-cadence-matrix.txt
+        path: attachments/tr-178-tc-161/scenario-cadence/live-cadence-matrix.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-11T20:45:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: >-
+      Arranca la ejecucion de TC-161 sobre el PR 71 desplegado en dev. Suites del repo verdes
+      en 4458647c: server 113/113 y client 60/60.
+  - at: "2026-09-11T21:00:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS. Los tres valores de cadencia (0, 1 y 2) verificados contra el endpoint publico
+      real con usageCount consecutivos, el defecto reportado reproducido contra el commit
+      PRE-fix con entradas identicas, los gates posteriores demostrados con maxImpressions, y
+      el riesgo de contadores historicos cerrado con valores de tres digitos. Cierra una de las
+      dos brechas que el PR declaraba sin validar desplegado. Sin defectos.

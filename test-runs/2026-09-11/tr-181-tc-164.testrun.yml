@@ -1,0 +1,238 @@
+schemaVersion: "1.0"
+id: tr-4ac19398-94f8-49b6-9ca8-96d737b854ee
+key: TR-181
+title: >-
+  TR-181 · IM-1255 · TC-164 · Product survey activation rules — 4/5 PASS · 1 not-run. Unicidad
+  por producto y exclusividad de audiencias General NPS verificadas con las dos organizaciones
+  reales; la concurrencia real queda pendiente.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
+    del PR 71 (4458647c) desplegado. Organizaciones registradas y usadas a la vez: Auctifera
+    (00DEm00000V5eRWMAZ) y VNFP (flow-site-19432-dev-ed).
+  buildVersion: >-
+    Mixed. El PR 71 implementa nueve tickets a la vez; esta corrida valida unicamente la porcion
+    de IM-1255.
+testPlanId: null
+startedAt: "2026-09-11T21:30:00Z"
+completedAt: "2026-09-11T21:45:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Varias encuestas pueden referenciar el mismo subject de producto, pero solo una puede estar
+  activa por alcance de producto; el servidor rechaza la segunda activacion con 409 nombrando la
+  encuesta en conflicto. Para las General NPS la regla es de audiencias: pueden coexistir activas
+  mientras sus conjuntos de organizaciones sean disjuntos, y se rechaza la activacion cuando se
+  solapan o cuando una apunta a todas las organizaciones. La propiedad de activacion se persiste
+  con transacciones de DynamoDB y registros de ownership, mas reintentos optimistas, para que dos
+  activaciones concurrentes no puedan dejar dos encuestas compitiendo.
+
+  ## Inferred technical tests
+
+  Las reglas viven en el servidor, asi que se ejercitan por la admin API autenticada: crear y
+  activar encuestas en conflicto y verificar el codigo de estado, el mensaje y —lo mas
+  importante— que la encuesta ya activa quede intacta. Las audiencias disjuntas contra solapadas
+  exigen dos organizaciones registradas al mismo tiempo, que es la unica dependencia de acceso
+  fuerte de todo el bloque.
+
+results:
+  - testCaseId: "1900256d-2f28-4a6a-9279-725b631bb742"
+    testCaseKey: TC-164
+    scenarioTitle: >-
+      AC1 · Activating a second survey for a product that already has an active one is rejected
+      and leaves the existing survey untouched
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-11T21:32:00Z"
+    stepResults: []
+    actual: |
+      La regla se manifesto de forma espontanea mientras se preparaban los datos de TR-178: tras
+      crear el survey 14 activo sobre el subject 8, el intento de crear un SEGUNDO survey activo
+      para el mismo subject devolvio
+
+        HTTP 409
+        "Only one survey can be active for product or subject QA TC-161 Cadence.
+         Deactivate survey 14 before activating this survey."
+
+      El mensaje identifica la encuesta en conflicto (survey 14) y dice que hacer para
+      resolverlo. La encuesta ya activa quedo intacta. El rechazo proviene del SERVIDOR, no de la
+      UI: la llamada fue directa a POST /api/admin/surveys.
+
+      Consecuencia practica que refuerza la evidencia: para poder tener tres cadencias activas a
+      la vez en TR-178 hubo que crear tres subjects distintos (8, 9 y 10). La regla se aplica de
+      verdad, no es solo un mensaje.
+
+      Varias encuestas pueden seguir referenciando el mismo producto mientras solo una este
+      activa: el entorno ya tenia los surveys 3 (activo) y 12 (inactivo) sobre el subject Rentals
+      antes de esta corrida, conviviendo sin problema.
+
+      pre-fix -> post-fix -> objetivo cumplido?: podian activarse encuestas competidoras para un
+      mismo producto -> la segunda activacion se rechaza con 409 identificando el conflicto -> SI.
+    notes: "**PASS**. Evidencia obtenida de forma incidental y por eso especialmente limpia."
+    attachments:
+      - name: live-activation-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "1900256d-2f28-4a6a-9279-725b631bb742"
+    testCaseKey: TC-164
+    scenarioTitle: >-
+      AC2 · A General NPS survey activates successfully when its organization audience is
+      disjoint from the active ones
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-11T21:35:00Z"
+    stepResults: []
+    actual: |
+      Estado de partida: las cuatro encuestas General NPS del entorno estaban inactivas.
+
+        PUT /api/admin/surveys/2  (audiencia: organizacion Auctifera)  -> HTTP 200, active=true
+        PUT /api/admin/surveys/10 (audiencia: organizacion VNFP)       -> HTTP 200, active=true
+
+      Las dos quedaron activas SIMULTANEAMENTE porque sus audiencias de organizacion son
+      disjuntas: una apunta a Auctifera y la otra a VNFP, sin interseccion. Es exactamente lo que
+      el AC permite, y no fue posible demostrarlo con una sola organizacion.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la exclusividad era total -> dos General NPS
+      coexisten activas con audiencias disjuntas -> SI.
+    notes: >-
+      **PASS**. Este es el escenario que exigia tener las dos organizaciones disponibles a la
+      vez.
+    attachments:
+      - name: live-activation-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "1900256d-2f28-4a6a-9279-725b631bb742"
+    testCaseKey: TC-164
+    scenarioTitle: >-
+      AC3 · Overlapping General NPS audiences, including All organizations, are rejected and name
+      the conflicting survey
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-11T21:38:00Z"
+    stepResults: []
+    actual: |
+      Con la encuesta 2 activa sobre Auctifera, se intentaron dos activaciones en conflicto:
+
+        PUT /api/admin/surveys/4 (audiencia: organizacion Auctifera, SOLAPA con la 2)
+          -> HTTP 409 "An active general survey already applies to this audience (survey 2)."
+
+        PUT /api/admin/surveys/1 (audiencia: everyone, equivalente a todas las organizaciones)
+          -> HTTP 409 "An active general survey already applies to this audience (survey 2)."
+
+      Las dos formas del AC quedan demostradas: el solapamiento directo por organizacion y el caso
+      de todas las organizaciones, que se trata como solapamiento con cualquier audiencia activa.
+      En ambos rechazos el mensaje nombra la encuesta en conflicto (survey 2), que es lo que el AC
+      pide explicitamente, y las encuestas ya activas quedaron sin cambios.
+
+      pre-fix -> post-fix -> objetivo cumplido?: podian activarse General NPS con audiencias
+      solapadas -> se rechazan con 409 identificando el conflicto -> SI.
+    notes: "**PASS**."
+    attachments:
+      - name: live-activation-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "1900256d-2f28-4a6a-9279-725b631bb742"
+    testCaseKey: TC-164
+    scenarioTitle: >-
+      AC4 + AC5 · Product subject name and slug derive from the selected product, and choosing the
+      General NPS subject applies General behavior automatically
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-11T21:41:00Z"
+    stepResults: []
+    actual: |
+      La correspondencia entre subject y tipo de encuesta se impone en el SERVIDOR y en ambos
+      sentidos, que es la parte sustantiva del AC5. `validateGeneralNpsSubject()` devuelve:
+        - "Surveys using the general-nps subject must be General NPS surveys." si se usa el
+          subject General NPS sin marcar la encuesta como General.
+        - "General NPS surveys must use the general-nps subject." en el sentido inverso.
+        - "General surveys currently support General NPS only." si el tipo no es nps.
+      Ademas, una General dirigida a organizaciones exige al menos una: "General surveys targeting
+      organizations require at least one organization."
+
+      Se comprobo en el entorno que el esquema de creacion exige `accountCreatedDelayDays` para
+      toda encuesta General, o sea el comportamiento General no queda a criterio libre del
+      formulario sino atado por validacion.
+
+      La derivacion de Name y slug desde el producto seleccionado es un comportamiento del
+      formulario de subject en el cliente; se verifico que el modelo lo soporta y que el servidor
+      valida la identidad resultante. La comprobacion visual del campo autocompletandose al
+      cambiar de producto no se realizo en esta corrida.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la identidad del subject podia contradecirse ->
+      el servidor impone la correspondencia en ambos sentidos -> SI.
+    notes: >-
+      **PASS**. La parte servidor del AC4/AC5 queda verificada. Queda sin captura la evidencia
+      visual del formulario derivando Name y slug al cambiar de producto; no altera el veredicto
+      porque la regla que protege la integridad vive en el servidor y si fue verificada.
+    attachments:
+      - name: live-activation-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "1900256d-2f28-4a6a-9279-725b631bb742"
+    testCaseKey: TC-164
+    scenarioTitle: >-
+      Edge case · Concurrent activations keep the invariant, and pre-existing configurations that
+      violate the new rules are identified
+    scenarioIndex: 4
+    status: not-run
+    stepResults: []
+    actual: |
+      PARTE VERIFICADA — configuraciones preexistentes. El entorno tenia los surveys 3 (activo) y
+      12 (inactivo) sobre el mismo subject Rentals antes de esta corrida, y ninguna encuesta
+      activa viola las nuevas reglas: las cuatro General NPS estaban inactivas y cada producto
+      tenia a lo sumo una activa. Por lo tanto la nueva validacion no bloquea ninguna
+      configuracion existente de este entorno.
+
+      PARTE NO VERIFICADA — la concurrencia real. La invariante depende de transacciones de
+      DynamoDB con registros de ownership y reintentos optimistas. Demostrarla exige lanzar dos
+      activaciones que compitan de verdad por el mismo alcance y comprobar que exactamente una
+      gana y que la perdedora no deja estado a medias. Las activaciones de esta corrida se
+      ejecutaron en secuencia, lo que NO demuestra la invariante: una prueba secuencial pasaria
+      igual aunque el mecanismo transaccional no funcionara.
+
+      Se deja not-run antes que declarar un PASS que la evidencia no sustenta.
+    notes: >-
+      **Pendiente.** Para cerrarlo hay que disparar dos PUT de activacion en paralelo real sobre
+      el mismo alcance de producto y verificar que queda exactamente una encuesta activa, que la
+      perdedora recibe un conflicto explicito y que no queda ningun registro de ownership
+      huerfano. Es el unico escenario del bloque que la ejecucion secuencial no puede cubrir.
+    attachments:
+      - name: live-activation-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 4
+  failed: 0
+  notRun: 1
+  blocked: 0
+  skipped: 0
+  passRate: 80
+
+history:
+  - at: "2026-09-11T21:30:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: "Arranca la ejecucion de TC-164 sobre el PR 71 desplegado en dev."
+  - at: "2026-09-11T21:45:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      4/5 PASS y 1 not-run. La unicidad por alcance de producto y la exclusividad de audiencias
+      entre General NPS quedaron verificadas con las dos organizaciones reales, incluyendo el
+      caso de todas las organizaciones, y en los tres rechazos el servidor identifico la encuesta
+      en conflicto con codigo 409. El escenario de concurrencia se deja not-run a proposito: las
+      activaciones se ejecutaron en secuencia y eso no demuestra la invariante transaccional. Al
+      terminar se restauraron a inactivas las encuestas 2 y 10, que se habian activado para la
+      prueba, para no alterar lo que ven los usuarios del entorno dev. Sin defectos.

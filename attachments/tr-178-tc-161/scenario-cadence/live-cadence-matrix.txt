@@ -1,0 +1,65 @@
+IM-1260 / TC-161 — cadencia triesBetweenShows verificada en el entorno desplegado
+==================================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, rama develop, PR 71 merge 4458647c)
+Fecha   : 2026-09-11
+Metodo  : POST /api/features/<id>/surveys con el contexto de entrega en el body
+          (respondentId, clientOrgId, usageCount). Es el endpoint publico real que usa el
+          widget, asi que lo medido es el runtime desplegado, no una simulacion.
+
+DATOS DE PRUEBA CREADOS (aislados, prefijo "QA TC-161", NO borrar: son evidencia)
+  subject 8  "QA TC-161 Cadence"   -> survey 14, triesBetweenShows=0
+  subject 9  "QA TC-161 Cadence 1" -> survey 15, triesBetweenShows=1
+  subject 10 "QA TC-161 Cadence 2" -> survey 16, triesBetweenShows=2
+  subject 11 "QA TC-161 Gates"     -> survey 17, triesBetweenShows=0 + maxImpressions=1
+  Se necesito un subject por cadencia porque la regla de IM-1255 permite una sola encuesta
+  activa por subject. Ese rechazo quedo registrado como evidencia cruzada (ver abajo).
+
+SECUENCIA OBSERVADA — usageCount 1..8, mismo respondent, misma organizacion
+
+  triesBetweenShows = 0 : MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR MOSTRAR
+  triesBetweenShows = 1 : MOSTRAR    -    MOSTRAR    -    MOSTRAR    -    MOSTRAR    -
+  triesBetweenShows = 2 : MOSTRAR    -       -    MOSTRAR    -       -    MOSTRAR    -
+
+  Cadencia 1 salta EXACTAMENTE una interaccion elegible; cadencia 2 salta EXACTAMENTE dos.
+  La cadencia efectiva es N+1 en ambos casos, que es lo que pide el ticket.
+
+CONTRASTE PRE-FIX vs POST-FIX (cadence-prepost.mjs, mismas entradas)
+  El diff del PR aisla el cambio a una sola linea:
+    PRE  (4458647c~1): interactionsSinceFirstShow % triesBetweenShows
+    POST (4458647c)  : const cadence = triesBetweenShows + 1;
+                       interactionsSinceFirstShow % cadence
+
+  triesBetweenShows = 0 : PRE y POST identicos (MOSTRAR en las 8) -> sin regresion
+  triesBetweenShows = 1 : PRE MOSTRAR en las 8  ->  POST alterna
+                          cadencia efectiva 1 -> 2   *** EL DEFECTO REPORTADO ***
+  triesBetweenShows = 2 : PRE cadencia 2 -> POST cadencia 3
+
+  La columna POST del script coincide exactamente con lo medido en el entorno desplegado,
+  lo que confirma que dev esta corriendo el codigo del PR y no una version previa.
+
+| # | Asercion | Esperado | Obtenido | Verdict |
+|---|----------|----------|----------|---------|
+| C1 | AC1 · cadencia 0 permite cada interaccion | mostrar en las 8 | mostrar en las 8, identico al PRE-fix | PASS |
+| C2 | AC2 · cadencia 1 salta una interaccion | mostrar/saltar alternado | mostrar/saltar alternado en las 8 | PASS |
+| C3 | AC2 · el defecto se reproduce PRE-fix | PRE muestra siempre con N=1 | PRE MOSTRAR en las 8; POST alterna | PASS |
+| C4 | AC3 · cadencia 2 salta dos y reaparece en la tercera | patron mostrar,-,-,mostrar | patron exacto observado | PASS |
+| C5 | AC1 · los gates posteriores siguen bloqueando | maxImpressions corta pese a la cadencia | con cadencia 0 y maxImpressions 1: MOSTRAR antes, no-mostrar tras 1 impresion | PASS |
+| C6 | Edge · usageCount ausente | no se muestra (usage_count_missing) | no-mostrar con cadencia 1 | PASS |
+| C7 | Edge · usageCount bajo el primer display | no se muestra (trigger_counter_not_reached) | usageCount 0 -> no-mostrar | PASS |
+| C8 | Edge · contadores historicos altos | la cadencia sigue el patron N+1 sin bloqueo permanente | cad=1: 101 MOSTRAR / 100 no-mostrar · cad=2: 1000 MOSTRAR / 999 no-mostrar | PASS |
+| C9 | Edge · cadencia 0 sin usageCount | el gate se salta entero | MOSTRAR | PASS |
+
+Resultado: 9/9 PASS. Los tres ACs verificados en el entorno desplegado, el defecto reproducido
+contra el commit PRE-fix, y el riesgo declarado por el ticket (contadores historicos) cerrado
+con valores de tres digitos.
+
+EVIDENCIA CRUZADA (IM-1255 / TC-164 AC1)
+  Al intentar crear una segunda encuesta activa para el subject 8 el servidor respondio 409:
+    "Only one survey can be active for product or subject QA TC-161 Cadence.
+     Deactivate survey 14 before activating this survey."
+  Identifica la encuesta en conflicto, que es justamente lo que pide el AC1 de IM-1255.
+
+SUITES DEL REPO en 4458647c
+  npm test --prefix server : 113/113 PASS
+  npm test --prefix client : 60/60 PASS
+  Coinciden con lo declarado en el cuerpo del PR.

@@ -1,0 +1,177 @@
+schemaVersion: "1.0"
+
+id: "ece5c154-cc4e-4e4b-8cab-2d54f6cef352"
+key: "TC-163"
+title: "Respondent profile snapshot is captured, normalized and displayed, and asynchronous Veevart Sales matching resolves to matched, not_found or ambiguous without blocking submission or leaking PII — IM-1254"
+description: |
+  Test case para IM-1254 (Historia, priority **Medium**, risk **High**, "In QA Review") —
+  epic IM-970 NPS Survey Tool delivery — QA Sub-task IM-1264. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 71" (**MERGED a `develop`** el 2026-09-11,
+  +3309/-596, 40 archivos). Ese PR implementa nueve tickets a la vez; este test case cubre
+  solo la porcion de IM-1254.
+
+  === QUE PIDE LA HISTORIA ===
+
+  Capturar nombre, email, telefono, titulo y nivel de engagement del respondent de forma
+  OPCIONAL; mostrar nombre e identificador en el detalle de la respuesta y en Engagement;
+  registrar el estado de match contra Veevart Sales como matched, not_found, ambiguous o
+  not_checked; mantener legibles las respuestas historicas sin esos atributos; y tratar el
+  perfil como PII, sin exponerlo en logs publicos. Sin migracion de tabla.
+
+  === QUE HACE EL PR (leido del diff) ===
+
+  `server/src/lib/salesforce.ts` — `matchVeevartSalesContactByEmail(email)`:
+    - Email vacio o integracion sin configurar -> `not_checked`.
+    - SOQL `SELECT Id, Engagement_Level__c FROM Contact WHERE Email = '<email>' LIMIT 2`.
+    - 0 registros -> `not_found`; mas de 1 -> `ambiguous`; exactamente 1 -> `matched` con
+      contactId y engagementLevel.
+    - El email se interpola en la SOQL pasando por `escapeSoqlLiteral()`, que escapa
+      backslash y comilla simple.
+  `server/src/lib/respondentEnrichment.ts`:
+    - Sin email en la respuesta no hace nada. Si el match da `not_checked` no escribe.
+    - En error persiste `veevartSalesMatchStatus: "error"` y relanza.
+  `server/src/routes/responses.ts:301`:
+    - Llama el enrichment como fire-and-forget: `void enrichResponseById(id).catch(...)`, asi
+      que un fallo NO rompe el envio de la respuesta. El log del catch solo emite el id de la
+      respuesta, no el perfil.
+    - La respuesta se inserta con `veevartSalesMatchStatus: "not_checked"` y el enrichment la
+      actualiza despues.
+  `server/src/data/types.ts:64`:
+    - El tipo admite **cinco** valores: matched, not_found, ambiguous, not_checked y **error**.
+
+  === RIESGOS ABIERTOS ===
+
+    - **SCOPE-FIT: el estado `error` no esta en los ACs.** La historia enumera cuatro estados
+      y el PR persiste un quinto. Hay que verificar como se muestra en el detalle y en
+      Engagement, porque un estado no contemplado puede renderizarse vacio o como "Unknown"
+      sin distinguirse de "no verificado".
+    - **PII en el objeto de error**: el log del catch solo imprime el id, pero el error que
+      viaja puede venir de la query SOQL y arrastrar el email del respondent en su mensaje.
+      Hay que inspeccionar la salida real de un fallo de enrichment, no solo la linea de log.
+    - **SOQL injection desde un endpoint publico**: el email llega de una submission publica y
+      termina interpolado en una SOQL. `escapeSoqlLiteral` escapa backslash y comilla simple,
+      que es el escape correcto, pero conviene ejercitarlo con comillas y backslashes reales.
+    - **Asincronia**: el estado inicial persistido es `not_checked` y el valor final llega
+      despues. Una lectura inmediata puede mostrar un estado transitorio; hay que distinguir
+      "todavia no se verifico" de "se verifico y no se encontro".
+    - **Riesgo High declarado por el ticket**: manejo de PII, enrichment asincrono e identidad
+      cruzada entre sistemas.
+    - **El PR esta MERGEADO a `develop`, no a `main`.**
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 71 sobre `develop` (4458647c), y el commit base 4458647c~1 para el contraste PRE-fix."
+  - "Entorno de Survey Tool con `develop` desplegado y credenciales de administrador."
+  - "Integracion con Veevart Sales configurada (JWT) para que el enrichment pueda ejecutarse; y capacidad de observarla sin configurar, para el camino not_checked."
+  - "En la organizacion de Salesforce: un Contact con email unico (para matched), un email que no exista como Contact (para not_found) y dos Contacts que compartan el mismo email (para ambiguous)."
+  - "Al menos una respuesta historica anterior al PR, sin los atributos de perfil, para verificar compatibilidad hacia atras."
+  - "npm instalado para correr `npm test --prefix server` (113 tests), `npm test --prefix client` (60 tests) y `npm run build`."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-163/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · A response with valid optional profile fields persists them normalized and shows the respondent in response detail and Engagement"
+    tags:
+      - ac-1
+      - happy-path
+      - profile
+    given:
+      - "una encuesta activa y un respondent que envia su respuesta con nombre, email, telefono y titulo"
+    when:
+      - "se almacena la respuesta"
+      - "un administrador abre el detalle de esa respuesta y la tab Engagement"
+    then:
+      - "los campos quedan persistidos y normalizados en la respuesta"
+      - "el detalle muestra el nombre y el identificador del respondent"
+      - "el nombre del respondent aparece tambien en Engagement"
+      - "no hizo falta ninguna migracion de tabla para almacenarlos"
+
+  - title: "AC2 · Historical responses without profile fields stay readable with a neutral fallback"
+    tags:
+      - ac-2
+      - regression
+      - backward-compatibility
+    given:
+      - "respuestas creadas antes de este PR, sin ninguno de los atributos de perfil"
+    when:
+      - "un administrador las abre en el detalle y las ve en Engagement"
+    then:
+      - "la respuesta sigue siendo legible y no produce error ni pantalla rota"
+      - "los valores ausentes se muestran con un fallback neutro, no como vacio ni como null literal"
+      - "el comportamiento de esas respuestas es el mismo que en el commit PRE-fix salvo por el fallback"
+
+  - title: "AC3 · Contact matching resolves to not_found, matched or ambiguous according to how many records the email returns"
+    tags:
+      - ac-3
+      - happy-path
+      - enrichment
+      - salesforce
+    given:
+      - "tres respondentes: uno cuyo email corresponde a exactamente un Contact, uno cuyo email no existe como Contact y uno cuyo email esta duplicado en dos Contacts"
+    when:
+      - "se envian sus respuestas y el enrichment asincrono termina"
+    then:
+      - "el primero queda con `matched` y con el contactId y el nivel de engagement resueltos"
+      - "el segundo queda con `not_found`"
+      - "el tercero queda con `ambiguous` y sin contactId, porque la consulta devuelve mas de un registro"
+      - "una respuesta sin email o con la integracion sin configurar permanece en `not_checked` y no se sobrescribe"
+
+  - title: "AC3 · Profile data never reaches public logs and enrichment failures do not break submission"
+    tags:
+      - ac-3
+      - security
+      - pii
+      - negative
+    given:
+      - "una respuesta con datos de perfil completos"
+      - "y un escenario donde el enrichment falla, por ejemplo con la integracion inaccesible"
+    when:
+      - "se envia la respuesta y se observa la salida de logs del servidor"
+    then:
+      - "el envio devuelve exito al respondent aunque el enrichment falle, porque se ejecuta como fire-and-forget"
+      - "la respuesta queda persistida y el estado de match refleja el fallo sin perder la respuesta"
+      - "los logs emiten unicamente el identificador de la respuesta, sin nombre, email, telefono ni titulo"
+      - "se inspecciona el contenido real del error registrado, para confirmar que no arrastra el email dentro del mensaje de la consulta"
+
+  - title: "Edge case · Email values with SOQL metacharacters are escaped, and the undocumented error state is rendered intelligibly"
+    tags:
+      - edge-case
+      - security
+      - soql-injection
+      - missing-doc
+    given:
+      - "un respondent que envia un email conteniendo comilla simple y backslash"
+      - "y una respuesta cuyo enrichment termino en el estado `error`, que no figura en los ACs"
+    when:
+      - "se procesa el enrichment de ambas"
+    then:
+      - "el email con metacaracteres se escapa antes de interpolarse en la SOQL y no altera la consulta ni provoca un fallo de sintaxis"
+      - "ninguna entrada del respondent puede modificar el filtro de la consulta ni devolver Contacts ajenos"
+      - "el estado `error` se muestra en el detalle y en Engagement de forma distinguible de `not_checked`, o se deja documentado como hueco de UI"
+      - "se reporta el desvio de alcance: el PR persiste cinco estados y la historia enumera cuatro"
+
+tags:
+  - im-1254
+  - im-970
+  - im-1264
+  - survey-tool
+  - nps
+  - respondent-profile
+  - enrichment
+  - salesforce
+  - pii
+  - dynamodb
+  - pr-71
+  - medium
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-11T16:40:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-11T16:40:00Z"
+  version: 1

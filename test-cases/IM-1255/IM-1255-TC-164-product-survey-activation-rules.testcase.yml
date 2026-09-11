@@ -1,0 +1,174 @@
+schemaVersion: "1.0"
+
+id: "1900256d-2f28-4a6a-9279-725b631bb742"
+key: "TC-164"
+title: "Product scope allows at most one active non-General survey, General NPS surveys coexist only with disjoint organization audiences, and product subject name and slug are derived from the selected product — IM-1255"
+description: |
+  Test case para IM-1255 (Historia, priority **Medium**, "In QA Review") — epic IM-970
+  NPS Survey Tool delivery — QA Sub-task IM-1265. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 71" (**MERGED a `develop`** el 2026-09-11,
+  +3309/-596, 40 archivos). Ese PR implementa nueve tickets a la vez; este test case cubre
+  solo la porcion de IM-1255.
+
+  === QUE PIDE LA HISTORIA ===
+
+  Varias encuestas pueden referenciar el mismo subject de producto, pero como maximo UNA
+  puede estar activa por alcance de producto. Varias General NPS pueden estar activas solo si
+  sus audiencias de organizacion NO se solapan; si se solapan, o si una apunta a All
+  organizations, la activacion se rechaza identificando la encuesta en conflicto. El Name y el
+  slug del subject de producto se derivan del producto seleccionado y no se pueden contradecir
+  manualmente. Al elegir el subject General NPS, el comportamiento General se aplica solo.
+
+  === QUE HACE EL PR (leido del diff) ===
+
+  `server/src/routes/surveys.ts`:
+    - Devuelve **409** con el identificador de la encuesta en conflicto, tanto en create como
+      en update: "An active general survey already applies to this audience (survey N)".
+    - `validateGeneralNpsSubject()` impone la correspondencia en ambos sentidos: una encuesta
+      con el subject General NPS debe ser General, y una encuesta General debe usar ese subject
+      y ser de tipo nps.
+    - Las General que apuntan a organizaciones exigen al menos una: "General surveys targeting
+      organizations require at least one organization."
+    - La propiedad de activacion se persiste con **transacciones de DynamoDB** y registros de
+      ownership, mas reintentos optimistas para las General no solapadas, de modo que dos
+      creaciones concurrentes no puedan activar encuestas que compitan.
+
+  === RIESGOS ABIERTOS ===
+
+    - **Regresion sobre configuraciones ya existentes**: la validacion es nueva y el ticket
+      declara que hay datos de subjects heredados. Una encuesta que hoy esta activa y que
+      violaria la regla podria quedar imposible de guardar al editarla. Hay que probar el
+      camino de edicion de una encuesta preexistente, no solo la creacion.
+    - **Concurrencia**: la garantia de unicidad depende de transacciones y lecturas
+      consistentes. Dos activaciones simultaneas para el mismo producto deben dejar exactamente
+      una activa; probarlo en secuencia no demuestra la invariante.
+    - **Solapamiento de audiencias entre organizaciones**: requiere DOS organizaciones de
+      Salesforce disponibles al mismo tiempo para ejercitar disjunto contra solapado.
+    - El mensaje de conflicto expone el identificador de otra encuesta; verificar que sea
+      informacion aceptable para el administrador que la recibe.
+    - **El PR esta MERGEADO a `develop`, no a `main`.**
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 71 sobre `develop` (4458647c), y el commit base 4458647c~1 para el contraste PRE-fix."
+  - "Entorno de Survey Tool con `develop` desplegado y credenciales de administrador."
+  - "DOS organizaciones registradas y disponibles a la vez, para poder construir audiencias disjuntas y solapadas."
+  - "Un producto con al menos dos encuestas asociadas, una activa y otra inactiva, para ejercitar la unicidad por alcance de producto."
+  - "El subject General NPS existente en el entorno, y al menos una encuesta General activa con audiencia conocida."
+  - "npm instalado para correr `npm test --prefix server` (113 tests), `npm test --prefix client` (60 tests) y `npm run build`."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-164/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · Activating a second survey for a product that already has an active one is rejected and leaves the existing survey untouched"
+    tags:
+      - ac-1
+      - negative
+      - activation
+    given:
+      - "un producto que ya tiene una encuesta activa"
+      - "y una segunda encuesta inactiva asociada al mismo producto"
+    when:
+      - "un administrador intenta activar la segunda encuesta"
+    then:
+      - "la activacion se rechaza con un mensaje de validacion visible"
+      - "la encuesta que ya estaba activa permanece activa y sin cambios"
+      - "varias encuestas pueden seguir referenciando el mismo producto mientras solo una este activa"
+      - "el rechazo ocurre en el servidor, no solo en la UI"
+
+  - title: "AC2 · A General NPS survey activates successfully when its organization audience is disjoint from the active ones"
+    tags:
+      - ac-2
+      - happy-path
+      - general-nps
+    given:
+      - "una encuesta General NPS activa cuya audiencia apunta a una organizacion"
+      - "y otra encuesta General NPS que apunta a una organizacion distinta, sin interseccion"
+    when:
+      - "se activa la segunda encuesta"
+    then:
+      - "la activacion tiene exito y ambas quedan activas a la vez"
+      - "cada organizacion recibe unicamente la encuesta General que le corresponde"
+      - "una encuesta General dirigida a organizaciones exige al menos una organizacion seleccionada"
+
+  - title: "AC3 · Overlapping General NPS audiences, including All organizations, are rejected and name the conflicting survey"
+    tags:
+      - ac-3
+      - negative
+      - general-nps
+      - conflict
+    given:
+      - "una encuesta General NPS activa con una audiencia de organizaciones conocida"
+    when:
+      - "se intenta activar otra General NPS que incluye alguna de esas mismas organizaciones"
+      - "y por separado se intenta activar una General NPS dirigida a All organizations"
+    then:
+      - "ambas activaciones se rechazan con codigo 409"
+      - "el mensaje identifica cual es la encuesta en conflicto"
+      - "las encuestas que ya estaban activas permanecen sin cambios"
+      - "All organizations se trata como solapamiento con cualquier audiencia activa"
+
+  - title: "AC4 + AC5 · Product subject name and slug derive from the selected product, and choosing the General NPS subject applies General behavior automatically"
+    tags:
+      - ac-4
+      - ac-5
+      - happy-path
+      - subject-identity
+      - admin-ui
+    given:
+      - "un administrador creando un subject y seleccionando un producto"
+      - "y por separado un administrador que selecciona el subject General NPS en el formulario de encuesta"
+    when:
+      - "cambia el producto seleccionado"
+      - "y observa el formulario tras elegir el subject General NPS"
+    then:
+      - "el Name y el slug se derivan del producto elegido y se actualizan al cambiar la seleccion"
+      - "un Name o slug manual que contradiga el producto no se puede guardar"
+      - "al elegir el subject General NPS se aplican automaticamente el trigger General y la opcion User.CreatedDate"
+      - "el trigger no se presenta como una eleccion arbitraria para ese subject"
+      - "la correspondencia se impone en ambos sentidos: el subject General NPS obliga a encuesta General, y una encuesta General obliga a ese subject y a tipo nps"
+
+  - title: "Edge case · Concurrent activations keep the invariant, and pre-existing configurations that violate the new rules are identified"
+    tags:
+      - edge-case
+      - regression
+      - concurrency
+      - legacy-data
+    given:
+      - "dos intentos de activacion simultaneos para el mismo alcance de producto"
+      - "y encuestas preexistentes configuradas antes de que existiera esta validacion"
+    when:
+      - "se lanzan ambas activaciones en paralelo"
+      - "y se edita y guarda una encuesta preexistente sin cambiar su audiencia"
+    then:
+      - "tras la concurrencia queda exactamente una encuesta activa para ese producto, gracias a las transacciones y los registros de ownership"
+      - "la activacion perdedora recibe un conflicto explicito y no deja estado a medias"
+      - "se deja constancia de cuantas encuestas activas del entorno violarian las nuevas reglas si se editaran"
+      - "una encuesta preexistente valida se puede seguir editando y guardando sin que la nueva validacion la bloquee"
+
+tags:
+  - im-1255
+  - im-970
+  - im-1265
+  - survey-tool
+  - nps
+  - activation-rules
+  - general-nps
+  - audience-overlap
+  - subject-identity
+  - dynamodb
+  - concurrency
+  - pr-71
+  - medium
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-11T16:45:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-11T16:45:00Z"
+  version: 1

@@ -1,0 +1,48 @@
+IM-1254 / TC-163 — perfil del respondente y enrichment, verificado en el entorno desplegado
+============================================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, rama develop, PR 71 merge 4458647c)
+Fecha   : 2026-09-11
+
+LIMITACION DEL ENTORNO — la mitad del AC3 NO es ejercitable aqui
+  GET /api/admin/integrations/salesforce/status devuelve:
+      { "enabled": false, "authFlow": "jwt", "configuredFromUi": false, ... }
+
+  La integracion con Veevart Sales NO esta configurada en dev. En consecuencia
+  `matchVeevartSalesContactByEmail()` corta en su guarda `isConfigured(cfg)` y devuelve
+  `not_checked` SIN llegar a consultar Salesforce. Los caminos `matched`, `not_found` y
+  `ambiguous` no se pueden producir en este entorno por mas Contacts que se creen en la
+  organizacion: el codigo nunca llega a la SOQL.
+
+  Esto tambien significa que el enrichment de IM-1254 NO depende de la scratch org de
+  Auctifera en el estado actual del entorno.
+
+| # | Asercion | Obtenido | Verdict |
+|---|----------|----------|---------|
+| P1 | AC1 · perfil completo se persiste normalizado | respuesta id=4: respondentName "QA O'Brien Test", respondentEmail, respondentPhone y respondentTitle persistidos tal cual | PASS |
+| P2 | AC1 · el nombre del respondente aparece en Engagement | la fila de qa-tc163-perfil muestra respondentName "QA O'Brien Test" | PASS |
+| P3 | AC1 · sin migracion de tabla | los atributos nuevos se escribieron sobre la tabla de responses existente, conviviendo con respuestas previas | PASS |
+| P4 | AC2 · respuesta sin campos de perfil sigue legible | respuesta id=5: name, email, phone y title en null, HTTP 201 sin error; en Engagement la fila existe y el nombre cae en fallback | PASS |
+| P5 | AC3 · sin integracion configurada el estado es not_checked | ambas respuestas quedan en veevartSalesMatchStatus "not_checked" | PASS |
+| P6 | AC3 · el envio no falla por el enrichment | HTTP 201 en ambas; el enrichment corre como fire-and-forget (void ... .catch()) | PASS |
+| P7 | AC3 · matched / not_found / ambiguous | NO EJERCITABLE en dev: la integracion esta deshabilitada | NOT-RUN |
+| P8 | Edge · email con metacaracteres no alcanza la SOQL | un email con comillas ("qa'or'1'='1@veevart.com") es rechazado con 400 "Invalid email" por el esquema zod ANTES de cualquier consulta | PASS |
+| P9 | Edge · estado `error` no documentado en los ACs | no reproducible sin integracion configurada; queda pendiente junto con P7 | NOT-RUN |
+
+HALLAZGO POSITIVO — defensa en profundidad contra la inyeccion SOQL
+  El riesgo que se levanto en la revision del diff era que el email llega de una submission
+  publica y termina interpolado en `WHERE Email = '...'`. Medido en el entorno hay DOS
+  barreras encadenadas:
+    1. El esquema zod de la respuesta valida el formato del email y devuelve 400 ante
+       cualquier valor con comillas o metacaracteres, asi que la entrada maliciosa no llega
+       siquiera a persistirse.
+    2. Si llegara, `escapeSoqlLiteral()` escapa backslash y comilla simple antes de armar la
+       consulta.
+  No se observo ninguna via por la que una entrada del respondent altere la consulta.
+
+PENDIENTE DE ENTORNO (no es defecto del PR)
+  Para cerrar P7 y P9 hace falta un entorno con la integracion de Veevart Sales configurada
+  (SFDC_CLIENT_ID, SFDC_USERNAME y SFDC_JWT_PRIVATE_KEY) y, en esa organizacion:
+    - un Contact con email unico            -> matched
+    - un email que no exista como Contact   -> not_found
+    - DOS Contacts que compartan el email    -> ambiguous
+  Con eso los tres caminos se verifican en una sola corrida de seguimiento.

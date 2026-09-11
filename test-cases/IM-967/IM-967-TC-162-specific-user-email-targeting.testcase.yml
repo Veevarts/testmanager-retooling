@@ -1,0 +1,176 @@
+schemaVersion: "1.0"
+
+id: "f98f1575-1313-4556-baf8-de1823e2039f"
+key: "TC-162"
+title: "Specific-user survey targeting matches a respondent by Salesforce ID or email, fails closed when the list is empty, and leaves the other audience modes unchanged — IM-967"
+description: |
+  Test case para IM-967 (Historia, priority **Medium**, "Is Ready For QA") — epic IM-970
+  NPS Survey Tool delivery — QA Sub-task IM-1263. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 71" (**MERGED a `develop`** el 2026-09-11,
+  +3309/-596, 40 archivos, branch feature/survey-delivery-diagnostics). Ese PR implementa
+  nueve tickets a la vez; este test case cubre solo la porcion de IM-967.
+
+  === QUE PIDE LA HISTORIA ===
+
+  Un administrador autenticado puede configurar una encuesta para que solo la vean
+  respondentes especificos, ingresando una o mas direcciones de email. La UI debe rechazar
+  emails invalidos con retroalimentacion clara. En runtime, un respondent que coincide ve la
+  encuesta si pasan las demas reglas, y uno que no coincide no la ve. Si la encuesta NO usa
+  targeting especifico, el comportamiento de audiencia existente no cambia. El targeting
+  queda detras de autenticacion de administrador porque expone configuracion de clientes.
+
+  === QUE HACE EL PR (leido del diff) ===
+
+  `server/src/lib/surveyRuntime.ts`:
+    - `audience` es un enum de tres valores: "everyone", "organization" y "specific_users"
+      (validado con zod en validation.ts, tanto en create como en update).
+    - `matchesSpecificUserAudience(audienceDetails, ctx)` compara contra la lista permitida:
+      si la lista esta vacia devuelve **false** (fail-closed, no abre la audiencia), y si no,
+      hace match cuando el `respondentId` O el `respondentEmail` del contexto esta en la lista.
+    - `detailsTokens()` parte la lista por saltos de linea, comas o punto y coma, y normaliza
+      cada token con `trim().toLowerCase()`. El contexto normaliza igual antes de comparar.
+    - El gate de audiencia es el PRIMERO que se evalua; si no pasa devuelve el motivo
+      `audience` y no llega a evaluar fechas, contadores ni limites.
+    - `respondentEmail` entra al contexto publico desde `respondentEmail`, `userEmail` o
+      `email`.
+  `server/src/routes/surveys.ts`:
+    - `validateSpecificUserAudience()` rechaza guardar una encuesta con audiencia
+      "specific_users" y lista vacia: "Specific user audience requires at least one
+      respondent ID or email."
+
+  Nota de alcance: la historia habla solo de emails, pero el PR acepta **email o Salesforce
+  respondent ID** en la misma lista. Es una ampliacion sobre el AC escrito, asi que hay que
+  verificarla como scope-fit, no asumirla correcta.
+
+  === RIESGOS ABIERTOS ===
+
+    - **RIESGO DE CONTROL DE ACCESO (el mas importante de este TC)**: la comparacion
+      normaliza a minusculas con `toLowerCase()`, pero los IDs de Salesforce de 15 caracteres
+      SON case-sensitive. Dos IDs de 15 chars que solo difieran en mayusculas se vuelven el
+      mismo token y podrian producir un falso positivo, es decir mostrar la encuesta a un
+      respondent que NO esta en la lista. Aqui el impacto es mayor que en un agregado de
+      analytics, porque decide quien ve la encuesta. Hay que verificar que formato de ID llega
+      realmente (15 vs 18 chars) antes de calificarlo como defecto o como riesgo aceptado.
+    - **La validacion de email que pide el AC2 vive en la UI**: hay que comprobar que el
+      servidor tambien rechace entradas invalidas, o dejar constancia de que la unica barrera
+      es el cliente.
+    - El PR declara explicitamente que **el targeting especifico en runtime todavia NO fue
+      validado en un entorno desplegado**. Esta es exactamente la brecha que cubre este TC.
+    - **El PR esta MERGEADO a `develop`, no a `main`.**
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 71 sobre `develop` (4458647c), y el commit base 4458647c~1 para el contraste PRE-fix."
+  - "Entorno de Survey Tool con `develop` desplegado y credenciales de administrador."
+  - "Organizacion de Salesforce con el widget instalado y al menos dos usuarios distinguibles: uno que se incluira en la lista de targeting y otro que NO."
+  - "Los identificadores reales de esos usuarios (Salesforce ID y email) para poder construir la lista y verificar el match."
+  - "Una encuesta activa que pase todos los demas gates de entrega, para que el unico factor decisorio sea la audiencia."
+  - "npm instalado para correr `npm test --prefix server` (113 tests), `npm test --prefix client` (60 tests) y `npm run build`."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-162/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · An authenticated admin can configure specific-user targeting with one or more addresses"
+    tags:
+      - ac-1
+      - happy-path
+      - admin-ui
+    given:
+      - "un administrador autenticado editando la configuracion de audiencia de una encuesta"
+    when:
+      - "selecciona la audiencia de usuarios especificos e ingresa una o mas direcciones de email"
+      - "guarda la encuesta"
+    then:
+      - "la encuesta queda persistida con audiencia `specific_users` y la lista ingresada"
+      - "la lista admite varias entradas separadas por salto de linea, coma o punto y coma"
+      - "al reabrir la encuesta la lista se muestra tal como quedo guardada"
+      - "la pantalla de configuracion solo es alcanzable con sesion de administrador"
+
+  - title: "AC2 · Invalid entries are rejected with clear feedback, and an empty list cannot be saved"
+    tags:
+      - ac-2
+      - negative
+      - validation
+    given:
+      - "un administrador editando la audiencia de usuarios especificos"
+    when:
+      - "ingresa valores invalidos como texto sin arroba o un email mal formado, y guarda"
+      - "y en otra prueba selecciona audiencia de usuarios especificos y deja la lista vacia"
+    then:
+      - "la UI rechaza las entradas invalidas con un mensaje claro y no guarda la encuesta"
+      - "la lista vacia se rechaza con el mensaje del servidor: Specific user audience requires at least one respondent ID or email"
+      - "se deja constancia de si la validacion de formato de email existe tambien en el servidor o solo en el cliente"
+
+  - title: "AC3 · A matching respondent sees the survey when every other rule passes"
+    tags:
+      - ac-3
+      - happy-path
+      - functional-ui
+      - targeting
+    given:
+      - "una encuesta con audiencia de usuarios especificos cuya lista incluye el identificador o el email de un respondent conocido"
+      - "y esa encuesta pasa todos los demas gates de entrega"
+    when:
+      - "ese respondent genera una interaccion elegible en la organizacion de Salesforce"
+    then:
+      - "la encuesta se evalua como mostrable y el widget la presenta"
+      - "el match funciona tanto por email como por Salesforce respondent ID, ya que el runtime compara ambos contra la misma lista"
+      - "se capturan las pantallas del widget que evidencian la entrega al usuario incluido"
+
+  - title: "AC4 · A non-matching respondent never sees the survey, and an empty list closes the audience instead of opening it"
+    tags:
+      - ac-4
+      - negative
+      - targeting
+      - security
+    given:
+      - "la misma encuesta con audiencia de usuarios especificos"
+      - "y un respondent cuyo identificador y email NO estan en la lista"
+    when:
+      - "ese respondent genera una interaccion elegible"
+      - "y por separado se evalua una encuesta cuya lista de usuarios especificos quedo vacia"
+    then:
+      - "al respondent no coincidente no se le muestra la encuesta y el motivo devuelto es `audience`"
+      - "la lista vacia NO abre la audiencia a todo el mundo: el runtime devuelve false y bloquea, o sea falla cerrado"
+      - "el gate de audiencia se evalua antes que los demas, asi que el rechazo ocurre sin depender de fechas ni contadores"
+      - "se verifica el comportamiento con identificadores de Salesforce que difieran solo en mayusculas, para dimensionar el riesgo de falso positivo por la normalizacion a minusculas"
+
+  - title: "AC5 · Surveys without specific-user targeting keep their existing audience behavior unchanged"
+    tags:
+      - ac-5
+      - regression
+      - audience
+    given:
+      - "encuestas configuradas con las otras audiencias: everyone y organization"
+    when:
+      - "se evalua la elegibilidad de respondentes contra esas encuestas, antes y despues del cambio"
+    then:
+      - "la audiencia everyone sigue permitiendo a cualquier respondent"
+      - "la audiencia organization sigue comparando contra la clave de organizacion normalizada, y una lista vacia de organizaciones sigue significando todas"
+      - "ninguna encuesta sin targeting especifico cambia a quien se muestra respecto del commit PRE-fix"
+
+tags:
+  - im-967
+  - im-970
+  - im-1263
+  - survey-tool
+  - nps
+  - targeting
+  - audience
+  - specific-users
+  - survey-runtime
+  - access-control
+  - pr-71
+  - medium
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-11T16:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-11T16:30:00Z"
+  version: 1

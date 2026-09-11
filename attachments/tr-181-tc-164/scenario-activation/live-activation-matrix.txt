@@ -1,0 +1,51 @@
+IM-1255 / TC-164 — reglas de activacion verificadas en el entorno desplegado
+============================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, rama develop, PR 71 merge 4458647c)
+Fecha   : 2026-09-11
+Metodo  : admin API autenticada. POST /api/admin/surveys para creacion,
+          PUT /api/admin/surveys/:id para activacion.
+Orgs    : Auctifera (00DEm00000V5eRWMAZ) y VNFP (flow-site-19432-dev-ed), ambas registradas
+          en Survey Tool. Este es el unico test case del bloque que exige DOS organizaciones
+          a la vez, porque el AC de audiencias no solapadas no es demostrable con una sola.
+
+--- AC1 · a lo sumo una encuesta activa por alcance de producto -------------------------
+
+Observado de forma espontanea al preparar TC-161: tras crear el survey 14 activo sobre el
+subject 8, el intento de crear un SEGUNDO survey activo para el mismo subject devolvio
+
+  HTTP 409
+  "Only one survey can be active for product or subject QA TC-161 Cadence.
+   Deactivate survey 14 before activating this survey."
+
+La encuesta ya activa (14) quedo intacta, y el mensaje identifica cual es el conflicto y que
+hay que hacer para resolverlo. El rechazo viene del SERVIDOR, no de la UI.
+Se necesitaron tres subjects distintos para poder tener tres cadencias activas a la vez, lo
+que es una demostracion practica de que la regla se aplica de verdad.
+
+--- AC2 y AC3 · exclusividad de audiencias entre General NPS ----------------------------
+
+Estado de partida: las cuatro encuestas General NPS (feature 2) estaban inactivas.
+
+| # | Accion | Audiencia | Resultado | Esperado | Verdict |
+|---|--------|-----------|-----------|----------|---------|
+| 1 | activar survey 2 | organizacion Auctifera | HTTP 200, active=true | activar | PASS |
+| 2 | activar survey 10 | organizacion VNFP (DISJUNTA de la anterior) | HTTP 200, active=true — ambas activas a la vez | activar | PASS (AC2) |
+| 3 | activar survey 4 | organizacion Auctifera (SOLAPA con la 2) | HTTP 409 "An active general survey already applies to this audience (survey 2)." | rechazar e identificar el conflicto | PASS (AC3) |
+| 4 | activar survey 1 | everyone, equivalente a All organizations | HTTP 409 "An active general survey already applies to this audience (survey 2)." | rechazar | PASS (AC3) |
+
+  AC2 demostrado: dos General NPS coexisten activas mientras sus audiencias de organizacion
+  no se intersecten (Auctifera y VNFP).
+  AC3 demostrado en sus dos formas: solapamiento directo por organizacion (caso 3) y el caso
+  All organizations, que se trata como solapamiento con cualquier audiencia activa (caso 4).
+  En ambos rechazos el mensaje nombra la encuesta en conflicto (survey 2), que es
+  exactamente lo que pide el AC, y las encuestas ya activas quedaron sin cambios.
+
+--- Estado del entorno tras la prueba ---------------------------------------------------
+
+Las encuestas 2 y 10 se devolvieron a inactive, su estado original. Verificacion final:
+  id=1 active=false · id=2 active=false · id=4 active=false · id=10 active=false
+Se restauro a proposito: dejar una General NPS activa cambia lo que ven los usuarios reales
+del entorno dev, y esta corrida no debe alterar el comportamiento del entorno.
+
+Los subjects y surveys creados por QA (prefijo "QA TC-16x") SI se conservan como evidencia,
+siguiendo la practica de no borrar datos de prueba.

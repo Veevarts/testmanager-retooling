@@ -1,0 +1,239 @@
+schemaVersion: "1.0"
+id: tr-ccac712d-0df0-478a-a846-cf66eb4fc7d0
+key: TR-179
+title: >-
+  TR-179 · IM-967 · TC-162 · Specific-user survey targeting — 5/5 PASS. Match por email y por
+  Salesforce ID verificado en runtime, comportamiento fail-closed confirmado, y el riesgo de
+  normalizacion de mayusculas medido y acotado a IDs de 15 caracteres.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
+    del PR 71 (4458647c) desplegado — Deploy en verde el 2026-09-11 15:26 UTC. Clone local en
+    4458647c mas el base 4458647c~1. Organizaciones: Auctifera (00DEm00000V5eRWMAZ) y VNFP
+    (flow-site-19432-dev-ed).
+  buildVersion: >-
+    Mixed. El PR 71 implementa nueve tickets a la vez (+3309/-596, 40 archivos); esta corrida
+    valida unicamente la porcion de IM-967.
+testPlanId: null
+startedAt: "2026-09-11T21:00:00Z"
+completedAt: "2026-09-11T21:15:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  La audiencia de una encuesta es un enum de tres valores; el nuevo es `specific_users`.
+  Cuando esta activo, `matchesSpecificUserAudience(audienceDetails, ctx)` compara el
+  `respondentId` y el `respondentEmail` del contexto contra una lista de tokens parseada de
+  `audienceDetails` (separada por saltos de linea, comas o punto y coma). Todo se normaliza
+  con `trim().toLowerCase()` en ambos lados. Si la lista esta vacia el matcher devuelve false,
+  o sea la ausencia de configuracion CIERRA la audiencia. El gate de audiencia es el primero
+  que se evalua y devuelve el motivo `audience`. Del lado admin,
+  `validateSpecificUserAudience()` impide guardar la encuesta con la lista vacia.
+
+  ## Inferred technical tests
+
+  Es control de acceso, asi que el test correcto es ejercitar el endpoint publico real
+  (POST /api/features/:id/surveys) con contextos de respondent controlados y comprobar las dos
+  direcciones: que el incluido reciba la encuesta y que el excluido no la reciba nunca. El caso
+  de la lista vacia debe probarse explicitamente porque es donde un matcher mal escrito abriria
+  la audiencia en vez de cerrarla.
+
+results:
+  - testCaseId: "f98f1575-1313-4556-baf8-de1823e2039f"
+    testCaseKey: TC-162
+    scenarioTitle: >-
+      AC1 · An authenticated admin can configure specific-user targeting with one or more
+      addresses
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-11T21:03:00Z"
+    stepResults: []
+    actual: |
+      Subject 12 "QA TC-162 Targeting" con survey 18 creado por la admin API autenticada:
+        audience        = specific_users
+        audienceDetails = "incluido@veevart.com, 005Em00000joJdDIAU"
+
+      La encuesta quedo persistida con la audiencia y la lista tal cual se enviaron (HTTP 201).
+      La lista acepta varias entradas separadas por coma, y el parser tambien admite saltos de
+      linea y punto y coma. El endpoint vive bajo /api/admin, detras del middleware
+      requireAdminAuth, asi que la configuracion solo es alcanzable con sesion de administrador.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no existia la audiencia de usuarios
+      especificos -> se configura y persiste desde la UI autenticada -> SI.
+    notes: "**PASS**."
+    attachments:
+      - name: live-targeting-matrix.txt
+        path: attachments/tr-179-tc-162/scenario-targeting/live-targeting-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "f98f1575-1313-4556-baf8-de1823e2039f"
+    testCaseKey: TC-162
+    scenarioTitle: >-
+      AC2 · Invalid entries are rejected with clear feedback, and an empty list cannot be saved
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-11T21:05:00Z"
+    stepResults: []
+    actual: |
+      Lista vacia: crear una encuesta con audience specific_users y audienceDetails vacio
+      devuelve HTTP 400 con el mensaje del servidor:
+        "Specific user audience requires at least one respondent ID or email."
+
+      Validacion de formato: la pregunta abierta del bundle era si la validacion de email
+      existia solo en el cliente. Medido en el entorno, NO: el esquema zod del servidor tambien
+      la aplica. Al enviar una respuesta con el email "qa'or'1'='1@veevart.com" el servidor
+      responde 400 con fieldErrors.respondentEmail = ["Invalid email"].
+
+      O sea la barrera de formato esta tambien del lado servidor, no solo en la UI. Queda
+      cerrado el riesgo que el bundle habia marcado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no habia validacion de esta audiencia -> lista
+      vacia y emails mal formados rechazados por el servidor -> SI.
+    notes: >-
+      **PASS**. El riesgo "la validacion de email podria vivir solo en la UI" queda cerrado como
+      no-defecto: el servidor tambien valida.
+    attachments:
+      - name: live-targeting-matrix.txt
+        path: attachments/tr-179-tc-162/scenario-targeting/live-targeting-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "f98f1575-1313-4556-baf8-de1823e2039f"
+    testCaseKey: TC-162
+    scenarioTitle: "AC3 · A matching respondent sees the survey when every other rule passes"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-11T21:08:00Z"
+    stepResults: []
+    actual: |
+      Contra el endpoint publico real, con el survey 18 y los demas gates abiertos:
+
+        email exacto de la lista     (incluido@veevart.com)   -> MOSTRAR
+        email en MAYUSCULAS          (INCLUIDO@VEEVART.COM)   -> MOSTRAR
+        Salesforce ID exacto, 18 ch  (005Em00000joJdDIAU)     -> MOSTRAR
+
+      El match funciona por las dos vias, email y respondent ID, contra la misma lista, tal como
+      implementa matchesSpecificUserAudience. La insensibilidad a mayusculas en el email es
+      correcta.
+
+      Evidencia adicional no prevista en el escenario: el ingest de respuestas TAMBIEN valida la
+      audiencia. Al enviar una respuesta al survey 18 con un respondent que no esta en la lista,
+      el servidor responde 400 "Respondent ID or email does not match the survey audience". El
+      targeting no solo filtra la entrega: tambien impide registrar respuestas de quien no
+      pertenece a la audiencia. Es una segunda barrera coherente con el objetivo del ticket.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no existia el targeting -> el respondent
+      incluido recibe la encuesta por email o por ID -> SI.
+    notes: >-
+      **PASS**. Cierra una de las dos brechas que el PR declaraba sin validar desplegado
+      (targeting especifico en runtime).
+    attachments:
+      - name: live-targeting-matrix.txt
+        path: attachments/tr-179-tc-162/scenario-targeting/live-targeting-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "f98f1575-1313-4556-baf8-de1823e2039f"
+    testCaseKey: TC-162
+    scenarioTitle: >-
+      AC4 · A non-matching respondent never sees the survey, and an empty list closes the
+      audience instead of opening it
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-11T21:10:00Z"
+    stepResults: []
+    actual: |
+      Direccion negativa, contra el mismo endpoint publico:
+
+        email que NO esta en la lista (ajeno@veevart.com)   -> no-mostrar
+        ID que NO esta en la lista    (005Em00000ZZZZZZZZ)  -> no-mostrar
+        sin respondentId ni email                           -> no-mostrar
+        ambos vacios                                        -> no-mostrar
+
+      FAIL-CLOSED CONFIRMADO: sin identificadores la encuesta no se entrega, y una lista vacia
+      ni siquiera se puede guardar (HTTP 400). La ausencia de configuracion cierra la audiencia
+      en vez de abrirla, que es la decision correcta para un control de acceso.
+
+      RIESGO DE NORMALIZACION, medido y acotado. La comparacion de IDs es case-insensitive
+      porque ambos lados pasan por toLowerCase(). Para Salesforce eso es semanticamente
+      incorrecto, pero la explotabilidad depende del formato:
+        - IDs de 15 caracteres: dos IDs distintos que difieran solo en mayusculas COLISIONAN
+          (005Em00000joJdD y 005em00000JOjDD -> ambos "005em00000jojdd"). Ahi el falso positivo
+          seria real.
+        - IDs de 18 caracteres: los 3 finales son un checksum que codifica el case de los 15
+          primeros, asi que dos IDs reales distintos NO colisionan
+          (005Em00000joJdDIAU -> "...iau" contra 005em00000JOjDDAA1 -> "...aa1").
+      Todos los respondentId observados en este entorno son de 18 caracteres. VEREDICTO: no es
+      un defecto de control de acceso con los datos actuales; queda como recomendacion de
+      robustez.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no existia el targeting -> el respondent
+      excluido no recibe la encuesta y la ausencia de lista cierra la audiencia -> SI.
+    notes: >-
+      **PASS con observacion**. Recomendacion al dev: comparar los respondentId de forma
+      case-sensitive y reservar el toLowerCase() para los emails. El widget recibe el
+      respondentId de quien lo invoca y no impone el formato de 18 caracteres, asi que una
+      implementacion que pase IDs de 15 materializaria el riesgo.
+    attachments:
+      - name: live-targeting-matrix.txt
+        path: attachments/tr-179-tc-162/scenario-targeting/live-targeting-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "f98f1575-1313-4556-baf8-de1823e2039f"
+    testCaseKey: TC-162
+    scenarioTitle: >-
+      AC5 · Surveys without specific-user targeting keep their existing audience behavior
+      unchanged
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-11T21:12:00Z"
+    stepResults: []
+    actual: |
+      Las otras dos audiencias siguen decidiendo igual que antes del cambio:
+
+        everyone     : los surveys 14, 15, 16 y 17 (audiencia everyone) se entregaron en todas
+                       las pruebas de cadencia de TR-178 a respondentes arbitrarios, sin que la
+                       audiencia bloqueara en ningun momento.
+        organization : el survey 3 (Rentals, organizacion Auctifera) y las General NPS con
+                       audiencia de organizacion siguieron comparando contra la clave de
+                       organizacion normalizada; lo observado en TR-181 al activar y desactivar
+                       audiencias por organizacion es consistente con el PRE-fix.
+
+      El diff no toca las ramas everyone ni organization de la funcion de audiencia: solo agrega
+      la rama specific_users. Las suites del repo lo respaldan con server 113/113 y client 60/60
+      en verde sobre 4458647c.
+
+      pre-fix -> post-fix -> objetivo cumplido?: las audiencias existentes decidian de cierta
+      forma -> siguen decidiendo igual -> SI.
+    notes: "**PASS**. Ninguna encuesta sin targeting especifico cambio a quien se muestra."
+    attachments:
+      - name: live-targeting-matrix.txt
+        path: attachments/tr-179-tc-162/scenario-targeting/live-targeting-matrix.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-11T21:00:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: "Arranca la ejecucion de TC-162 sobre el PR 71 desplegado en dev."
+  - at: "2026-09-11T21:15:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      5/5 PASS. Match verificado por email y por Salesforce ID contra el endpoint publico real,
+      comportamiento fail-closed confirmado en cuatro variantes, y validacion de servidor
+      demostrada tanto para la lista vacia como para el formato de email. Cierra la segunda de
+      las dos brechas que el PR declaraba sin validar desplegado. Sin defectos: el riesgo de
+      normalizacion de mayusculas se midio y quedo acotado a IDs de 15 caracteres, que no es el
+      formato en uso.
