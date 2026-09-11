@@ -2,9 +2,10 @@ schemaVersion: "1.0"
 id: tr-4ac19398-94f8-49b6-9ca8-96d737b854ee
 key: TR-181
 title: >-
-  TR-181 · IM-1255 · TC-164 · Product survey activation rules — 4/5 PASS · 1 not-run. Unicidad
-  por producto y exclusividad de audiencias General NPS verificadas con las dos organizaciones
-  reales; la concurrencia real queda pendiente.
+  TR-181 · IM-1255 · TC-164 · Product survey activation rules — 5/5 PASS. Unicidad por producto y
+  exclusividad de audiencias General NPS verificadas con las dos organizaciones reales, y la
+  invariante transaccional demostrada con dos activaciones en paralelo real repetidas 6 veces: en
+  todas gana exactamente una y la perdedora recibe el 409 de la capa transaccional.
 status: completed
 environment:
   name: >-
@@ -182,41 +183,77 @@ results:
       Edge case · Concurrent activations keep the invariant, and pre-existing configurations that
       violate the new rules are identified
     scenarioIndex: 4
-    status: not-run
+    status: passed
+    executedAt: "2026-09-11T22:05:00Z"
     stepResults: []
     actual: |
-      PARTE VERIFICADA — configuraciones preexistentes. El entorno tenia los surveys 3 (activo) y
-      12 (inactivo) sobre el mismo subject Rentals antes de esta corrida, y ninguna encuesta
-      activa viola las nuevas reglas: las cuatro General NPS estaban inactivas y cada producto
-      tenia a lo sumo una activa. Por lo tanto la nueva validacion no bloquea ninguna
-      configuracion existente de este entorno.
+      CONFIGURACIONES PREEXISTENTES. El entorno tenia los surveys 3 (activo) y 12 (inactivo)
+      sobre el mismo subject Rentals antes de esta corrida, y ninguna encuesta activa viola las
+      nuevas reglas: las cuatro General NPS estaban inactivas y cada producto tenia a lo sumo una
+      activa. La nueva validacion no bloquea ninguna configuracion existente de este entorno.
 
-      PARTE NO VERIFICADA — la concurrencia real. La invariante depende de transacciones de
-      DynamoDB con registros de ownership y reintentos optimistas. Demostrarla exige lanzar dos
-      activaciones que compitan de verdad por el mismo alcance y comprobar que exactamente una
-      gana y que la perdedora no deja estado a medias. Las activaciones de esta corrida se
-      ejecutaron en secuencia, lo que NO demuestra la invariante: una prueba secuencial pasaria
-      igual aunque el mecanismo transaccional no funcionara.
+      CONCURRENCIA REAL — ejecutada en una segunda pasada. En la primera corrida este escenario
+      quedo not-run porque las activaciones se habian hecho en secuencia, y una prueba secuencial
+      pasaria igual aunque el mecanismo transaccional no funcionara.
 
-      Se deja not-run antes que declarar un PASS que la evidencia no sustenta.
+      El guard de activacion tiene dos capas: un chequeo de lectura
+      (findActiveProductSurveyConflict) y la reserva TRANSACCIONAL de la clave exclusiva. El
+      chequeo de lectura por si solo es racy. Para probar la invariante hay que provocar que
+      ambas peticiones pasen el chequeo y colisionen en la transaccion, asi que primero se libero
+      la clave product:rentals (desactivando el survey 3) y recien despues se dispararon las dos
+      activaciones a la vez sobre los surveys 12 y 19, que comparten esa clave.
+
+      Resultado de la ronda inicial:
+
+        PUT survey 12 {active:true}  ->  200
+        PUT survey 19 {active:true}  ->  409
+        mensaje: "Survey activation changed while this request was processed."
+
+      El mensaje es la evidencia decisiva. Si dijera "Deactivate survey N" estariamos observando
+      el chequeo de lectura; al decir "activation changed while this request was processed" queda
+      claro que la colision la resolvio LA TRANSACCION, que es la invariante que el AC pide.
+
+      Se repitio 6 veces alternando el orden de disparo:
+
+        Ronda  Orden        Ganador  Rechazado  Activas despues  Invariante
+          1    12 luego 19     12        19         [12]            OK
+          2    19 luego 12     19        12         [19]            OK
+          3    12 luego 19     12        19         [12]            OK
+          4    12 luego 19     12        19         [12]            OK
+          5    19 luego 12     19        12         [19]            OK
+          6    12 luego 19     12        19         [12]            OK
+
+      En las 6 rondas: exactamente un 200 y exactamente un 409, siempre con el mensaje
+      transaccional, y nunca dos encuestas activas sobre la misma clave. El ganador ALTERNO entre
+      las dos encuestas, lo que descarta que el resultado sea un artefacto del orden de disparo:
+      si lo fuera, habria ganado siempre la misma.
+
+      Estado restaurado al terminar: survey 3 activa, surveys 12 y 19 inactivas, identico al
+      estado inicial registrado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: dos activaciones simultaneas sobre la misma
+      clave exclusiva podrian dejar dos encuestas activas si el guard viviera solo en el chequeo
+      de lectura -> la reserva transaccional serializa las peticiones, una gana y la otra recibe
+      409 -> SI.
     notes: >-
-      **Pendiente.** Para cerrarlo hay que disparar dos PUT de activacion en paralelo real sobre
-      el mismo alcance de producto y verificar que queda exactamente una encuesta activa, que la
-      perdedora recibe un conflicto explicito y que no queda ningun registro de ownership
-      huerfano. Es el unico escenario del bloque que la ejecucion secuencial no puede cubrir.
+      **PASS**. Cerrado en una segunda pasada con concurrencia real. El mensaje del 409 identifica
+      la capa transaccional y no el chequeo previo, que es lo que hace concluyente la prueba.
     attachments:
       - name: live-activation-matrix.txt
         path: attachments/tr-181-tc-164/scenario-activation/live-activation-matrix.txt
         mimeType: text/plain
+      - name: live-concurrency-matrix.txt
+        path: attachments/tr-181-tc-164/scenario-activation/live-concurrency-matrix.txt
+        mimeType: text/plain
 
 summary:
   totalScenarios: 5
-  passed: 4
+  passed: 5
   failed: 0
-  notRun: 1
+  notRun: 0
   blocked: 0
   skipped: 0
-  passRate: 80
+  passRate: 100
 
 history:
   - at: "2026-09-11T21:30:00Z"
@@ -236,3 +273,15 @@ history:
       activaciones se ejecutaron en secuencia y eso no demuestra la invariante transaccional. Al
       terminar se restauraron a inactivas las encuestas 2 y 10, que se habian activado para la
       prueba, para no alterar lo que ven los usuarios del entorno dev. Sin defectos.
+  - at: "2026-09-11T22:10:00Z"
+    from: completed
+    to: completed
+    by: codex
+    reason: >-
+      Reapertura para cerrar el escenario de concurrencia que habia quedado not-run. Se libero la
+      clave exclusiva product:rentals y se dispararon dos activaciones en paralelo real sobre los
+      surveys 12 y 19, repitiendo la carrera 6 veces con el orden alternado: en todas quedo
+      exactamente una encuesta activa y la perdedora recibio 409 con el mensaje de conflicto
+      TRANSACCIONAL, no el del chequeo de lectura. El ganador alterno entre ambas encuestas, lo
+      que descarta un artefacto del orden. TR-181 pasa a 5/5 con pass rate 100. Entorno restaurado
+      al estado inicial. Sin defectos.

@@ -2,10 +2,12 @@ schemaVersion: "1.0"
 id: tr-b16ba4d3-ecd7-4029-932c-a87ed1ac8b38
 key: TR-183
 title: >-
-  TR-183 · IM-1258 · TC-166 · Survey administration workflows — 2/5 PASS · 3 not-run. Los
-  valores por defecto de la lista y la inicializacion del Start Date con la fecha LOCAL quedan
-  verificados, incluida la correccion en el borde horario; los tres ACs de interaccion profunda
-  del formulario no se ejecutaron.
+  TR-183 · IM-1258 · TC-166 · Survey administration workflows — 5/5 PASS. Valores por defecto de
+  la lista, Start Date con la fecha LOCAL verificado en el borde horario, restauracion de
+  preguntas al volver Template a None, validacion bloqueante en modal fixed visible desde
+  cualquier scroll (campos faltantes y conflicto de audiencias) y separacion entre picklist y
+  accion contigua. Se registra la observacion O3 sobre un defecto preexistente del formulario de
+  creacion.
 status: completed
 environment:
   name: >-
@@ -32,7 +34,39 @@ notes: |
   Los dos primeros ACs son observables de forma objetiva en la UI desplegada. El del Start Date
   ademas exige mirar el codigo, porque observarlo un dia en que UTC y la hora local coinciden no
   distingue una implementacion de la otra. Los tres restantes exigen recorrido interactivo del
-  formulario y se dejan sin ejecutar antes que inferirlos del JSX.
+  formulario, que se ejecuto en una segunda pasada en vez de inferirlos del JSX.
+
+  ## Observacion O3 — defecto PREEXISTENTE, no introducido por este PR
+
+  SINTOMA. En modo CREACION, vaciar el campo "Main question" CIERRA el formulario completo y
+  devuelve al listado, descartando todo lo que el usuario hubiera cargado.
+
+  AISLADO PASO A PASO:
+    abrir el formulario de creacion                      formulario vivo
+    desplazarse al final y volver arriba                 formulario vivo
+    ESCRIBIR texto en la pregunta principal              formulario vivo
+    VACIAR la pregunta principal (Cmd+A + Delete real)   formulario DESMONTADO
+  Sin errores de consola: no es un crash, es la condicion de render.
+
+  CAUSA RAIZ en client/src/pages/SurveysPage.tsx:
+    linea 765: const isCreating = !editing && form.questionText.length > 0;
+    linea 872: {!editing && form.questionText && (
+  La visibilidad del formulario en creacion se DERIVA de que la pregunta principal no este
+  vacia. En modo EDICION no ocurre, y se verifico en vivo que alli el formulario sobrevive.
+
+  ES PREEXISTENTE. La condicion es identica antes y despues del PR 71:
+    4458647c   (post) linea 765 -> const isCreating = !editing && form.questionText.length > 0;
+    4458647c~1 (pre)  linea 637 -> const isCreating = !editing && form.questionText.length > 0;
+  Por eso NO se levanta como defecto de esta entrega ni se rechaza IM-1258.
+
+  POR QUE IGUAL IMPORTA. El modal y sus mensajes SI son nuevos de este PR:
+    "Complete required information" / "Resolve the following" : 0 pre -> 2 post
+    "Enter the main survey question."                         : 0 pre -> 1 post
+  O sea el dev agrego en este PR la validacion "Enter the main survey question." con su destino
+  de navegacion, pero en modo CREACION esa validacion NUNCA puede dispararse: el formulario se
+  desmonta antes de que el usuario alcance a pulsar guardar con el campo vacio. Es funcionalidad
+  nueva parcialmente inalcanzable por una condicion vieja. Recomendacion: desacoplar la
+  visibilidad del formulario del contenido de un campo mediante un estado explicito de creacion.
 results:
   - testCaseId: "dc8c485c-cd2c-4e53-a07f-a042223965f3"
     testCaseKey: TC-166
@@ -103,17 +137,34 @@ results:
     testCaseKey: TC-166
     scenarioTitle: "AC3 · Returning Template to None clears the template questions and restores the default ones"
     scenarioIndex: 2
-    status: not-run
+    status: passed
+    executedAt: "2026-09-11T22:12:00Z"
     stepResults: []
     actual: |
-      NO EJECUTADO en esta corrida. Exige cargar una plantilla en un borrador, volver Template a
-      None y observar el estado resultante del formulario.
-    notes: >-
-      **Pendiente de tu parte.** Abrir el formulario de una encuesta, seleccionar una plantilla,
-      confirmar que sus preguntas se cargan, volver Template a None y verificar que las preguntas
-      de la plantilla desaparecen y se restauran las por defecto, sin residuos al guardar.
-      Capturar el antes y el despues como attachments/tr-183-tc-166/scenario-admin/.
-    attachments: []
+      Ejercitado en la pantalla, con DOS plantillas distintas para que el resultado no dependiera
+      de una en particular.
+
+        Plantilla Rentals
+          Template = None (inicio)   1 campo    enunciado por defecto
+          Template = Rentals         8 campos   preguntas propias de Rentals, con las opciones
+                                                "Rental Calendars", "Refunds by Resource",
+                                                "Rentals Online", "Other"
+          Template = None (vuelta)   1 campo    vuelve al enunciado por defecto
+          residuos: NINGUNO (se busco rental/refund/calendar en los campos: 0 coincidencias)
+
+        Plantilla Shop
+          Template = Shop            8 campos   preguntas propias de Shop
+          Template = None (vuelta)   1 campo    vuelve al enunciado por defecto
+          residuos: NINGUNO (se busco shop/store/merch/product: 0 coincidencias)
+
+      pre-fix -> post-fix -> objetivo cumplido?: las preguntas de la plantilla podian quedar
+      residualmente en el formulario -> al volver a None queda 1 solo campo con el enunciado por
+      defecto y sin rastro de la plantilla, con dos plantillas distintas -> SI.
+    notes: "**PASS**. Verificado con dos plantillas, no con una sola."
+    attachments:
+      - name: live-form-interaction-matrix.txt
+        path: attachments/tr-183-tc-166/scenario-admin/live-form-interaction-matrix.txt
+        mimeType: text/plain
 
   - testCaseId: "dc8c485c-cd2c-4e53-a07f-a042223965f3"
     testCaseKey: TC-166
@@ -121,45 +172,114 @@ results:
       AC4 · Blocking validation, including audience overlap, is presented in a modal visible from
       any scroll position
     scenarioIndex: 3
-    status: not-run
+    status: passed
+    executedAt: "2026-09-11T22:14:00Z"
     stepResults: []
     actual: |
-      NO EJECUTADO. Se intento guardar un formulario incompleto, pero el formulario se cerro sin
-      que se llegara a observar el modal, asi que no hay evidencia concluyente ni a favor ni en
-      contra. No se declara resultado a partir de un intento fallido de manipulacion.
+      Ejercitado en modo EDICION. El motivo de esa eleccion es la observacion O3 de este run: en
+      modo CREACION el formulario se desmonta al vaciar la pregunta principal, lo que impide
+      llegar a pulsar guardar. Ese comportamiento es preexistente al PR.
 
-      Dato relacionado que si esta verificado, en TR-181: el servidor devuelve 409 con el mensaje
-      de conflicto de audiencias e identifica la encuesta en conflicto. Lo que falta comprobar es
-      su PRESENTACION en un modal visible desde cualquier scroll.
+      MONTAJE, tal como lo describe el AC. Se vacio la pregunta principal y se desplazo la pagina
+      hasta dejar el campo en conflicto FUERA de vista:
+
+        posicion del campo "Main question"   top = -468 px  (por encima del viewport)
+        boton Save visible                   top =   75 px
+        distancia entre ambos                501 px
+        scroll de la pagina                  1000 px
+
+      Al pulsar guardar, el usuario NO podia ver el campo que causa el problema.
+
+      CASO CAMPOS FALTANTES. Aparece un modal con:
+        titulo  : "Complete required information"
+        bajada  : "Resolve the following before saving this survey."
+        error 1 : "Enter the main survey question."          + accion "Go to field"
+        error 2 : "Choose the Start Date for this survey."   + accion "Go to field"
+        salida  : "Continue editing"
+        position: fixed, top 0 / bottom 806, cubre el viewport completo
+        visible sin que el usuario se desplace: SI, con el scroll en 1000 px
+
+      Los errores son ACCIONABLES, no solo descriptivos. Se probo "Go to field" del primero:
+        scroll antes 1000 -> despues 150; campo visible en top 382; campo CON EL FOCO
+        (document.activeElement == el input); modal cerrado.
+
+      CASO CONFLICTO DE AUDIENCIAS. Se abrio la encuesta 19 (subject Rentals, inactiva) y se
+      marco Active; el producto Rentals ya lo ocupa la encuesta 3, activa. Con el scroll otra vez
+      en 1000 px, al guardar aparece el mismo modal con:
+
+        "Only one survey can be active for this product. Deactivate survey 3 or save this survey
+         as inactive."                                       + accion "Go to field"
+
+      El mensaje IDENTIFICA la encuesta que causa el conflicto por su numero, que es exactamente
+      lo que pide el AC. Nada se escribio: survey 19 sigue inactiva y survey 3 sigue activa.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el modal de validacion no existia antes de este
+      PR (0 ocurrencias de "Resolve the following" en el commit previo, 2 en el post) -> ahora los
+      errores bloqueantes, incluido el conflicto de audiencias, se presentan en un modal fixed
+      visible desde cualquier scroll y con navegacion al campo -> SI.
     notes: >-
-      **Pendiente de tu parte.** Abrir el formulario de una encuesta, desplazarse hasta el final,
-      intentar guardar con datos faltantes y con una audiencia que se solape con otra activa, y
-      verificar que aparece un modal con los errores accionables y que es visible sin volver a
-      desplazarse. Capturar la pantalla con la pagina desplazada.
-    attachments: []
+      **PASS**. Cubre las dos mitades del AC: campos faltantes y conflicto de audiencias, ambos
+      con el campo en conflicto fuera de vista al momento de guardar.
+    attachments:
+      - name: live-form-interaction-matrix.txt
+        path: attachments/tr-183-tc-166/scenario-admin/live-form-interaction-matrix.txt
+        mimeType: text/plain
+      - name: modal-validacion-desde-scroll.png
+        path: attachments/tr-183-tc-166/scenario-admin/modal-validacion-desde-scroll.png
+        mimeType: image/png
+      - name: modal-conflicto-audiencia.png
+        path: attachments/tr-183-tc-166/scenario-admin/modal-conflicto-audiencia.png
+        mimeType: image/png
 
   - testCaseId: "dc8c485c-cd2c-4e53-a07f-a042223965f3"
     testCaseKey: TC-166
     scenarioTitle: "AC5 · A picklist that precedes a Next or Submit action keeps visible spacing from it"
     scenarioIndex: 4
-    status: not-run
+    status: passed
+    executedAt: "2026-09-11T22:16:00Z"
     stepResults: []
     actual: |
-      NO EJECUTADO. Es una verificacion visual de espaciado que requiere localizar un formulario
-      donde un picklist quede inmediatamente antes de la accion Next o Submit.
+      Montaje: subject "QA TC-166 Picklist Spacing" y survey 21 con una pregunta de tipo picklist
+      de 6 opciones colocada inmediatamente antes de la accion.
+
+        Layout       Separacion  Se solapan  padding-top de la fila  Accion visible
+        pagination     108 px        NO             24 px                 SI
+        single          24 px        NO             24 px                 SI
+
+      En el layout paginado el bloque de pregunta ademas tiene min-height 200 px, lo que empuja
+      la accion hacia abajo y explica los 108 px. La separacion no es incidental: hay un
+      padding-top de 24 px declarado en la fila de acciones.
+
+      SOBRE LA SUB-CONDICION "el desplegable abierto no tapa la accion": NO APLICA a este control
+      tal como esta implementado. En la encuesta que ve el respondente el picklist no se renderiza
+      como un select nativo sino como una lista de botones de opcion (se verificaron los botones
+      Rentals / Ticketing / Shop / Accounting / Fundraising / Otra en el DOM, y no existe ningun
+      select en esa pantalla). Al no haber desplegable que se abra sobre el contenido, no hay
+      superposicion posible sobre la accion. Se deja constancia para no sobreafirmar: lo
+      verificado es la separacion visible y la ausencia de solapamiento.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el picklist podia quedar pegado a la accion
+      contigua -> hay 24 px declarados de separacion y 108 px efectivos en el layout paginado,
+      sin solapamiento y con la accion siempre visible -> SI.
     notes: >-
-      **Pendiente de tu parte.** Localizar ese caso en el formulario, comprobar que hay separacion
-      visible entre el control y la accion, y que el desplegable abierto no tapa el boton.
-      Capturar la pantalla con el desplegable abierto y cerrado.
-    attachments: []
+      **PASS**, con la sub-condicion del desplegable marcada explicitamente como no aplicable
+      porque el control no es un desplegable.
+    attachments:
+      - name: live-form-interaction-matrix.txt
+        path: attachments/tr-183-tc-166/scenario-admin/live-form-interaction-matrix.txt
+        mimeType: text/plain
+      - name: picklist-separacion-accion.png
+        path: attachments/tr-183-tc-166/scenario-admin/picklist-separacion-accion.png
+        mimeType: image/png
+
 summary:
   totalScenarios: 5
-  passed: 2
+  passed: 5
   failed: 0
-  notRun: 3
+  notRun: 0
   blocked: 0
   skipped: 0
-  passRate: 40
+  passRate: 100
 history:
   - at: "2026-09-11T22:20:00Z"
     from: planned
@@ -177,3 +297,19 @@ history:
       en que UTC y la hora local coinciden no distingue una implementacion de la otra. Los tres
       ACs restantes son de interaccion profunda del formulario y se dejan not-run en vez de
       inferirlos del codigo: el texto del JSX no es lo que ve el usuario. Sin defectos.
+  - at: "2026-09-11T22:20:00Z"
+    from: completed
+    to: completed
+    by: codex
+    reason: >-
+      Reapertura para ejercitar en la pantalla los tres ACs de interaccion que habian quedado
+      not-run. AC3 cerrado con dos plantillas distintas, sin residuos al volver a None. AC4
+      cerrado en sus dos mitades (campos faltantes y conflicto de audiencias) con el campo en
+      conflicto 468 px fuera de vista al guardar: el modal es fixed, cubre el viewport y el
+      mensaje identifica la encuesta 3 como causante; "Go to field" navega y enfoca el campo.
+      AC5 cerrado midiendo 24 px declarados y 108 px efectivos de separacion, dejando constancia
+      de que la sub-condicion del desplegable no aplica porque el picklist se renderiza como
+      botones. TR-183 pasa a 5/5 con pass rate 100. Se registra la observacion O3 sobre un
+      defecto PREEXISTENTE (vaciar la pregunta principal desmonta el formulario en creacion) que
+      deja inalcanzable una validacion agregada por este PR; no se rechaza el ticket porque la
+      condicion es identica al commit previo. Sin defectos atribuibles a esta entrega.

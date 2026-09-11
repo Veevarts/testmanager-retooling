@@ -1,0 +1,205 @@
+TR-183 · TC-166 · IM-1258 — AC3, AC4 y AC5 ejercitados en la UI desplegada
+===========================================================================
+Ejecutado    : 2026-09-11
+Entorno      : Survey Tool dev (https://surveytool.dev.veevart.ai), `develop` con el merge
+               commit del PR 71 (4458647c). Navegador en UTC-5, viewport 1512x806.
+
+Los tres ACs habian quedado not-run en la primera corrida por no inferirlos del JSX. Aqui se
+ejercitan de verdad en la pantalla.
+
+
+AC3 · VOLVER TEMPLATE A NONE RESTAURA LAS PREGUNTAS POR DEFECTO
+================================================================
+Se hizo el viaje de ida y vuelta con DOS plantillas distintas, para que el resultado no
+dependiera de una en particular.
+
+  Plantilla Rentals
+  -----------------
+    Estado                      Campos de texto   Contenido
+    --------------------------  ---------------   -------------------------------------------
+    Template = None (inicio)           1          "How likely are you to recommend us to a
+                                                   friend or colleague?"  (por defecto)
+    Template = Rentals                 8          preguntas propias de Rentals, incluidas las
+                                                  opciones "Rental Calendars", "Refunds by
+                                                  Resource", "Rentals Online", "Other"
+    Template = None (vuelta)           1          vuelve al enunciado por defecto
+
+    residuos de la plantilla tras volver a None : NINGUNO
+      (se busco cualquier texto con rental / refund / calendar en los campos: 0 coincidencias)
+
+  Plantilla Shop
+  --------------
+    Template = Shop                    8          preguntas propias de Shop
+    Template = None (vuelta)           1          vuelve al enunciado por defecto
+
+    residuos de la plantilla tras volver a None : NINGUNO
+      (se busco shop / store / merch / product: 0 coincidencias)
+
+  VEREDICTO AC3: PASS
+    pre-fix -> post-fix -> objetivo cumplido?
+      las preguntas de la plantilla podian quedar residualmente en el formulario
+      -> al volver a None el formulario queda con 1 solo campo y el enunciado por defecto,
+         sin rastro de la plantilla anterior, con dos plantillas distintas
+      -> SI.
+
+
+AC4 · VALIDACION BLOQUEANTE EN UN MODAL VISIBLE DESDE CUALQUIER SCROLL
+=======================================================================
+Se ejercito en modo EDICION. El motivo de esa eleccion esta explicado en la observacion O3
+al final de este archivo: en modo CREACION el formulario se desmonta al vaciar la pregunta
+principal, lo que impide llegar a pulsar guardar.
+
+  Montaje del escenario, tal como lo describe el AC
+  --------------------------------------------------
+    Se abre una encuesta en edicion y se vacia la pregunta principal.
+    Se desplaza la pagina hasta dejar el campo en conflicto FUERA de vista:
+
+      posicion del campo "Main question"   top = -468 px   (por encima del viewport)
+      boton Save visible                   top =   75 px
+      distancia entre ambos                501 px
+      scroll de la pagina                  1000 px
+
+    Es decir: al pulsar guardar, el usuario NO podia ver el campo que causa el problema.
+
+  Resultado — caso de campos faltantes
+  -------------------------------------
+    Aparece un modal con:
+
+      titulo   : "Complete required information"
+      bajada   : "Resolve the following before saving this survey."
+      error 1  : "Enter the main survey question."          + accion "Go to field"
+      error 2  : "Choose the Start Date for this survey."   + accion "Go to field"
+      salida   : "Continue editing"
+
+      position del contenedor : fixed
+      top / bottom            : 0 / 806  (cubre el viewport completo)
+      visible sin que el usuario se desplace: SI, estando el scroll en 1000 px
+
+    Los errores son ACCIONABLES, no solo descriptivos: cada uno trae su propio "Go to field".
+    Se probo el de la pregunta principal:
+
+      scroll antes del clic   1000 px
+      scroll despues           150 px
+      campo visible            SI  (top 382 px)
+      campo con el foco        SI  (document.activeElement == el input)
+      modal cerrado            SI
+
+  Resultado — caso de conflicto de audiencias
+  --------------------------------------------
+    Se abrio la encuesta 19 (subject Rentals, inactiva) y se marco Active. El producto
+    Rentals ya lo ocupa la encuesta 3, que esta activa.
+
+    Con el scroll de nuevo en 1000 px, al guardar aparece el mismo modal con:
+
+      "Only one survey can be active for this product. Deactivate survey 3 or save this
+       survey as inactive."                                  + accion "Go to field"
+
+      position: fixed, visible sin desplazarse: SI
+
+    El mensaje IDENTIFICA la encuesta que causa el conflicto por su numero (survey 3), que es
+    exactamente lo que pide el AC: que el administrador sepa que encuesta lo provoca.
+
+    Nada se escribio: tras el intento, survey 19 sigue inactiva y survey 3 sigue activa.
+
+  VEREDICTO AC4: PASS
+    pre-fix -> post-fix -> objetivo cumplido?
+      el modal de validacion no existia antes de este PR (0 ocurrencias en el commit previo)
+      -> ahora los errores bloqueantes, incluido el conflicto de audiencias, se presentan en
+         un modal fixed visible desde cualquier posicion de scroll, con navegacion al campo
+      -> SI.
+
+
+AC5 · SEPARACION ENTRE UN PICKLIST Y LA ACCION NEXT O SUBMIT
+=============================================================
+Montaje: subject "QA TC-166 Picklist Spacing" (featureId 14) y survey 21 con una pregunta de
+tipo picklist de 6 opciones colocada inmediatamente antes de la accion.
+
+  Layout       Separacion   Se solapan   padding-top de la fila de accion   Accion visible
+  -----------  -----------  -----------  --------------------------------  --------------
+  pagination      108 px        NO                   24 px                      SI
+  single           24 px        NO                   24 px                      SI
+
+  En el layout paginado el bloque de pregunta ademas tiene min-height 200 px, lo que empuja
+  la accion hacia abajo y explica los 108 px.
+
+  Sobre la sub-condicion "el desplegable abierto no tapa la accion"
+  -----------------------------------------------------------------
+  NO APLICA a este control tal como esta implementado. En la encuesta que ve el respondente
+  el picklist NO se renderiza como un <select> nativo sino como una lista de botones de
+  opcion (se verificaron los botones Rentals / Ticketing / Shop / Accounting / Fundraising /
+  Otra en el DOM, y no existe ningun <select> en esa pantalla). Al no haber desplegable que
+  se abra por encima del contenido, no hay superposicion posible sobre la accion.
+
+  Se deja constancia para no sobreafirmar: lo verificado es la separacion visible y la
+  ausencia de solapamiento. La condicion del desplegable no se declara probada porque el
+  control no es un desplegable.
+
+  VEREDICTO AC5: PASS (con la sub-condicion del desplegable marcada como no aplicable)
+
+
+OBSERVACION O3 — DEFECTO PREEXISTENTE, NO INTRODUCIDO POR ESTE PR
+==================================================================
+Sintoma
+-------
+  En modo CREACION, vaciar el campo "Main question" CIERRA el formulario completo y devuelve
+  al listado, descartando todo lo que el usuario hubiera cargado.
+
+Aislado paso a paso
+-------------------
+  abrir el formulario de creacion                      formulario vivo
+  desplazarse al final y volver arriba                 formulario vivo
+  ESCRIBIR texto en la pregunta principal              formulario vivo
+  VACIAR la pregunta principal (Cmd+A + Delete real)   formulario DESMONTADO -> vuelve al listado
+
+  Sin errores de consola: no es un crash, es la condicion de render.
+
+Causa raiz
+----------
+  client/src/pages/SurveysPage.tsx
+
+      linea 765:  const isCreating = !editing && form.questionText.length > 0;
+      linea 872:  {!editing && form.questionText && (
+
+  La visibilidad del formulario en modo creacion se DERIVA de que la pregunta principal no
+  este vacia. Al vaciarla, isCreating pasa a false y el panel se desmonta.
+
+  En modo EDICION no ocurre: alli el panel depende de `editing`, y se verifico en vivo que el
+  formulario sobrevive con la pregunta vacia.
+
+Es preexistente
+---------------
+  La condicion es IDENTICA antes y despues del PR 71:
+
+      commit 4458647c    (post) : linea 765 -> const isCreating = !editing && form.questionText.length > 0;
+      commit 4458647c~1  (pre)  : linea 637 -> const isCreating = !editing && form.questionText.length > 0;
+
+  Por eso NO se levanta como defecto de esta entrega ni se rechaza IM-1258.
+
+Por que igualmente importa reportarlo
+--------------------------------------
+  El modal de validacion y sus mensajes SI son nuevos de este PR:
+
+      "Complete required information" / "Resolve the following"  : 0 ocurrencias pre -> 2 post
+      "Enter the main survey question."                          : 0 ocurrencias pre -> 1 post
+
+  O sea el dev agrego en este PR una validacion "Enter the main survey question." con su
+  propio destino de navegacion apuntando a survey-main-question, pero en modo CREACION esa
+  validacion concreta NUNCA puede dispararse: el formulario se desmonta antes de que el
+  usuario alcance a pulsar guardar con el campo vacio.
+
+  Es funcionalidad nueva parcialmente inalcanzable por una condicion vieja. Conviene
+  desacoplar la visibilidad del formulario del contenido de un campo — por ejemplo con un
+  estado explicito de "creando" — para que la validacion recien agregada sirva tambien al
+  crear, y para dejar de descartar el trabajo del usuario al limpiar un campo.
+
+
+ESTADO DEL ENTORNO AL CERRAR
+=============================
+  survey  3  ACTIVA     (estado original, sin cambios netos)
+  survey 12  inactiva   (estado original)
+  survey 19  inactiva   (estado original)
+  survey 20  inactiva   dato de prueba conservado, prefijo "QA TC-167"
+  survey 21  inactiva   dato de prueba conservado, prefijo "QA TC-166"
+
+  Ninguna edicion de prueba se guardo: los intentos de guardado terminaron en el modal de
+  validacion o se cancelaron, y se verifico que las encuestas tocadas conservan sus valores.

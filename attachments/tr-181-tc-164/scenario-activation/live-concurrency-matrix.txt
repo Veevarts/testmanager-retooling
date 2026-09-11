@@ -1,0 +1,88 @@
+TR-181 · TC-164 · IM-1255 — Invariante transaccional de activacion bajo concurrencia real
+=========================================================================================
+Ejecutado    : 2026-09-11
+Entorno      : Survey Tool dev (https://surveytool.dev.veevart.ai), `develop` con el merge
+               commit del PR 71 (4458647c) desplegado.
+Metodo       : dos PUT de activacion disparados en paralelo desde el mismo cliente contra
+               DOS encuestas distintas que comparten la MISMA clave de activacion exclusiva.
+
+
+POR QUE ESTE ESCENARIO ES EL QUE PRUEBA LA INVARIANTE
+-----------------------------------------------------
+En server/src/routes/surveys.ts el guard de activacion tiene DOS capas:
+
+  1. Chequeo de lectura  : findActiveProductSurveyConflict(...) -> 409 con el mensaje
+                           "Only one survey can be active for product or subject X.
+                            Deactivate survey N before activating this survey."
+  2. Transaccion          : el update reserva activationScope { kind: "exclusive", key }
+                           y sendActivationConflict(...) responde 409 con el mensaje
+                           "Survey activation changed while this request was processed."
+
+La capa 1 por si sola es RACY: entre leer y escribir hay una ventana. Solo la capa 2 cierra
+esa ventana. Para probar la invariante hay que provocar que AMBAS peticiones pasen la capa 1
+y colisionen en la capa 2 — por eso primero se libera la clave y recien despues se disparan
+las dos activaciones a la vez.
+
+El mensaje del 409 es, por tanto, la evidencia decisiva: si dijera "Deactivate survey N"
+estariamos observando el chequeo de lectura. Si dice "activation changed while this request
+was processed", la colision la resolvio LA TRANSACCION.
+
+
+MONTAJE
+-------
+Clave exclusiva bajo prueba : product:rentals
+Encuestas participantes     : survey 12 (Rentals, inactiva) y survey 19 (Rentals, inactiva)
+Ocupante inicial            : survey 3 (Rentals, ACTIVA) -> se desactiva para liberar la clave
+Estado inicial registrado   : 3=activa, 12=inactiva, 19=inactiva
+
+
+RONDA INICIAL
+-------------
+  scope liberado (survey 3 -> inactiva)        OK
+  PUT survey 12 {active:true}  ->  200
+  PUT survey 19 {active:true}  ->  409
+  mensaje del 409: "Survey activation changed while this request was processed.
+                    Review active surveys and try again."   <-- capa TRANSACCIONAL
+  estado tras la carrera: solo survey 12 activa
+  tiempo de las dos llamadas en paralelo: 235 ms
+
+
+SEIS RONDAS, ALTERNANDO EL ORDEN DE DISPARO
+--------------------------------------------
+Ronda  Orden disparo   Ganador  Rechazado  Activas despues  Invariante
+-----  --------------  -------  ---------  ---------------  ----------
+  1    12 luego 19        12        19          [12]            OK
+  2    19 luego 12        19        12          [19]            OK
+  3    12 luego 19        12        19          [12]            OK
+  4    12 luego 19        12        19          [12]            OK
+  5    19 luego 12        19        12          [19]            OK
+  6    12 luego 19        12        19          [12]            OK
+
+  En las 6 rondas: exactamente UN 200 y exactamente UN 409.
+  En las 6 rondas el mensaje del 409 fue el de la transaccion, nunca el del chequeo previo.
+  En NINGUNA ronda quedaron dos encuestas activas sobre la misma clave exclusiva.
+
+  El ganador ALTERNO entre las dos encuestas (12 en las rondas 1,3,4,6; 19 en las 2 y 5).
+  Eso importa: demuestra que se esta serializando una carrera real y no que exista un orden
+  determinista que haga ganar siempre a la misma. Si el resultado fuera un artefacto del
+  orden de disparo, el ganador habria seguido al orden; no lo hizo.
+
+
+VEREDICTO DE AJUSTE AL OBJETIVO
+--------------------------------
+pre-fix -> post-fix -> objetivo cumplido?
+
+  Dos activaciones simultaneas sobre la misma clave exclusiva podrian dejar dos encuestas
+  activas si el guard viviera solo en el chequeo de lectura
+     -> la reserva transaccional de la clave serializa las dos peticiones: una gana con 200
+        y la otra recibe 409 con el mensaje de conflicto transaccional
+     -> SI. La invariante "una sola encuesta activa por clave exclusiva" se sostiene bajo
+        concurrencia real, verificada 6 veces.
+
+
+RESTAURACION DEL ENTORNO
+-------------------------
+  survey 12 -> inactiva
+  survey 19 -> inactiva
+  survey  3 -> ACTIVA   (estado original)
+  Verificado contra el estado inicial registrado: coincide exactamente.

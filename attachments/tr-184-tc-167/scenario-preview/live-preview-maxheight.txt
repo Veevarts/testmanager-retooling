@@ -1,0 +1,109 @@
+TR-184 · TC-167 · IM-1257 — AC3: contenido que SUPERA la altura maxima del preview
+===================================================================================
+Ejecutado    : 2026-09-11
+Entorno      : Survey Tool dev (https://surveytool.dev.veevart.ai), `develop` con el merge
+               commit del PR 71 (4458647c). Viewport de escritorio 1512x806.
+
+
+POR QUE HIZO FALTA FABRICAR EL CASO
+------------------------------------
+En la primera corrida este AC quedo not-run: ninguna encuesta del entorno era lo bastante
+larga como para alcanzar el tope de altura. Los dos previews observados median 292 y 268 px
+contra un tope de 629 px, o sea ni se acercaban. Declarar PASS mirando encuestas cortas
+habria sido afirmar justo lo que el AC no permitia observar.
+
+Para cerrarlo se creo una encuesta deliberadamente larga.
+
+
+MONTAJE
+-------
+Subject creado : "QA TC-167 Long Preview"  (slug qa-tc-167-long-preview, featureId 13)
+Encuesta       : survey 20, INACTIVA, 13 bloques de contenido
+                   1 bloque de score
+                   1 pregunta de seguimiento
+                   1 pregunta de recomendacion de empresa
+                  10 preguntas personalizadas de texto con enunciados largos
+URL del preview: /survey/qa-tc-167-long-preview?preview=1&surveyId=20
+                 (identificador explicito en la URL, igual que en el AC1)
+
+
+EL TOPE DE ALTURA, CALCULADO Y OBSERVADO
+-----------------------------------------
+La funcion de clamp del cliente (SurveysPage.tsx) define:
+
+    maxHeight = max(240, min(640, floor(viewportHeight * 0.85) - 56))
+
+Con el viewport de 806 px:   floor(806 * 0.85) = 685;  685 - 56 = 629;  min(640, 629) = 629
+Tope esperado: 629 px
+
+    Medicion             Valor
+    -------------------  --------
+    alto del contenido   2620 px      <-- muy por encima del tope
+    alto del contenedor   629 px      <-- exactamente el tope calculado
+    ancho del contenedor  320 px
+    tope esperado         629 px
+    coincide con el tope  SI
+
+
+PERMANECE DENTRO DEL VIEWPORT
+------------------------------
+    top del contenedor      109 px
+    bottom del contenedor   738 px
+    alto del viewport       806 px
+    desborda la pantalla?   NO   (738 < 806)
+
+
+EL SCROLL INTERNO EXISTE Y RECORRE TODO EL CONTENIDO
+-----------------------------------------------------
+    area visible (clientHeight)    614 px
+    contenido (scrollHeight)      2620 px
+    recorrido maximo              2006 px
+
+    posicion inicial     0
+    se fija en 400   ->   400   OK
+    se fija al maximo -> 2006   OK
+
+    El scroll no es decorativo: recorre los 2006 px completos.
+
+
+NINGUN ELEMENTO SE SOLAPA AL DESPLAZARSE
+-----------------------------------------
+Con el contenido desplazado hasta el final se midieron las cajas de todos los controles y
+titulos visibles (label, h1, h2, h3, button, textarea, input) y se comparo cada uno con el
+anterior por posicion vertical:
+
+    bloques visibles al final del scroll   7
+    pares que se solapan                   0
+
+    Criterio: se cuenta solapamiento si el top de un bloque queda por encima del bottom del
+    bloque previo con mas de 2 px de margen de tolerancia.
+
+
+COBERTURA DEL DEV SOBRE LA MISMA LOGICA
+----------------------------------------
+El PR trae tests unitarios propios sobre las funciones puras de clamp, incluido el caso del
+techo con otro viewport:
+
+    clampSurveyPreviewFrameHeight(1200, 800)  -> 624      (min(640, floor(800*0.85)-56))
+    clampSurveyPreviewFrameHeight(120,  900)  -> 240      (piso)
+    clampSurveyPreviewFrameWidth(1200,  700)  -> 668      (techo de ancho)
+
+La observacion viva de arriba y estos tests se refuerzan: el tope se cumple tanto en la
+funcion aislada como en el render real.
+
+
+VEREDICTO DE AJUSTE AL OBJETIVO
+--------------------------------
+pre-fix -> post-fix -> objetivo cumplido?
+
+  El preview podia desbordar o recortar contenido sin permitir recorrerlo
+     -> con 2620 px de contenido el contenedor se detiene en su tope de 629 px, sigue dentro
+        del viewport, habilita scroll interno que recorre los 2006 px restantes y ningun
+        elemento se solapa
+     -> SI.
+
+
+ESTADO DEL DATO DE PRUEBA
+--------------------------
+  survey 20 queda INACTIVA y conservada como evidencia, con prefijo "QA TC-167" en su
+  enunciado para que sea identificable. No se borro.
