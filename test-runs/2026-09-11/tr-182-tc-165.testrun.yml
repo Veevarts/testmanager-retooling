@@ -1,0 +1,249 @@
+schemaVersion: "1.0"
+id: tr-6b913bdb-14e1-48a6-b911-92ab6b1efa53
+key: TR-182
+title: >-
+  TR-182 · IM-1256 · TC-165 · Excel-compatible response export — 4/5 PASS · 1 FAIL. Metadatos,
+  escape de delimitadores y neutralizacion de formulas correctos; el archivo NO se emite como
+  UTF-8 compatible con Excel (sin BOM ni declaracion de delimitador), que es lo que pide el AC2.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
+    del PR 71 (4458647c) desplegado. El CSV se analizo a nivel de bytes y con un parser conforme
+    a RFC 4180, para que el veredicto no dependa de un visor concreto.
+  buildVersion: >-
+    Mixed. El PR 71 implementa nueve tickets a la vez; esta corrida valida unicamente la porcion
+    de IM-1256.
+testPlanId: null
+startedAt: "2026-09-11T21:50:00Z"
+completedAt: "2026-09-11T22:05:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El PR centraliza la serializacion del CSV en `escapeCsvCell()` (server/src/lib/csv.ts): envuelve
+  en comillas y duplica las comillas internas cuando el valor contiene comilla, coma, CR o LF, y
+  antepone un apostrofe a cualquier string que empiece por igual, mas, guion o arroba, para que
+  una hoja de calculo no lo ejecute como formula. El export de respuestas suma las columnas de
+  organizacion e identidad del respondente, hasta 30 en total, y responde con
+  `Content-Type: text/csv; charset=utf-8`.
+
+  ## Inferred technical tests
+
+  El AC habla de un archivo, asi que el test correcto es descargar el CSV real y analizarlo por
+  dos vias independientes: los BYTES del archivo para la codificacion, y un parser conforme a
+  RFC 4180 para la estructura. Verificar con Excel seria deseable pero no es suficiente ni
+  necesario para calificar: lo que el spec exige es que el archivo se EMITA de cierta forma, y
+  eso se comprueba objetivamente.
+
+  ## Defecto encontrado
+
+  El archivo no lleva BOM UTF-8 ni declaracion de delimitador, pese a que el design spec pide
+  "Emit an Excel-compatible UTF-8 file and delimiter declaration where required". Ver el
+  escenario 2 y el detalle en live-csv-matrix.txt.
+
+results:
+  - testCaseId: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+    testCaseKey: TC-165
+    scenarioTitle: >-
+      AC1 · The standard CSV includes organization and respondent metadata with exactly one
+      logical row per response
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-11T21:55:00Z"
+    stepResults: []
+    actual: |
+      La cabecera del export trae 30 columnas e incluye las cuatro que pide el AC:
+      `client_org_id`, `organization_name`, `respondent_id` y `respondent_name`.
+
+      Parseando el archivo con un parser conforme a RFC 4180: 1 fila de cabecera y 8 filas
+      logicas para las 8 respuestas del entorno. TODAS las filas tienen exactamente 30 celdas,
+      igual que la cabecera, incluida la respuesta cuyo comentario lleva saltos de linea
+      embebidos. O sea cada respuesta ocupa exactamente una fila logica.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el export no llevaba identidad de organizacion
+      ni de respondente -> las cuatro columnas presentes y el grano de una fila por respuesta
+      intacto -> SI.
+    notes: "**PASS**."
+    attachments:
+      - name: live-csv-matrix.txt
+        path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+    testCaseKey: TC-165
+    scenarioTitle: >-
+      AC2 · Values containing delimiters, quotes or line breaks stay inside their intended columns
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-11T21:56:00Z"
+    stepResults: []
+    actual: |
+      Tres respuestas con texto problematico, recuperadas del CSV con el parser RFC 4180:
+
+        coma, punto y coma y comillas : "Uno, dos; tres cuatro y cinco" vuelve intacto en su
+                                        celda, con las comillas internas duplicadas en el archivo
+        saltos de linea embebidos     : el comentario multilinea viaja envuelto en comillas y su
+                                        fila conserva las 30 celdas; el salto se preserva dentro
+                                        de la celda en vez de partir la fila
+        acentos y signos              : el texto en espanol se recupera caracter por caracter
+
+      Ningun valor se desplazo de columna y el contenido del texto libre no sufrio alteraciones.
+      Esta mitad del AC2, la de que los valores queden en sus columnas, se cumple.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el escape estaba disperso -> centralizado en
+      escapeCsvCell y correcto para delimitadores, comillas y saltos -> SI.
+    notes: >-
+      **PASS**. Nota: esta mitad del AC2 pasa; la que falla es la de la codificacion, registrada
+      en el escenario siguiente.
+    attachments:
+      - name: live-csv-matrix.txt
+        path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+    testCaseKey: TC-165
+    scenarioTitle: >-
+      AC2 · The exported file is Excel-compatible UTF-8 so accented characters display correctly
+    scenarioIndex: 2
+    status: failed
+    executedAt: "2026-09-11T21:58:00Z"
+    stepResults: []
+    actual: |
+      Los primeros bytes del archivo descargado son:
+
+          72 65 73 70 6f 6e      ->  "respon..."  (el inicio de la cabecera)
+
+      NO son EF BB BF: el archivo NO lleva marca de orden de bytes UTF-8. Tampoco su primera
+      linea es una declaracion de delimitador; arranca directamente en
+      "response_id,survey_id,...".
+
+      Los DATOS si son UTF-8 valido: el texto en espanol con acentos y signos de apertura se
+      decodifica correctamente con TextDecoder de UTF-8, y la respuesta HTTP declara
+      Content-Type: text/csv; charset=utf-8.
+
+      El problema es que esa cabecera solo aplica al transporte. Cuando el archivo queda en
+      disco y el usuario lo abre con doble clic, Excel no la lee: sin BOM, Excel en Windows
+      interpreta el archivo con la codificacion local en vez de UTF-8 y los acentos se ven
+      corruptos. Es justo el escenario que el AC2 quiere evitar.
+
+      Ningun camino agrega el BOM: el dashboard descarga con window.open del endpoint sin
+      postprocesar (ResponsesDashboard.tsx:358, DashboardPage.tsx:160) y el export del Summary
+      construye su Blob uniendo las filas con saltos de linea, tampoco antepone BOM
+      (SummaryDashboard.tsx:149).
+
+      pre-fix -> post-fix -> objetivo cumplido?: el design spec pide emitir "an Excel-compatible
+      UTF-8 file and delimiter declaration where required" -> el archivo se emite sin BOM y sin
+      declaracion de delimitador -> NO.
+    notes: >-
+      **FAIL.** Incumple el design spec y la segunda mitad del AC2. Limite declarado con
+      honestidad: se verifico objetivamente que el BOM no esta y que el spec lo exige, pero NO se
+      abrio el archivo en Excel sobre Windows para fotografiar los acentos corruptos, porque no
+      habia Excel disponible en el entorno de ejecucion. El veredicto se sostiene en el
+      incumplimiento verificable del spec, no en una suposicion sobre el render. Arreglo
+      sugerido: anteponer el BOM al cuerpo del CSV en el endpoint de export y evaluar si el
+      locale de los usuarios exige ademas la linea de declaracion de separador.
+    defects:
+      - summary: >-
+          El CSV de respuestas no se emite como archivo UTF-8 compatible con Excel: falta el BOM
+          y la declaracion de delimitador que pide el design spec
+        severity: medium
+        jiraKey: IM-1256
+        url: https://veevart.atlassian.net/browse/IM-1256
+    attachments:
+      - name: live-csv-matrix.txt
+        path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+    testCaseKey: TC-165
+    scenarioTitle: "Security · Values that a spreadsheet could execute as a formula are neutralized"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-11T22:00:00Z"
+    stepResults: []
+    actual: |
+      Dos valores ejecutables enviados desde el endpoint publico de respuestas:
+
+        nombre     "=cmd|calc!A1"     -> exportado con un apostrofe delante
+        comentario "=HYPERLINK(...)"  -> exportado con un apostrofe delante
+
+      El apostrofe hace que la hoja de calculo trate el valor como texto en vez de evaluarlo. El
+      patron del guard tolera espacios y caracteres de control por delante del signo, asi que no
+      se evade anteponiendo un espacio. El valor original sigue siendo legible.
+
+      EFECTO COLATERAL MEDIDO, documentado y no levantado como defecto: el prefijo se aplica a
+      cualquier string que empiece por esos caracteres, incluidos valores legitimos:
+
+        "- Muy buena atencion, volveria" -> se exporta con apostrofe delante
+        "@soporte respondio rapido"      -> se exporta con apostrofe delante
+        "+1 a la propuesta"              -> se exporta con apostrofe delante
+
+      Empezar un comentario con guion es comun en texto libre. En Excel el apostrofe inicial es
+      el marcador de texto literal y no se muestra en la celda, asi que el analista ve el texto
+      limpio; pero en un parser generico (pandas, un script de ingesta, un BI) el apostrofe SI
+      queda dentro del dato. Es el trade-off estandar y recomendado de esta mitigacion.
+
+      pre-fix -> post-fix -> objetivo cumplido?: un valor de usuario podia ejecutarse al abrir el
+      CSV -> se neutraliza como texto -> SI.
+    notes: "**PASS**. Mitigacion efectiva contra inyeccion de formulas en hojas de calculo."
+    attachments:
+      - name: live-csv-matrix.txt
+        path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
+        mimeType: text/plain
+
+  - testCaseId: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+    testCaseKey: TC-165
+    scenarioTitle: >-
+      Regression · The export keeps working for responses without the new metadata and respects
+      the export policy
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-11T22:02:00Z"
+    stepResults: []
+    actual: |
+      Las respuestas anteriores al PR, que no tienen nombre de respondente ni los metadatos
+      nuevos, se exportan sin error: sus celdas nuevas salen vacias y la fila conserva las 30
+      celdas, igual que las respuestas nuevas. El numero de columnas es consistente entre unas y
+      otras, asi que el archivo sigue siendo tabular para cualquier consumidor.
+
+      El endpoint sigue aceptando el parametro de gobernanza que decide que respuestas se
+      incluyen, y el nombre del archivo descargado lo refleja.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el export funcionaba para las respuestas
+      existentes -> sigue funcionando y suma columnas sin romper las historicas -> SI.
+    notes: "**PASS**. Sin regresion sobre las respuestas previas al cambio."
+    attachments:
+      - name: live-csv-matrix.txt
+        path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 4
+  failed: 1
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 80
+
+history:
+  - at: "2026-09-11T21:50:00Z"
+    from: planned
+    to: in-progress
+    by: codex
+    reason: "Arranca la ejecucion de TC-165 sobre el PR 71 desplegado en dev."
+  - at: "2026-09-11T22:05:00Z"
+    from: in-progress
+    to: completed
+    by: codex
+    reason: >-
+      4/5 PASS y 1 FAIL. Los metadatos de organizacion y respondente estan, el grano de una fila
+      logica por respuesta se sostiene incluso con saltos de linea embebidos, el escape de
+      delimitadores y comillas es correcto, y la neutralizacion de formulas funciona. El FAIL es
+      el archivo en si: se emite sin BOM UTF-8 y sin declaracion de delimitador, pese a que el
+      design spec pide "an Excel-compatible UTF-8 file and delimiter declaration where required"
+      y el AC2 exige que los caracteres Unicode se muestren correctamente al abrirlo en Excel.
+      Se verifico a nivel de bytes; se declara que no se abrio en Excel sobre Windows por falta
+      del programa en el entorno de ejecucion. Historia rebotada a QA.

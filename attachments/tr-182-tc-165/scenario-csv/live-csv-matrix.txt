@@ -1,0 +1,82 @@
+IM-1256 / TC-165 — export CSV verificado en el entorno desplegado
+==================================================================
+Entorno : https://surveytool.dev.veevart.ai (dev, rama develop, PR 71 merge 4458647c)
+Fecha   : 2026-09-11
+Metodo  : GET /api/admin/responses/export.csv con sesion de administrador. El contenido se
+          analizo a nivel de BYTES (para la codificacion) y con un parser conforme a RFC 4180
+          (para la estructura), de modo que el veredicto no dependa de un visor concreto.
+
+DATOS DE PRUEBA CREADOS (prefijo "qa-tc165", NO borrar: son evidencia)
+  qa-tc165-acentos      comentario con acentos y signos del espanol
+  qa-tc165-delim        comentario con coma, punto y coma y comillas dobles
+  qa-tc165-multilinea   comentario con saltos de linea embebidos (LF y CRLF)
+  qa-tc165-formula      nombre "=cmd|calc!A1" y comentario "=HYPERLINK(...)"
+  qa-tc165-legit-guion  comentario legitimo que empieza por guion
+  qa-tc165-legit-arroba comentario legitimo que empieza por arroba
+  qa-tc165-legit-mas    comentario legitimo que empieza por signo mas
+
+| # | Asercion | Esperado | Obtenido | Verdict |
+|---|----------|----------|----------|---------|
+| E1 | AC1 · columnas de metadatos | organizacion e identidad del respondente presentes | la cabecera trae client_org_id, organization_name, respondent_id y respondent_name entre sus 30 columnas | PASS |
+| E2 | AC1 · una fila logica por respuesta | 1 cabecera + 1 fila por respuesta | parseado con RFC 4180: 8 filas logicas para 8 respuestas, y TODAS con exactamente 30 celdas, igual que la cabecera | PASS |
+| E3 | AC2 · delimitadores y comillas | los valores no se salen de su columna | "Uno, dos; tres \"cuatro\" y cinco" se recupera intacto en su celda; las comillas internas vienen duplicadas | PASS |
+| E4 | AC2 · saltos de linea embebidos | el valor queda en una sola fila logica | el comentario multilinea se envuelve en comillas y su fila sigue teniendo 30 celdas; el salto se conserva dentro de la celda | PASS |
+| E5 | AC2 · archivo compatible con Excel en UTF-8 | BOM o mecanismo equivalente + declaracion de delimitador | **NO hay BOM y NO hay declaracion sep=** — ver analisis abajo | **FAIL** |
+| E6 | Seguridad · neutralizacion de formulas | los valores ejecutables se emiten como texto | "=cmd|calc!A1" -> "'=cmd|calc!A1" y "=HYPERLINK(...)" -> "'=HYPERLINK(...)" | PASS |
+| E7 | Regresion · respuestas historicas | se exportan sin romper la fila | las respuestas anteriores al PR se exportan con las celdas nuevas vacias y conservan las 30 columnas | PASS |
+
+--- E5, el unico FAIL: el archivo no es "Excel-compatible UTF-8" -------------------------
+
+HECHO MEDIDO (no inferido): los primeros bytes del archivo son
+
+    72 65 73 70 6f 6e     ->  "respon..." (el inicio de la cabecera)
+
+No son EF BB BF, o sea NO hay marca de orden de bytes UTF-8. Tampoco la primera linea es una
+declaracion de delimitador: el archivo arranca directamente en "response_id,survey_id,...".
+
+Los DATOS si son UTF-8 valido: "Atención al día: ¡excelente! Señalización clara, cañón de luz
+óptimo." se decodifica perfecto con TextDecoder('utf-8'), y la respuesta HTTP declara
+Content-Type: text/csv; charset=utf-8.
+
+POR QUE ES UN INCUMPLIMIENTO. El design spec del ticket pide literalmente "Emit an
+Excel-compatible UTF-8 file and delimiter declaration where required", y el AC2 remata con
+"When the CSV is opened in Excel ... And Unicode characters display correctly". El
+Content-Type solo aplica al transporte HTTP: cuando el archivo queda en disco y el usuario lo
+abre con doble clic, Excel no lee esa cabecera. Sin BOM, Excel en Windows interpreta el
+archivo con la codificacion local (Windows-1252) en vez de UTF-8, y los acentos se ven
+corruptos. Ese es exactamente el escenario que el AC2 quiere evitar.
+
+ALCANCE: ningun camino agrega el BOM.
+  - El dashboard descarga con window.open("/api/admin/responses/export.csv?...") sin
+    postprocesar (ResponsesDashboard.tsx:358 y DashboardPage.tsx:160).
+  - El export del Summary construye su Blob con rows.join("\n") y tampoco antepone BOM
+    (SummaryDashboard.tsx:149).
+
+LIMITE DE ESTA VERIFICACION, declarado: se comprobo de forma objetiva que el BOM no esta y que
+el spec lo pide. NO se abrio el archivo en Excel sobre Windows para fotografiar los acentos
+corruptos, porque no habia Excel disponible en el entorno de ejecucion. El FAIL se sostiene en
+el incumplimiento verificable del design spec, no en una suposicion sobre el render.
+
+ARREGLO SUGERIDO: anteponer "﻿" al cuerpo del CSV en el endpoint de export, y evaluar si
+el locale de los usuarios exige ademas la linea "sep=,". Es un cambio de una linea y cierra
+las dos mitades del AC2.
+
+--- Efecto colateral de la neutralizacion de formulas (no es defecto) --------------------
+
+El prefijo de apostrofe se aplica a CUALQUIER string que empiece por =, + , - o @, incluidos
+valores legitimos de usuarios reales:
+
+    "- Muy buena atencion, volveria"  ->  "'- Muy buena atencion, volveria"
+    "@soporte respondio rapido"       ->  "'@soporte respondio rapido"
+    "+1 a la propuesta"               ->  "'+1 a la propuesta"
+
+Empezar un comentario con un guion es comun en texto libre. En Excel el apostrofe inicial es
+el marcador de texto literal y NO se muestra en la celda, asi que el analista ve el texto
+limpio. Pero en un parser generico (pandas, un script de ingesta, un BI) el apostrofe SI queda
+dentro del dato y hay que limpiarlo.
+
+Es el trade-off estandar y recomendado de la mitigacion contra inyeccion de formulas, asi que
+NO se levanta como defecto. Se documenta para que quien consuma el CSV fuera de Excel lo
+tenga presente.
+
+Resultado: 6 PASS · 1 FAIL (E5).

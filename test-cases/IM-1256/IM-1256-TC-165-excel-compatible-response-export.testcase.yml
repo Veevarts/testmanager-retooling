@@ -1,0 +1,157 @@
+schemaVersion: "1.0"
+
+id: "b57532c8-4876-4e96-9cbe-5db15117d5b2"
+key: "TC-165"
+title: "Standard response CSV export carries organization and respondent metadata, keeps one logical row per response with delimiters, quotes and newlines escaped, and neutralizes spreadsheet formulas — IM-1256"
+description: |
+  Test case para IM-1256 (Historia, priority **Medium**, "In QA Review") — epic IM-970
+  NPS Survey Tool delivery — QA Sub-task IM-1266. Repositorio: `survey-tool`.
+  PR bajo prueba: Veevarts/survey-tool "PR 71" (**MERGED a `develop`** el 2026-09-11,
+  +3309/-596, 40 archivos). Ese PR implementa nueve tickets a la vez; este test case cubre
+  solo la porcion de IM-1256.
+
+  === QUE PIDE LA HISTORIA ===
+
+  El CSV estandar de respuestas debe incluir nombre de organizacion, ID de organizacion, ID de
+  usuario y nombre de usuario; conservar una fila de cabecera y una fila logica por respuesta;
+  escapar delimitadores, comillas y saltos de linea segun las reglas de CSV; y emitir un
+  archivo UTF-8 compatible con Excel mas la declaracion de delimitador donde haga falta.
+
+  El AC2 es explicito sobre el resultado observable: al abrir el CSV en Excel los valores
+  deben quedar en sus columnas y **los caracteres Unicode deben mostrarse correctamente**.
+
+  === QUE HACE EL PR (leido del diff) ===
+
+  `server/src/lib/csv.ts` centraliza la serializacion en `escapeCsvCell()`:
+    - `FORMULA_PREFIX = /^[\u0000-\u0020]*[=+\-@]/` detecta prefijos de formula, tolerando
+      espacios y caracteres de control por delante.
+    - Si el valor es string y coincide, lo prefija con un apostrofe para neutralizarlo.
+    - Envuelve en comillas y duplica las comillas internas cuando el valor contiene comilla,
+      coma, CR o LF.
+  `server/src/routes/responses.ts` arma el export con 30 columnas, entre ellas `client_org_id`,
+  `organization_name`, `respondent_id` y `respondent_name`, y responde con
+  `Content-Type: text/csv; charset=utf-8`.
+
+  === RIESGOS ABIERTOS ===
+
+    - **El archivo NO lleva BOM UTF-8 ni declaracion `sep=`**, aunque el design spec pide
+      emitir "an Excel-compatible UTF-8 file and delimiter declaration where required". Sin
+      BOM, Excel en Windows abre el archivo con la codificacion local en vez de UTF-8, que es
+      justo lo que el AC2 quiere evitar. Verificar en la ejecucion y calificar.
+    - El escape de formula convierte cualquier string que empiece por `=`, `+`, `-` o `@` en
+      texto prefijado con apostrofe. Es la mitigacion correcta contra la inyeccion de formulas,
+      pero tambien afecta valores legitimos: un comentario que arranque con un guion se
+      exportara con el apostrofe visible. Conviene dimensionar el efecto colateral.
+    - El PR declara "normalizes multiline option answers for Excel"; hay que comprobar que la
+      normalizacion no altere el contenido de las respuestas de texto libre.
+    - **El PR esta MERGEADO a `develop`, no a `main`.**
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Clone de Veevarts/survey-tool en el merge commit del PR 71 sobre `develop` (4458647c), y el commit base 4458647c~1 para el contraste PRE-fix."
+  - "Entorno de Survey Tool con `develop` desplegado y credenciales de administrador."
+  - "Respuestas de prueba que contengan acentos y signos en espanol, comas, punto y coma, comillas dobles, saltos de linea embebidos y valores que empiecen por `=`, `+`, `-` o `@`."
+  - "Un parser de CSV conforme a RFC 4180 para verificar la estructura con independencia de Excel."
+  - "Acceso a Excel o a LibreOffice Calc para la verificacion visual del AC2, si se quiere cerrar la parte de render."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-165/."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · The standard CSV includes organization and respondent metadata with exactly one logical row per response"
+    tags:
+      - ac-1
+      - happy-path
+      - csv-export
+    given:
+      - "respuestas registradas que llevan metadatos de organizacion y de respondente"
+    when:
+      - "un administrador descarga el CSV estandar desde el dashboard"
+    then:
+      - "la cabecera incluye las columnas de nombre de organizacion, ID de organizacion, ID de usuario y nombre de usuario"
+      - "existe exactamente una fila de cabecera"
+      - "cada respuesta ocupa exactamente una fila logica, verificada con un parser conforme a RFC 4180"
+      - "todas las filas tienen el mismo numero de celdas que la cabecera"
+
+  - title: "AC2 · Values containing delimiters, quotes or line breaks stay inside their intended columns"
+    tags:
+      - ac-2
+      - edge-case
+      - csv-escaping
+    given:
+      - "respuestas cuyo texto contiene comas, punto y coma, comillas dobles y saltos de linea embebidos"
+    when:
+      - "se descarga el CSV y se parsea"
+    then:
+      - "cada valor queda dentro de la celda que le corresponde, sin desplazar columnas"
+      - "las comillas internas aparecen duplicadas segun la regla de CSV"
+      - "los valores con saltos de linea quedan envueltos en comillas y siguen perteneciendo a una sola fila logica"
+      - "el contenido del texto libre se conserva sin alteraciones"
+
+  - title: "AC2 · The exported file is Excel-compatible UTF-8 so accented characters display correctly"
+    tags:
+      - ac-2
+      - encoding
+      - excel-compatibility
+    given:
+      - "respuestas cuyo texto contiene acentos y signos del espanol"
+    when:
+      - "se descarga el CSV y se inspeccionan sus primeros bytes y su codificacion"
+    then:
+      - "los datos estan codificados en UTF-8 valido"
+      - "el archivo se emite de forma que Excel lo interprete como UTF-8, es decir con marca de orden de bytes o con el mecanismo equivalente que el design spec exige"
+      - "la declaracion de delimitador se emite cuando es necesaria para que Excel separe las columnas"
+      - "al abrir el archivo los caracteres acentuados se muestran correctamente y no como secuencias corruptas"
+
+  - title: "Security · Values that a spreadsheet could execute as a formula are neutralized"
+    tags:
+      - security
+      - csv-injection
+      - edge-case
+    given:
+      - "respuestas cuyo texto empieza por `=`, `+`, `-` o `@`, incluyendo una funcion de hoja de calculo y un intento de comando"
+    when:
+      - "se descarga el CSV"
+    then:
+      - "esos valores se emiten prefijados de forma que la hoja de calculo los trate como texto y no los ejecute"
+      - "la neutralizacion tambien aplica cuando el valor viene precedido de espacios o caracteres de control"
+      - "el valor original sigue siendo legible para quien lee el archivo"
+      - "se deja constancia del efecto colateral sobre valores legitimos que empiecen por esos caracteres"
+
+  - title: "Regression · The export keeps working for responses without the new metadata and respects the export policy"
+    tags:
+      - regression
+      - backward-compatibility
+    given:
+      - "respuestas anteriores al PR, sin nombre de respondente ni metadatos nuevos"
+      - "y la seleccion de politica de exportacion disponible en el dashboard"
+    when:
+      - "se descarga el CSV con cada politica"
+    then:
+      - "las respuestas historicas se exportan sin error y sus celdas nuevas quedan vacias en vez de romper la fila"
+      - "la politica de exportacion sigue decidiendo que respuestas se incluyen, igual que antes del cambio"
+      - "el numero de columnas es consistente entre respuestas historicas y nuevas"
+
+tags:
+  - im-1256
+  - im-970
+  - im-1266
+  - survey-tool
+  - nps
+  - csv-export
+  - excel-compatibility
+  - csv-injection
+  - reporting
+  - pr-71
+  - medium
+
+estimatedDuration: 75
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-11T21:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-11T21:50:00Z"
+  version: 1
