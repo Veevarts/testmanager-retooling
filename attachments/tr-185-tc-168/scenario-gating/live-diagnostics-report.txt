@@ -1,0 +1,153 @@
+TR-185 · TC-168 · IM-1253 — Segunda pasada sobre el PR 75: arreglo de fecha y funcionalidad
+=============================================================================================
+Ejecutado    : 2026-09-15
+Entorno      : Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el
+               merge commit del PR 75 (1ad3b4ce, 2026-09-14) desplegado.
+Antecedente  : en la primera pasada (2026-09-11, PR 71) este TR quedo 2/3, con la funcionalidad
+               de diagnostico sin ejecutar y una recomendacion abierta sobre la fecha en UTC.
+
+
+1. EL CAMBIO SOLICITADO ESTA HECHO
+===================================
+Recomendacion que QA dejo el 2026-09-11:
+  "corregir la fecha por defecto de DiagnosticsPage para que use el mismo helper local que
+   SurveysPage ANTES de encender el flag"
+
+Estado en el PR 75:
+
+  ANTES (4458647c) — client/src/pages/DiagnosticsPage.tsx
+    function todayYmd(): string {
+      return new Date().toISOString().slice(0, 10);          // UTC
+    }
+    ...
+    today: todayYmd(),
+
+  DESPUES (1ad3b4ce)
+    import { localDateInputValue } from "../lib/dates";
+    ...
+    today: localDateInputValue(),
+
+  Ademas el helper se EXTRAJO a un modulo compartido nuevo, client/src/lib/dates.ts, y
+  SurveysPage dejo de tener su propia copia (localTodayDateInputValue fue eliminada y
+  reemplazada por el import). O sea ahora hay UNA sola definicion de "hoy" en el panel de
+  administracion, que era el fondo del problema y no solo el sintoma.
+
+  El dev agrego test propio para el borde exacto que QA habia reportado
+  (client/src/lib/dates.test.ts):
+
+    localDateInputValue(new Date(2026, 8, 8, 12, 0, 0))            -> "2026-09-08"
+    localDateInputValue({ getTime: 2026-09-12T04:30:00Z,
+                          getTimezoneOffset: 300 })                 -> "2026-09-11"
+
+  El segundo caso es 23:30 hora local en UTC-5, que es literalmente el instante que QA uso
+  como evidencia en TR-183. Una implementacion UTC ingenua devolveria 2026-09-12.
+
+  Suites ejecutadas sobre 1ad3b4ce:
+    cliente : 62/62 PASS   (eran 60; +2 por dates.test.ts)
+    servidor: 117/117 PASS (eran 113)
+
+
+2. POR QUE ESTE ARREGLO NO ERA COSMETICO
+=========================================
+En la primera pasada QA lo reporto como "dos fechas distintas en la misma sesion". Al ejercitar
+ahora la funcionalidad se ve que el impacto era mayor: el parametro `today` NO es decorativo,
+alimenta los contadores por dia del reporte de elegibilidad.
+
+Demostracion sobre el entorno desplegado, con el MISMO respondente y el MISMO instante,
+variando unicamente el criterio de fecha:
+
+  Instante simulado: 2026-09-16T02:30:00Z  =  21:30 hora local en UTC-5
+    criterio UTC ingenuo (el bug viejo) -> 2026-09-16
+    criterio local correcto (el actual) -> 2026-09-15
+
+  Respondente con 1 impresion registrada hoy sobre la survey 17 (maxShowsPerDay = 1):
+
+    today=2026-09-15 (LOCAL, correcto)
+      eligible             : false
+      reason               : max_shows_per_day_reached
+      todayImpressionCount : 1
+      surveysShownToday    : 1
+
+    today=2026-09-16 (UTC, el bug viejo)
+      eligible             : true
+      reason               : null
+      todayImpressionCount : 0
+      surveysShownToday    : 0
+
+  Con el bug, la pantalla de diagnostico habria respondido "es elegible, nada la bloquea"
+  cuando en realidad el tope diario SI la estaba bloqueando. Es decir, la herramienta cuya
+  unica funcion es explicar por que una encuesta no se entrega habria dado la respuesta
+  CONTRARIA durante las ultimas cinco horas de cada dia.
+
+  Eso eleva el hallazgo de "inconsistencia visual" a "diagnostico incorrecto en su funcion
+  principal", y confirma que valia la pena arreglarlo antes de encender el flag.
+
+
+3. LA FUNCIONALIDAD DE DIAGNOSTICO, EJERCITADA
+===============================================
+CORRECCION A LA PRIMERA PASADA. El 2026-09-11 este run afirmo que "la pagina de diagnosticos no
+consume ningun endpoint propio". Esa descripcion era imprecisa: SI existe un endpoint dedicado,
+
+    GET /api/admin/features/:featureId/respondent-state/:respondentId
+
+que es el que DiagnosticsPage invoca via api.features.respondentState(...). Las conclusiones de
+seguridad de aquella pasada NO cambian, y se re-verificaron aqui:
+
+    - el endpoint ya existia ANTES del PR 71
+        git show 4458647c~1:server/src/routes/features.ts | grep -c respondent-state  -> 2
+        git show 4458647c:server/src/routes/features.ts   | grep -c respondent-state  -> 2
+      o sea el PR 71 no agrego superficie de API nueva, que era la afirmacion importante.
+    - vive bajo /api/admin, detras de requireAdminAuth (app.use("/api/admin", requireAdminAuth)).
+    - no hay ningun router de diagnosticos montado aparte.
+
+CONSECUENCIA UTIL: como el flag solo gatea la RUTA DEL CLIENTE, la logica de diagnostico si es
+ejercitable con sesion de administrador. Ya no hace falta encender el flag para validar que la
+funcionalidad hace lo que el ticket promete.
+
+Ciclo ejecutado sobre el entorno desplegado, subject "QA TC-161 Gates" (featureId 11),
+survey 17 con maxShowsPerDay = 1, respondente nuevo:
+
+  Paso                        eligible  reason                      impressionCount  todayCount
+  --------------------------  --------  --------------------------  ---------------  ----------
+  respondente sin actividad     true    null                              0              0
+  se registra 1 impresion       false   max_shows_per_day_reached         1              1
+
+  El reporte tambien devuelve el bloque global:
+      maxSurveysPerDay 10, surveysShownToday 0 -> 1, limitReached false
+
+  Y por cada encuesta candidata informa: active, audience, appliesToRequestedFeature,
+  allowsClientOrg, los limites configurados (maxDismissals, maxShowsPerDay, cooldownDays) y los
+  contadores (impressionCount, todayImpressionCount, dismissalCount, dismissalCountAllTime,
+  responseCount, respondentResponseCount, lastRespondedAt).
+
+  Es exactamente lo que el README describe como la feature: "read-only eligibility diagnostics
+  for a subject, respondent, organization, user creation date, and usage count to see the exact
+  reason a survey is eligible or blocked".
+
+LIMITE DECLARADO: lo verificado es la FUNCIONALIDAD (el reporte de elegibilidad y su manejo de
+fechas) a traves de su propia API. El RENDER de la pagina sigue sin ejercitarse porque el flag
+continua apagado, y encenderlo exige un rebuild del cliente. No se declara probado el render.
+Se deja constancia de que eso NO es una omision del ticket: entregar la pantalla apagada es
+precisamente lo que IM-1253 pide.
+
+
+4. EL GATING SIGUE VIGENTE SOBRE EL BUILD NUEVO
+================================================
+Re-verificado tras el despliegue del PR 75:
+
+    client/src/config/featureFlags.ts  ->  diagnostics: false
+    navegar a /admin/diagnostics       ->  redirige a /admin/features
+    entradas de navegacion             ->  Subjects, Surveys, Dashboard, Organizations, Settings
+    hay entrada de diagnosticos?       ->  NO
+
+  El apagado sigue siendo real: la ruta no se registra en App.tsx con el flag en falso.
+
+
+5. RESTAURACION
+================
+  El respondente sintetico usado para el ciclo se elimino con el endpoint de reset:
+
+    DELETE /api/admin/features/11/respondent-state/<rid>
+      -> { ok: true, impressionsDeleted: 1, dismissalsDeleted: 0 }
+
+  Verificado despues: impressionCount 0, eligible true, reason null. Sin rastro en el entorno.

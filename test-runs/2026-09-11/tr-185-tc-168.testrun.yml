@@ -2,9 +2,11 @@ schemaVersion: "1.0"
 id: tr-4acbaad2-4a19-4a57-997f-8ebd6105bd7d
 key: TR-185
 title: >-
-  TR-185 · IM-1253 · TC-168 · Gated delivery diagnostics — 2/3 PASS · 1 not-run. El apagado por
-  feature flag es efectivo y no deja API expuesta; la funcionalidad no es verificable sin encender
-  el flag. Se reporta un bug latente que se activara junto con el.
+  TR-185 · IM-1253 · TC-168 · Gated delivery diagnostics — 3/3 PASS. El apagado por feature flag
+  es efectivo y no deja API expuesta, y la funcionalidad de diagnostico quedo ejercitada a traves
+  de su API de admin sin necesidad de encender el flag. El bug latente de fecha en UTC fue
+  corregido por el PR 75 y se verifico donde importa: con el criterio viejo el reporte daba la
+  respuesta contraria sobre el bloqueo.
 status: completed
 environment:
   name: >-
@@ -95,46 +97,77 @@ results:
     testCaseKey: TC-168
     scenarioTitle: "Diagnostics functionality itself, reachable only with the flag enabled"
     scenarioIndex: 2
-    status: not-run
+    status: passed
+    executedAt: "2026-09-15T19:40:00Z"
     stepResults: []
     actual: |
-      NO EJERCITABLE. El flag es una constante compilada, no una variable de entorno, asi que
-      encenderlo exige modificar el codigo y reconstruir el cliente. La funcionalidad de
-      diagnostico de entrega no se puede alcanzar desde el entorno desplegado.
+      EJECUTADO en una segunda pasada, sobre el PR 75 (1ad3b4ce) ya desplegado en dev.
 
-      HALLAZGO AL REVISAR EL CODIGO APAGADO — bug latente que se activara con el flag:
+      CORRECCION A LA PRIMERA PASADA. El 2026-09-11 este run afirmo que "la pagina de
+      diagnosticos no consume ningun endpoint propio". Era impreciso: SI existe un endpoint
+      dedicado, GET /api/admin/features/:featureId/respondent-state/:respondentId, que es el que
+      DiagnosticsPage invoca. Las conclusiones de seguridad NO cambian y se re-verificaron: el
+      endpoint ya existia ANTES del PR 71 (grep -c respondent-state da 2 tanto en 4458647c~1
+      como en 4458647c), vive bajo /api/admin detras de requireAdminAuth, y no hay router de
+      diagnosticos montado aparte. La afirmacion importante —que el PR 71 no agrego superficie
+      de API nueva— se sostiene.
 
-      client/src/pages/DiagnosticsPage.tsx define su fecha por defecto como
-      `new Date().toISOString().slice(0, 10)`, que devuelve la fecha en UTC. En la misma entrega,
-      SurveysPage usa un helper que compensa el offset y devuelve la fecha LOCAL, verificado en
-      TR-183 incluso en el borde horario. Son dos criterios distintos para la misma idea de "hoy"
-      dentro del mismo panel de administracion.
+      CONSECUENCIA: como el flag solo gatea la ruta del CLIENTE, la logica de diagnostico si es
+      ejercitable con sesion de administrador, sin encender nada.
 
-      Consecuencia cuando enciendan el flag: para un usuario en UTC-5, entre las 19:00 y las 23:59
-      hora local la pantalla de diagnosticos propondra MANANA como fecha por defecto mientras el
-      formulario de encuestas propone HOY. Son cinco horas de cada dia con dos fechas distintas en
-      la misma sesion.
+      CICLO EJECUTADO. Subject "QA TC-161 Gates" (featureId 11), survey 17 con maxShowsPerDay=1,
+      respondente nuevo:
 
-      No se levanta como defecto de esta entrega porque el codigo es inalcanzable con el flag
-      apagado y no afecta a ningun usuario hoy.
+        Paso                      eligible  reason                     impressions  todayCount
+        respondente sin actividad   true    null                            0           0
+        se registra 1 impresion     false   max_shows_per_day_reached       1           1
+
+      El reporte devuelve ademas el bloque global (maxSurveysPerDay 10, surveysShownToday 0->1)
+      y por cada encuesta candidata: active, audience, appliesToRequestedFeature,
+      allowsClientOrg, los limites configurados y los contadores completos. Es exactamente la
+      feature que el README describe: ver la razon exacta por la que una encuesta esta elegible
+      o bloqueada.
+
+      EL ARREGLO DE FECHA, VERIFICADO DONDE IMPORTA. El parametro `today` alimenta los contadores
+      por dia, asi que el bug reportado no era cosmetico. Mismo respondente, mismo instante
+      (2026-09-16T02:30:00Z = 21:30 local en UTC-5), variando solo el criterio de fecha:
+
+        today=2026-09-15 (LOCAL, el actual)  -> eligible false, reason max_shows_per_day_reached
+        today=2026-09-16 (UTC, el bug viejo) -> eligible true,  reason null
+
+      Con el bug, la pantalla habria respondido "es elegible, nada la bloquea" cuando el tope
+      diario SI estaba bloqueando. La herramienta cuya unica funcion es explicar por que una
+      encuesta no se entrega habria dado la respuesta CONTRARIA durante cinco horas de cada dia.
+
+      LIMITE DECLARADO: se verifico la FUNCIONALIDAD a traves de su propia API. El RENDER de la
+      pagina sigue sin ejercitarse porque el flag continua apagado y encenderlo exige rebuild.
+      No se declara probado el render. Eso NO es una omision del ticket: entregar la pantalla
+      apagada es precisamente lo que IM-1253 pide.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la funcionalidad de diagnostico no se habia
+      podido ejercitar y su fecha por defecto se calculaba en UTC -> el reporte de elegibilidad
+      explica correctamente el bloqueo y la fecha por defecto es local, con el helper unificado
+      en lib/dates.ts y cubierto por test propio en el borde horario -> SI.
     notes: >-
-      **Pendiente de entorno.** Cerrar este escenario exige encender el flag y reconstruir el
-      cliente. Recomendacion al dev: corregir la fecha por defecto de DiagnosticsPage para que use
-      el mismo helper local que SurveysPage ANTES de encender el flag, para no estrenar la pantalla
-      con una inconsistencia de fechas.
+      **PASS**. Cerrado sin encender el flag, porque el gating es del cliente y la logica vive
+      detras de una API de admin ya existente. Se corrige de paso una imprecision de la primera
+      pasada sobre esa API, sin que cambien las conclusiones de seguridad.
     attachments:
       - name: live-gating-matrix.txt
         path: attachments/tr-185-tc-168/scenario-gating/live-gating-matrix.txt
         mimeType: text/plain
+      - name: live-diagnostics-report.txt
+        path: attachments/tr-185-tc-168/scenario-gating/live-diagnostics-report.txt
+        mimeType: text/plain
 
 summary:
   totalScenarios: 3
-  passed: 2
+  passed: 3
   failed: 0
-  notRun: 1
+  notRun: 0
   blocked: 0
   skipped: 0
-  passRate: 67
+  passRate: 100
 
 history:
   - at: "2026-09-11T22:45:00Z"
@@ -155,3 +188,18 @@ history:
       una constante compilada. Se reporta un bug latente: DiagnosticsPage calcula "hoy" en UTC
       mientras SurveysPage lo calcula en hora local, lo que dara dos fechas distintas en la misma
       sesion durante las ultimas cinco horas de cada dia local cuando enciendan el flag.
+  - at: "2026-09-15T19:45:00Z"
+    from: completed
+    to: completed
+    by: codex
+    reason: >-
+      Reapertura sobre el PR 75 (1ad3b4ce), que implementa la recomendacion abierta: la fecha por
+      defecto de DiagnosticsPage ya no se calcula en UTC sino con un helper local extraido a
+      lib/dates.ts y compartido con SurveysPage, con test propio para el borde 04:30Z/offset 300.
+      Suites verdes: cliente 62/62, servidor 117/117. Se cerro ademas el escenario de
+      funcionalidad, que no requeria encender el flag: el gating es del cliente y la logica vive
+      detras de GET /api/admin/features/:id/respondent-state/:id, una API de admin preexistente.
+      El reporte explica correctamente el bloqueo (max_shows_per_day_reached tras una impresion)
+      y se demostro que con el criterio UTC viejo habria informado lo contrario. Se corrige una
+      imprecision de la primera pasada sobre esa API sin que cambien las conclusiones de
+      seguridad. Gating re-verificado sobre el build nuevo. TR-185 pasa a 3/3. Sin defectos.
