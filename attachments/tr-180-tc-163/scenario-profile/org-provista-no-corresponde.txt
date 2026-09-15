@@ -1,0 +1,152 @@
+TR-180 · TC-163 · IM-1254 — Por que la org provista NO permite cerrar los escenarios abiertos
+===============================================================================================
+Ejecutado    : 2026-09-15
+Contexto     : se retomo el ticket con una scratch org nueva provista para reemplazar la de
+               Auctifera que habia expirado el 2026-09-11.
+Org provista : alias nps_03 / AuctiferaDX__nps_3
+               https://customer-ruby-7292-dev-ed.scratch.my.salesforce.com
+               Org ID 00DRt00000WkwJ0MAJ · namespace Auctifera · expira 2026-10-14
+
+
+RESUMEN
+-------
+La org provista es una scratch org de PRODUCTO con namespace Auctifera. El enriquecimiento de
+IM-1254 no consulta una org de producto: consulta la org de VENTAS de Veevart. Son dos orgs
+distintas, y apuntar la integracion a esta produciria evidencia enganosa en vez de cobertura.
+
+Se detuvo el montaje antes de crear nada en la org o de tocar la configuracion de dev.
+
+
+1. QUE ORG ESPERA LA INTEGRACION
+=================================
+README del repo, seccion de integracion con Salesforce:
+
+  "New responses with a respondent email are enriched asynchronously against Contact.Email in
+   the configured VEEVART SALES Salesforce connection. The response records the Contact ID,
+   Engagement_Level__c, and one of matched, not_found, ambiguous, not_checked, or error"
+
+Y la funcion se llama literalmente matchVeevartSalesContactByEmail. La consulta es:
+
+  SELECT Id, Engagement_Level__c FROM Contact WHERE Email = '<email>' LIMIT 2
+
+Es decir: el Survey Tool busca al respondente dentro del CRM INTERNO de Veevart, para saber si
+quien contesto la encuesta es un contacto conocido del area comercial y con que nivel de
+engagement. No busca en la org del cliente.
+
+
+2. QUE ES LA ORG PROVISTA
+==========================
+Inventario de campos personalizados de Contact en la org provista (Setup > Object Manager >
+Contact > Fields & Relationships, lista ordenada por etiqueta, rango renderizado A-F):
+
+  campos personalizados encontrados        : 27
+  con namespace Auctifera__                : 27
+  sin namespace                            :  0
+  existe Engagement_Level__c               :  NO
+  existe algun campo con "Engagement"      :  NO
+
+  Muestra: Auctifera__Customer_Status__c, Auctifera__Client_Value__c,
+           Auctifera__Amount_Bought__c, Auctifera__Accounting_System_Id__c,
+           Auctifera__Contact_SF_18_ID__c, Auctifera__Annual_Revenue__c ...
+
+La totalidad de la personalizacion de Contact pertenece al paquete Auctifera. Esto es una org
+donde vive el PRODUCTO que los museos usan, o sea el tipo de org cuyos usuarios RESPONDEN
+encuestas. No es la org donde Veevart guarda sus contactos comerciales.
+
+
+3. POR QUE NO SE FORZO LA PRUEBA
+=================================
+Se podia crear a mano un campo Engagement_Level__c sin namespace y tres Contacts, apuntar la
+conexion "Veevart Sales" de dev a esta org y obtener tres PASS verdes. Se descarto, y conviene
+dejar dicho por que:
+
+  a) Seria fabricar el esquema para que calce con la consulta. Un verde asi prueba que la
+     caneria funciona (autenticacion JWT, SOQL, persistencia), pero NO prueba nada sobre el
+     esquema real de la org de ventas, que es exactamente donde vive el riesgo: si alli el
+     campo no existe o se llama distinto, la consulta falla con INVALID_FIELD y TODOS los
+     enriquecimientos caen en "error". La prueba habria dado luz verde justo sobre el punto
+     que no valida.
+
+  b) Etiquetar esa org como "Veevart Sales connection" en dev seria incorrecto de base, y
+     dejaria la configuracion de dev apuntando a una org que no corresponde.
+
+  c) El costo no era menor: Connected App con certificado, llave privada RSA guardada en la
+     configuracion de un entorno COMPARTIDO, y encender una integracion que hace que todas las
+     respuestas de dev empiecen a sincronizar hacia esa org.
+
+No se creo ningun campo, ningun Contact, ninguna Connected App, y no se modifico la
+configuracion de Salesforce de dev. La org quedo como estaba.
+
+
+4. OBSTACULOS TECNICOS ENCONTRADOS EN EL CAMINO
+================================================
+Se documentan porque aplican a cualquier intento futuro contra una scratch org:
+
+  - Login por API con usuario y contrasena: RECHAZADO.
+      LOGIN_MUST_USE_SECURITY_TOKEN. Salesforce exige security token para login SOAP/API desde
+      fuera de la red confiable. Hace falta el token, o un flujo OAuth.
+
+  - Sesion de navegador contra la API REST: RECHAZADA.
+      Un fetch same-origin autenticado con la cookie de sesion a
+      /services/data/v61.0/sobjects/Contact/describe devuelve 401. La API REST exige Bearer
+      OAuth, no la cookie.
+
+  - La integracion del Survey Tool solo soporta JWT.
+      authFlow: "jwt" es un literal fijo en server/src/lib/salesforce.ts, y el propio dev tiene
+      un test llamado "does not enable the removed password flow". Usuario y contrasena no
+      sirven para configurarla: hace falta Connected App (Consumer Key) + llave privada RSA +
+      usuario preautorizado.
+
+  - La org pide registro de telefono (MFA) al primer ingreso; se puede posponer con
+    "Remind Me Later".
+
+  - Estado actual de la integracion en dev:
+      enabled: false · clientId: "REPLACE_ME" · username: "REPLACE_ME" · hasJwtPrivateKey: false
+      configuredFromUi: false
+
+
+5. QUE COBERTURA SI EXISTE HOY
+===============================
+La logica de las tres ramas del ticket esta cubierta por tests del dev, en
+server/src/lib/salesforce.test.ts, y se ejecutaron en esta sesion (servidor 117/117 PASS):
+
+  "does not query contacts when Salesforce is not configured"
+      -> status not_checked, y ademas asserta que fetch NO se llama ni una vez.
+
+  "matches a Veevart Sales contact by email and returns engagement"
+      -> status matched, contactId 003xx000000001AAA, engagementLevel "Champion".
+         Ademas verifica la consulta emitida:
+           contiene FROM Contact
+           contiene LIMIT 2
+           el email o'hara@example.com viaja escapado como o\'hara@example.com
+         Ese ultimo assert cubre la defensa contra inyeccion SOQL con una comilla simple.
+
+  "distinguishes missing and ambiguous Veevart Sales contacts"
+      -> 0 registros  -> not_found
+      -> 2 registros  -> ambiguous
+
+  Es cobertura seria de las ramas y del escape. Lo que NO cubre, por usar fetch simulado:
+      - que la consulta funcione contra un esquema real (que Engagement_Level__c exista)
+      - que el enriquecimiento asincrono PERSISTA los campos en el registro de respuesta
+        (veevartSalesContactId, veevartSalesMatchStatus, engagementLevel, enrichedAt)
+
+  Esos dos puntos son los que siguen abiertos, y ambos requieren una conexion real a la org de
+  ventas de Veevart.
+
+
+6. QUE HARIA FALTA PARA CERRARLO DE VERDAD
+===========================================
+  - Acceso a la org de Salesforce que efectivamente cumple el rol de "Veevart Sales" (la que
+    tiene Contact.Engagement_Level__c), aunque sea un sandbox suyo.
+  - Una Connected App en esa org con certificado, y la llave privada para configurar el flujo
+    JWT, con el usuario preautorizado.
+  - Tres Contacts de prueba: uno con email unico, dos compartiendo un email, y un tercer email
+    que no exista en la org.
+  - Un entorno donde encender la integracion sin afectar a terceros, o acuerdo explicito para
+    encenderla temporalmente en dev.
+
+RECOMENDACION INDEPENDIENTE DE LO ANTERIOR: verificar por separado que la org de ventas real
+tenga hoy el campo Engagement_Level__c con ese nombre exacto. Es una comprobacion de un minuto
+y cubre el modo de falla mas probable de esta integracion, que es un INVALID_FIELD silencioso
+degradando todos los enriquecimientos a "error" sin que nadie lo note, porque el enriquecimiento
+es fire-and-forget y la respuesta del usuario se guarda igual.
