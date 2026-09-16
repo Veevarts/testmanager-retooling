@@ -1,0 +1,297 @@
+schemaVersion: "1.0"
+id: tr-e90b0c52-7c7a-4153-af08-80c90d69a11d
+key: TR-186
+title: >-
+  TR-186 · IM-1270 · TC-169 · Survey creation form persistence — 5/5 PASS. Vaciar la pregunta
+  principal ya no desmonta el formulario, y la validacion que el PR 71 habia agregado pero era
+  inalcanzable en modo creacion por fin se dispara.
+status: completed
+environment:
+  name: >-
+    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
+    del PR 75 (1ad3b4ce, 2026-09-14) desplegado. Navegador con viewport 1512x806, sesion de
+    administrador. Los cinco escenarios se ejercitaron en la interfaz real, con capturas por paso.
+  buildVersion: >-
+    UI-only. El arreglo toca unicamente client/src/pages/SurveysPage.tsx; no hay superficie de API
+    nueva ni cambios de servidor, asi que no se planifico regresion de backend ni de datos.
+testPlanId: null
+startedAt: "2026-09-15T23:05:00Z"
+completedAt: "2026-09-15T23:20:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El defecto nacia de derivar la visibilidad del formulario de creacion del contenido de un campo:
+  `const isCreating = !editing && form.questionText.length > 0;`. Al vaciar la pregunta principal,
+  isCreating pasaba a false y el panel se desmontaba, devolviendo al listado y descartando todo lo
+  que el administrador hubiera cargado.
+
+  El arreglo introduce un estado explicito de creacion: `const [creating, setCreating] =
+  useState(false)` y `const isCreating = creating && !editing`. Se enciende en openCreate() y se
+  apaga en collapseSurveyForm() y en openEdit(). Es exactamente lo que QA habia sugerido al
+  reportar la observacion O3 en TR-183.
+
+  Efecto secundario importante y deseado: la validacion "Enter the main survey question." que el
+  PR 71 habia agregado era INALCANZABLE en modo creacion, porque el formulario se desmontaba antes
+  de que el usuario pudiera pulsar guardar con el campo vacio. Ahora se dispara.
+
+  ## Inferred technical tests
+
+  Es un cambio de interfaz sin API nueva, asi que la prueba no manual es la ejecucion en vivo de
+  los cinco ACs sobre el entorno desplegado, con observacion del DOM (montaje del formulario,
+  valores de cada campo, posicion y visibilidad del modal, elemento con el foco) y verificacion
+  por API del estado persistido al final. Se suman las suites del repo sobre el commit desplegado.
+
+  ## Origen del ticket
+
+  El defecto lo encontro QA como observacion O3 mientras validaba IM-1258 sobre el PR 71 (TR-183).
+  Se verifico entonces que la condicion era identica antes y despues de ese PR
+  (`4458647c` linea 765 y `4458647c~1` linea 637), por lo que NO se uso para rechazar IM-1258 y el
+  dev abrio este ticket aparte. Este run cierra ese ciclo.
+
+results:
+  - testCaseId: "68911511-1199-40f6-a2f2-669ef4cd8167"
+    testCaseKey: TC-169
+    scenarioTitle: >-
+      AC1 · Clearing the main question keeps the creation form mounted with every other value
+      intact
+    scenarioIndex: 0
+    status: passed
+    stepResults: []
+    actual: |
+      Se abrio el formulario de creacion y se cargaron varios campos a proposito, para poder
+      comprobar despues que ninguno se pierde: Main question "QA TC-169 pregunta principal",
+      Follow-up "QA TC-169 seguimiento", Start date 2026-09-20 (deliberadamente distinta de hoy),
+      Subject 1, Active sin marcar.
+
+      La pregunta principal se vacio con una interaccion REAL — clic, Cmd+A, Delete — que es como
+      se reprodujo el defecto original, no con una asignacion de valor por codigo.
+
+        formulario sigue montado       SI    (#survey-main-question presente)
+        titulo de la pantalla          "Create survey"   (no volvio a "Surveys")
+        volvio al listado              NO
+        lista de encuestas visible     NO
+        pregunta principal             "" (vacia)
+        boton de guardar disponible    SI
+
+        Follow-up                      "QA TC-169 seguimiento"   intacto
+        Start date                     2026-09-20                intacto
+        Subject                        1                         intacto
+        Active                         sin marcar                intacto
+
+      pre-fix -> post-fix -> objetivo cumplido?: vaciar la pregunta principal desmontaba el
+      formulario y descartaba la configuracion en curso -> el formulario permanece montado, la
+      pregunta queda vacia y los cuatro valores restantes conservan exactamente lo que tenian
+      -> SI.
+    notes: "**PASS.** Es el sintoma exacto que se reporto como O3 en TR-183."
+    attachments:
+      - name: live-creation-state-matrix.txt
+        path: attachments/tr-186-tc-169/scenario-creation/live-creation-state-matrix.txt
+        mimeType: text/plain
+      - name: 02-formulario-con-datos-cargados.png
+        path: attachments/tr-186-tc-169/scenario-creation/02-formulario-con-datos-cargados.png
+        mimeType: image/png
+      - name: 03-pregunta-vaciada-formulario-sigue-abierto.png
+        path: attachments/tr-186-tc-169/scenario-creation/03-pregunta-vaciada-formulario-sigue-abierto.png
+        mimeType: image/png
+
+  - testCaseId: "68911511-1199-40f6-a2f2-669ef4cd8167"
+    testCaseKey: TC-169
+    scenarioTitle: >-
+      AC2 · Saving with an empty main question shows the blocking validation modal
+    scenarioIndex: 1
+    status: passed
+    stepResults: []
+    actual: |
+      Es el punto central del ticket. El PR 71 habia agregado esta validacion con su propio
+      destino de navegacion, pero en modo creacion NUNCA podia dispararse.
+
+      Se desplazo la pagina hasta dejar el campo en conflicto fuera de vista antes de guardar,
+      igual que en TR-183, para comprobar de paso que el modal no dependa de la posicion:
+
+        scroll al pulsar Create        1462 px
+        top del campo Main question    -242 px  (por encima del viewport)
+        campo fuera de vista           SI
+
+      Resultado:
+
+        modal presente                 SI
+        titulo                         "Complete required information"
+        bajada                         "Resolve the following before saving this survey."
+        mensaje                        "Enter the main survey question."  + accion "Go to field"
+        salida                         "Continue editing"
+        position del contenedor        fixed
+        top / bottom                   0 / 806   (cubre el viewport completo)
+        visible sin desplazarse        SI, con el scroll en 1462
+        la encuesta se creo?           NO, sigue en el formulario
+
+      pre-fix -> post-fix -> objetivo cumplido?: la validacion existia en el codigo pero era
+      inalcanzable en modo creacion -> se dispara, bloquea el guardado y muestra su mensaje,
+      visible desde cualquier posicion de scroll -> SI.
+    notes: >-
+      **PASS.** Cierra el punto que hacia que esto fuera mas que una molestia: era funcionalidad
+      nueva parcialmente inalcanzable por una condicion vieja.
+    attachments:
+      - name: live-creation-state-matrix.txt
+        path: attachments/tr-186-tc-169/scenario-creation/live-creation-state-matrix.txt
+        mimeType: text/plain
+      - name: 04-modal-validacion-alcanzable-en-creacion.png
+        path: attachments/tr-186-tc-169/scenario-creation/04-modal-validacion-alcanzable-en-creacion.png
+        mimeType: image/png
+
+  - testCaseId: "68911511-1199-40f6-a2f2-669ef4cd8167"
+    testCaseKey: TC-169
+    scenarioTitle: >-
+      AC3 · The modal action brings the main question into view and gives it focus
+    scenarioIndex: 2
+    status: passed
+    stepResults: []
+    actual: |
+      Se uso la accion "Go to field" del error de la pregunta principal:
+
+        scroll antes de la accion      1462 px
+        scroll despues                  838 px
+        top del campo                   382 px
+        campo dentro del viewport      SI    (alto del viewport 806)
+        campo con el foco              SI    (document.activeElement == survey-main-question)
+        modal cerrado                  SI
+
+      Y tras el viaje los demas valores siguen intactos: Follow-up "QA TC-169 seguimiento" y
+      Start date 2026-09-20.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el error no es solo descriptivo -> es accionable
+      y deja al administrador escribiendo en el campo correcto sin tener que volver a hacer clic
+      -> SI.
+    notes: "**PASS.**"
+    attachments:
+      - name: live-creation-state-matrix.txt
+        path: attachments/tr-186-tc-169/scenario-creation/live-creation-state-matrix.txt
+        mimeType: text/plain
+      - name: 05-go-to-field-campo-visible-y-con-foco.png
+        path: attachments/tr-186-tc-169/scenario-creation/05-go-to-field-campo-visible-y-con-foco.png
+        mimeType: image/png
+
+  - testCaseId: "68911511-1199-40f6-a2f2-669ef4cd8167"
+    testCaseKey: TC-169
+    scenarioTitle: >-
+      AC4 · Creation state resets when returning to the list after cancelling or creating
+    scenarioIndex: 3
+    status: passed
+    stepResults: []
+    actual: |
+      El AC menciona dos caminos de vuelta y se probaron LOS DOS, porque el estado se apaga desde
+      lugares distintos del codigo (collapseSurveyForm y openEdit).
+
+      CAMINO 1 — CANCELAR
+        tras pulsar Cancel:
+          titulo                       "Surveys"
+          formulario desmontado        SI
+          encuestas en la lista        19
+          queda rastro de "QA TC-169"  NO
+        al reabrir "Add survey":
+          pregunta principal           el valor por defecto
+          follow-up                    "" (vacio)
+          start date                   2026-09-15 (hoy)
+          conservo el 2026-09-20       NO
+
+      CAMINO 2 — CREACION EXITOSA
+        tras crear la encuesta:
+          titulo                       "Surveys"
+          formulario desmontado        SI
+          encuestas en la lista        20  (era 19)
+        al reabrir "Add survey":
+          pregunta principal           el valor por defecto
+          arrastra lo anterior         NO
+          start date                   2026-09-15
+
+      pre-fix -> post-fix -> objetivo cumplido?: no queda estado de creacion colgado por ninguno
+      de los dos caminos -> SI.
+    notes: >-
+      **PASS por los dos caminos.** Observacion lateral util: que el start date vuelva a
+      2026-09-15 (hoy en hora local) y no a la fecha escrita confirma de paso el helper
+      localDateInputValue verificado en IM-1253 / TR-185. Los dos arreglos conviven bien.
+    attachments:
+      - name: live-creation-state-matrix.txt
+        path: attachments/tr-186-tc-169/scenario-creation/live-creation-state-matrix.txt
+        mimeType: text/plain
+      - name: 06-reapertura-tras-cancelar-formulario-limpio.png
+        path: attachments/tr-186-tc-169/scenario-creation/06-reapertura-tras-cancelar-formulario-limpio.png
+        mimeType: image/png
+
+  - testCaseId: "68911511-1199-40f6-a2f2-669ef4cd8167"
+    testCaseKey: TC-169
+    scenarioTitle: >-
+      Regression · Editing an existing survey and creating one with a valid question keep working
+    scenarioIndex: 4
+    status: passed
+    stepResults: []
+    actual: |
+      Este escenario no era opcional: el arreglo toca la condicion que gobierna el montaje de TODA
+      la pagina de encuestas (isCreating aparece tambien en bloques con !isCreating, lineas 823 y
+      1784), no solo el caso reportado.
+
+      CREACION CON PREGUNTA VALIDA
+        pregunta                       "QA TC-169 creacion con pregunta valida"
+        resultado                      encuesta #22 creada
+        aparece en el listado          SI  (Rentals · NPS · Everyone · desde 2026-09-15)
+        estado                         Inactive
+        hubo modal de error            NO
+        total de encuestas             19 -> 20
+
+      MODO EDICION, VACIANDO LA PREGUNTA PRINCIPAL
+        se abrio la encuesta #22 en edicion con su pregunta cargada y se vacio con la misma
+        interaccion real (clic, Cmd+A, Delete):
+
+          formulario sigue montado     SI
+          pregunta                     "" (vacia)
+          salto a modo creacion        NO   (el titulo sigue siendo "Surveys")
+
+        Importa el ultimo punto: isCreating = creating && !editing, asi que aunque `creating`
+        hubiera quedado encendido, abrir una edicion lo apaga. Los dos modos no pueden estar
+        activos a la vez.
+
+      Se cancelo la edicion sin guardar y se verifico POR API que la encuesta no quedo con la
+      pregunta vacia: survey 22 questionText = "QA TC-169 creacion con pregunta valida",
+      active = false.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el modo edicion se comporta igual que antes del
+      arreglo y la creacion con pregunta valida termina correctamente -> SI.
+    notes: "**PASS.**"
+    attachments:
+      - name: live-creation-state-matrix.txt
+        path: attachments/tr-186-tc-169/scenario-creation/live-creation-state-matrix.txt
+        mimeType: text/plain
+      - name: 01-listado-antes-de-crear.png
+        path: attachments/tr-186-tc-169/scenario-creation/01-listado-antes-de-crear.png
+        mimeType: image/png
+      - name: 07-creacion-con-pregunta-valida-encuesta-22.png
+        path: attachments/tr-186-tc-169/scenario-creation/07-creacion-con-pregunta-valida-encuesta-22.png
+        mimeType: image/png
+      - name: 08-edicion-con-pregunta-vacia-formulario-intacto.png
+        path: attachments/tr-186-tc-169/scenario-creation/08-edicion-con-pregunta-vacia-formulario-intacto.png
+        mimeType: image/png
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-15T23:20:00Z"
+    by: codex
+    from: planned
+    to: completed
+    reason: >-
+      Ejecucion completa de los cinco ACs en la interfaz desplegada con capturas por paso. Se
+      cierra el ciclo del defecto que la propia QA habia reportado como observacion O3 en TR-183:
+      el arreglo hace exactamente lo que se habia sugerido, desacoplar la visibilidad del
+      formulario del contenido de un campo mediante un estado explicito de creacion. Suites sobre
+      1ad3b4ce: servidor 117/117, cliente 62/62. Se levanta la observacion O6, que no es defecto:
+      ningun test automatizado cubre este arreglo, porque el cliente no tiene harness de
+      componentes (sin testing-library, jsdom, vitest ni jest); el arreglo queda protegido solo
+      por esta verificacion manual. 5/5 PASS, sin defectos abiertos.

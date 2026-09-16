@@ -1,0 +1,122 @@
+schemaVersion: "1.0"
+
+id: "68911511-1199-40f6-a2f2-669ef4cd8167"
+key: "TC-169"
+title: "Survey creation stays open when the main question is cleared, and the blocking validation becomes reachable in create mode — IM-1270"
+description: |
+  Test case para IM-1270 (Error, priority **Medium**) — QA Sub-task IM-1276. Repositorio:
+  `survey-tool`. Arreglo bajo prueba: PR 75 (merge commit 1ad3b4ce en `develop`, 2026-09-14).
+
+  === ORIGEN DEL TICKET ===
+
+  Este defecto lo encontro QA como observacion O3 mientras validaba IM-1258 sobre el PR 71
+  (ver TR-183). En modo CREACION, vaciar el campo "Main question" DESMONTABA el formulario
+  completo y devolvia al listado, descartando todo lo que el administrador hubiera cargado.
+
+  Se verifico entonces que la condicion era IDENTICA antes y despues del PR 71
+  (`const isCreating = !editing && form.questionText.length > 0;` en ambos commits), por lo que
+  NO se uso para rechazar IM-1258 y el dev abrio este ticket aparte.
+
+  === POR QUE NO ERA SOLO UNA MOLESTIA ===
+
+  El PR 71 habia agregado una validacion bloqueante nueva con el mensaje "Enter the main survey
+  question." y su propio destino de navegacion. Pero en modo creacion esa validacion NUNCA podia
+  dispararse: el formulario se desmontaba antes de que el usuario alcanzara a pulsar guardar con
+  el campo vacio. Era funcionalidad nueva parcialmente inalcanzable por una condicion vieja.
+
+  El arreglo hace exactamente lo que QA habia sugerido: desacopla la visibilidad del formulario
+  del contenido de un campo introduciendo un estado explicito de creacion
+  (`const [creating, setCreating] = useState(false)`, `const isCreating = creating && !editing`).
+
+  === ALCANCE ===
+
+  Es un cambio solo de interfaz, sin superficie de API nueva. La cobertura se concentra en el
+  comportamiento observable en pantalla, que es donde vive el defecto. Se incluye un escenario de
+  regresion explicito porque el arreglo toca la condicion que gobierna el montaje de TODA la
+  pagina de encuestas, no solo el caso reportado.
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "Entorno de Survey Tool con `develop` desplegado (PR 75, 1ad3b4ce) y sesion de administrador."
+  - "Al menos un subject existente para poder abrir el formulario de creacion de encuestas."
+  - "Al menos una encuesta ya creada, para poder ejercitar el modo edicion en el escenario de regresion."
+format: gherkin
+scenarios:
+  - title: "AC1 · Clearing the main question keeps the creation form mounted with every other value intact"
+    tags: [ac-1, happy-path, regression-evidence]
+    given:
+      - "el formulario de creacion de encuesta abierto"
+      - "y varios campos ya cargados por el administrador, ademas de la pregunta principal"
+    when:
+      - "el administrador vacia por completo el campo de la pregunta principal"
+    then:
+      - "el formulario sigue montado y no se vuelve al listado de encuestas"
+      - "los demas valores que habia cargado conservan exactamente lo que tenian"
+      - "no se pierde nada de la configuracion en curso"
+
+  - title: "AC2 · Saving with an empty main question shows the blocking validation modal"
+    tags: [ac-2, negative, validation]
+    given:
+      - "el formulario de creacion abierto con la pregunta principal vacia"
+    when:
+      - "el administrador intenta guardar la encuesta"
+    then:
+      - "aparece el modal de validacion bloqueante con el mensaje \"Enter the main survey question.\""
+      - "la encuesta no se crea"
+      - "queda demostrado que la validacion que el PR 71 habia agregado ya es alcanzable en modo creacion"
+
+  - title: "AC3 · The modal action brings the main question into view and gives it focus"
+    tags: [ac-3, navigation, accessibility]
+    given:
+      - "el modal de validacion abierto por una pregunta principal vacia"
+    when:
+      - "el administrador usa la accion que lleva al campo"
+    then:
+      - "el campo de la pregunta principal queda visible dentro del area visible de la pantalla"
+      - "y recibe el foco, de modo que el administrador puede escribir sin volver a hacer clic"
+      - "el modal se cierra"
+
+  - title: "AC4 · Creation state resets when returning to the list after cancelling or creating"
+    tags: [ac-4, state-reset, happy-path]
+    given:
+      - "el formulario de creacion abierto con datos cargados"
+    when:
+      - "el administrador cancela, o bien crea la encuesta correctamente, y vuelve al listado"
+      - "y despues abre de nuevo el formulario de creacion"
+    then:
+      - "el listado se muestra sin rastro del formulario anterior"
+      - "el formulario nuevo aparece limpio, sin los valores de la sesion de creacion previa"
+      - "no queda un estado de creacion colgado que altere lo que se ve en el listado"
+
+  - title: "Regression · Editing an existing survey and creating one with a valid question keep working"
+    tags: [ac-5, regression, happy-path]
+    given:
+      - "una encuesta ya existente y el arreglo que cambia la condicion de montaje de la pagina"
+    when:
+      - "el administrador abre esa encuesta en modo edicion y vacia su pregunta principal"
+      - "y por separado crea una encuesta nueva con una pregunta principal valida"
+    then:
+      - "en modo edicion el formulario sigue montado, igual que antes del arreglo"
+      - "la creacion con pregunta valida termina correctamente y la encuesta aparece en el listado"
+      - "abrir edicion estando en modo creacion no deja los dos modos activos a la vez"
+tags:
+  - im-1270
+  - im-1276
+  - survey-tool
+  - nps
+  - admin-ui
+  - survey-creation
+  - form-state
+  - validation
+  - pr-75
+  - medium
+estimatedDuration: 35
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-15T23:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-15T23:00:00Z"
+  version: 1
