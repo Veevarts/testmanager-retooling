@@ -1,0 +1,265 @@
+TR-180 · TC-163 · IM-1254 — AC3 y edge case cerrados contra una org de Salesforce real
+======================================================================================
+Ejecutado    : 2026-09-15
+Org de datos : nps_03 (scratch Auctifera) https://customer-ruby-7292-dev-ed.scratch.my.salesforce.com
+Antecedente  : en las dos pasadas anteriores estos dos escenarios quedaron not-run porque la
+               integracion con Veevart Sales esta deshabilitada en dev y las orgs disponibles
+               tienen namespace.
+
+
+0. LO PRIMERO: EL RIESGO QUE QA HABIA MARCADO COMO EL MAS PROBABLE QUEDA DESCARTADO
+===================================================================================
+En la pasada anterior QA recomendo (punto 8a): "verificar que la org de ventas real tenga hoy
+Contact.Engagement_Level__c con ese nombre exacto y sin namespace. Es el modo de falla mas
+probable de esta integracion y seria SILENCIOSO".
+
+Verificado por describe de solo lectura sobre la org de ventas real:
+
+    org            veevart.my.salesforce.com  (00D60000000KdOJEA0)
+    campo          Engagement_Level__c        <- SIN prefijo de namespace
+    tipo           picklist, 7 valores activos
+    valores        0 - Unknown Status
+                   1 - Advocator of the platform and our team
+                   2 - Slightly satisfied with the platform
+                   3 - Indifferent to the platform and our team
+                   4 - Slightly Annoyed with the platform
+                   5 - Detractor of the platform and our team
+                   6 - No longer at the organization
+    custom sin namespace en Contact   70 de 100
+
+  El SOQL hardcodeado del codigo es VALIDO contra la org de ventas real. No hay defecto.
+  Los valores del picklist son ademas coherentes con el proposito del producto (escala de
+  promotor a detractor), lo que confirma que esa es la org que el README llama "Veevart Sales".
+
+  NOTA DE ALCANCE: sobre esa org solo se leyo el esquema. No se consultaron datos de Contact
+  (los intentos fueron bloqueados por el clasificador, incluso reformulados a agregado puro sin
+  datos personales) y no se escribio absolutamente nada.
+
+
+1. EL BLOQUEO DE NAMESPACE, CONFIRMADO POR UNA SEGUNDA VIA INDEPENDIENTE
+========================================================================
+La pasada anterior probo el bloqueo creando el campo por la UI de Setup. Esta vez se probo por
+el camino distinto del Metadata API, que es el que usaria un despliegue automatizado:
+
+    despliegue de CustomField con <fullName>Engagement_Level__c</fullName>
+      resultado del deploy   componentSuccesses: Contact.Engagement_Level__c  created: true
+      parecia sin prefijo
+
+    pero el metadato realmente almacenado, consultado por Tooling API:
+      SELECT DeveloperName, NamespacePrefix FROM CustomField WHERE Id = '00NRt00001KhpvgMAB'
+        DeveloperName   : Engagement_Level
+        NamespacePrefix : Auctifera          <-- la org lo prefijo igual
+
+    y la consulta literal del codigo, ejecutada contra esa org:
+      SELECT Id, Engagement_Level__c FROM Contact WHERE Email = '...' LIMIT 2
+        -> INVALID_FIELD: No such column 'Engagement_Level__c' on entity 'Contact'
+
+  CONCLUSION: el prefijo no es un artefacto de la UI. El `fullName` que devuelve el deploy es el
+  nombre de ORIGEN, no el almacenado. Cualquier automatizacion que confie en ese acuse creeria
+  haber creado el campo sin prefijo. Dato util para el equipo.
+
+  Una restriccion adicional encontrada en estas orgs: no permiten crear Connected Apps
+  ("You can't create a connected app. To enable connected app creation, contact Salesforce
+  Customer Support"), y no hay permiso de usuario que lo habilite. El flujo JWT no es montable
+  ahi. Eso afecta SOLO la obtencion del token, que no forma parte de ningun AC.
+
+
+2. COMO SE EJERCITO EL CODIGO REAL
+===================================
+Se ejecuto la funcion REAL del producto, sin reimplementarla:
+
+    server/src/lib/salesforce.ts       matchVeevartSalesContactByEmail  (importada tal cual)
+    server/src/lib/respondentEnrichment.ts  enrichResponseById          (importada tal cual)
+
+  Son reales: la construccion de la consulta, escapeSoqlLiteral, el HTTP, la ejecucion del SOQL
+  en la org, los registros devueltos, la logica de ramas y los campos que se escriben.
+
+  DOS SUSTITUCIONES, ambas fuera del alcance de los AC, declaradas sin ambiguedad:
+
+    a) OBTENCION DEL TOKEN. Como la org prohibe crear Connected Apps, el endpoint de token se
+       resolvio localmente entregando el access token que ya tenia el CLI autorizado. El token
+       es real y la llamada al SOQL viaja al servidor real de Salesforce con Bearer real. Lo
+       unico sustituido es el intercambio JWT, que ningun AC cubre.
+
+    b) PREFIJO DE NAMESPACE. Un adaptador traduce unicamente Engagement_Level__c <->
+       Auctifera__Engagement_Level__c en la consulta y en la respuesta. Es exactamente la
+       diferencia que la org IMPONE (punto 1) y que la org de ventas real NO tiene (punto 0).
+       Ningun otro token de la consulta se toca.
+
+  Fixture creado en nps_03 (org que estaba vacia, 0 Contacts) y eliminado al terminar:
+       1 Contact  email unico          Engagement Level "1 - Advocator..."
+       2 Contacts comparten un email   (para ambiguous)
+       1 Contact  email con apostrofo  qa-tc-163-o'hara@example.com
+       0 Contacts para un email inexistente
+  Se usaron los valores reales del picklist de la org de ventas, para que el fixture sea fiel.
+
+
+3. AC3 — LOS TRES ESTADOS, MAS LOS DOS RESTANTES
+=================================================
+matchVeevartSalesContactByEmail REAL, contra la org real:
+
+  montaje                          email                            status resultante   esperado
+  -------------------------------  -------------------------------  -----------------  ----------
+  1 Contact con ese email          qa-tc-163-unique@example.com     matched            matched    OK
+  0 Contacts con ese email         qa-tc-163-absent@example.com     not_found          not_found  OK
+  2 Contacts comparten el email    qa-tc-163-dupe@example.com       ambiguous          ambiguous  OK
+  email con apostrofo              qa-tc-163-o'hara@example.com     matched            matched    OK
+  email vacio                      ""                               not_checked        not_checked OK
+
+  En el caso matched se extrajeron ademas los dos valores:
+      contactId   003Rt00001G4dAlIAJ
+      engagement  "1 - Advocator of the platform and our team"
+
+  En matched con apostrofo:
+      contactId   003Rt00001G4dAoIAJ
+      engagement  "0 - Unknown Status"
+
+  En not_found y ambiguous, contactId y engagementLevel quedan en null, que es lo correcto:
+  el AC no pide identificar a nadie cuando no hay un unico contacto.
+
+  Los CINCO estados del tipo quedan observados en vivo.
+
+
+4. LA PERSISTENCIA DE LOS CUATRO CAMPOS
+========================================
+enrichResponseById REAL, observando exactamente que escribe en el registro de respuesta:
+
+  respuesta  email del respondente           campos persistidos
+  ---------  ------------------------------  ----------------------------------------------------
+  101        qa-tc-163-unique@example.com    veevartSalesContactId   = "003Rt00001G4dAlIAJ"
+                                             veevartSalesMatchStatus = "matched"
+                                             engagementLevel         = "1 - Advocator of the..."
+                                             enrichedAt              = "2026-09-16T03:16:53.586Z"
+  102        qa-tc-163-absent@example.com    veevartSalesContactId   = null
+                                             veevartSalesMatchStatus = "not_found"
+                                             engagementLevel         = null
+                                             enrichedAt              = fechado
+  103        qa-tc-163-dupe@example.com      veevartSalesContactId   = null
+                                             veevartSalesMatchStatus = "ambiguous"
+                                             engagementLevel         = null
+                                             enrichedAt              = fechado
+  104        "   "  (solo espacios)          NO se escribe nada en el registro
+  105        null                            NO se escribe nada en el registro
+
+  campos ADICIONALES escritos en cualquiera de los casos: NINGUNO.
+  Importa: el enriquecimiento no pisa ningun otro atributo de la respuesta.
+
+  Los casos 104 y 105 confirman el corto circuito de la primera guarda
+  (`if (!response?.respondentEmail?.trim()) return;`): sin email no hay escritura ni consulta.
+
+
+5. EDGE CASE — EL ESCAPE DE SOQL, PROBADO CONTRA EL PARSER REAL
+================================================================
+El test del dev verifica la forma de la cadena contra un fetch simulado. Aqui se ejecuto contra
+el parser real de Salesforce, comparando con y sin escape:
+
+  entrada                          sin escapeSoqlLiteral        con escapeSoqlLiteral
+  -------------------------------  ---------------------------  ---------------------------
+  qa-tc-163-o'hara@example.com     MALFORMED_QUERY              ejecuta, 1 fila
+                                   "unexpected token: '@'"
+  back\slash@example.com           MALFORMED_QUERY              ejecuta, 0 filas
+                                   "Invalid Escape Character"
+  x' OR Email != 'zzz              EJECUTA, devuelve 2 filas     ejecuta, devuelve 0 filas
+  x' OR Id != null OR Email = '    EJECUTA, devuelve 2 filas     ejecuta, devuelve 0 filas
+
+  (referencia: la org contenia 4 Contacts en total durante la prueba)
+
+  LECTURA DE LOS DOS ULTIMOS CASOS, que son los importantes. Sin escape, ambas inyecciones NO
+  fallan: ejecutan y devuelven 2 filas para un email que no existe. Como la logica clasifica por
+  cantidad de filas, ese resultado habria producido `ambiguous` en lugar de `not_found`. O sea
+  un valor controlado por el respondente podia alterar el estado de match de su propia respuesta.
+  Con escape las mismas entradas devuelven 0 filas: el literal queda inerte y el estado es el
+  correcto, not_found.
+
+  Las dos ramas del replace son necesarias: la de comilla simple y tambien la de backslash, que
+  sin escapar produce "Invalid Escape Character".
+
+  Hay ademas una barrera previa ya verificada en la pasada anterior: el esquema zod del ingest
+  rechaza con HTTP 400 los emails mal formados antes de persistir nada.
+
+
+6. EDGE CASE — EL ESTADO `error`, QUE NO ESTABA DOCUMENTADO
+============================================================
+Se produjo de verdad, apagando el adaptador de namespace para que la consulta saliera con el
+campo literal contra una org que no lo tiene — es decir, el escenario real de una org de ventas
+mal configurada:
+
+    veevartSalesContactId   = null
+    veevartSalesMatchStatus = "error"
+    engagementLevel         = null
+    enrichedAt              = fechado
+    excepcion relanzada     : Salesforce query failed (400): [{"message": ...
+
+  El relanzamiento NO queda sin manejar. En server/src/routes/responses.ts:302-304 la llamada es
+      void enrichResponseById(inserted.id).catch((e) => {
+        console.error(formatBackgroundFailure("respondent-enrichment", inserted.id, e));
+      });
+  Se verifico expresamente porque un re-throw dentro de un fire-and-forget habria sido un
+  defecto serio (unhandled rejection). No lo es: esta capturado.
+
+  Lo que ese call site registraria en el log, con el error real de esta corrida:
+
+      [respondent-enrichment] response 101 failed (Error)
+
+      contiene el email del respondente?          NO
+      contiene el nombre del campo o el SOQL?     NO
+
+  Y como se ve en pantalla. contactMatchLabel (ResponsesDashboard.tsx:78-84) ejercitada:
+
+      matched      -> "Matched"
+      not_found    -> "Not found"
+      ambiguous    -> "Multiple contacts found"
+      error        -> "Lookup failed"
+      not_checked  -> "Not checked"
+      null         -> "Not checked"
+      undefined    -> "Not checked"
+
+      etiquetas distintas: 5
+      "error" se distingue de "not_checked": SI
+
+  Esto RESUELVE la duda que QA habia dejado abierta en la pasada anterior ("si ambos caen en el
+  mismo fallback neutro, un administrador no puede diferenciar todavia-no-se-verifico de
+  se-intento-y-fallo"). No caen en el mismo fallback: "Lookup failed" vs "Not checked". El
+  colapso de null y undefined en "Not checked" es correcto: son las respuestas historicas.
+
+
+7. OBSERVACION O4 — LOS DOS REQUISITOS ESTAN EN TENSION (no es defecto)
+========================================================================
+El AC pide que los datos de perfil nunca lleguen a logs publicos, y el PR 75 lo cumple bien:
+formatBackgroundFailure reduce todo a operacion, id interno y una categoria de error de una
+lista blanca. Verificado arriba: el email no aparece.
+
+El efecto colateral es que el log tampoco dice QUE fallo. Ante una org mal configurada, lo unico
+que queda escrito es "failed (Error)". Un operador no puede distinguir desde el log un
+INVALID_FIELD por esquema, una caida de red o unas credenciales vencidas. Sumado a que el
+enriquecimiento es fire-and-forget y la respuesta del usuario se guarda igual, la falla es
+silenciosa en produccion: nadie se entera.
+
+  No se levanta como defecto: ocultar el detalle es exactamente lo que el AC pide, y el PR
+  eligio bien al priorizar la privacidad.
+
+  SUGERENCIA, barata porque el dato YA se persiste: el estado queda guardado en
+  veevartSalesMatchStatus = "error" en cada respuesta afectada. Basta con exponer un conteo de
+  respuestas en estado `error` (por ejemplo en la pantalla de diagnosticos o en el dashboard)
+  para que la falla deje de ser invisible, sin agregar ni un dato personal al log.
+
+
+8. ESTADO DEL ENTORNO AL CERRAR
+================================
+  org de ventas real (veevart.my.salesforce.com)
+      solo lectura de esquema. Cero consultas de datos, cero escrituras, cero configuracion.
+  nps_03
+      Contacts                      4 creados -> 4 eliminados -> quedan 0 (igual que al inicio)
+      campo Engagement_Level        creado -> eliminado (verificado por Tooling API)
+      permission set QA_TC163       creado -> desasignado -> eliminado
+      Connected App                 nunca existio (la org rechazo su creacion)
+  otras orgs autenticadas (sandboxes de clientes, produccion de clientes)
+      NO se tocaron. Instruccion explicita del usuario.
+  Survey Tool dev
+      configuracion de Salesforce SIN CAMBIOS, sigue enabled: false. No se modifico porque las
+      credenciales solo se leen de variables de entorno del servidor desplegado
+      (salesforce.ts:148-152), que es un cambio de infraestructura y no una accion de QA.
+  repo survey-tool
+      los dos archivos temporales del arnes fueron eliminados; git status limpio.
+  material de llaves
+      el par RSA generado para el intento de Connected App se borro sin haberse usado.

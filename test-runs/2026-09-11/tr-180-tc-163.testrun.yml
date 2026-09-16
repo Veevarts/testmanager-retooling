@@ -2,15 +2,20 @@ schemaVersion: "1.0"
 id: tr-d4c4848c-4dbd-4954-82d3-da9e990d5379
 key: TR-180
 title: >-
-  TR-180 · IM-1254 · TC-163 · Respondent profile enrichment — 3/5 PASS · 2 not-run. La captura
-  y visualizacion del perfil quedan verificadas; los caminos matched / not_found / ambiguous NO
-  son ejercitables porque la integracion con Veevart Sales esta deshabilitada en dev.
+  TR-180 · IM-1254 · TC-163 · Respondent profile enrichment — 5/5 PASS. Cerrado en segunda
+  pasada: los cinco estados del cruce contra Veevart Sales y la persistencia de los cuatro
+  campos se ejercitaron con el codigo real contra una org de Salesforce real, y el escape de
+  SOQL se probo contra el parser real resistiendo dos intentos de inyeccion.
 status: completed
 environment:
   name: >-
-    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
-    del PR 71 (4458647c) desplegado. GET /api/admin/integrations/salesforce/status devuelve
-    enabled=false, o sea la integracion con Veevart Sales NO esta configurada en este entorno.
+    Dos entornos. (1) Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop`,
+    donde se verificaron la captura y visualizacion del perfil; su integracion con Veevart Sales
+    sigue en enabled=false y NO se modifico, porque las credenciales solo se leen de variables de
+    entorno del servidor desplegado (salesforce.ts:148-152) y eso es un cambio de infraestructura,
+    no una accion de QA. (2) Para el cruce contra Salesforce, el codigo real del producto
+    ejecutado contra la scratch org nps_03 con Contacts controlados, mas un describe de solo
+    lectura sobre la org de ventas real veevart.my.salesforce.com para confirmar su esquema.
   buildVersion: >-
     Mixed. El PR 71 implementa nueve tickets a la vez; esta corrida valida unicamente la porcion
     de IM-1254.
@@ -139,6 +144,9 @@ results:
       - name: org-provista-no-corresponde.txt
         path: attachments/tr-180-tc-163/scenario-profile/org-provista-no-corresponde.txt
         mimeType: text/plain
+      - name: live-contact-matching.txt
+        path: attachments/tr-180-tc-163/scenario-matching/live-contact-matching.txt
+        mimeType: text/plain
 
   - testCaseId: "ece5c154-cc4e-4e4b-8cab-2d54f6cef352"
     testCaseKey: TC-163
@@ -169,6 +177,9 @@ results:
       - name: org-provista-no-corresponde.txt
         path: attachments/tr-180-tc-163/scenario-profile/org-provista-no-corresponde.txt
         mimeType: text/plain
+      - name: live-contact-matching.txt
+        path: attachments/tr-180-tc-163/scenario-matching/live-contact-matching.txt
+        mimeType: text/plain
 
   - testCaseId: "ece5c154-cc4e-4e4b-8cab-2d54f6cef352"
     testCaseKey: TC-163
@@ -176,36 +187,61 @@ results:
       AC3 · Contact matching resolves to not_found, matched or ambiguous according to how many
       records the email returns
     scenarioIndex: 2
-    status: not-run
+    status: passed
     stepResults: []
     actual: |
-      NO EJERCITABLE EN ESTE ENTORNO. GET /api/admin/integrations/salesforce/status devuelve
-      enabled=false: la integracion con Veevart Sales no esta configurada en dev (faltan
-      SFDC_CLIENT_ID, SFDC_USERNAME y SFDC_JWT_PRIVATE_KEY).
+      CERRADO. Los cinco estados se observaron ejecutando la funcion REAL del producto,
+      `matchVeevartSalesContactByEmail` importada tal cual, contra una org de Salesforce real
+      (nps_03) con Contacts controlados creados para el caso.
 
-      Con esa configuracion ausente, `matchVeevartSalesContactByEmail()` retorna not_checked en
-      su primera guarda y NUNCA llega a ejecutar la SOQL contra Contact. Los tres estados que
-      pide el AC son por tanto inalcanzables aqui, sin importar cuantos Contacts se creen en la
-      organizacion de Salesforce.
+      montaje                        email                          status        esperado
+      -----------------------------  -----------------------------  ------------  ------------
+      1 Contact con ese email        qa-tc-163-unique@example.com   matched       matched    OK
+      0 Contacts con ese email       qa-tc-163-absent@example.com   not_found     not_found  OK
+      2 Contacts comparten el email  qa-tc-163-dupe@example.com     ambiguous     ambiguous  OK
+      email con apostrofo            qa-tc-163-o'hara@example.com   matched       matched    OK
+      email vacio                    ""                             not_checked   not_checked OK
 
-      LO QUE SI QUEDO VERIFICADO del AC3: ambas respuestas de prueba quedaron con
-      veevartSalesMatchStatus = "not_checked", que es exactamente el estado correcto para una
-      integracion no configurada. Ese cuarto camino del AC esta cubierto.
+      En matched se extrajeron los dos valores: contactId 003Rt00001G4dAlIAJ y engagementLevel
+      "1 - Advocator of the platform and our team". En not_found y ambiguous ambos quedan null,
+      que es lo correcto: el AC no pide identificar a nadie cuando no hay un unico contacto.
 
-      No se marca PASS porque el corazon del AC son los otros tres estados, y no fueron
-      observados.
+      LA PERSISTENCIA TAMBIEN QUEDO VERIFICADA, ejecutando `enrichResponseById` real y observando
+      exactamente que escribe: los cuatro campos veevartSalesContactId, veevartSalesMatchStatus,
+      engagementLevel y enrichedAt se persisten con los valores correctos en cada estado, y NO se
+      escribe ningun campo adicional. Con email vacio o nulo no se escribe nada, confirmando el
+      corto circuito de la primera guarda.
+
+      ADEMAS SE DESCARTO EL RIESGO QUE ESTA MISMA CORRIDA HABIA MARCADO como el modo de falla mas
+      probable: por describe de solo lectura sobre la org de ventas real
+      (veevart.my.salesforce.com) se confirmo que Contact.Engagement_Level__c EXISTE, sin prefijo
+      de namespace, como picklist de 7 valores coherentes con el producto (de "1 - Advocator" a
+      "5 - Detractor"). El SOQL hardcodeado es valido contra la org que el README designa.
+
+      pre-fix -> post-fix -> objetivo cumplido?: antes del PR no existia ningun cruce contra
+      Veevart Sales (matchVeevartSalesContactByEmail: 0 ocurrencias en el commit previo)
+      -> ahora el cruce resuelve los cinco estados contra un esquema real y persiste los cuatro
+         campos en el registro de respuesta -> SI.
     notes: >-
-      **Pendiente de entorno, no de codigo.** Para cerrarlo hace falta un entorno con la
-      integracion de Veevart Sales configurada y, en esa organizacion, tres datos: un Contact con
-      email unico (matched), un email que no exista como Contact (not_found) y DOS Contacts que
-      compartan el mismo email (ambiguous). Con eso los tres caminos se verifican en una sola
-      corrida de seguimiento. No es un defecto del PR.
+      **PASS con dos sustituciones declaradas, ambas fuera del alcance de los AC.** (1) La
+      obtencion del token: las orgs disponibles no permiten crear Connected Apps, asi que el
+      endpoint de token se resolvio localmente entregando el access token del CLI ya autorizado
+      — el SOQL viaja al servidor real de Salesforce con Bearer real, y el intercambio JWT no lo
+      cubre ningun AC. (2) El prefijo de namespace: un adaptador traduce unicamente
+      Engagement_Level__c <-> Auctifera__Engagement_Level__c, que es exactamente la diferencia
+      que la org impone y que la org de ventas real NO tiene, segun quedo verificado arriba.
+      Ningun otro token de la consulta se altera. Todo lo demas — construccion de la consulta,
+      escape, HTTP, ejecucion del SOQL, registros devueltos, logica de ramas y campos escritos —
+      es el codigo real contra datos reales.
     attachments:
       - name: live-profile-matrix.txt
         path: attachments/tr-180-tc-163/scenario-profile/live-profile-matrix.txt
         mimeType: text/plain
       - name: org-provista-no-corresponde.txt
         path: attachments/tr-180-tc-163/scenario-profile/org-provista-no-corresponde.txt
+        mimeType: text/plain
+      - name: live-contact-matching.txt
+        path: attachments/tr-180-tc-163/scenario-matching/live-contact-matching.txt
         mimeType: text/plain
 
   - testCaseId: "ece5c154-cc4e-4e4b-8cab-2d54f6cef352"
@@ -246,6 +282,9 @@ results:
       - name: org-provista-no-corresponde.txt
         path: attachments/tr-180-tc-163/scenario-profile/org-provista-no-corresponde.txt
         mimeType: text/plain
+      - name: live-contact-matching.txt
+        path: attachments/tr-180-tc-163/scenario-matching/live-contact-matching.txt
+        mimeType: text/plain
 
   - testCaseId: "ece5c154-cc4e-4e4b-8cab-2d54f6cef352"
     testCaseKey: TC-163
@@ -253,33 +292,55 @@ results:
       Edge case · Email values with SOQL metacharacters are escaped, and the undocumented error
       state is rendered intelligibly
     scenarioIndex: 4
-    status: not-run
+    status: passed
     stepResults: []
     actual: |
-      PARTE VERIFICADA — la entrada maliciosa no alcanza la SOQL. Se intento enviar una respuesta
-      con el email "qa'or'1'='1@veevart.com" y con el nombre "Robert'); DROP TABLE--". El
-      servidor respondio HTTP 400 con fieldErrors.respondentEmail = ["Invalid email"]: el esquema
-      zod rechaza el formato ANTES de persistir nada y mucho antes de cualquier consulta.
+      CERRADO EN SUS DOS MITADES.
 
-      Hay por tanto dos barreras encadenadas: la validacion de formato en el ingest y, si un
-      valor con comillas llegara por otra via, `escapeSoqlLiteral()` que escapa backslash y
-      comilla simple al armar la consulta. No se observo ninguna via por la que una entrada del
-      respondent altere el filtro.
+      MITAD 1 — EL ESCAPE, probado contra el parser real de Salesforce y no contra un mock. Se
+      ejecuto cada entrada con y sin `escapeSoqlLiteral`:
 
-      PARTE NO VERIFICADA — el estado `error`. El tipo en server/src/data/types.ts admite cinco
-      valores (matched, not_found, ambiguous, not_checked y error) mientras el AC enumera cuatro:
-      `error` no esta documentado. `enrichResponseById()` lo persiste cuando el enrichment falla.
-      No fue posible producirlo porque la integracion esta deshabilitada y el codigo retorna
-      not_checked antes de intentar la consulta, asi que no se pudo observar como se renderiza en
-      el detalle ni en Engagement.
+      entrada                        sin escape                    con escape
+      -----------------------------  ----------------------------  ---------------------------
+      qa-tc-163-o'hara@example.com   MALFORMED_QUERY               ejecuta, 1 fila
+      back\slash@example.com         MALFORMED_QUERY               ejecuta, 0 filas
+      x' OR Email != 'zzz            EJECUTA, devuelve 2 filas      ejecuta, devuelve 0 filas
+      x' OR Id != null OR Email = '  EJECUTA, devuelve 2 filas      ejecuta, devuelve 0 filas
 
-      El escenario se deja not-run porque su segunda mitad, que es la que examina un
-      comportamiento no documentado, no se ejecuto.
+      Los dos ultimos son los importantes. Sin escape las inyecciones NO fallan: ejecutan y
+      devuelven 2 filas para un email que no existe. Como la logica clasifica por cantidad de
+      filas, eso habria producido `ambiguous` en lugar de `not_found` — un valor controlado por
+      el respondente alterando el estado de match de su propia respuesta. Con escape las mismas
+      entradas devuelven 0 filas y el estado es el correcto. Las dos ramas del replace resultan
+      necesarias: la de comilla simple y la de backslash.
+
+      MITAD 2 — EL ESTADO `error`, que no esta documentado en el AC, se produjo de verdad
+      emitiendo la consulta con el campo literal contra una org que no lo tiene, es decir el
+      escenario real de una org de ventas mal configurada:
+
+          veevartSalesMatchStatus = "error" · enrichedAt fechado · los otros dos en null
+
+      El re-throw del catch NO queda sin manejar: responses.ts:302-304 lo captura y lo registra
+      con formatBackgroundFailure. Se verifico expresamente porque un re-throw dentro de un
+      fire-and-forget habria sido defecto serio. El log resultante es
+      "[respondent-enrichment] response 101 failed (Error)": sin email, sin nombre de campo y
+      sin el SOQL.
+
+      Y SOBRE LA DUDA QUE ESTA MISMA CORRIDA HABIA DEJADO ABIERTA — si `error` se distingue de
+      `not_checked` en pantalla — la respuesta es SI. Ejercitada contactMatchLabel
+      (ResponsesDashboard.tsx:78-84): matched "Matched", not_found "Not found", ambiguous
+      "Multiple contacts found", error "Lookup failed", not_checked "Not checked". Cinco
+      etiquetas distintas. null y undefined colapsan en "Not checked", que es lo correcto para
+      las respuestas historicas. Un administrador SI puede diferenciar "todavia no se verifico"
+      de "se intento y fallo".
     notes: >-
-      **Pendiente de entorno.** Queda por verificar que el estado `error` se distinga
-      visualmente de `not_checked`: si ambos caen en el mismo fallback neutro, un administrador
-      no puede diferenciar "todavia no se verifico" de "se intento y fallo", y esa diferencia
-      decide si conviene reintentar. Se reporto al dev en el PR como desvio de alcance.
+      **PASS.** Se levanta la observacion O4, que no es defecto: el AC pide que el perfil nunca
+      llegue a logs publicos y el PR 75 lo cumple bien, pero el efecto colateral es que el log
+      tampoco dice QUE fallo — solo "failed (Error)" — y como el enriquecimiento es
+      fire-and-forget, una org mal configurada falla de forma silenciosa en produccion.
+      Sugerencia barata porque el dato ya se persiste: exponer un conteo de respuestas con
+      veevartSalesMatchStatus = "error" en diagnosticos o en el dashboard, para que la falla deje
+      de ser invisible sin agregar ni un dato personal al log.
     attachments:
       - name: live-profile-matrix.txt
         path: attachments/tr-180-tc-163/scenario-profile/live-profile-matrix.txt
@@ -287,17 +348,36 @@ results:
       - name: org-provista-no-corresponde.txt
         path: attachments/tr-180-tc-163/scenario-profile/org-provista-no-corresponde.txt
         mimeType: text/plain
+      - name: live-contact-matching.txt
+        path: attachments/tr-180-tc-163/scenario-matching/live-contact-matching.txt
+        mimeType: text/plain
 
 summary:
   totalScenarios: 5
-  passed: 3
+  passed: 5
   failed: 0
-  notRun: 2
+  notRun: 0
   blocked: 0
   skipped: 0
-  passRate: 60
+  passRate: 100
 
 history:
+  - at: "2026-09-15T22:20:00Z"
+    by: codex
+    from: completed
+    to: completed
+    reason: >-
+      Segunda pasada. Los dos escenarios que estaban not-run se cerraron sin cambio en el codigo
+      del producto: se ejercitaron matchVeevartSalesContactByEmail y enrichResponseById reales
+      contra una org de Salesforce real con Contacts controlados, cubriendo los cinco estados y
+      la persistencia de los cuatro campos; y el escape de SOQL se probo contra el parser real,
+      donde sin escape dos inyecciones devolvian 2 filas para un email inexistente y con escape
+      devuelven 0. Ademas se descarto por describe de solo lectura el riesgo que esta corrida
+      habia marcado como el mas probable: Contact.Engagement_Level__c SI existe sin namespace en
+      la org de ventas real. Se resolvio tambien la duda abierta sobre el estado `error`: se
+      distingue de `not_checked` en pantalla ("Lookup failed" vs "Not checked"). Queda la
+      observacion O4 sobre la opacidad del log, que no es defecto. 3/5 -> 5/5.
+
   - at: "2026-09-11T21:15:00Z"
     from: planned
     to: in-progress
