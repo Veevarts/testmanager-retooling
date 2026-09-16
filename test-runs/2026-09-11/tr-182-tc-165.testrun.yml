@@ -2,18 +2,19 @@ schemaVersion: "1.0"
 id: tr-6b913bdb-14e1-48a6-b911-92ab6b1efa53
 key: TR-182
 title: >-
-  TR-182 · IM-1256 · TC-165 · Excel-compatible response export — 4/5 PASS · 1 FAIL. Metadatos,
-  escape de delimitadores y neutralizacion de formulas correctos; el archivo NO se emite como
-  UTF-8 compatible con Excel (sin BOM ni declaracion de delimitador), que es lo que pide el AC2.
+  TR-182 · IM-1256 · TC-165 · Excel-compatible response export — 5/5 PASS. El unico FAIL de la
+  primera corrida quedo cerrado sobre el PR 75: el endpoint ya emite el BOM UTF-8 y separa filas
+  con CRLF, y el BOM no rompio el parseo conforme a RFC 4180, que era el riesgo real del arreglo.
 status: completed
 environment:
   name: >-
-    Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el merge commit
-    del PR 71 (4458647c) desplegado. El CSV se analizo a nivel de bytes y con un parser conforme
-    a RFC 4180, para que el veredicto no dependa de un visor concreto.
+    Survey Tool dev (https://surveytool.dev.veevart.ai). La primera pasada corrio sobre `develop`
+    con el PR 71 (4458647c); la segunda, que cerro el FAIL, sobre `develop` con el PR 75
+    (1ad3b4ce). El CSV se analizo a nivel de bytes y con un parser conforme a RFC 4180 en ambas,
+    para que el veredicto no dependa de un visor concreto ni cambie de criterio entre pasadas.
   buildVersion: >-
-    Mixed. El PR 71 implementa nueve tickets a la vez; esta corrida valida unicamente la porcion
-    de IM-1256.
+    Mixed. El PR 71 implementa nueve tickets a la vez y esta corrida valida unicamente la porcion
+    de IM-1256; el PR 75 trae el arreglo del defecto que esta misma corrida habia reportado.
 testPlanId: null
 startedAt: "2026-09-11T21:50:00Z"
 completedAt: "2026-09-11T22:05:00Z"
@@ -107,50 +108,67 @@ results:
     scenarioTitle: >-
       AC2 · The exported file is Excel-compatible UTF-8 so accented characters display correctly
     scenarioIndex: 2
-    status: failed
-    executedAt: "2026-09-11T21:58:00Z"
+    status: passed
     stepResults: []
     actual: |
-      Los primeros bytes del archivo descargado son:
+      CERRADO. Re-verificado sobre el PR 75 (1ad3b4ce) desplegado en dev, con el mismo endpoint,
+      el mismo metodo de observacion y el mismo criterio con que se levanto el FAIL, para que la
+      comparacion sea simetrica.
 
-          72 65 73 70 6f 6e      ->  "respon..."  (el inicio de la cabecera)
+      ANTES (2026-09-11)                        AHORA (2026-09-15)
+      ----------------------------------------  ----------------------------------------------
+      primeros bytes: 72 65 73 70 6f 6e         primeros 12 bytes: ef bb bf 72 65 73 70 6f 6e
+                      -> "respon..."                               73 65 5f
+      BOM UTF-8: AUSENTE                        BOM UTF-8: PRESENTE
+      filas unidas con LF                       filas unidas con CRLF (RFC 4180)
 
-      NO son EF BB BF: el archivo NO lleva marca de orden de bytes UTF-8. Tampoco su primera
-      linea es una declaracion de delimitador; arranca directamente en
-      "response_id,survey_id,...".
+      El arreglo centraliza la serializacion en dos helpers gemelos (server/src/lib/csv.ts y
+      client/src/lib/csv.ts) y los TRES caminos de descarga que QA habia enumerado como omisos
+      quedan cubiertos: responses.ts:454 alimenta los dos que usaban window.open, y
+      SummaryDashboard.tsx:150 el que arma el Blob en el navegador.
 
-      Los DATOS si son UTF-8 valido: el texto en espanol con acentos y signos de apertura se
-      decodifica correctamente con TextDecoder de UTF-8, y la respuesta HTTP declara
-      Content-Type: text/csv; charset=utf-8.
+      EL BOM NO ROMPIO EL PARSEO ESTANDAR, que era el riesgo real de este arreglo. El ticket pide
+      abrirlo "in Excel AND a standards-compliant parser", asi que el archivo descargado se
+      parseo con una maquina de estados RFC 4180:
 
-      El problema es que esa cabecera solo aplica al transporte. Cuando el archivo queda en
-      disco y el usuario lo abre con doble clic, Excel no la lee: sin BOM, Excel en Windows
-      interpreta el archivo con la codificacion local en vez de UTF-8 y los acentos se ven
-      corruptos. Es justo el escenario que el AC2 quiere evitar.
+          comillas sin cerrar                 NO
+          columnas en la cabecera             30
+          registros de datos                  11
+          distribucion de anchos              {30: 11}  <- los 11 con 30 campos exactos
+          decodifica UTF-8 sin reemplazos     SI
+          U+FEFF suelto dentro del cuerpo     NO
 
-      Ningun camino agrega el BOM: el dashboard descarga con window.open del endpoint sin
-      postprocesar (ResponsesDashboard.tsx:358, DashboardPage.tsx:160) y el export del Summary
-      construye su Blob uniendo las filas con saltos de linea, tampoco antepone BOM
-      (SummaryDashboard.tsx:149).
+      Y eso con contenido que habria roto columnas si el escapado fallara: 9 celdas con coma,
+      5 con comilla doble, 2 con salto de linea, 9 con caracteres no ASCII y 9 con formula
+      neutralizada.
 
-      pre-fix -> post-fix -> objetivo cumplido?: el design spec pide emitir "an Excel-compatible
-      UTF-8 file and delimiter declaration where required" -> el archivo se emite sin BOM y sin
-      declaracion de delimitador -> NO.
+      Detalle que a simple vista confunde: un conteo ingenuo da 13 CRLF y 2 LF sueltos, o sea 14
+      "lineas", pero el parser devuelve 12 registros. No es contradiccion: 2 de esos CRLF viven
+      DENTRO de celdas entrecomilladas (respuestas multilinea del usuario) y el parser
+      correctamente no los toma como separadores. 14 - 2 = 12 = 1 cabecera + 11 respuestas.
+
+      El dev agrego cobertura sobre el defecto exacto en los dos lados (csv.test.ts en server y
+      client, ambos con "prepends the UTF-8 BOM and uses Excel-compatible row endings"). Suites
+      sobre 1ad3b4ce: servidor 117/117, cliente 62/62.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el archivo se emitia sin BOM y Excel en Windows
+      lo interpretaba con la codificacion local corrompiendo los acentos -> ahora emite EF BB BF,
+      separa filas con CRLF, los tres caminos pasan por los helpers centralizados y un parser
+      conforme obtiene 11 registros de 30 campos exactos -> SI.
     notes: >-
-      **FAIL.** Incumple el design spec y la segunda mitad del AC2. Limite declarado con
-      honestidad: se verifico objetivamente que el BOM no esta y que el spec lo exige, pero NO se
-      abrio el archivo en Excel sobre Windows para fotografiar los acentos corruptos, porque no
-      habia Excel disponible en el entorno de ejecucion. El veredicto se sostiene en el
-      incumplimiento verificable del spec, no en una suposicion sobre el render. Arreglo
-      sugerido: anteponer el BOM al cuerpo del CSV en el endpoint de export y evaluar si el
-      locale de los usuarios exige ademas la linea de declaracion de separador.
-    defects:
-      - summary: >-
-          El CSV de respuestas no se emite como archivo UTF-8 compatible con Excel: falta el BOM
-          y la declaracion de delimitador que pide el design spec
-        severity: medium
-        jiraKey: IM-1256
-        url: https://veevart.atlassian.net/browse/IM-1256
+      **PASS.** Sobre la segunda ausencia que señalaba el reporte original, la declaracion de
+      delimitador: NO se agrego, y eso es correcto. El design spec dice "delimiter declaration
+      WHERE REQUIRED", y aqui no corresponde — una linea "sep=," no es parte de RFC 4180, asi que
+      un parser conforme la leeria como un registro de un solo campo y se perderia la uniformidad
+      de anchos verificada arriba; cumpliria una mitad del AC2 rompiendo la otra. Con el BOM
+      presente Excel ya detecta UTF-8, que era el problema de los acentos. Queda la observacion
+      O5, que no es defecto: el BOM resuelve la CODIFICACION, no la SEPARACION DE COLUMNAS, asi
+      que en un Windows con separador de listas ";" (es-ES, de-DE, fr-FR, pt-BR) el doble clic
+      dejaria todo en una columna. No se marca como defecto porque el publico son museos de habla
+      inglesa y en_US usa coma; si aparecieran usuarios con locale europeo, la salida correcta no
+      es "sep=" sino una descarga .xlsx. LIMITE DECLARADO, igual que en la corrida anterior: no
+      se abrio el archivo en Excel sobre Windows; el veredicto se sostiene en los bytes y el
+      parseo, que es el mismo criterio con que se levanto el FAIL.
     attachments:
       - name: live-csv-matrix.txt
         path: attachments/tr-182-tc-165/scenario-csv/live-csv-matrix.txt
@@ -221,14 +239,29 @@ results:
 
 summary:
   totalScenarios: 5
-  passed: 4
-  failed: 1
+  passed: 5
+  failed: 0
   notRun: 0
   blocked: 0
   skipped: 0
-  passRate: 80
+  passRate: 100
 
 history:
+  - at: "2026-09-15T22:45:00Z"
+    by: codex
+    from: completed
+    to: completed
+    reason: >-
+      Segunda pasada sobre el PR 75. El unico escenario en FAILED se cerro: el endpoint de export
+      ya emite EF BB BF al inicio y une las filas con CRLF, y los tres caminos de descarga que se
+      habian reportado como omisos pasan ahora por los helpers centralizados de csv.ts. Se
+      verifico ademas lo que era el riesgo real del arreglo: que el BOM no rompiera el parseo
+      estandar. Un parser RFC 4180 obtiene 11 registros de 30 campos exactos, sin comillas sin
+      cerrar y sin U+FEFF suelto en el cuerpo. La declaracion de delimitador NO se agrego y se
+      concluye que es correcto, porque "sep=" romperia justamente ese parseo conforme que el
+      mismo ticket exige; queda como observacion O5 la dependencia de locale, que no es defecto.
+      4/5 -> 5/5, sin defectos abiertos.
+
   - at: "2026-09-11T21:50:00Z"
     from: planned
     to: in-progress

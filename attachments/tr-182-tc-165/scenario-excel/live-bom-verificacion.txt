@@ -1,0 +1,172 @@
+TR-182 · TC-165 · IM-1256 — Re-verificacion del unico escenario que habia quedado en FAILED
+============================================================================================
+Ejecutado    : 2026-09-15
+Entorno      : Survey Tool dev (https://surveytool.dev.veevart.ai) corriendo `develop` con el
+               merge commit del PR 75 (1ad3b4ce, 2026-09-14) desplegado.
+Antecedente  : el 2026-09-11 este escenario fue el unico FAIL de la corrida. El archivo se emitia
+               sin marca de orden de bytes, y ningun camino de descarga la agregaba.
+
+
+1. EL DEFECTO REPORTADO Y SU ESTADO
+====================================
+Lo que QA observo el 2026-09-11:
+
+    primeros bytes del archivo   72 65 73 70 6f 6e     -> "respon..."
+    BOM UTF-8 (EF BB BF)         AUSENTE
+    declaracion de delimitador   AUSENTE
+
+  y se dejo constancia de que los tres caminos de descarga lo omitian:
+    ResponsesDashboard.tsx:358   window.open del endpoint, sin postprocesar
+    DashboardPage.tsx:160        window.open del endpoint, sin postprocesar
+    SummaryDashboard.tsx:149     Blob armado uniendo filas, sin BOM
+
+Lo que se observa ahora, descargando el mismo endpoint desde la sesion de administrador:
+
+    GET /api/admin/responses/export.csv            -> 200
+    Content-Type                                   text/csv; charset=utf-8
+    Content-Disposition                            attachment; filename="responses-standard.csv"
+
+    primeros 12 bytes   ef bb bf 72 65 73 70 6f 6e 73 65 5f
+                        ^^^^^^^^ BOM          ^ "response_"
+    BOM UTF-8 presente  SI
+    total               3435 bytes
+
+  El BOM esta. Es el mismo endpoint, el mismo metodo de observacion y el mismo criterio de
+  aceptacion con que se levanto el FAIL, para que la comparacion sea simetrica.
+
+
+2. COMO SE ARREGLO, Y QUE LOS TRES CAMINOS QUEDARON CUBIERTOS
+==============================================================
+El PR 75 centraliza la serializacion en dos helpers gemelos:
+
+    server/src/lib/csv.ts
+        const UTF8_BOM = "\uFEFF";
+        export function buildExcelCompatibleCsv(rows: string[]): string {
+          return `${UTF8_BOM}${rows.join("\r\n")}`;
+        }
+
+    client/src/lib/csv.ts    (identico, para el camino que arma el Blob en el navegador)
+
+  Consumidores, verificados por grep sobre el commit desplegado:
+
+    server/src/routes/responses.ts:454
+        res.status(200).send(buildExcelCompatibleCsv(rows));
+        -> cubre los DOS caminos que descargaban con window.open, porque ambos apuntan a este
+           mismo endpoint. Ya no dependen de postprocesar nada en el cliente.
+
+    client/src/components/dashboard/SummaryDashboard.tsx:150
+        new Blob([buildExcelCompatibleCsv(rows)], { type: "text/csv;charset=utf-8" })
+        -> cubre el tercer camino, el unico que se construye en el navegador.
+
+  Los tres caminos que QA habia enumerado como omisos quedan cubiertos. Ademas el arreglo
+  corrige algo que el reporte original no habia pedido: las filas ahora se unen con CRLF y no
+  con LF, que es lo que exige RFC 4180.
+
+
+3. EL ARCHIVO, PARSEADO CON UN PARSER RFC 4180 DE VERDAD
+=========================================================
+El ticket pide expresamente abrirlo "in Excel AND a standards-compliant parser". El BOM podria
+haber roto la segunda mitad, asi que se parseo el archivo descargado con una maquina de estados
+que respeta comillas dobles escapadas como "" y CRLF como separador de registro:
+
+    quedan comillas sin cerrar          NO
+    columnas en la cabecera             30
+    registros de datos                  11
+    distribucion de anchos              {30: 11}   <- los 11 registros con 30 campos exactos
+    todos los registros del mismo ancho SI
+
+  Es decir: agregar el BOM no desalineo ni una columna, y cada respuesta ocupa exactamente una
+  fila logica, que es lo que pide el AC1.
+
+  Contenido que habria roto las columnas si el escapado fallara:
+
+    celdas con coma                     9
+    celdas con comilla doble            5
+    celdas con salto de linea           2
+    celdas con caracteres no ASCII      9
+    celdas con formula neutralizada     9
+
+  Los saltos de linea merecen detalle, porque a simple vista confunden. Un conteo ingenuo sobre
+  el texto da 13 CRLF y 2 LF sueltos, o sea 14 "lineas"; el parser en cambio devuelve 12
+  registros. No es contradiccion: 2 de esos CRLF viven DENTRO de celdas entrecomilladas
+  (respuestas multilinea escritas por el usuario), y el parser correctamente no los toma como
+  separadores. 14 - 2 = 12 = 1 cabecera + 11 respuestas. Cuadra.
+
+  Decodificacion:
+    decodifica como UTF-8 sin caracteres de reemplazo   SI
+    hay caracteres no ASCII en el cuerpo                SI
+    aparece algun U+FEFF suelto dentro del cuerpo       NO  (solo el del inicio)
+
+
+4. COBERTURA QUE AGREGO EL DEV
+===============================
+El PR 75 sumo pruebas sobre el defecto exacto que se reporto, en los dos lados:
+
+    server/src/lib/csv.test.ts
+        escapeCsvCell
+          - quotes delimiters, quotes, and line breaks
+          - neutralizes spreadsheet formulas in text fields
+          - does not rewrite numeric values or ordinary text
+        buildExcelCompatibleCsv
+          - prepends the UTF-8 BOM and uses Excel-compatible row endings
+
+    client/src/lib/csv.test.ts
+        buildExcelCompatibleCsv
+          - prepends the UTF-8 BOM and uses Excel-compatible row endings
+
+  Suites completas sobre 1ad3b4ce:
+    servidor  117/117 PASS
+    cliente    62/62 PASS
+
+
+5. SOBRE LA DECLARACION DE DELIMITADOR — POR QUE NO ESTA, Y POR QUE ESO ES CORRECTO
+===================================================================================
+El reporte original marcaba dos ausencias: el BOM y la declaracion de delimitador. El arreglo
+agrego la primera y NO la segunda. Verificado:
+
+    la primera linea empieza con "sep="   NO
+    delimitador usado                     coma
+
+  El design spec pide "an Excel-compatible UTF-8 file AND delimiter declaration WHERE REQUIRED".
+  La expresion "where required" es la que decide, y aqui lo correcto es NO agregarla:
+
+    - El mismo ticket pide validar el archivo con un parser conforme al estandar. Una linea
+      "sep=," NO es parte de RFC 4180: un parser conforme la leeria como un primer registro de
+      un solo campo, y se perderia la propiedad que acabamos de verificar en el punto 3 (todos
+      los registros con el mismo ancho). Es decir, agregarla cumpliria una mitad del AC2
+      rompiendo la otra.
+    - Con el BOM presente, Excel ya detecta UTF-8 correctamente, que era el problema real de
+      los acentos.
+
+  OBSERVACION O5, declarada para no sobreafirmar. El BOM resuelve la CODIFICACION, no la
+  SEPARACION DE COLUMNAS. En un Windows cuyo separador de listas sea ";" (habitual en es-ES,
+  de-DE, fr-FR, pt-BR), abrir con doble clic un CSV separado por comas deja todo en una sola
+  columna, con BOM o sin el. No se marca como defecto: el publico del producto son museos de
+  habla inglesa, en_US usa la coma, y el propio ticket exige compatibilidad con parsers
+  estandar, que es incompatible con la linea "sep=". Si en el futuro aparecen usuarios con
+  locale europeo, la salida correcta NO es agregar "sep=" al CSV sino ofrecer una descarga .xlsx,
+  que no tiene ambiguedad de separador.
+
+  LIMITE DECLARADO, igual que en la corrida anterior: no se abrio el archivo en Excel sobre
+  Windows. El veredicto se sostiene en la verificacion objetiva de los bytes y del parseo, que es
+  exactamente el criterio con el que se levanto el FAIL. No se afirma nada sobre el render.
+
+
+6. VEREDICTO DE AJUSTE AL OBJETIVO
+===================================
+pre-fix -> post-fix -> objetivo cumplido?
+
+  El archivo se emitia sin BOM, de modo que Excel en Windows lo interpretaba con la codificacion
+  local y los acentos se corrompian; ningun camino de descarga lo agregaba
+     -> el endpoint emite EF BB BF al inicio, los tres caminos de descarga pasan por los helpers
+        centralizados, las filas se separan con CRLF, un parser RFC 4180 obtiene 11 registros de
+        30 campos exactos sin comillas sin cerrar, y el texto decodifica como UTF-8 sin
+        caracteres de reemplazo
+     -> SI.
+
+
+7. ESTADO DEL ENTORNO
+======================
+  Solo se hicieron descargas (GET). No se creo, modifico ni elimino ningun dato en dev.
+  El contenido del CSV no se copia en esta evidencia: se reportan la cabecera de columnas, que no
+  tiene datos personales, y metricas agregadas.
