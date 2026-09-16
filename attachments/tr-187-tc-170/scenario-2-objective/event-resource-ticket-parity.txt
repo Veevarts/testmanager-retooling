@@ -1,0 +1,82 @@
+TR-187 · TC-170 · IM-1227 — Escenario 2: evento, recurso y ticket nunca se contradicen
+=======================================================================================
+Ejecutado    : 2026-09-16 · Long Island Children's Museum · todas las reservas
+Metodo       : las 4 CTEs de pago materializadas con su texto VERBATIM (PRE y POST) en tablas #temp,
+               y los 6 CASE de estado verbatim (evento, recurso, ticket; PRE y POST) evaluados por
+               reserva sobre el mismo snapshot. Salida solo numerica.
+
+POR QUE ESTE METODO ES FIEL
+---------------------------
+  Se verifico en el codigo que el estado depende SOLO de datos a nivel reserva/orden en las cuatro
+  versiones:
+      PRE  evento    so.STATUS, so.AMOUNT, rpr.NET_PAID_AMOUNT
+      PRE  recurso   so.STATUS                                   <-- ignoraba el pago
+      POST evento    so.STATUS, so.AMOUNT, rpr.PAID_AMOUNT
+      POST recurso   so.STATUS, so.AMOUNT, rpr.PAID_AMOUNT
+  con los mismos joins en los tres archivos (so.ID = r.ID, rpr.RESERVATIONID = r.ID). Asi que
+  evaluar el CASE por reserva es exactamente equivalente a evaluarlo por fila de salida. La
+  presencia de recursos por reserva sale de la query real de recurso.
+
+  Por que no se corrieron las queries enteras de una vez: con el estado proyectado inline, la query
+  de evento de MAIN ya excede los 120 s de safesql, aunque cada pieza tarda segundos (ver
+  observacion de costo en scenario-4). Materializar la CTE en #temp es la misma consulta logica con
+  otro plan fisico.
+
+RESULTADOS
+----------
+  reservas                                                  16.731
+  reservas con al menos un recurso                          16.484
+
+                                                             PRE      POST
+  evento distinto de alguno de sus recursos (a nivel query)    0        0
+  trigger promueve el evento a Paid y el recurso queda
+    en un estado que no es Paid ni Canceled                  9.868      0     <-- el defecto del ticket
+  evento tras trigger distinto de su recurso (cualquiera)    9.868      0
+  evento Paid con dinero adeudado                              122      0
+  recurso Paid con dinero adeudado                             122      0
+  evento Y recurso Paid con dinero adeudado                    122      0
+  ticket con valor crudo de Altru (Confirmed/Finalized)      4.235      0     (Confirmed 4.217 + Finalized 18)
+  ticket Pending en una reserva totalmente pagada            7.989      0
+  ticket distinto del que dicta la tabla de mapeo            4.235      0
+
+  Cambios de estado al re-exportar:
+    evento                                                  10.445   (el PR re-midio 10.445 el 2026-09-15: coincide)
+    recurso                                                 10.445
+    ticket, sobre todas las reservas                        14.378   (el PR da 13.924 sobre 16.064 con tickets;
+                                                                     otro universo, no comparable directo)
+
+LECTURA
+-------
+  1. RESPUESTA A LA PREGUNTA DEL TICKET. No eran dos registros: 9.868 reservas de Long Island
+     terminarian con el evento en Paid y sus recursos en otro estado.
+
+  2. OBSERVACION QUE CONVIENE ENTENDER. A nivel query, antes del arreglo, evento y recurso ya
+     coincidian en las 16.484 reservas. La divergencia la crea SOLO el trigger de Rental_Event__c
+     despues de la carga, que no tiene bypass y reescribe el estado a Paid, mientras recurso y
+     ticket si desactivan su trigger. Es exactamente el argumento del PR. Por eso la medicion
+     decisiva es la simulada con la regla del trigger, y esa baja de 9.868 a 0.
+
+  3. La tabla de mapeo al ticket (Paid->Sold; Reserved/Partially Paid, Signed Contract,
+     Proposal/Negotiation->Reserved; Inquiry->Pending; Canceled->Canceled) se cumple en las 16.731
+     reservas. Las tres exportaciones ya no pueden contradecirse.
+
+  4. DIFERENCIAS CON LAS CIFRAS DEL PR. Las que el dev re-midio el 2026-09-15 coinciden exactas
+     (10.445 cambios; 572 reservas con reembolso; 91 Paid en bruto y no en neto). Las del
+     2026-09-07 difieren un poco (9.928 vs 9.868; 4.203 vs 4.235; 7.592 vs 7.989), compatible con
+     una base que se sigue sincronizando. La unica que QA NO reproduce es "305 eventos y recursos
+     Paid con dinero adeudado": QA mide 122 tanto con pagado bruto como con neto. No afecta el
+     veredicto: en POST ese numero es 0 con cualquiera de las dos definiciones de pagado que usa la
+     escalera.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    9.868 reservas con evento Paid y recurso en otro estado tras la carga; 122 Paid con deuda;
+    4.235 tickets con valor crudo
+    -> 0, 0 y 0; y el ticket sigue la tabla de mapeo en todas las reservas
+    -> SI.
+
+  LIMITE DECLARADO: la brecha residual post-carga que describe el PR (el trigger arma su propio
+  total, que puede diferir de SALESORDER.AMOUNT) no se puede observar sin la org cargada, y la de
+  Long Island es productiva. La simulacion usa SALESORDER.AMOUNT como total. La consulta de
+  aceptacion post-carga que propone el PR sigue siendo necesaria despues del load.
+
+Salida: wrappers/out_M_batch.json (result set 1) · generador: wrappers/gen_M.py · lote: wrappers/M_batch.sql

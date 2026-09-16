@@ -1,0 +1,50 @@
+TR-187 · TC-170 · IM-1227 — Escenario 5: contrato con los picklists de Salesforce
+==================================================================================
+Ejecutado    : 2026-09-16
+Fuente       : codigo del paquete Auctifera — Veevarts/AuctiferaDX, rama main @ 8202e19fe0
+               (2026-09-16T14:44:31Z). Archivos XML copiados en esta carpeta.
+Metodo       : lectura de la metadata fuente del paquete. NO se toco ninguna org.
+
+DESVIO DECLARADO RESPECTO DEL TC: el escenario pedia leer los picklists en un sandbox de trainings.
+Se leyo la metadata fuente del paquete, que es lo que se instala en cada org, sin tocar ninguna.
+Limite: no verifica la version instalada en la org de Long Island (productiva, sin acceso de QA).
+
+1. EVENTO Y RECURSO COMPARTEN EL MISMO VALUE SET — afirmacion central del PR
+-----------------------------------------------------------------------------
+  Rental_Event__c.Status__c                   valueSetName = Rental_Event_Status   restricted = true
+  Rental_Resources__c.Rental_Status__c        valueSetName = Rental_Event_Status   restricted = true
+
+  Global value set Rental_Event_Status (7 valores, todos activos):
+    Inquiry · Proposal/Negotiation · Signed Contract · Reserved/Partially Paid · Paid · Not Sold · Canceled
+
+  Los 6 valores que emite la escalera existen y estan activos:
+    Canceled SI · Paid SI · Reserved/Partially Paid SI · Signed Contract SI · Proposal/Negotiation SI · Inquiry SI
+  (Not Sold existe en el value set pero la escalera no lo emite.)
+
+  DATO QUE EL PR NO MENCIONA: ambos picklists son RESTRINGIDOS. Cualquier valor crudo de Altru que se
+  hubiera escapado por el ELSE so.STATUS de la escalera vieja habria sido RECHAZADO en la carga.
+  Medido en vivo: sobre Long Island ese escape ocurria en 0 reservas, asi que no habia rechazos antes.
+  La escalera nueva ya no tiene ese ELSE en evento ni recurso.
+
+2. EL OBJETO DE TICKETING ES Group_Reservation__c
+-------------------------------------------------
+  El PR lo llama Ticketing__c, pero ese es el nombre del LOOKUP. Verificado en el paquete:
+    - ReservationTriggerHandler (el que nombra la query) opera sobre Group_Reservation__c
+    - Rental_Resources__c.Ticketing__c tiene referenceTo = Group_Reservation__c, label "Ticket"
+
+  Group_Reservation__c.Status__c   picklist local   restricted = NO declarado (no restringido)
+    Canceled · Pending · Reserved · Sold · Confirmed · Refunded
+  Coincide exactamente con la lista que el PR corrigio en su segundo commit.
+
+  Valores que emiten las filas de reserva:  Sold SI · Reserved SI · Pending SI · Canceled SI
+  Crudos de Altru:                          Finalized NO · Complete NO · Tentative NO · Unresolved NO
+                                            Cancelled NO · Confirmed SI (valido, pero con otro significado:
+                                            en Veevart es ticket escaneado)
+
+  MATIZ: como este picklist NO es restringido, los 18 'Finalized' crudos de antes del arreglo no
+  hacian fallar la carga: entraban como valor fuera de lista. El problema era dato sucio, no rechazo.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    el ticket podia recibir valores fuera de su lista (Finalized) o con otro significado (Confirmed)
+    -> todos los valores emitidos existen en el picklist de destino y tienen el significado correcto
+    -> SI (sobre la metadata fuente del paquete).

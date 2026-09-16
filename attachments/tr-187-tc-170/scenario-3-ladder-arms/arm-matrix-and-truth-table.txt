@@ -1,0 +1,86 @@
+TR-187 · TC-170 · IM-1227 — Escenario 3: brazos de la escalera
+===============================================================
+Ejecutado    : 2026-09-16
+Dos pruebas complementarias:
+  A. matriz de brazos sobre los datos reales de Long Island (31 combinaciones observadas)
+  B. tabla de verdad: los CASE verbatim ejecutados por SQL Server sobre 64 filas sinteticas, para
+     cubrir los brazos que Long Island no tiene. No lee ninguna tabla del cliente. Las expectativas
+     se calcularon aparte en Python a partir de la regla declarada en el PR.
+
+A. MATRIZ SOBRE DATOS REALES (evento POST = recurso POST en las 31 filas)
+-------------------------------------------------------------------------
+Codigo de estado de Altru verificado con datos: 0 Pending, 1 Complete, 2 Tentative, 3 Confirmed,
+4 Finalized, 5 Cancelled. Los codigos 6 (Reserved) y 7 (Unresolved) no aparecen en Long Island.
+
+  Altru       pago                          PRE ev/rec          PRE ticket   POST ev = rec             POST ticket       n
+  ----------  ----------------------------  ------------------  -----------  ------------------------  -----------  ------
+  Pending     nada pagado, adeuda           Inquiry             Pending      Inquiry                   Pending          63
+  Pending     pago parcial                  Inquiry             Pending      Reserved/Partially Paid   Reserved        201
+  Pending     pagado completo               Inquiry             Pending      Paid                      Sold          7.989
+  Pending     total 0, nada pagado          Inquiry             Pending      Inquiry                   Pending         215
+  Complete    pago parcial                  Paid                Sold         Reserved/Partially Paid   Reserved          1
+  Complete    pagado completo               Paid                Sold         Paid                      Sold            767
+  Complete    total 0, nada pagado          Paid                Sold         Paid                      Sold             39
+  Tentative   nada pagado, adeuda           Proposal/Negotiat.  Reserved     Proposal/Negotiation      Reserved         88
+  Tentative   pago parcial                  Proposal/Negotiat.  Reserved     Reserved/Partially Paid   Reserved         56
+  Tentative   pagado completo               Proposal/Negotiat.  Reserved     Paid                      Sold          1.952
+  Tentative   total 0, nada pagado          Proposal/Negotiat.  Reserved     Proposal/Negotiation      Reserved         57
+  Confirmed   nada pagado, adeuda           Paid                Confirmed*   Signed Contract           Reserved        101
+  Confirmed   pago parcial                  Paid                Confirmed*   Reserved/Partially Paid   Reserved         20
+  Confirmed   pagado completo               Paid                Confirmed*   Paid                      Sold          3.971
+  Confirmed   total 0, nada pagado          Paid                Confirmed*   Signed Contract           Reserved        125
+  Finalized   pagado completo               Paid                Finalized*   Paid                      Sold             18
+  Cancelled   cualquier pago                Canceled            Canceled     Canceled                  Canceled      1.068
+  (* valor crudo de Altru. Filas con bandas de pago equivalentes sumadas; detalle en out_M_batch.json)
+
+  Verificado sobre datos reales:
+    Cancelled prevalece sobre el pago ........ 43 canceladas con el total cubierto -> Canceled
+    Pending totalmente pagada -> Paid ......... 7.989
+    Pago parcial -> Reserved/Partially Paid ... en Pending, Complete, Tentative y Confirmed
+    Confirmed sin pago -> Signed Contract ..... 226 (101 adeudan + 125 con total 0); ya no Paid
+    Complete con total 0 -> Paid .............. 39
+
+  NO observable en Long Island: una Complete o Finalized SIN pago y CON deuda. No existe ninguna.
+  Tampoco hay reservas Reserved ni Unresolved. Por eso la parte B.
+
+B. TABLA DE VERDAD — 64 FILAS, 0 DIVERGENCIAS
+---------------------------------------------
+  8 estados x 8 combinaciones de pago: (100, sin fila de pago) (100, 0) (100, 40) (100, 100)
+  (100, 150) (0, sin fila de pago) (0, 50) (sin total, sin fila de pago).
+  Por fila se compararon: evento POST, recurso POST, ticket POST de reserva, y el ticket de una orden
+  que NO es reserva en PRE contra POST.
+
+  Brazos que Long Island no podia mostrar, ahora verificados:
+    Complete  total 100, sin pago    -> Signed Contract / Reserved     (filas 9 y 10)
+    Finalized total 100, sin pago    -> Signed Contract / Reserved     (filas 33 y 34)
+    Finalized total 0                -> Paid / Sold                    (filas 38-40)
+    Reserved  sin pago               -> Reserved/Partially Paid        (filas 49, 50, 54, 56)
+    Unresolved sin pago              -> Reserved/Partially Paid        (filas 57, 58, 62, 64)
+    sobrepago (150 de 100)           -> Paid / Sold en todos los estados no cancelados
+    sin fila de pago (NULL)          -> igual que pagado 0 (el COALESCE funciona)
+
+  Orden no-reserva: el estado de ticket PRE = POST en las 64 combinaciones. El pago no toca esa rama.
+
+REEMBOLSOS — la decision de pagado bruto
+----------------------------------------
+  reservas con reembolso                                        572   (PR: 572)
+  Paid con pagado bruto pero NO con pagado neto                  91   (PR: 91)
+    de esas, la escalera POST emite Paid                         66
+    las 25 restantes son canceladas, y Canceled prevalece
+  Es la consecuencia aceptada que documenta el PR: una reserva reembolsada y no cancelada queda Paid.
+
+DECISIONES DE PRODUCTO — no son de QA
+-------------------------------------
+  QA verifica que la escalera cumple la regla declarada. Si la regla es la correcta lo decide el
+  reportante antes de cargar:
+    a) Confirmed pasa a Signed Contract: 226 reservas de Long Island dejan de figurar como Paid.
+    b) Reembolsada y no cancelada queda Paid: 66 reservas. Depende de que
+       Manage_Status_by_Payment__c este activo en la org de destino.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    el estado seguia al estado de flujo de Altru e ignoraba el pago; Confirmed afirmaba Paid sin pago
+    -> el pago prevalece salvo la cancelacion, en datos reales y en las 64 combinaciones sinteticas
+    -> SI.
+
+Salidas: wrappers/out_M_batch.json (result set 3), wrappers/out_truth_table.sql.json
+Scripts: wrappers/gen_truth.py, wrappers/check_truth.py, wrappers/truth_table.sql

@@ -1,0 +1,98 @@
+TR-187 · TC-170 · IM-1227 — Escenario 4: regresion
+===================================================
+Ejecutado    : 2026-09-16 · Long Island Children's Museum · base 8b522c3 vs head 464c9d8
+
+1. LAS CINCO QUERIES EJECUTAN CONTRA DATOS REALES — lo que el PR declaro no haber hecho
+-------------------------------------------------------------------------------------
+  La base respondio hoy (SELECT 1 OK). La afirmacion del PR de que estaba inalcanzable ya no aplica.
+  Cada archivo se ejecuto en PRE y POST de dos formas que juntas cubren todo su texto ejecutable:
+    - FROM / JOIN / WHERE verbatim con la proyeccion reemplazada por conteos
+    - el CASE de estado verbatim (identico en las 4 ramas de ticketing) en el lote materializado
+  ticketing_only_event.sql necesita 4 parametros que inyecta el ETL (@hasDateFilterFrom,
+  @hasDateFilterTo, @dateFilterFrom, @dateFilterTo); se declararon con los valores de una corrida
+  completa sin filtro, igual que ticketing-event.extractor.ts.
+
+2. GRANO DE FILAS — IDENTICO EN LOS CINCO ARCHIVOS
+--------------------------------------------------
+  Archivo                        Medida                        PRE        POST
+  -----------------------------  ----------------------------  ---------  ---------
+  rental_events_groups.sql       filas                            16.731     16.731
+                                 claves distintas                 16.731     16.731
+  rental_resource.sql            filas                            33.698     33.698
+                                 eventos distintos                16.484     16.484
+  ticketing_only_program.sql     filas                           933.506    933.506
+                                 filas que son reservas                -     16.064  (PR: 16.064)
+  ticketing_only_event.sql       filas                               206        206
+                                 filas que son reservas                0          0
+  ticketing.sql (legado)         rama 1 filas                    933.506    933.506
+                                 rama 1 reservas                  16.064     16.064
+                                 rama 2 filas                        206        206
+
+  El evento sigue siendo una fila por reserva, y el PR no multiplica ni pierde filas en ningun archivo.
+
+3. LAS FILAS QUE NO SON RESERVAS NO CAMBIAN
+-------------------------------------------
+  Estado de ticket PRE vs POST evaluado sobre TODAS las ordenes de SALESORDER (superconjunto de las
+  que exporta ticketing):
+      ordenes                                1.125.095
+      ordenes que no son reservas            1.108.364
+        con estado de ticket distinto            0
+      ordenes que son reservas                  16.731
+        con estado de ticket distinto          14.378   (la reformulacion buscada)
+
+4. ESTATICO — QUE MAS CAMBIO EN LOS ARCHIVOS
+--------------------------------------------
+  rental_events_groups.sql   las 10 CTEs sin cambio (hash identico), incluida ReservationClientContacts
+                             de IM-1224; SELECT final identico fuera del CASE de estado. En este archivo
+                             el UNICO cambio ejecutable es esa expresion.
+  ticketing (3 archivos,     fuera del CASE de estado, el unico cambio es:
+   4 ramas)                    LEFT JOIN RentalPaymentRollups rpr ON rpr.RESERVATIONID = so.ID
+                             RentalPaymentRollups agrupa por RESERVATIONID, clave unica: el join no
+                             puede agregar ni quitar filas (confirmado en vivo en el punto 2).
+  CTEs de pago               cuerpo identico en los 5 archivos (hash por CTE).
+
+5. IM-774 — Auctifera__Confirmed_Date_Time__c
+---------------------------------------------
+  La expresion de esa columna es identica en PRE y POST (cae dentro del texto "fuera del CASE",
+  comparado igual en las 4 ramas) y sigue leyendo el so.STATUS crudo. Con la misma expresion sobre
+  los mismos datos, sus valores son identicos por construccion.
+  ticketing-trigger-bypass-query.spec.ts de IM-774 pasa en el head.
+  Tickets de reserva con estado 'Confirmed' en POST: 0.
+  RUPTURA DELIBERADA, declarada por el PR y confirmada: esa fecha queda poblada en filas cuyo estado
+  ahora es Reserved o Sold, no Confirmed. El valor no cambia; el emparejamiento estado/fecha de
+  IM-774 si.
+
+6. IM-812 — guard endurecido
+----------------------------
+  rental-resource-query.spec.ts pasa en el head y tambien en la base (el endurecimiento no altera
+  lo que el guard permite sobre el SQL actual).
+
+7. OBSERVACION DE COSTO — el PR la declaro como no medida
+---------------------------------------------------------
+  Tiempos medidos en vivo (safesql, techo de 120 s por request):
+    rollup de pagos (COUNT)                           4 s
+    PaymentRefunds sola, calculando montos             4 s
+    query de evento, conteo                            5 s
+    query de recurso, conteo                           8 s
+    ticketing_only_program POST, conteos              34 s
+    ticketing.sql PRE / POST, conteos              8 s / 8 s
+    ticketing_only_event PRE / POST                3 s / 4 s
+    lote materializado completo (PRE+POST)           172 s
+    query de evento de MAIN con el estado inline   > 120 s  (timeout de safesql)
+
+  Hallazgo: cada pieza de la cadena de pagos tarda segundos, pero cuando el estado se evalua inline
+  la consulta de evento no termina en 120 s. Es una regresion de plan del optimizador al expandir la
+  cadena de CTEs (PaymentRefunds se referencia dos veces dentro de RentalPaymentRows), no volumen.
+  Materializando las CTEs en #temp la misma logica corre en segundos.
+  Esto YA ocurre en main en el archivo de evento: no lo introduce el PR. Lo que el PR hace es copiar
+  la misma cadena a 4 archivos mas, dos de ellos con flujos de 933 mil filas.
+  El ETL usa 30 minutos de timeout por request (sql-server.adapter.ts, DEFAULT_REQUEST_TIMEOUT_MS),
+  asi que el techo de safesql no es el del ETL y esto no se levanta como defecto.
+  RECOMENDACION: la corrida cronometrada por archivo que el propio PR propone, con el timeout real
+  del ETL, antes de cargar. Si el plan resulta lento, materializar PaymentRefunds lo resuelve.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    el PR debia cambiar solo estados de reservas sin alterar grano ni filas ajenas
+    -> grano identico en 5 archivos, 0 cambios en 1.108.364 ordenes que no son reservas, IM-1224 e
+       IM-774 intactos
+    -> SI.

@@ -1,0 +1,155 @@
+schemaVersion: "1.0"
+
+id: "9903560c-a831-4b95-936d-3fc75c9e4784"
+key: "TC-170"
+title: "Rental Event, Rental Resource and Ticketing export one payment-first status per reservation — the two Long Island records reconcile and event/resource divergence drops to zero — IM-1227"
+description: |
+  Test case para IM-1227 (Historia, priority **High**, "In QA Review") — epic IM-70 Altru
+  Queries — QA Sub-task IM-1278. Cliente reportante: Long Island Children's Museum.
+  PR bajo prueba: Veevarts/MigrationToolETL "PR #180" (open, base main, head 464c9d8,
+  9 archivos, +1439/-38).
+
+  === QUE REPORTA EL TICKET ===
+
+  Dos Rental Events cuyo estado y pago contradicen a sus Rental Resources. El ticket no trae
+  criterios de aceptacion formales; el comportamiento esperado se infiere de sus dos ejemplos y
+  de su pregunta abierta ("no queda claro si afecta solo a estos dos registros o a mas").
+    Example 1 — estado Paid con pago vinculado, pero los recursos quedan Pending (deberian
+                ser Sold).
+    Example 2 — Confirmed en Altru pero Paid en Salesforce, sin ningun pago en ninguno de los
+                dos lados, y con un recurso vinculado en Paid.
+
+  === QUE DICE EL PR QUE ESTA MAL ===
+
+  No son dos registros: TRES escaleras de estado se derivan de una sola columna de Altru,
+  SALESORDER.STATUS, y ninguna coincide con las otras. Esa columna es el estado de FLUJO de la
+  reserva y no dice nada del pago, que Altru lleva aparte en SALESORDERPAYMENT y
+  RESERVATIONSECURITYDEPOSITPAYMENT. Ademas el trigger de Rental_Event__c no tiene campo de
+  bypass y reescribe Status__c a Paid tras la carga, mientras rental_resource.sql y la familia
+  de ticketing SI desactivan sus triggers y conservan lo que escribio la query.
+
+  === QUE HACE EL ARREGLO ===
+
+  Una unica escalera "primero el pago", identica byte a byte en rental_events_groups.sql y
+  rental_resource.sql (verificado por QA en 464c9d8 al armar este plan), alimentada por cuatro
+  CTEs de pago con cuerpo identico en los cinco archivos. Emite seis valores: Canceled, Paid,
+  Reserved/Partially Paid, Signed Contract, Proposal/Negotiation, Inquiry. Las filas de
+  ticketing que son reservas se derivan de esa escalera con una tabla de mapeo; las que no son
+  reservas conservan la escalera original sin cambios.
+
+  === RIESGOS ABIERTOS QUE ESTE CASO NO PUEDE CERRAR ===
+
+  - EL DEV DECLARA NO HABER EJECUTADO EL SQL MODIFICADO CONTRA DATOS REALES. Solo lectura,
+    SET PARSEONLY y asserts sobre el texto. El body se contradice ademas: en Risks dice que la DB
+    volvio a responder el 2026-09-15 y en Validation que sigue inalcanzable. Ejecutar las cinco
+    queries es la primera tarea de este caso.
+  - El PR afirma que el TICKET CRUZO los numeros de orden de los dos ejemplos. Se verifica con
+    datos de Altru antes de usar esos registros, no se acepta tal cual.
+  - El chequeo post-carga que el PR llama "la prueba real" exige la org de Long Island cargada,
+    que es productiva. Se EXCLUYE de este caso; el escenario 2 es su equivalente a nivel de query.
+  - Dos decisiones de producto pendientes de validacion del reportante: Confirmed pasa a Signed
+    Contract, y una reserva totalmente reembolsada y no cancelada queda Paid. QA verifica que el
+    comportamiento coincida con la regla declarada, no si la regla es correcta.
+  - El PR #181 (IM-1228) CONTIENE a este PR y toca los mismos nueve archivos. El veredicto queda
+    atado al commit 464c9d8.
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Perfil safesql qa_longisland alcanzable contra la base Altru de Long Island Children's Museum."
+  - "Clone de Veevarts/MigrationToolETL con main y el head del PR 180 (464c9d8) disponibles."
+  - "Sandbox de trainings con el paquete Auctifera instalado, con acceso de solo lectura, para el escenario de contrato con Salesforce."
+  - "Las consultas de verificacion se expresan como conteos y agregados para no sacar datos personales de la fuente."
+format: gherkin
+scenarios:
+  - title: "Regression evidence · The two reported reservations export one coherent status across event, resource and ticket"
+    tags: [regression-evidence, long-island, example-1, example-2]
+    given:
+      - "el perfil safesql de Long Island y las queries en main (antes del arreglo) y en el head del PR 180"
+      - "las dos reservas del ticket identificadas por su Implementation External ID"
+    when:
+      - "se resuelve en Altru el numero de orden y los montos de cada reserva, sin asumir el cruce de numeros de orden que afirma el PR"
+      - "se ejecutan las tres exportaciones, evento, recurso y ticket, antes y despues del arreglo, filtradas a esas dos reservas"
+    then:
+      - "queda establecido con datos de Altru a que numero de orden corresponde cada External ID, confirmando o refutando el cruce que afirma el PR"
+      - "la reserva Pending con el total cubierto pasa de estados discordantes a Paid en evento y recurso, y Sold en el ticket"
+      - "la reserva Confirmed sin ningun pago deja de exportar Paid y queda Signed Contract en evento y recurso, y Reserved en el ticket"
+      - "ninguna de las dos exporta en el ticket un valor crudo de Altru como Confirmed o Finalized"
+
+  - title: "Objective · Rental Event and Rental Resource never export different statuses for the same reservation"
+    tags: [objective, blast-radius, happy-path]
+    given:
+      - "todas las reservas de Long Island y la escalera compartida del arreglo"
+    when:
+      - "se ejecutan rental_events_groups.sql y rental_resource.sql y se cruzan por reserva, midiendo solo conteos"
+      - "se deriva el estado de ticket esperado de cada reserva aplicando la tabla de mapeo al estado del evento"
+    then:
+      - "antes del arreglo se reproduce la divergencia en mucho mas que dos registros y se registra su magnitud, respondiendo la pregunta abierta del ticket"
+      - "despues del arreglo el numero de reservas cuyo estado de evento difiere del de alguno de sus recursos es cero"
+      - "ninguna reserva exporta Paid en evento o recurso mientras todavia se adeuda dinero"
+      - "el estado exportado en el ticket de cada reserva coincide con el que dicta la tabla de mapeo"
+      - "este resultado es el equivalente a nivel de query del chequeo post-carga que propone el PR, sin depender de la org productiva del cliente"
+
+  - title: "Edge cases · Payment outranks workflow state except for cancellation, and the closed-out gate holds"
+    tags: [edge-case, ladder-arms]
+    given:
+      - "las reservas de Long Island agrupadas por estado de Altru y por relacion entre lo pagado y el total"
+    when:
+      - "se compara el estado que emite la escalera para cada combinacion"
+    then:
+      - "una reserva Cancelled exporta Canceled aunque tenga el total cubierto"
+      - "una reserva Pending totalmente pagada exporta Paid, y una parcialmente pagada exporta Reserved/Partially Paid"
+      - "una reserva Confirmed sin pagos exporta Signed Contract y ya no Paid"
+      - "una reserva Complete o Finalized exporta Paid solo si no adeuda nada; si adeuda, exporta Signed Contract"
+      - "lo pagado se toma bruto de reembolsos, y se mide cuantas reservas quedan Paid por esa decision frente a una lectura neta"
+      - "se deja constancia de que Confirmed a Signed Contract y reembolsada-no-cancelada a Paid son reglas de producto pendientes del reportante"
+
+  - title: "Regression · Row grain, non-reservation ticketing rows and the IM-774 confirmed date stay intact"
+    tags: [regression, row-grain, checksum]
+    given:
+      - "las cinco queries modificadas en main y en el head del PR 180"
+    when:
+      - "se ejecutan ambas versiones contra la misma fuente y se comparan los conteos de filas por archivo"
+      - "se calcula una huella por fila de las filas de ticketing que no son reservas, antes y despues"
+    then:
+      - "las cinco queries ejecutan sin error contra datos reales, lo que el PR declara no haber hecho"
+      - "el conteo de filas de cada archivo es identico antes y despues del arreglo"
+      - "las filas de ticketing que no son reservas son identicas fila por fila antes y despues"
+      - "Auctifera__Confirmed_Date_Time__c conserva sus valores, porque sigue leyendo el estado crudo de Altru"
+      - "la suite query-regression pasa sobre el commit bajo prueba, incluida la asercion de IM-774 que prohibe emitir Confirmed"
+      - "se registra el tiempo de ejecucion de cada archivo, porque el PR declara el costo como no medido"
+
+  - title: "Target contract · Every emitted status is a valid value of the Salesforce picklists the load writes to"
+    tags: [edge-case, salesforce-contract, missing-doc]
+    given:
+      - "un sandbox de trainings con el paquete Auctifera instalado, en solo lectura"
+    when:
+      - "se leen los valores de Rental_Event__c.Status__c, de Rental_Resources__c.Rental_Status__c y del estado de Ticketing"
+    then:
+      - "los dos campos de estado de evento y de recurso comparten el mismo conjunto de valores, como afirma el PR"
+      - "los seis valores que emite la escalera existen en ese conjunto, de modo que un re-upsert no puede ser rechazado por el picklist"
+      - "los valores que emiten las filas de reserva del ticket existen en el picklist de Ticketing"
+      - "Finalized no es un valor valido de Ticketing, lo que confirma que las filas que lo exportaban en crudo eran un error de carga"
+tags:
+  - im-1227
+  - im-70
+  - im-1278
+  - altru
+  - migration
+  - rentals
+  - rental-events
+  - rental-resources
+  - ticketing
+  - rental-status
+  - long-island
+  - pr-180
+  - high
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-16T19:40:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-16T19:40:00Z"
+  version: 1

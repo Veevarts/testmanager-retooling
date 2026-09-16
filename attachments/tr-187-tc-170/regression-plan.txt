@@ -1,0 +1,35 @@
+TR-187 · TC-170 · IM-1227 — Plan de regresion tecnica y de seguridad
+=====================================================================
+Planificado  : 2026-09-16, antes de ejecutar las corridas en vivo.
+PR           : Veevarts/MigrationToolETL 180, head 464c9d8
+Base real    : 8b522c3 (IM-1224, PR 179 ya mergeado).
+
+NOTA SOBRE LA BASE. El clone local tenia origin/main desactualizado en 63a9796, un commit ANTES de
+IM-1224. Una primera corrida del revert-proof uso ese commit y mezclaba dos cambios. Se detecto al ver
+que el head tenia la CTE ReservationClientContacts (de IM-1224) y la supuesta base no; se hizo fetch,
+se recalculo el merge-base real (8b522c3, el PR tiene exactamente sus 9 commits encima y esta al dia
+con main) y se repitio todo contra esa base. Nada de este run se apoya en 63a9796.
+
+Item                                              Tipo        Riesgo  Metodo de verificacion                          Veredicto
+------------------------------------------------  ----------  ------  ----------------------------------------------  ---------
+R1  Suite query-regression del repo               tecnica     alto    npm test query-regression en 464c9d8            ver regression-results.txt
+R2  Los specs nuevos guardean el arreglo           tecnica     alto    revert-proof: SQL de 8b522c3 con specs del PR   ver regression-results.txt
+R3  Grano de filas de rental_events_groups.sql     tecnica     alto    COUNT(*) y COUNT(DISTINCT) PRE vs POST en vivo  ver regression-results.txt
+R4  Grano de filas de rental_resource.sql          tecnica     alto    COUNT(*) y COUNT(DISTINCT) PRE vs POST en vivo  ver regression-results.txt
+R5  Grano de filas de las 3 queries de ticketing   tecnica     alto    COUNT(*) PRE vs POST en vivo                    ver regression-results.txt
+R6  Filas de ticketing que NO son reservas         tecnica     alto    estado de ticket PRE vs POST en todas las       ver regression-results.txt
+    conservan su estado                                                ordenes sin reserva, en vivo
+R7  Solo el CASE de estado y un LEFT JOIN cambian  tecnica     medio   diff normalizado sin comentarios, fuera del     ver regression-results.txt
+    en ticketing                                                       CASE, en las 4 ramas
+R8  CTEs de pago identicas en los 5 archivos       tecnica     medio   hash del cuerpo normalizado                     ver regression-results.txt
+R9  IM-774: la query sigue sin emitir 'Confirmed'  tecnica     medio   ticketing-trigger-bypass-query.spec.ts +        ver regression-results.txt
+                                                                       conteo en vivo de tickets 'Confirmed'
+R10 IM-812: guard de VOLUNTEERTYPEID endurecido    tecnica     bajo    rental-resource-query.spec.ts en head y base    ver regression-results.txt
+R11 IM-1224: resolucion del client contact intacta tecnica     medio   el diff del PR no toca ReservationClientContacts ver regression-results.txt
+R12 Costo de ejecucion                             tecnica     medio   tiempos medidos por pieza en vivo               ver regression-results.txt
+S1  Secretos en lineas agregadas                   seguridad   alto    grep de patrones sobre el diff                  ver regression-results.txt
+S2  SQL dinamico / inyeccion                       seguridad   alto    grep EXEC, sp_executesql, concatenacion         ver regression-results.txt
+S3  Sentencias de escritura en las queries         seguridad   alto    conteo sin comentarios en los 5 .sql            ver regression-results.txt
+S4  Dependencias                                   seguridad   medio   archivos de paquetes en el diff                 ver regression-results.txt
+S5  Datos personales en docs agregados             seguridad   medio   grep de emails, telefonos, GUIDs                ver regression-results.txt
+S6  Codigo TS de runtime tocado                    seguridad   medio   lista de .ts no-spec en el diff                 ver regression-results.txt

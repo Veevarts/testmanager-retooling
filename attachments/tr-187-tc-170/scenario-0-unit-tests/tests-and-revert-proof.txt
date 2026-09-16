@@ -1,0 +1,58 @@
+TR-187 · TC-170 · IM-1227 — Tests del dev y revert-proof
+=========================================================
+Ejecutado    : 2026-09-16
+Repo         : Veevarts/MigrationToolETL, worktree aislado en el head del PR 180 (464c9d8).
+               El clone local del usuario estaba en otra rama con archivos sin trackear: no se toco.
+
+BASE CORRECTA
+-------------
+  El origin/main local estaba desactualizado (63a9796, un commit antes de IM-1224). Una primera
+  corrida del revert-proof uso esa base por error; se detecto al ver que el head tenia la CTE
+  ReservationClientContacts de IM-1224 y la base no. Tras fetch:
+      merge-base real   8b522c3  (IM-1224, PR 179 mergeado)
+      commits del PR    9, exactamente los de IM-1227
+      main avanzo?      no, el PR esta al dia
+      diff de los 5 .sql contra la base real: +670 / -33, lo que declara el PR
+  Todo lo que sigue usa 8b522c3.
+
+1. SUITE DEL REPO EN EL HEAD
+---------------------------
+  npm test -- --runInBand query-regression
+    Test Suites: 17 skipped, 50 passed, 50 of 67 total
+    Tests:       175 skipped, 697 passed, 872 total
+  Coincide exactamente con lo que declara el PR (697 passed).
+  Las 17 suites saltadas son las de integracion con Docker, gateadas por RUN_DOCKER_SQL_QUERY_TESTS.
+
+  Pasan los 3 specs del PR y el de IM-774:
+    PASS rental-status-ladder-query.spec.ts          (nuevo)
+    PASS ticketing-reservation-status-query.spec.ts  (nuevo)
+    PASS rental-resource-query.spec.ts               (endurecido, IM-812)
+    PASS ticketing-trigger-bypass-query.spec.ts      (IM-774, no tocado)
+
+2. REVERT-PROOF — los specs guardean el arreglo de verdad
+---------------------------------------------------------
+  Se pusieron los 5 .sql de la base 8b522c3 bajo los specs del PR:
+    FAIL rental-status-ladder-query.spec.ts
+    FAIL ticketing-reservation-status-query.spec.ts
+    PASS rental-resource-query.spec.ts
+    Tests: 39 failed, 15 passed, 54 total
+
+  Lectura: los dos specs nuevos fallan sin el SQL del PR, asi que no pasan por casualidad.
+  rental-resource-query.spec.ts pasa tambien en la base, lo esperable: el PR solo endurecio su guard
+  de IM-812, no agrego una asercion del arreglo.
+  El worktree se restauro a 464c9d8 sin cambios.
+
+3. MATRIZ DE COBERTURA DEL DEV CONTRA EL TICKET
+------------------------------------------------
+  Escenario del TC                       Cubierto por specs del dev              Hueco
+  -------------------------------------  --------------------------------------  -------------------------------
+  S1 los dos registros del ticket        no (los specs no ejecutan datos)        cubierto por QA en vivo
+  S2 evento = recurso por reserva        paridad textual de la escalera          ejecucion real: QA en vivo
+  S3 brazos de la escalera               orden de brazos, gate de cerradas,      datos reales: QA en vivo +
+                                         8 estados enumerados                    tabla de verdad
+  S4 grano y filas no-reserva            escalera original verbatim, join       ejecucion real: QA en vivo
+                                         unico por reserva
+  S5 valores validos en Salesforce       no                                      QA contra fuente del paquete
+
+  El dev declaro no haber ejecutado el SQL contra datos reales. Todos los huecos de ejecucion
+  quedaron cubiertos por QA en este run.

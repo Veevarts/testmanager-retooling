@@ -1,0 +1,58 @@
+TR-187 · TC-170 · IM-1227 — OWASP Top 10 (2021), escaneo de aplicabilidad
+=========================================================================
+Ejecutado    : 2026-09-16
+Alcance      : diff de Veevarts/MigrationToolETL PR 180, 8b522c3 (base real) -> 464c9d8 (head)
+               9 archivos: 5 queries .sql, 3 specs .spec.ts, 1 doc .md. +1439 / -38.
+Naturaleza   : queries SQL de SOLO LECTURA que el ETL ejecuta contra el backup Altru del cliente
+               para producir las filas que se cargan en Salesforce.
+
+Hechos verificados sobre el diff, usados abajo
+-----------------------------------------------
+  dependencias modificadas (package.json / lockfiles)        ninguna
+  codigo TS de runtime modificado (extractores/mappers)      ninguno, solo specs
+  sentencias de escritura en los 5 .sql, sin comentarios     0 en cada archivo
+  SQL dinamico agregado (EXEC, sp_executesql, concatenacion) ninguno
+  parametros de entrada nuevos en las queries                ninguno; solo el DECLARE @timeZone ya existente
+  patrones de secretos en lineas agregadas                   ninguno (1 falso positivo: la palabra "token"
+                                                             en un comentario sobre el parser del test)
+  emails, telefonos o GUIDs de registros en el doc agregado  ninguno
+
+Categoria                                    Aplica  Verificacion                                         Veredicto
+-------------------------------------------  ------  ---------------------------------------------------  ---------
+A01 Broken Access Control                    N/A     El PR no toca autenticacion, autorizacion, rutas ni  N/A
+                                                     credenciales. Las queries corren con la conexion ya
+                                                     existente del ETL.
+A02 Cryptographic Failures                   N/A     Sin cambios de cifrado, transporte ni almacenamiento. N/A
+                                                     Los montos de pago ya se exportaban antes del PR
+                                                     (Auctifera__Paid_Amount_2__c).
+A03 Injection                                SI      Busqueda de SQL dinamico y concatenacion de entrada  PASS
+                                                     en las lineas agregadas: ninguna. Las 5 queries son
+                                                     texto estatico sin parametros nuevos, y el codigo TS
+                                                     que las ejecuta no cambio.
+A04 Insecure Design                          SI      La derivacion de estado es el cambio de diseno. Reduce PASS
+                                                     estados "Paid" falsos, que eran un problema de
+                                                     integridad financiera. Las dos reglas de producto
+                                                     discutibles (Confirmed -> Signed Contract; reembolsada
+                                                     no cancelada -> Paid) estan documentadas y no abren
+                                                     ninguna superficie de ataque.
+A05 Security Misconfiguration                N/A     Sin cambios de configuracion, infraestructura ni      N/A
+                                                     entorno.
+A06 Vulnerable and Outdated Components       SI      Revision de dependencias en el diff: ninguna          PASS
+                                                     agregada, quitada ni actualizada.
+A07 Identification and Authentication        N/A     Sin superficie de identidad ni sesion.                N/A
+    Failures
+A08 Software and Data Integrity Failures     SI      Las queries siguen cargando con los flags de bypass   PASS
+                                                     de trigger que ya existian (Disable_Trigger__c,
+                                                     Technical_Bypass_Triggers__c); el PR no agrega
+                                                     ninguno. Los specs nuevos endurecen la integridad del
+                                                     texto de las queries y se probo que fallan contra el
+                                                     SQL de la base (revert-proof).
+A09 Security Logging and Monitoring          N/A     Sin cambios de logging ni monitoreo.                  N/A
+    Failures
+A10 Server-Side Request Forgery              N/A     El diff no agrega ninguna llamada saliente.           N/A
+
+RESUMEN: 4 aplicables · 4 PASS · 0 FAIL · 6 N/A. Sin bloqueantes de seguridad.
+
+Nota sobre la propia evidencia de QA: todas las consultas de verificacion devuelven solo conteos y
+agregados. Los unicos identificadores que aparecen son los dos External ID y numeros de orden que ya
+figuran en el ticket de Jira, que son identificadores internos de registro y no datos personales.

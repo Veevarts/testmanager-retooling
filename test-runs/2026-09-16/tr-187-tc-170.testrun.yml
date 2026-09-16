@@ -1,0 +1,327 @@
+schemaVersion: "1.0"
+id: tr-2288324b-7898-401c-b2f5-8f51b9011bd4
+key: TR-187
+title: >-
+  TR-187 · IM-1227 · TC-170 · Rental status payment-first ladder — 5/5 PASS. Evento, recurso y ticket
+  exportan un unico estado por reserva: 9.868 reservas de Long Island con evento y recurso
+  contradictorios tras la carga bajan a 0, y las cinco queries se ejecutaron contra datos reales,
+  cosa que el PR no habia hecho.
+status: completed
+environment:
+  name: >-
+    Base Altru de Long Island Children's Museum via safesql (qa_longisland,
+    migration-db.rtl.veevartapp.com), solo lectura; las unicas escrituras fueron tablas #temp de
+    sesion. Queries de Veevarts/MigrationToolETL en un worktree aislado: base real 8b522c3 (IM-1224)
+    contra head 464c9d8 del PR 180. Metadata de Salesforce leida del paquete
+    Veevarts/AuctiferaDX main @ 8202e19, sin tocar ninguna org.
+  buildVersion: >-
+    Mixed — SQL-only (5 queries de extraccion) + specs de contrato + doc. Sin codigo TS de runtime ni
+    dependencias. PR 180 abierto contra main; el PR 181 (IM-1228) lo contiene y el veredicto queda
+    atado al commit 464c9d8.
+testPlanId: null
+startedAt: "2026-09-16T19:45:00Z"
+completedAt: "2026-09-16T21:10:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Altru guarda el estado de FLUJO de la reserva en SALESORDER.STATUS y el pago por separado. Antes
+  del arreglo, la escalera del recurso miraba solo ese estado y la del evento lo combinaba con el
+  pago neto, con una rama que convertia Confirmed, Complete y Finalized en Paid sin mirar el pago.
+  A nivel query evento y recurso coincidian, pero el trigger de Rental_Event__c, que no tiene bypass,
+  reescribe el evento a Paid tras la carga cuando lo pagado cubre el total, mientras recurso y
+  ticket desactivan su trigger y conservan lo exportado. De ahi la contradiccion del ticket.
+
+  El PR pone una unica escalera que prioriza el pago, identica en evento y recurso, alimentada por
+  las mismas 4 CTEs de pago en los 5 archivos, y deriva el estado del ticket de reserva de esa
+  escalera con una tabla de mapeo. Las filas de ticketing que no son reservas conservan la escalera
+  original.
+
+  ## Inferred technical tests
+
+  Ejecutados todos en este run, ninguno manual:
+  - suite query-regression en el head y revert-proof con el SQL de la base;
+  - los dos registros del ticket, PRE vs POST, por dos metodos;
+  - paridad evento/recurso/ticket en todas las reservas, incluida la simulacion del trigger;
+  - matriz de brazos sobre datos reales y tabla de verdad sintetica para los brazos ausentes;
+  - grano de filas de los 5 archivos e invariancia de las ordenes que no son reservas;
+  - chequeos estaticos de alcance del diff, identidad de CTEs e IM-1224;
+  - contrato con los picklists desde la metadata del paquete;
+  - regresion de seguridad y OWASP Top 10.
+
+  ## Hallazgos que conviene leer antes de cargar
+
+  1. El ticket habia cruzado los numeros de orden de sus dos ejemplos; confirmado con datos.
+  2. El body del PR dice que la base es inalcanzable; hoy respondio.
+  3. Dos reglas de producto requieren el visto bueno del reportante: Confirmed a Signed Contract
+     (226 reservas) y reembolsada no cancelada a Paid (66, depende de Manage_Status_by_Payment__c).
+  4. Costo: regresion de plan preexistente en main al evaluar el estado inline; el ETL tolera 30
+     minutos, pero conviene la corrida cronometrada por archivo que propone el PR.
+  5. Queda la brecha residual post-carga que ningun escenario de query puede cerrar; la consulta de
+     aceptacion del PR debe correrse despues del load.
+
+results:
+  - testCaseId: "9903560c-a831-4b95-936d-3fc75c9e4784"
+    testCaseKey: TC-170
+    scenarioTitle: >-
+      Regression evidence · The two reported reservations export one coherent status across event, resource and ticket
+    scenarioIndex: 0
+    status: passed
+    stepResults: []
+    actual: |
+      Ejecutado sobre la base Altru de Long Island por dos metodos independientes que coinciden: las
+      queries reales de evento y recurso, y los CASE de estado verbatim de evento, recurso y ticket.
+
+      EL CRUCE DE NUMEROS DE ORDEN QUE AFIRMA EL PR QUEDA CONFIRMADO CON DATOS DE ALTRU:
+        128A24C3-4A69-403C-9102-C9E7FE883A56 -> LOOKUPID 8-15359860  (el ticket decia 15013828)
+        02245AEA-853E-4C9D-AF78-D86F940D95D9 -> LOOKUPID 8-15013828  (el ticket decia 15359860)
+      Los External ID si correspondian a la descripcion de cada ejemplo.
+
+                              128A24C3 (Pending, 221 de 221)   02245AEA (Confirmed, 0 de 275)
+                              PRE          POST                PRE             POST
+        Evento (query)        Inquiry      Paid                Paid            Signed Contract
+        Evento tras trigger   Paid         Paid                Paid            Signed Contract
+        Recurso               Inquiry      Paid                Paid            Signed Contract
+        Ticket                Pending      Sold                Confirmed crudo Reserved
+
+      El PRE reproduce los dos ejemplos del ticket al pie de la letra: evento Paid con tickets Pending, y
+      una reserva sin un peso pagado exportada Paid en evento y recurso.
+
+      pre-fix -> post-fix -> objetivo cumplido?: estados contradictorios entre si y con el pago real ->
+      un unico estado coherente con el pago en las tres exportaciones; el ticket del Example 1 queda en
+      Sold, que es exactamente lo que pedia el reportante -> SI.
+    notes: >-
+      **PASS.** El ticket habia cruzado los numeros de orden de sus dos ejemplos; QA lo verifico con datos antes de usarlos.
+    attachments:
+      - name: examples-pre-post.txt
+        path: attachments/tr-187-tc-170/scenario-1-examples/examples-pre-post.txt
+        mimeType: text/plain
+      - name: out_A_examples_pre.json
+        path: attachments/tr-187-tc-170/wrappers/out_A_examples_pre.json
+        mimeType: application/json
+      - name: out_A_examples_post.json
+        path: attachments/tr-187-tc-170/wrappers/out_A_examples_post.json
+        mimeType: application/json
+
+  - testCaseId: "9903560c-a831-4b95-936d-3fc75c9e4784"
+    testCaseKey: TC-170
+    scenarioTitle: >-
+      Objective · Rental Event and Rental Resource never export different statuses for the same reservation
+    scenarioIndex: 1
+    status: passed
+    stepResults: []
+    actual: |
+      Todas las reservas de Long Island (16.731; 16.484 con recursos), PRE y POST sobre el mismo snapshot.
+
+                                                                  PRE      POST
+        evento distinto de alguno de sus recursos (query)           0        0
+        trigger lleva el evento a Paid y el recurso queda
+          en un estado que no es Paid ni Canceled               9.868        0   <-- el defecto del ticket
+        evento Paid con dinero adeudado                           122        0
+        evento Y recurso Paid con dinero adeudado                 122        0
+        ticket con valor crudo de Altru                         4.235        0   (Confirmed 4.217, Finalized 18)
+        ticket Pending en reserva totalmente pagada             7.989        0
+        ticket distinto del que dicta la tabla de mapeo         4.235        0
+
+      Estados que cambian al re-exportar: evento 10.445 y recurso 10.445 (identico al re-medido del PR el
+      2026-09-15); ticket 14.378 sobre todas las reservas.
+
+      RESPUESTA A LA PREGUNTA DEL TICKET: no eran dos registros, eran 9.868.
+
+      A nivel query, antes del arreglo evento y recurso ya coincidian; la divergencia la crea solo el
+      trigger de Rental_Event__c tras la carga, como argumenta el PR. Por eso la medicion decisiva es la
+      simulada con la regla del trigger, y esa baja a 0.
+
+      pre-fix -> post-fix -> objetivo cumplido?: 9.868 reservas con evento y recurso contradictorios tras la
+      carga, 122 Paid con deuda, 4.235 tickets crudos -> 0, 0, 0, y el ticket sigue la tabla de mapeo en
+      las 16.731 -> SI.
+    notes: >-
+      **PASS.** Metodo: CTEs de pago materializadas con texto verbatim en #temp y los 6 CASE de estado verbatim evaluados por reserva; es equivalente porque el estado depende solo de datos a nivel reserva en las cuatro versiones (verificado en el codigo). Diferencia con el PR que QA no reproduce: el PR informa 305 eventos y recursos Paid con deuda; QA mide 122 con pagado bruto y con neto. No cambia el veredicto: en POST es 0. LIMITE: la brecha residual post-carga (el trigger arma su propio total) no es observable sin la org cargada, que para Long Island es productiva; la consulta de aceptacion post-carga que propone el PR sigue siendo necesaria despues del load.
+    attachments:
+      - name: event-resource-ticket-parity.txt
+        path: attachments/tr-187-tc-170/scenario-2-objective/event-resource-ticket-parity.txt
+        mimeType: text/plain
+      - name: out_M_batch.json
+        path: attachments/tr-187-tc-170/wrappers/out_M_batch.json
+        mimeType: application/json
+      - name: M_batch.sql
+        path: attachments/tr-187-tc-170/wrappers/M_batch.sql
+        mimeType: text/plain
+      - name: gen_M.py
+        path: attachments/tr-187-tc-170/wrappers/gen_M.py
+        mimeType: text/plain
+
+  - testCaseId: "9903560c-a831-4b95-936d-3fc75c9e4784"
+    testCaseKey: TC-170
+    scenarioTitle: >-
+      Edge cases · Payment outranks workflow state except for cancellation, and the closed-out gate holds
+    scenarioIndex: 2
+    status: passed
+    stepResults: []
+    actual: |
+      A. Matriz de brazos sobre datos reales (31 combinaciones; evento = recurso en todas):
+        Cancelled prevalece sobre el pago ........ 43 canceladas con el total cubierto -> Canceled
+        Pending totalmente pagada -> Paid ......... 7.989
+        pago parcial -> Reserved/Partially Paid ... en Pending, Complete, Tentative y Confirmed
+        Confirmed sin pago -> Signed Contract ..... 226; ya no Paid
+        Complete con total 0 -> Paid .............. 39
+
+      B. Long Island NO tiene ninguna Complete o Finalized sin pago y con deuda, ni reservas Reserved o
+      Unresolved. Para cubrir esos brazos, los CASE verbatim se ejecutaron en SQL Server sobre una tabla
+      de verdad sintetica de 64 filas (8 estados x 8 combinaciones de pago), sin leer tablas del cliente,
+      contra expectativas calculadas aparte desde la regla del PR:
+        64 filas, 0 divergencias.
+        Complete/Finalized total 100 sin pago -> Signed Contract / Reserved      (filas 9, 10, 33, 34)
+        Complete/Finalized total 0 -> Paid / Sold
+        Reserved y Unresolved sin pago -> Reserved/Partially Paid
+        sin fila de pago se comporta como pagado 0
+        orden que no es reserva: ticket PRE = POST en las 64
+
+      Reembolsos: 572 reservas con reembolso (PR 572); 91 Paid en bruto y no en neto (PR 91); la escalera
+      emite Paid en 66 de ellas y Canceled en las 25 canceladas.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el estado seguia al flujo de Altru e ignoraba el pago;
+      Confirmed afirmaba Paid sin pago -> el pago prevalece salvo la cancelacion, en datos reales y en las
+      64 combinaciones -> SI.
+    notes: >-
+      **PASS.** Las dos reglas discutibles son decision de producto y no de QA, y requieren el visto bueno del reportante antes de cualquier carga: (a) Confirmed a Signed Contract, 226 reservas de Long Island dejan de figurar Paid; (b) reembolsada y no cancelada queda Paid, 66 reservas, y depende de que Manage_Status_by_Payment__c este activo en la org de destino.
+    attachments:
+      - name: arm-matrix-and-truth-table.txt
+        path: attachments/tr-187-tc-170/scenario-3-ladder-arms/arm-matrix-and-truth-table.txt
+        mimeType: text/plain
+      - name: out_truth_table.sql.json
+        path: attachments/tr-187-tc-170/wrappers/out_truth_table.sql.json
+        mimeType: application/json
+      - name: truth_table.sql
+        path: attachments/tr-187-tc-170/wrappers/truth_table.sql
+        mimeType: text/plain
+      - name: check_truth.py
+        path: attachments/tr-187-tc-170/wrappers/check_truth.py
+        mimeType: text/plain
+
+  - testCaseId: "9903560c-a831-4b95-936d-3fc75c9e4784"
+    testCaseKey: TC-170
+    scenarioTitle: >-
+      Regression · Row grain, non-reservation ticketing rows and the IM-774 confirmed date stay intact
+    scenarioIndex: 3
+    status: passed
+    stepResults: []
+    actual: |
+      LAS CINCO QUERIES EJECUTAN CONTRA DATOS REALES, en PRE y POST, lo que el PR declaro no haber hecho.
+      La base respondio hoy, contra lo que dice el body del PR.
+
+      Grano identico en los cinco archivos:
+        rental_events_groups.sql     16.731 filas / 16.731 claves
+        rental_resource.sql          33.698 filas / 16.484 eventos
+        ticketing_only_program.sql   933.506 filas (16.064 de reservas, la cifra del PR)
+        ticketing_only_event.sql     206 filas
+        ticketing.sql (legado)       933.506 + 206
+
+      Filas que no son reservas: estado de ticket PRE vs POST sobre 1.108.364 ordenes -> 0 cambios.
+
+      Estatico: en el archivo de evento las 10 CTEs quedan identicas (incluida la de IM-1224) y el unico
+      cambio ejecutable es el CASE de estado; en ticketing, fuera de ese CASE solo se agrega un LEFT JOIN
+      sobre una clave unica; las CTEs de pago son identicas en los 5 archivos.
+
+      IM-774: la expresion de Auctifera__Confirmed_Date_Time__c es identica y sigue leyendo el estado
+      crudo, asi que sus valores no cambian; el spec de IM-774 pasa y ningun ticket de reserva queda en
+      Confirmed. IM-812: el spec endurecido pasa.
+      Suite del repo en el head: 697 passed, 0 failed. Revert-proof con el SQL de la base: 39 tests fallan.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el PR debia cambiar solo estados de reservas -> grano
+      identico, 0 cambios fuera de las reservas, IM-1224 e IM-774 intactos -> SI.
+    notes: >-
+      **PASS.** Observacion de costo, no defecto: cada pieza de la cadena de pagos tarda segundos, pero con el estado evaluado inline la query de evento de MAIN no termina en los 120 s de safesql, por una regresion de plan al expandir las CTEs (PaymentRefunds se referencia dos veces). Es preexistente en main; el PR copia la misma cadena a 4 archivos mas, dos con 933 mil filas. El ETL tolera 30 minutos por request, asi que no se levanta como defecto; se recomienda la corrida cronometrada por archivo que propone el propio PR antes de cargar. Nota de base: el origin/main local estaba desactualizado y un primer revert-proof uso esa base por error; se detecto, se recalculo el merge-base real (8b522c3) y se repitio todo.
+    attachments:
+      - name: grain-and-invariance.txt
+        path: attachments/tr-187-tc-170/scenario-4-regression/grain-and-invariance.txt
+        mimeType: text/plain
+      - name: tests-and-revert-proof.txt
+        path: attachments/tr-187-tc-170/scenario-0-unit-tests/tests-and-revert-proof.txt
+        mimeType: text/plain
+      - name: static-checks.txt
+        path: attachments/tr-187-tc-170/wrappers/static-checks.txt
+        mimeType: text/plain
+      - name: out_G_er_post.json
+        path: attachments/tr-187-tc-170/wrappers/out_G_er_post.json
+        mimeType: application/json
+      - name: out_L_ticketing_only_program_post.sql.json
+        path: attachments/tr-187-tc-170/wrappers/out_L_ticketing_only_program_post.sql.json
+        mimeType: application/json
+      - name: out_L_ticketing_pre.sql.json
+        path: attachments/tr-187-tc-170/wrappers/out_L_ticketing_pre.sql.json
+        mimeType: application/json
+      - name: out_L_ticketing_post.sql.json
+        path: attachments/tr-187-tc-170/wrappers/out_L_ticketing_post.sql.json
+        mimeType: application/json
+      - name: regression-results.txt
+        path: attachments/tr-187-tc-170/regression-results.txt
+        mimeType: text/plain
+
+  - testCaseId: "9903560c-a831-4b95-936d-3fc75c9e4784"
+    testCaseKey: TC-170
+    scenarioTitle: >-
+      Target contract · Every emitted status is a valid value of the Salesforce picklists the load writes to
+    scenarioIndex: 4
+    status: passed
+    stepResults: []
+    actual: |
+      Leido de la metadata fuente del paquete Auctifera (Veevarts/AuctiferaDX main @ 8202e19), sin tocar
+      ninguna org.
+
+      Rental_Event__c.Status__c y Rental_Resources__c.Rental_Status__c apuntan al MISMO global value set,
+      Rental_Event_Status: la afirmacion central del PR es cierta. Los 6 valores que emite la escalera
+      existen y estan activos. Ambos picklists son RESTRINGIDOS, dato que el PR no menciona.
+
+      El objeto de ticketing es Group_Reservation__c, no Ticketing__c (ese es el nombre del lookup). Su
+      Status__c tiene exactamente Canceled, Pending, Reserved, Sold, Confirmed, Refunded, la lista que el PR
+      corrigio. Los valores de reserva (Sold, Reserved, Pending, Canceled) son validos; Finalized no lo es.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el ticket podia recibir valores fuera de su lista o con
+      otro significado -> todo valor emitido existe en el picklist de destino con el significado correcto
+      -> SI.
+    notes: >-
+      **PASS sobre la metadata fuente del paquete.** DESVIO DECLARADO: el TC pedia leerlo en un sandbox de trainings; se uso la fuente del paquete, que es lo que se instala en cada org, para no tocar ninguna. Limite: no verifica la version instalada en la org de Long Island. Matiz: el picklist de Group_Reservation__c NO es restringido, asi que los 18 Finalized crudos de antes entraban como valor fuera de lista (dato sucio) y no hacian fallar la carga; los de evento y recurso si son restringidos, y ahi el escape crudo ocurria en 0 reservas.
+    attachments:
+      - name: picklist-contract.txt
+        path: attachments/tr-187-tc-170/scenario-5-picklists/picklist-contract.txt
+        mimeType: text/plain
+      - name: Rental_Event_Status.globalValueSet-meta.xml
+        path: attachments/tr-187-tc-170/scenario-5-picklists/Rental_Event_Status.globalValueSet-meta.xml
+        mimeType: application/xml
+      - name: Status__c.field-meta.xml
+        path: attachments/tr-187-tc-170/scenario-5-picklists/Status__c.field-meta.xml
+        mimeType: application/xml
+      - name: Rental_Status__c.field-meta.xml
+        path: attachments/tr-187-tc-170/scenario-5-picklists/Rental_Status__c.field-meta.xml
+        mimeType: application/xml
+      - name: Group_Reservation__c.Status__c.field-meta.xml
+        path: attachments/tr-187-tc-170/scenario-5-picklists/Group_Reservation__c.Status__c.field-meta.xml
+        mimeType: application/xml
+      - name: source-ref.txt
+        path: attachments/tr-187-tc-170/scenario-5-picklists/source-ref.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-16T21:10:00Z"
+    by: codex
+    from: planned
+    to: completed
+    reason: >-
+      Ejecucion completa contra la base de Long Island. Las cinco queries del PR corrieron contra
+      datos reales en PRE y POST, con grano identico en los cinco archivos. La contradiccion entre
+      evento y recurso tras la carga baja de 9.868 reservas a 0, los tickets crudos de 4.235 a 0, y
+      las 1.108.364 ordenes que no son reservas no cambian. Los brazos de la escalera ausentes en
+      Long Island se cubrieron con una tabla de verdad de 64 filas sin divergencias. Suite 697/0,
+      revert-proof con 39 fallos en la base. Sin defectos; dos decisiones de producto quedan para
+      el reportante y una observacion de costo.
