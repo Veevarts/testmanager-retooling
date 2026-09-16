@@ -1,0 +1,75 @@
+TR-188 · TC-171 · IM-1228 — Escenario 4: contrato con Salesforce y camino TS
+============================================================================
+Ejecutado    : 2026-09-16
+Fuente       : metadata y Apex del paquete — Veevarts/AuctiferaDX main @ 8202e19fe0. Sin tocar ninguna org.
+
+1. LOS CAMPOS DESTINO
+---------------------
+  Rental_Event__c.Rental_Resource_Subtotals2__c   Currency(18,2)   campo PLANO, no roll-up
+  Rental_Event__c.Rental_Resource_Taxes3__c       Currency(18,2)   campo PLANO, no roll-up
+  La query los emite como DECIMAL(18,2): compatible.
+
+2. LA CAUSA RAIZ, CONFIRMADA EN LAS FORMULAS
+-------------------------------------------
+  Event_Rental_Total_Amount__c (BlankAsZero) = Subtotal__c + Total_Rental_Event_Taxes__c + Processing_Fees__c
+
+  Subtotal__c (BlankAsZero) =
+    IF(AND(ISNULL(Rental_Resource_Subtotals2__c), NOT(ISNULL(Resources_Rental_Charge__c))),
+       Resources_Rental_Charge__c - Resource_Rental_Discounts__c - Additional_Discount__c,
+       Rental_Resource_Subtotals2__c - Additional_Discount__c)
+
+  Total_Rental_Event_Taxes__c (BlankAsZero) =
+    IF(ISBLANK(TEXT(Reason_for_Tax_Waive__c)),
+       IF(ISNULL(Rental_Resource_Taxes3__c), Rental_Resource_Taxes__c + Additional_Tax_Amount_c__c,
+                                             Rental_Resource_Taxes3__c + Additional_Tax_Amount_c__c),
+       0)
+
+  Las dos formulas intentan caer a los roll-ups cuando el campo "2"/"3" esta vacio, pero estan
+  configuradas "treat blanks as zeroes": con esa opcion ISNULL sobre un numero en blanco da FALSO, el
+  fallback nunca se dispara y la formula usa 0. Es exactamente la causa que describe el PR.
+
+  Detalle que valida el calculo del PR: cuando Subtotals2 tiene valor, la formula solo le resta
+  Additional_Discount__c, no el descuento de recursos. Entonces Subtotals2 tiene que venir NETO del
+  descuento por item, que es lo que calcula la query (TOTAL - DISCOUNT_AMOUNT por item).
+
+  Los roll-ups del fallback (Resources_Rental_Charge__c, Rental_Resource_Taxes__c) filtran
+  Rental_Status__c <> 'Canceled': coherente con que el PR excluya ordenes canceladas.
+
+3. EL APEX QUE ESCRIBE ESOS CAMPOS, Y POR QUE NUNCA CORRIA
+----------------------------------------------------------
+  RentalEventManageResources.setRentalResourceTaxesSubtotals: por evento arranca en 0.00 y suma
+  Subtotal_Amount3__c / Tax_Amount3__c (o Subtotal_Amount__c / Tax_Amount__c si vienen nulos) de los
+  recursos no 'Canceled'. Sin recursos deja 0.00.
+
+  RentalResourcesTriggerHandler aplica filterDisabledTriggerRecords en el constructor (linea 193) y
+  otra vez antes de llamar al metodo (lineas 870-884): los recursos con Disable_Trigger__c = true se
+  excluyen. Todos los recursos migrados cargan con ese flag, asi que el calculo nunca corria.
+
+  PRECISION sobre "unico escritor": en codigo productivo asignan esos campos el metodo anterior y
+  ademas RentalEventCloneController (al clonar un evento). Para el camino de migracion la afirmacion
+  del PR se sostiene.
+
+4. EL CAMINO TS — query -> mapper -> entidad -> pipeline -> CSV
+--------------------------------------------------------------
+  Nombres identicos de punta a punta:
+    SQL        AS Auctifera__Rental_Resource_Subtotals2__c / AS Auctifera__Rental_Resource_Taxes3__c
+    mapper     row.Auctifera__Rental_Resource_Subtotals2__c -> rentalResourceSubtotals (parseNullableNumber)
+    entidad    rentalResourceSubtotals / rentalResourceTaxes: number | null
+    pipeline   RENTAL_EVENT_HEADERS y la fila del CSV con los mismos dos nombres
+
+  Test propio de QA contra las funciones reales (qa-tc171-rental-event-totals-mapping.spec.ts): 6/6 PASS
+    - la cabecera incluye cada campo exactamente una vez
+    - 1234.56 / 98.77 llegan intactos a la fila del CSV
+    - el 0 que emite la query se conserva como 0 y NO se convierte en blanco
+    - un DECIMAL entregado como string ('1234.56') se convierte a numero
+    - toda clave de la fila tiene su columna en la cabecera
+    - (documenta el limite) una columna ausente del SQL se mapearia a blanco
+
+  Por que importa el tercer punto: el PR emite 0 en vez de NULL porque una celda vacia del CSV no puede
+  borrar un valor ya guardado. Si el mapper convirtiera el 0 en blanco, esa garantia se perderia. No
+  lo hace.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    los campos que leen las formulas del total nunca se cargaban
+    -> llegan a Salesforce con el nombre y el tipo correctos, y las formulas los leen
+    -> SI (sobre la metadata fuente del paquete; no verifica la version instalada en la org del cliente).

@@ -1,0 +1,147 @@
+schemaVersion: "1.0"
+
+id: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+key: "TC-171"
+title: "Rental Event exports its resource subtotals and taxes so Event Rental Total Amount stops reading zero, and multi-tax items no longer duplicate resource rows — IM-1228"
+description: |
+  Test case para IM-1228 (Historia, priority **High**, "In QA Review") — epic IM-70 Altru
+  Queries — QA Sub-task IM-1279. Cliente reportante: Long Island Children's Museum.
+  PR bajo prueba: Veevarts/MigrationToolETL "PR #181" (open, base main, head 9555d56).
+
+  === QUE REPORTA EL TICKET ===
+
+  El campo formula Event Rental Total Amount del Rental Event no refleja el dinero de sus Rental
+  Resources, en TODOS los Rental Events/Groups migrados. El ticket no trae criterios de aceptacion
+  ni registros de ejemplo: el comportamiento esperado se infiere de la descripcion.
+
+  === CAUSA SEGUN EL PR ===
+
+  Event_Rental_Total_Amount__c suma formulas que leen Rental_Resource_Subtotals2__c y
+  Rental_Resource_Taxes3__c. Esos dos NO son roll-ups sino campos Currency que solo escribe Apex
+  desde el trigger de Rental Resource, y ese trigger esta desactivado en todos los recursos
+  migrados (Disable_Trigger__c = 1). El export de eventos nunca los emitia, asi que quedaban NULL
+  y la formula, que trata blancos como cero, leia casi 0.
+
+  === QUE HACE EL ARREGLO ===
+
+  rental_events_groups.sql calcula y exporta ambos campos por reserva con la misma matematica por
+  item que rental_resource.sql (asignacion de descuento, redondeo por item, TOTALTAX como
+  porcentaje, compuerta de TYPECODE), excluyendo ordenes canceladas y tickets que el export de
+  recursos descarta, y emitiendo 0 en vez de NULL. Los campos viajan por la entidad, el mapper y
+  el pipeline de Rental Event.
+
+  Arreglo colateral: SALESORDERITEMTAX tiene una fila por (item, impuesto). Ambas queries ahora la
+  unen preagregada por item. Antes, rental_resource.sql emitia un external id DUPLICADO por cada
+  impuesto extra de un item, cada fila cobrada a una sola tasa.
+
+  === ALCANCE ===
+
+  El PR 181 CONTIENE al PR 180 (IM-1227), ya validado en TR-187. Este caso cubre solo el delta
+  propio de IM-1228: 464c9d8 (head de 180) -> 9555d56 (head de 181). El ticketing es identico al
+  de 180 y queda fuera, salvo como regresion.
+
+  === RIESGOS ABIERTOS ===
+
+  - El dev declara no haberlo medido con datos reales (la base rechazo conexiones el 09-14 y 09-15)
+    y deja un chequeo de paridad agregado para correr con safesql. QA lo corre y ademas verifica
+    por su cuenta.
+  - La verificacion en la org que propone el PR exige la org de Long Island recargada, que es
+    productiva. Se EXCLUYE; el escenario 1 es su equivalente a nivel de query.
+  - Sin ACs ni ejemplos concretos en el ticket.
+  - Ediciones post go-live: los recursos migrados conservan Disable_Trigger__c, asi que editarlos
+    no recalcula los totales del evento. Fuera de alcance segun el PR.
+  - Merge: el PR pide mergear 180 primero y volver a mergear main en 181 (el repo hace squash).
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Perfil safesql qa_longisland alcanzable contra la base Altru de Long Island Children's Museum."
+  - "Clone de Veevarts/MigrationToolETL con el head del PR 180 (464c9d8), el head del PR 181 (9555d56) y la base real de main disponibles."
+  - "Lectura de la metadata del paquete Auctifera (AuctiferaDX) para verificar formulas, tipos de campo y el Apex que escribe los totales."
+  - "Las consultas de verificacion se expresan como conteos y agregados para no sacar datos personales de la fuente."
+format: gherkin
+scenarios:
+  - title: "Objective · Every Rental Event exports resource subtotals and taxes equal to the sum of its non-canceled exported resources, never blank"
+    tags: [objective, happy-path, parity]
+    given:
+      - "todas las reservas de Long Island y las queries de evento y de recurso en el head del PR 181"
+    when:
+      - "se ejecuta el chequeo de paridad agregado que deja el PR"
+      - "y QA recalcula por su cuenta, por reserva, la suma de subtotales e impuestos de los recursos que exporta rental_resource.sql, excluyendo los cancelados"
+    then:
+      - "antes del arreglo el export de eventos no emite ninguno de los dos campos, que quedarian en blanco"
+      - "despues del arreglo ningun evento emite esos campos en blanco"
+      - "el numero de eventos cuyo subtotal o impuesto exportado difiere de la suma de sus recursos es cero"
+      - "la verificacion independiente de QA coincide con el chequeo del PR"
+
+  - title: "Resource grain · Items with more than one tax no longer produce duplicate resource rows"
+    tags: [grain, bug-fix, regression-evidence]
+    given:
+      - "los items de alquiler de Long Island con mas de una fila en SALESORDERITEMTAX"
+    when:
+      - "se ejecuta rental_resource.sql antes y despues del arreglo y se comparan filas contra external ids distintos"
+    then:
+      - "antes del arreglo hay mas filas que external ids distintos, y se cuantifica cuantos duplicados habia"
+      - "despues del arreglo cada external id aparece exactamente una vez"
+      - "el impuesto de un item con varias tasas se calcula con la tasa combinada y no con una sola"
+      - "las filas de items con una sola tasa no cambian su subtotal ni su impuesto"
+
+  - title: "Edge cases · Cancelled orders, dropped ticket items, discounts and orders without items are handled like the resource export"
+    tags: [edge-case, parity]
+    given:
+      - "reservas de Long Island con orden cancelada, con items de ticket que el export de recursos descarta, con descuentos, y sin items"
+    when:
+      - "se comparan los totales exportados en el evento con los recursos exportados de cada caso"
+    then:
+      - "una reserva de orden cancelada no suma los subtotales ni impuestos de sus items"
+      - "los items de ticket que el export de recursos descarta tampoco suman en el evento"
+      - "el descuento se asigna y redondea por item igual que en el export de recursos"
+      - "una reserva sin items exporta 0 en ambos campos y no blanco"
+
+  - title: "Target contract · The fields reach the right Salesforce API names and the package formulas really read them"
+    tags: [salesforce-contract, mapping, missing-doc]
+    given:
+      - "la metadata del paquete Auctifera y el codigo TS del pipeline de Rental Event"
+    when:
+      - "se revisan la entidad, el mapper, la lista de columnas del pipeline y las definiciones de los campos y formulas del paquete"
+    then:
+      - "los dos valores viajan desde la query hasta la carga con los nombres Auctifera__Rental_Resource_Subtotals2__c y Auctifera__Rental_Resource_Taxes3__c"
+      - "ambos campos existen en el paquete con un tipo numerico compatible con el valor exportado"
+      - "las formulas de subtotal, impuestos y total del evento leen esos campos, confirmando la causa raiz declarada"
+      - "se confirma si el Apex que escribe esos campos queda desactivado por Disable_Trigger__c, como afirma el PR"
+
+  - title: "Regression · The IM-1227 status ladder, event grain and the dev suites stay intact"
+    tags: [regression, row-grain, im-1227]
+    given:
+      - "el head del PR 180 ya validado en TR-187 y el head del PR 181"
+    when:
+      - "se comparan los estados emitidos y el grano del evento entre ambos heads"
+      - "y se corre la suite query-regression y la suite de integracion nueva del PR"
+    then:
+      - "el estado de evento, recurso y ticket de cada reserva es identico entre los dos heads"
+      - "el export de eventos sigue siendo una fila por reserva"
+      - "la suite query-regression pasa sobre el head del PR 181"
+      - "la suite de integracion nueva pasa, y se registra si su prueba con Docker se pudo ejecutar"
+tags:
+  - im-1228
+  - im-70
+  - im-1279
+  - altru
+  - migration
+  - rentals
+  - rental-events
+  - rental-resources
+  - totals
+  - taxes
+  - long-island
+  - pr-181
+  - high
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-16T21:15:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-16T21:15:00Z"
+  version: 1

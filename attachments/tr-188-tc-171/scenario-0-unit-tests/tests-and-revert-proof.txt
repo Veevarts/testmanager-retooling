@@ -1,0 +1,47 @@
+TR-188 · TC-171 · IM-1228 — Tests del dev, revert-proof y test propio de QA
+============================================================================
+Ejecutado    : 2026-09-16 · worktree aislado de Veevarts/MigrationToolETL en 9555d56 (head del PR 181)
+Alcance      : delta propio de IM-1228 = 464c9d8 (head del PR 180, validado en TR-187) -> 9555d56
+               14 archivos, +1340 / -2. El ticketing es identico al del PR 180.
+
+1. SUITE DE CONTRATO — npm test -- --runInBand query-regression
+   Test Suites: 18 skipped, 50 passed · Tests: 181 skipped, 703 passed, 0 failed
+   Coincide con lo que declara el PR (703).
+
+2. SUITE DE INTEGRACION NUEVA — rental-event-resource-totals-query.integration.spec.ts (Docker)
+   Primera corrida: 6/6 FALLAN con "SQL Server is now ready for client connections not received after
+   60000ms". Es ENTORNO: testcontainers corta a los 60 s y SQL Server tarda mas en levantar sobre
+   colima. Se aplico un parche LOCAL en el worktree de QA (.withStartupTimeout(300_000)), no commiteado.
+   Segunda corrida: 6/6 PASAN
+     keeps one event row per reservation with the totals joined in
+     equals the package rollup over the exported resources for every reservation
+     applies the order discount allocation and every tax on each item once
+     rounds per item and skips the ticket row the resource export drops
+     emits 0, not NULL, for a reservation with no items
+     emits 0 for a cancelled reservation even though it has items
+
+3. REVERT-PROOF — SQL de 464c9d8 (sin IM-1228) bajo los specs de 9555d56
+   rental-event-query.spec.ts (contrato)      5 failed, 45 passed   -> guardea el arreglo
+   suite de integracion (Docker)              3 failed, 3 passed
+     FALLA  equals the package rollup ...                       (correcto)
+     FALLA  applies the order discount allocation and every tax (correcto)
+     FALLA  rounds per item and skips the ticket row            (correcto)
+     PASA   keeps one event row per reservation                 (correcto: el grano no cambia)
+     PASA   emits 0, not NULL, for a reservation with no items   <-- pasa SIN el arreglo
+     PASA   emits 0 for a cancelled reservation                   <-- pasa SIN el arreglo
+
+   OBSERVACION O1 (calidad de test, no defecto del producto). Esos dos tests pasan aunque el SQL no
+   emita las columnas. El helper es cents(v) = Math.round((v ?? 0) * 100): con la columna AUSENTE el
+   valor es undefined, expect(undefined).not.toBeNull() pasa y cents(undefined) = 0. Un NULL real si lo
+   detectarian; lo que no detectan es que alguien quite las columnas. Esa regresion la sigue atrapando
+   "equals the package rollup" en las reservas con dinero. Arreglo sugerido: expect(row).toHaveProperty(...)
+   o toBeDefined() antes de cents().
+
+4. TEST PROPIO DE QA — camino TS de runtime que ningun spec del repo cubre
+   El PR agrega los campos a RentalEventRecord, RentalEventMapper y RentalEventPipeline, pero
+   rental-event-query.spec.ts solo verifica el TEXTO de la proyeccion SQL. QA escribio un spec temporal
+   contra las funciones reales (mapper.toDomain + pipeline.buildCsvDescriptor): 6/6 PASS. Archivado en
+   scenario-4-contract/ y borrado del worktree.
+
+   OBSERVACION O2: conviene agregar al repo un test equivalente; hoy el mapeo solo esta protegido por
+   esta verificacion.

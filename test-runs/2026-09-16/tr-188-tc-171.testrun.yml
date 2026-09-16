@@ -1,0 +1,320 @@
+schemaVersion: "1.0"
+id: tr-09d3029f-daf3-4b9e-a002-e309db2c8aa3
+key: TR-188
+title: >-
+  TR-188 · IM-1228 · TC-171 · Rental Event resource totals export — 5/5 PASS. El evento exporta
+  subtotal e impuestos de sus recursos: paridad al centavo con el rollup del paquete en 20.828 eventos de
+  Long Island y Vizcaya, sin totales en blanco, y el camino hasta el CSV verificado con un test propio.
+status: completed
+environment:
+  name: >-
+    Bases Altru de Long Island Children's Museum (qa_longisland) y Vizcaya (qa_vizcaya4) via safesql, solo
+    lectura; las unicas escrituras fueron tablas #temp de sesion. Queries de Veevarts/MigrationToolETL en
+    un worktree aislado: 464c9d8 (PR 180) contra 9555d56 (PR 181). Suite Docker sobre colima. Metadata y
+    Apex del paquete leidos de Veevarts/AuctiferaDX main @ 8202e19, sin tocar ninguna org.
+  buildVersion: >-
+    Mixed — SQL (rental_events_groups.sql, rental_resource.sql) + TS de runtime (entidad, mapper,
+    pipeline) + specs de contrato e integracion + docs de openspec. El PR 181 contiene al PR 180; este run
+    cubre el delta propio de IM-1228 y el veredicto queda atado a 9555d56.
+testPlanId: null
+startedAt: "2026-09-16T21:20:00Z"
+completedAt: "2026-09-16T22:30:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Event_Rental_Total_Amount__c suma formulas que leen Rental_Resource_Subtotals2__c y
+  Rental_Resource_Taxes3__c. Esos campos no son roll-ups: los escribe un metodo Apex invocado desde el
+  trigger de Rental Resource, que excluye los recursos con Disable_Trigger__c, y todos los migrados lo
+  tienen. El export de eventos nunca los emitia, quedaban en blanco, y las formulas (BlankAsZero) leian 0
+  sin caer a su fallback.
+
+  El PR calcula ambos campos en rental_events_groups.sql por reserva, con la misma matematica por item
+  que rental_resource.sql y excluyendo ordenes canceladas y tickets descartados, emite 0 en vez de NULL,
+  y los lleva por entidad, mapper y pipeline. De paso preagrega SALESORDERITEMTAX por item en las dos
+  queries, arreglando las filas de recurso duplicadas que producia un item con varios impuestos.
+
+  ## Inferred technical tests
+
+  Todos ejecutados en este run:
+  - suite de contrato y suite de integracion Docker en 9555d56, con revert-proof de ambas;
+  - chequeo de paridad del PR, verbatim, en Long Island;
+  - verificacion independiente de QA en Long Island y Vizcaya con cadena de CTEs materializada;
+  - grano del recurso y montos por item, PRE vs POST, fila por fila;
+  - casos limite marcados con tablas base;
+  - contrato con la metadata y el Apex del paquete;
+  - test propio de QA del camino mapper -> pipeline;
+  - regresion estatica y en vivo contra IM-1227; seguridad y OWASP.
+
+  ## Hallazgos que conviene leer
+
+  1. Long Island no tiene impuestos en alquileres; la mitad de impuestos se verifico en Vizcaya.
+  2. Ninguna base alcanzable tiene items con varias tasas: el bug de duplicados solo se pudo probar en el
+     fixture Docker, donde falla antes y pasa despues.
+  3. Dos tests de integracion de "emite 0" pasan aunque falten las columnas (observacion O1).
+  4. El camino mapper -> pipeline no tiene test en el repo; QA lo cubrio con uno propio (observacion O2).
+  5. La base respondio hoy, contra lo que dice el body del PR.
+  6. Orden de merge: el PR pide mergear 180 primero y volver a mergear main en 181, porque el repo hace
+     squash.
+
+results:
+  - testCaseId: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+    testCaseKey: TC-171
+    scenarioTitle: >-
+      Objective · Every Rental Event exports resource subtotals and taxes equal to the sum of its non-canceled exported resources, never blank
+    scenarioIndex: 0
+    status: passed
+    stepResults: []
+    actual: |
+      Dos verificaciones independientes que coinciden: el chequeo de paridad del PR ejecutado verbatim, y
+      la de QA, que materializo cada CTE de las dos queries con su texto verbatim y reescribio el rollup a
+      partir del metodo Apex del paquete (suma de Subtotal_Amount3/Tax_Amount3 de recursos no Canceled).
+
+      Antes del arreglo el export de eventos no proyecta ninguno de los dos campos (el diff solo los agrega).
+
+                                        Long Island                 Vizcaya
+        eventos exportados                  16.731                   4.097
+        totales en blanco                        0                       0
+        eventos desalineados         0 (PR) · 0 (QA exacto)       0 (QA exacto)
+        subtotales evento = rollup   9.768.665,66 = 9.768.665,66  24.251.988,89 = 24.251.988,89
+        impuestos evento = rollup           0 = 0                 1.566.015,14 = 1.566.015,14
+        eventos con impuesto > 0                 0                   1.379
+        recursos con Amount3 nulo                0                       0
+
+      Long Island no tiene impuestos en alquileres; la mitad de impuestos se verifico en Vizcaya.
+      Recursos con Amount3 nulo = 0 significa que el Apex nunca usaria su campo alternativo, asi que la
+      transcripcion del rollup es exacta.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los dos campos no se exportaban y la formula del total leia
+      0 -> se exportan en todos los eventos, nunca en blanco, y coinciden al centavo con el rollup del
+      paquete en 20.828 eventos de dos clientes -> SI.
+    notes: >-
+      **PASS.** Solo Long Island y Vizcaya respondieron; Illinois, MOAD, Kidstream 1 y Kidstream B2 no conectaron. LIMITE: la verificacion en la org que propone el PR exige la org de Long Island recargada, que es productiva; esta paridad es su equivalente a nivel de query.
+    attachments:
+      - name: parity-long-island-vizcaya.txt
+        path: attachments/tr-188-tc-171/scenario-1-parity/parity-long-island-vizcaya.txt
+        mimeType: text/plain
+      - name: out_live_parity.json
+        path: attachments/tr-188-tc-171/wrappers/out_live_parity.json
+        mimeType: application/json
+      - name: out_M2_A_li.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_A_li.json
+        mimeType: application/json
+      - name: out_M2_A_vz.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_A_vz.json
+        mimeType: application/json
+      - name: M2_A_li.sql
+        path: attachments/tr-188-tc-171/wrappers/M2_A_li.sql
+        mimeType: text/plain
+      - name: gen_M2.py
+        path: attachments/tr-188-tc-171/wrappers/gen_M2.py
+        mimeType: text/plain
+
+  - testCaseId: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+    testCaseKey: TC-171
+    scenarioTitle: >-
+      Resource grain · Items with more than one tax no longer produce duplicate resource rows
+    scenarioIndex: 1
+    status: passed
+    stepResults: []
+    actual: |
+      El cambio es uno solo: rental_resource.sql deja de unir SALESORDERITEMTAX en crudo (una fila por item e
+      impuesto) y la une preagregada por item. Su SELECT final no cambia.
+
+      Items de alquiler con mas de una fila de impuesto: Long Island 0 (y 0 impuestos en total); Vizcaya 0
+      (3.890 filas de una sola tasa). El defecto de duplicados NO existe en los datos alcanzables.
+
+      Verificado en vivo, PRE (464c9d8) vs POST (9555d56), fila por fila:
+                                                Long Island        Vizcaya
+        filas = ids distintos, antes y despues  33.698 = 33.698    16.603 = 16.603
+        ids perdidos / nuevos                         0 / 0             0 / 0
+        items de una tasa con monto distinto              0                 0
+        impuestos PRE = POST                          0 = 0      1.742.350,57 = 1.742.350,57
+
+      El caso multitasa se probo de forma ejecutable en el fixture Docker del PR, que incluye un item con dos
+      filas de impuesto: "applies the order discount allocation and every tax on each item once" PASA con el
+      SQL de 9555d56 y FALLA con el de 464c9d8.
+
+      pre-fix -> post-fix -> objetivo cumplido?: un item con varias tasas duplicaba su fila de recurso -> una
+      fila por item con la tasa combinada (fixture) y cero cambios en items de una tasa (datos reales) -> SI.
+    notes: >-
+      **PASS con limite declarado:** el caso de varias tasas solo existe en el fixture; ninguna base alcanzable lo contiene. Lo que si se probo con datos reales es que la preagregacion no altera ningun item de una sola tasa, sobre 50.301 filas y USD 1,74 M en impuestos.
+    attachments:
+      - name: multi-tax-grain.txt
+        path: attachments/tr-188-tc-171/scenario-2-resource-grain/multi-tax-grain.txt
+        mimeType: text/plain
+      - name: out_M2_B_li.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_B_li.json
+        mimeType: application/json
+      - name: out_M2_B_vz.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_B_vz.json
+        mimeType: application/json
+      - name: probe-tax-by-profile.txt
+        path: attachments/tr-188-tc-171/wrappers/probe-tax-by-profile.txt
+        mimeType: text/plain
+      - name: M2_B_li.sql
+        path: attachments/tr-188-tc-171/wrappers/M2_B_li.sql
+        mimeType: text/plain
+
+  - testCaseId: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+    testCaseKey: TC-171
+    scenarioTitle: >-
+      Edge cases · Cancelled orders, dropped ticket items, discounts and orders without items are handled like the resource export
+    scenarioIndex: 2
+    status: passed
+    stepResults: []
+    actual: |
+      Subconjuntos marcados con tablas BASE de Altru, no con las CTEs del PR:
+                                                                Long Island   Vizcaya
+        canceladas                                                 1.068        588
+          con totales distintos de 0                                   0          0
+          con algun recurso exportado que no es Canceled               0          0
+        sin items / sin recursos exportados                          247        253
+          con totales en blanco o distintos de 0                       0          0
+        con descuento de orden                                       130          0
+          desalineadas contra el rollup (exacto)                       0          -
+        con ticket que el export descarta                              0          0
+
+      La equivalencia en la que se apoya el PR, "orden Cancelled = recurso Canceled", se cumple en las dos
+      bases. La paridad es exacta al centavo, asi que cubre tambien la asignacion y el redondeo del descuento
+      por item. Los tickets descartados no existen en ninguna base: cubiertos por el fixture Docker ("rounds
+      per item and skips the ticket row the resource export drops", pasa en 9555d56 y falla en 464c9d8).
+
+      pre-fix -> post-fix -> objetivo cumplido?: los casos limite deben comportarse igual que el export de
+      recursos -> 0 desalineaciones en cada subconjunto observable y el ticket descartado probado en fixture
+      -> SI.
+    notes: >-
+      **PASS.** El caso de ticket descartado se apoya solo en el fixture.
+    attachments:
+      - name: edge-cases.txt
+        path: attachments/tr-188-tc-171/scenario-3-edge-cases/edge-cases.txt
+        mimeType: text/plain
+      - name: out_M2_A_li.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_A_li.json
+        mimeType: application/json
+      - name: out_M2_A_vz.json
+        path: attachments/tr-188-tc-171/wrappers/out_M2_A_vz.json
+        mimeType: application/json
+
+  - testCaseId: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+    testCaseKey: TC-171
+    scenarioTitle: >-
+      Target contract · The fields reach the right Salesforce API names and the package formulas really read them
+    scenarioIndex: 3
+    status: passed
+    stepResults: []
+    actual: |
+      Metadata del paquete (AuctiferaDX main @ 8202e19), sin tocar ninguna org:
+        Rental_Resource_Subtotals2__c y Rental_Resource_Taxes3__c: Currency(18,2), campos PLANOS.
+        Event_Rental_Total_Amount__c = Subtotal__c + Total_Rental_Event_Taxes__c + Processing_Fees__c.
+        Subtotal__c y Total_Rental_Event_Taxes__c intentan caer a los roll-ups con ISNULL, pero son
+        BlankAsZero: ISNULL sobre un numero en blanco da falso y la formula usa 0. Es la causa del PR.
+        El Apex que los calcula (setRentalResourceTaxesSubtotals) se invoca desde RentalResourcesTriggerHandler,
+        que filtra los recursos con Disable_Trigger__c = true; todos los migrados lo tienen.
+
+      Camino TS: los nombres son identicos en SQL, mapper, entidad y cabecera del pipeline. Ningun spec del
+      repo lo ejercita (rental-event-query.spec.ts solo mira el texto SQL), asi que QA escribio uno contra las
+      funciones reales: 6/6 PASS. El 0 que emite la query llega como 0 al CSV, no como blanco, que es lo que
+      hace valer la decision del PR de emitir 0 para pisar valores ya cargados.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los campos que leen las formulas del total nunca se cargaban
+      -> llegan con nombre y tipo correctos y las formulas los leen -> SI.
+    notes: >-
+      **PASS sobre la metadata fuente del paquete.** Precision a una afirmacion del PR: ademas del metodo de rollup, RentalEventCloneController tambien asigna esos campos (al clonar un evento); para el camino de migracion no cambia nada. OBSERVACION O2: el camino mapper -> pipeline no tiene test en el repo; conviene sumar el que escribio QA.
+    attachments:
+      - name: salesforce-contract-and-mapping.txt
+        path: attachments/tr-188-tc-171/scenario-4-contract/salesforce-contract-and-mapping.txt
+        mimeType: text/plain
+      - name: qa-tc171-rental-event-totals-mapping.spec.ts
+        path: attachments/tr-188-tc-171/scenario-4-contract/qa-tc171-rental-event-totals-mapping.spec.ts
+        mimeType: text/plain
+      - name: qa-mapping-test-result.txt
+        path: attachments/tr-188-tc-171/scenario-4-contract/qa-mapping-test-result.txt
+        mimeType: text/plain
+      - name: Event_Rental_Total_Amount__c.field-meta.xml
+        path: attachments/tr-188-tc-171/scenario-4-contract/Event_Rental_Total_Amount__c.field-meta.xml
+        mimeType: application/xml
+      - name: Subtotal__c.field-meta.xml
+        path: attachments/tr-188-tc-171/scenario-4-contract/Subtotal__c.field-meta.xml
+        mimeType: application/xml
+      - name: Total_Rental_Event_Taxes__c.field-meta.xml
+        path: attachments/tr-188-tc-171/scenario-4-contract/Total_Rental_Event_Taxes__c.field-meta.xml
+        mimeType: application/xml
+      - name: Rental_Resource_Subtotals2__c.field-meta.xml
+        path: attachments/tr-188-tc-171/scenario-4-contract/Rental_Resource_Subtotals2__c.field-meta.xml
+        mimeType: application/xml
+      - name: Rental_Resource_Taxes3__c.field-meta.xml
+        path: attachments/tr-188-tc-171/scenario-4-contract/Rental_Resource_Taxes3__c.field-meta.xml
+        mimeType: application/xml
+      - name: source-ref.txt
+        path: attachments/tr-188-tc-171/scenario-4-contract/source-ref.txt
+        mimeType: text/plain
+
+  - testCaseId: "04485296-f4c6-4e47-b29b-3eb6822efcfc"
+    testCaseKey: TC-171
+    scenarioTitle: >-
+      Regression · The IM-1227 status ladder, event grain and the dev suites stay intact
+    scenarioIndex: 4
+    status: passed
+    stepResults: []
+    actual: |
+      Estatico (464c9d8 vs 9555d56): el CASE de estado es identico en evento y recurso; los tres archivos de
+      ticketing son identicos; en el evento las 10 CTEs previas no cambian (incluida la de IM-1224) y el
+      SELECT final solo agrega las 2 columnas y un LEFT JOIN por reserva sobre una CTE agrupada; en el recurso
+      solo cambia el join de impuestos y el SELECT final no cambia.
+
+      En vivo: estado de recurso distinto entre 180 y 181, fila por fila, 0 en Long Island (33.698 filas) y
+      0 en Vizcaya (16.603). Evento una fila por reserva: 16.731 en Long Island, igual que en TR-187.
+
+      Suites en 9555d56: contrato 703 passed, 0 failed; integracion Docker 6/6. Revert-proof con el SQL de
+      464c9d8: contrato 5 fallos, integracion 3 fallos.
+
+      pre-fix -> post-fix -> objetivo cumplido?: IM-1228 no debia tocar los estados de IM-1227 ni el grano
+      del evento -> estados identicos fila por fila en dos bases y grano identico -> SI.
+    notes: >-
+      **PASS.** La integracion Docker fallo 6/6 en la primera corrida por ENTORNO (testcontainers corta a los 60 s y SQL Server tarda mas en colima); con un parche local de startupTimeout, no commiteado, paso 6/6. OBSERVACION O1: en el revert-proof, "emits 0, not NULL, for a reservation with no items" y "emits 0 for a cancelled reservation" pasan aunque el SQL no emita las columnas, porque cents(v) hace (v ?? 0) y not.toBeNull() acepta undefined; la regresion la sigue atrapando el test de paridad con el rollup.
+    attachments:
+      - name: regression-vs-im1227.txt
+        path: attachments/tr-188-tc-171/scenario-5-regression/regression-vs-im1227.txt
+        mimeType: text/plain
+      - name: tests-and-revert-proof.txt
+        path: attachments/tr-188-tc-171/scenario-0-unit-tests/tests-and-revert-proof.txt
+        mimeType: text/plain
+      - name: suite-logs.txt
+        path: attachments/tr-188-tc-171/scenario-0-unit-tests/suite-logs.txt
+        mimeType: text/plain
+      - name: static-checks-181.txt
+        path: attachments/tr-188-tc-171/wrappers/static-checks-181.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-188-tc-171/regression-results.txt
+        mimeType: text/plain
+      - name: regression-plan.txt
+        path: attachments/tr-188-tc-171/regression-plan.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-188-tc-171/owasp-top10-scan.txt
+        mimeType: text/plain
+
+summary:
+  totalScenarios: 5
+  passed: 5
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - at: "2026-09-16T22:30:00Z"
+    by: codex
+    from: planned
+    to: completed
+    reason: >-
+      Ejecucion completa. El evento exporta subtotal e impuestos iguales al rollup del paquete, al
+      centavo y sin blancos, en 20.828 eventos de Long Island y Vizcaya, confirmado por el chequeo del PR y
+      por una verificacion independiente de QA. El bug de filas duplicadas por varios impuestos no existe
+      en los datos alcanzables y quedo probado en el fixture Docker. Estados de IM-1227 y grano del evento
+      identicos. Suites 703/0 y 6/6; revert-proof con fallos donde corresponde. Sin defectos; dos
+      observaciones de calidad de tests.

@@ -1,0 +1,47 @@
+TR-188 · TC-171 · IM-1228 — Escenario 2: items con varios impuestos ya no duplican filas de recurso
+====================================================================================================
+Ejecutado    : 2026-09-16
+
+EL CAMBIO
+---------
+  rental_resource.sql unia SALESORDERITEMTAX en crudo, que tiene una fila por (item, impuesto). Un
+  item con dos impuestos producia dos filas con el MISMO external id, cada una cobrada a una sola tasa.
+  El PR la reemplaza por RentalResourceItemTaxes (SUM(TOTALTAX) por item). Verificado en el diff: es el
+  unico cambio del export de recursos, y su SELECT final no cambia.
+
+LO QUE LOS DATOS REALES ALCANZABLES PERMITEN VER
+------------------------------------------------
+  Items de alquiler con mas de una fila de impuesto:
+      Long Island      0   (ademas 0 filas de impuesto en total)
+      Vizcaya          0   (3.890 filas de impuesto, todas de una sola tasa)
+      Illinois, MOAD, Kidstream 1, Kidstream B2: no conectaron
+
+  O sea el defecto de duplicados NO existe en los datos de estos dos clientes, y no se puede
+  reproducir con datos reales.
+
+  Lo que SI se verifico en vivo, PRE (464c9d8) vs POST (9555d56), fila por fila:
+                                               Long Island        Vizcaya
+      filas PRE = ids distintos PRE          33.698 = 33.698   16.603 = 16.603
+      filas POST = ids distintos POST        33.698 = 33.698   16.603 = 16.603
+      ids perdidos / nuevos                       0 / 0            0 / 0
+      items de una tasa con subtotal o
+        impuesto distinto entre PRE y POST          0                0
+      suma de impuestos PRE = POST                  0 = 0     1.742.350,57 = 1.742.350,57
+
+  Es decir: la preagregacion no altera ningun item de una sola tasa, incluso con USD 1,74 M de
+  impuestos reales en Vizcaya.
+
+EL CASO DE VARIAS TASAS, PROBADO DE FORMA EJECUTABLE
+----------------------------------------------------
+  El fixture Docker del PR incluye un item con dos filas de impuesto. El test "applies the order
+  discount allocation and every tax on each item once":
+      PASA con el SQL de 9555d56
+      FALLA con el SQL de 464c9d8 (revert-proof)
+  Asi que el defecto se reproduce antes y desaparece despues sobre el fixture.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    un item con varias tasas duplicaba su fila de recurso con una sola tasa por fila
+    -> una fila por item con la tasa combinada (fixture), sin cambios en items de una tasa (datos reales)
+    -> SI, con el limite declarado de que el caso multitasa solo existe en el fixture.
+
+Salidas: wrappers/out_M2_B_li.json, out_M2_B_vz.json, probe-tax-by-profile.txt · lote: wrappers/M2_B_li.sql

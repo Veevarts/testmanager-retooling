@@ -1,0 +1,66 @@
+TR-188 · TC-171 · IM-1228 — Escenario 1: cada evento exporta subtotal e impuestos iguales a sus recursos
+=========================================================================================================
+Ejecutado    : 2026-09-16 · safesql, solo agregados
+
+DOS VERIFICACIONES INDEPENDIENTES
+---------------------------------
+  A. El chequeo de paridad que deja el PR (openspec/.../live-parity-check.sql), ejecutado VERBATIM.
+  B. Verificacion propia de QA: cada CTE de rental_resource.sql y de rental_events_groups.sql se
+     materializo con su texto VERBATIM en #temp y el SELECT final real corrio sobre esas tablas. El
+     rollup se reescribio a partir del metodo Apex del paquete (RentalEventManageResources.
+     setRentalResourceTaxesSubtotals): por evento, suma de Subtotal_Amount3__c y Tax_Amount3__c de los
+     recursos EXPORTADOS cuyo Rental_Status__c no es 'Canceled', arrancando en 0.
+     Materializar es la misma consulta logica con otro plan; evita la regresion de plan documentada en TR-187.
+
+  Solo Long Island y Vizcaya respondieron. Illinois, MOAD, Kidstream 1 y Kidstream B2 no conectaron
+  (timeout del tunel).
+
+ANTES DEL ARREGLO
+-----------------
+  El SELECT final de rental_events_groups.sql en 464c9d8 no proyecta ninguno de los dos campos
+  (verificado en el diff: solo se AGREGAN las 2 columnas). Cargados asi, quedaban en blanco y la
+  formula del total leia 0. Ver scenario-4-contract para la causa en el paquete.
+
+LONG ISLAND CHILDREN'S MUSEUM
+-----------------------------
+                                                   A. chequeo del PR     B. QA independiente
+  reservas / eventos exportados                         16.731                 16.731
+  filas de recurso = ids distintos                   33.698 = 33.698        33.698 = 33.698
+  eventos con Subtotals2 o Taxes3 en blanco                  -                      0
+  eventos desalineados contra el rollup                      0              0 exacto, 0 con tolerancia
+  eventos con subtotal > 0                              15.129                 15.129
+  suma de subtotales del evento                    9.768.665,66           9.768.665,66
+  suma del rollup del paquete                               -             9.768.665,66
+  suma de impuestos                                        0                      0
+  recursos con Amount3 nulo                                 -                      0
+
+  Long Island NO tiene impuestos en alquileres (0 filas en SALESORDERITEMTAX para items de
+  reservas). La mitad "impuestos" se verifica con Vizcaya.
+
+VIZCAYA
+-------
+  eventos exportados                                   4.097
+  filas de recurso = ids distintos                16.603 = 16.603
+  eventos con Subtotals2 o Taxes3 en blanco                0
+  eventos desalineados                                     0 exacto, 0 con tolerancia
+  eventos con subtotal > 0 / con impuesto > 0        2.537 / 1.379
+  suma de subtotales evento = rollup          24.251.988,89 = 24.251.988,89
+  suma de impuestos evento = rollup            1.566.015,14 =  1.566.015,14
+  recursos con Amount3 nulo                                0
+
+POR QUE IMPORTA "Amount3 nulo = 0"
+----------------------------------
+  El Apex del paquete usa Subtotal_Amount__c / Tax_Amount__c cuando Subtotal_Amount3__c / Tax_Amount3__c
+  vienen nulos. Como el export de recursos nunca los deja nulos en ninguna de las dos bases, la
+  transcripcion del rollup es exacta y no hay un segundo camino de calculo sin cubrir.
+
+  pre-fix -> post-fix -> objetivo cumplido?
+    los dos campos no se exportaban y la formula del total leia 0 en todos los eventos
+    -> se exportan en todos, nunca en blanco, y coinciden al centavo con el rollup del paquete en
+       20.828 eventos de dos clientes (USD 34,0 M en subtotales y USD 1,57 M en impuestos)
+    -> SI.
+
+  LIMITE DECLARADO: la verificacion en la org que propone el PR exige la org de Long Island recargada,
+  que es productiva. Se excluyo; esta paridad es su equivalente a nivel de query.
+
+Salidas: wrappers/out_live_parity.json, out_M2_A_li.json, out_M2_A_vz.json · lote: wrappers/M2_A_li.sql
