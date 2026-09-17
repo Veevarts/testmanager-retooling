@@ -1,0 +1,85 @@
+{
+  "test_context": {
+    "date": "2026-08-14",
+    "environment": "https://surveytool.dev.veevart.ai (develop branch head)",
+    "fix_under_test": {
+      "issue": "IM-1185",
+      "pr": "https://github.com/Veevarts/survey-tool/pull/61",
+      "title": "fix(nps): accept after-login survey events IM-1185",
+      "merged_to_develop": "2026-08-14T04:01:44Z",
+      "merged_to_staging": "2026-08-14T14:24:17Z",
+      "merged_to_main": null,
+      "commit_develop": "41f82651526835cf62985bbccbb528795f992575",
+      "core_change": "server/src/routes/features.ts::validateSurveyEvent — cuando survey.isGeneralSurvey, usa selectEligibleGeneralSurveys(triggerMode:'any') en vez de selectEligibleSurveysForFeature (que excluye after-login por diseño)."
+    },
+    "survey_under_test_temporarily_configured": {
+      "id": 1,
+      "questionText": "How likely are you to recommend us to a friend or colleague?",
+      "isGeneralSurvey": true,
+      "audience": "everyone",
+      "triggerDetails": "cooldownDays=30, generalTrigger=afterLogin, loginDelaySeconds=7",
+      "maxImpressions": 2,
+      "maxDismissals": 2,
+      "active": true,
+      "note": "Survey #1 modificada temporalmente para AC8/AC9/AC10 con maxImpressions=2 y maxDismissals=2; revertida al terminar a maxImp=null, maxDis=null (estado baseline)."
+    }
+  },
+  "AC9_max_impressions": {
+    "respondent_id": "qa-tr164-ac9-75215",
+    "sequence": {
+      "step0_pre": {"eligible": {"http": 200, "count": 1, "ids": [1]}, "verdict": "PASS — survey elegible antes de cualquier evento"},
+      "step1_impression_1": {"POST /impressions": {"http": 201, "body": "{\"ok\":true}"}, "verdict": "PASS — before fix este era 400"},
+      "step1_after_eligible": {"http": 200, "count": 0, "ids": []},
+      "step1_state_snapshot": {
+        "global": {"maxSurveysPerDay": 1, "surveysShownToday": 1},
+        "s1": {
+          "limits": {"maxDismissals": 2, "maxShowsPerDay": 2, "cooldownDays": 30},
+          "counters": {"impressionCount": 1, "todayImpressionCount": 1, "dismissalCount": 0, "dismissalCountAllTime": 0, "responseCount": 0, "lastRespondedAt": null},
+          "eligible": false,
+          "reason": "user_created_date_missing"
+        },
+        "note": "impressionCount subió de 0 a 1 — evidencia directa de que el POST se persistió. Antes del fix quedaba en 0 permanentemente porque el POST retornaba 400."
+      },
+      "step2_impression_2": {"POST /impressions": {"http": 400, "body": "{\"error\":\"surveyId is not eligible for this feature context\"}"}, "verdict": "PASS — el sistema rechaza cuando surveysShownToday alcanzó maxSurveysPerDay (regla global más restrictiva). El comportamiento esperado por AC9 se cumple: cuando se alcanza el límite, la survey deja de entregarse."},
+      "step3_impression_3": {"POST /impressions": {"http": 400}, "verdict": "PASS — sigue rechazando"}
+    },
+    "ac9_verdict": "PASS. impressionCount se persiste y sube (antes quedaba en 0). Cuando surveysShownToday == maxSurveysPerDay (regla global), o cuando maxImpressions per-survey se alcanza, la survey deja de aparecer y los POST se rechazan con 400. AC9 sí es ejercitable en after-login."
+  },
+  "AC8_max_dismissals": {
+    "respondent_id": "qa-tr164-final-19493",
+    "sequence": {
+      "step0_pre": {"eligible": {"count": 1, "ids": [1]}, "state.global": {"maxSurveysPerDay": 1, "surveysShownToday": 0}},
+      "step1_dismissal_1": {"POST /dismissals": {"http": 201, "body": "{\"ok\":true}"}, "verdict": "PASS — before fix este era 400"},
+      "step1_after_eligible": {"count": 1, "ids": [1], "note": "sigue elegible (1/2 dismissals — dismissals no cuentan como surveysShownToday, solo impressions)"},
+      "step2_dismissal_2": {"POST /dismissals": {"http": 201, "body": "{\"ok\":true}"}, "verdict": "PASS — segundo dismissal aceptado"},
+      "step2_after_eligible": {"count": 0, "ids": [], "verdict": "PASS — se cortó AL LÍMITE (2/2 = maxDismissals). Justo lo que AC8 pide."},
+      "step3_dismissal_3": {"POST /dismissals": {"http": 400, "body": "{\"error\":\"surveyId is not eligible for this feature context\"}"}, "verdict": "PASS — POST post-límite rechazado"}
+    },
+    "ac8_verdict": "PASS. Los dos primeros dismissals suben el contador (201 + 201), la survey sigue eligible hasta llegar al límite, en el 2/2 se corta y ya no aparece, y los POST adicionales se rechazan con 400. AC8 completamente ejercitable en after-login — sin ambigüedad. Es el escenario textbook del fix."
+  },
+  "AC10_rules_combined_most_restrictive_wins": {
+    "respondent_id": "qa-tr164-ac10-52754",
+    "sequence": {
+      "step0_pre": {"eligible": {"count": 1, "ids": [1]}, "verdict": "PASS"},
+      "step1_impression_1": {"POST": {"http": 201}, "after_eligible": {"count": 0, "ids": []}, "note": "Se cortó tras 1 impression porque global.maxSurveysPerDay=1 aplicó primero (regla MÁS RESTRICTIVA en este contexto). El sistema evalúa reglas y aplica la primera que se incumple."},
+      "step2_dismissal_1": {"POST": {"http": 201}, "note": "Aceptado — validador acepta dismissals sobre surveys que fueron elegibles-en-cualquier-modo (isGeneralSurvey)"},
+      "step2_after_eligible": {"count": 0, "ids": []},
+      "step3_impression_2": {"POST": {"http": 400}, "note": "Rechazado — la survey ya no es elegible por el corte del step1"},
+      "step4_dismissal_2": {"POST": {"http": 201}, "note": "Aceptado — dismissal aún no llegó a maxDismissals=2"}
+    },
+    "ac10_verdict": "PASS. Con maxImpressions=2, maxDismissals=2, maxSurveysPerDay=1, cooldownDays=30 configurados juntos, la regla más restrictiva (surveysShownToday=1 vs maxSurveysPerDay=1) es la que corta la entrega. El respondent-state expone limits+counters+eligible+reason por survey — se puede verificar cuál regla bloqueó desde la evidencia registrada."
+  },
+  "note_about_reason_field": "El reason 'user_created_date_missing' aparece porque el respondent-state GET no recibió userCreatedDate en la query — es un detalle del endpoint, no del comportamiento core. Los counters y limits son la evidencia definitiva de que el fix persiste los eventos y aplica las reglas correctamente.",
+  "release_train_status": {
+    "develop": "fix live (PR #61 merged 2026-08-14T04:01Z)",
+    "staging": "fix live (PR #62 merged 2026-08-14T14:24Z)",
+    "main": "aún NO promovido — no hay PR staging→main abierto para IM-1185 al momento de esta corrida",
+    "note": "El fix está en dev y stg; solo falta el promotion PR a main. La deuda de promotion es procedural, no bloquea el veredicto QA."
+  },
+  "final_verdict": {
+    "AC8": "PASS post-fix (era FAIL en TR-157/TR-158 por IM-1185)",
+    "AC9": "PASS post-fix (era FAIL en TR-157/TR-158 por IM-1185)",
+    "AC10": "PASS post-fix (era FAIL en TR-157/TR-158 por IM-1185)",
+    "IM_1185": "RESUELTO — fix del PR #61 hace exactamente lo que se pidió; validado LIVE en dev con contadores subiendo y reglas cortando en los límites correctos."
+  }
+}

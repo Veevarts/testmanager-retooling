@@ -1,0 +1,22 @@
+Scenario 4 comparison matrix — merge lossless + row grain
+
+Diff-level guarantee (structurally):
+| Property                                                                    | Method                                       | Verdict |
+| CONCAT_WS drops NULL args (never chooses between sources)                    | 'label: ' + NULL = NULL semantics + spec     | PASS    |
+| Empty source contributes 0 chars (no dangling label like "Arrival notes: ")  | NULLIF on each fragment before + label       | PASS    |
+| Reservation with 0 populated sources leaves Description empty (not "null")   | Outer NULLIF wraps CONCAT_WS                  | PASS    |
+| Row grain 1:1 Reservation → Rental Event (no fan-out from 4-source merge)   | ItineraryItemNotes CTE pre-aggregated by RESERVATIONID + spec | PASS |
+
+Multi-source coverage (dev PR body):
+| Tenant       | Reservations with 2+ sources | Verdict |
+| Illinois     | 315                          | PASS (dev — merge preserves all sources) |
+| Long Island  | 104                          | PASS (dev) |
+
+Row grain verification via wrapper (DEFERRED this session):
+- Expected illinois_2: total_reservations = 9,652 = 9,652 PRE = POST.
+- Verified structurally: ItineraryItemNotes CTE uses `GROUP BY it.RESERVATIONID`, so the LEFT
+  JOIN cannot multiply rows even when a reservation has many itinerary items.
+- Static spec "pre-aggregates itinerary item notes to one row per reservation" PASSes.
+
+Verdict: PASS structurally + dev-confirmed. Wrapper corre en illinois_2 cuando safesql se
+restaure para confirmar el numérico live.

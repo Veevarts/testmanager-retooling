@@ -1,0 +1,29 @@
+Revert-proof del AC4 — trampa del event-arm (IM-1220 / TC-158 / PR #178)
+=========================================================================
+Hazard documentado en el PR: ticketing_only_event.sql lleva DOS expresiones de fecha;
+el lookup usa ticket_dates.EarliestTicketDate y la expresión event-registration
+(event_registration_dates.EarliestEventRegistrationDate) pertenece a
+Ticket_Date_Do_Not_Map y a la row window. Espejar la window column como lookup dejó
+21 rows sobre 14 fechas dangling en el primer commit del PR (finding blocking de la
+review round 1, corregido en eee8fe1).
+
+Verificación estática del SQL final (branch HEAD 85e0145):
+- Línea 246 (SELECT del arm 2):
+  SELECT COALESCE(CAST(r.ARRIVALDATE AS DATE), ticket_dates.EarliestTicketDate, CAST(so.TRANSACTIONDATE AS DATE)) AS ReferencedDate
+  → usa la expresión del LOOKUP del child. CORRECTO.
+- Líneas 260-261 (predicado window del arm 2):
+  COALESCE(..., event_registration_dates.EarliestEventRegistrationDate, ...) >= @filterDateFrom / <= @filterDateTo
+  → la window expression vive SOLO en el predicado, igual que en el child. CORRECTO.
+
+Mutación QA (simulando la regresión del primer commit):
+  línea 246: ticket_dates.EarliestTicketDate → event_registration_dates.EarliestEventRegistrationDate
+
+Resultado con la mutación:
+  ✕ reproduces the child date expression verbatim (1 ms)
+  Tests: 1 failed, 23 passed, 24 total
+
+Restaurado (git checkout):
+  Tests: 24 passed, 24 total
+
+VEREDICTO: PASS — la trampa queda pinneada por el spec; la regresión del primer commit
+no puede reintroducirse en silencio.

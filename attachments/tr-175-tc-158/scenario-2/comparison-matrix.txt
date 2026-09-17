@@ -1,0 +1,25 @@
+Comparison matrix — Scenario 2 (AC2): completeness parent ↔ children — IM-1220 / TC-158 / TR-175
+=================================================================================================
+Verificación INDEPENDIENTE de QA (no es re-cita del dev): los 3 children se corrieron
+verbatim (wrapeados solo en SELECT DISTINCT de su columna de lookup, patrón
+aggregate-wrapper) contra el mismo tenant, y el set del parent POST-fix se comparó
+bidireccionalmente en local (analyze_vm.py children-auto).
+
+| Source/Test | Metric | Baseline (pre-fix) | Post-fix | Delta | AC / Objective ref | Objective met? | Verdict |
+|---|---|---|---|---|---|---|---|
+| ticketing_only_program.sql (verbatim, unwindowed) | fechas distintas referenciadas | n/a | 4,894 (+1 row con lookup NULL, sin efecto) | — | AC2 | — | dato |
+| ticketing_only_event.sql (verbatim, unwindowed) | fechas distintas referenciadas | n/a | 135 | — | AC2 | — | dato |
+| ticketing_direct_registrant.sql (verbatim, unwindowed) | fechas distintas referenciadas | n/a | 53 | — | AC2 | — | dato |
+| UNION children | fechas distintas | n/a | 4,945 | — | AC2 | — | dato |
+| parent POST-fix | fechas distintas | 4,892 | 4,945 | +53 | AC2 | YES | PASS |
+| DANGLING (child referencia, parent no tiene) | count | 5+ (las 5 del ticket eran dangling, por eso el lookup falló) | **0** | resuelto | AC2 / Objetivo | YES | PASS |
+| SURPLUS (parent tiene, ningún child referencia) | count | 3 (las 3 fechas luego removidas) | **0** | resuelto | AC2 | YES | PASS |
+| las 5 fechas del ticket en el set referenciado | membership | referenciadas pero sin parent | referenciadas Y con parent | — | AC1/AC2 | YES | PASS |
+
+Corolario por lógica de conjuntos: las 3 fechas removidas (2018-06-18, 2022-09-13,
+2024-09-11) NO están referenciadas por ningún child — dangling = 0 garantiza que toda
+fecha referenciada está en el parent, y esas 3 no están en el parent POST. Es decir,
+las únicas remociones son surplus inerte, exactamente lo advertido por el PR.
+
+pre-fix obtenido → post-fix obtenido → ¿objetivo cumplido?: dangling >0 / surplus 3 →
+dangling 0 / surplus 0 sobre 4,945 fechas → SÍ (set-equality exacta).

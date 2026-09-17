@@ -1,0 +1,60 @@
+TR-167 · TC-149 (IM-1192) · Scenario 0 · Unit tests inspection
+
+## Files added / modified by PR #167
+
+The PR touches ONE spec file (all IM-1192-tagged):
+
+- `src/data-migration/infrastructure/destination/sql-server/query-regression/charge-without-order-query.spec.ts` (+455 lines, NEW)
+  - 6 describe blocks, **21 `it` tests** — 3 more than the "18" mentioned in the PR body (spec grew during review round 2 and 3, F-9 and F-13 added additional tests).
+
+## AC ↔ test coverage matrix
+
+| AC | AC summary                                                | Test files                                              | Test cases                                                                                                                                                                    | Covered? |
+|----|-----------------------------------------------------------|---------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|
+| 1  | Dangling POS refs 88,193 → 0                              | charge-without-order-query.spec.ts                      | 4 tests in "POS Purchase reference" block: per-family branches (F-8 anchor), NULL fallback, CAST NVARCHAR (IM-770), plus 4 gate-mirror tests in "family gates" block          | YES      |
+| 2  | CASE order load-bearing (families 1+2 overlap 25,787)     | charge-without-order-query.spec.ts                      | 1 dedicated ordering test: "keeps the rental branch ahead of the order-backed branch" (F-1). Also 1 order-less-gate test asserting SALESORDERPAYMENT for reference resolution | YES      |
+| 3  | No row loss (115,010 emitted + 115,010 distinct external) | charge-without-order-query.spec.ts + PR body            | 4 tests in "grain" block: ChargeRank, REVENUEPAYMENTMETHOD MIN(id) guard (F-6), no un-projected tables, keeps `COALESCE(chargeRevenue.ID, ft.ID)`. Cross-tenant PR-body data. | YES      |
+| 4  | Cross-file regression + UUID `06e4b843…` origin           | (no direct spec — validated by PR body + code-diff)     | The tables-header block prevents drift; PR body explicitly states charge_with_order.sql is unchanged (0 dangling, 670,828+1,080 refs). UUID confirmed as SALESORDER.ID.       | PARTIAL  |
+| 5  | Idempotency + windowed hazard                             | charge-without-order-query.spec.ts + docs               | Grain block asserts idempotence via ChargeRank ordering; F-9 test breaks membership installment fan-out. Windowed-hazard is documented (F-12) not fixed; needs its own ticket. | PARTIAL  |
+
+Gaps flagged for compensating evidence (comparison matrices):
+- AC4: charge_with_order.sql regression measured only in PR body (dev safesql), not by a spec. → Compensated by dev-side dangling reconciliation cited in PR body.
+- AC5 windowed hazard: no test (documented as open, F-12). → Compensated by capturing it as a KNOWN LIMITATION in TR notes + handoff.
+
+## Test-run result on PR branch (pr-167, HEAD ef8677e)
+
+Runner: `npm test -- --runInBand src/data-migration/infrastructure/destination/sql-server/query-regression/charge-without-order-query.spec.ts` — Jest.
+
+- Suite: `charge_without_order.sql` spec.
+- Result: **21 passed / 21 total · 0 failed · 0 skipped**.
+- Time: ~0.43s.
+
+Whole `query-regression` suite (regression):
+- Runner: `npm test -- --runInBand query-regression`.
+- Result: **456 passed · 128 skipped · 44 of 60 suites passed · 16 suites skipped (docker/live)**.
+- Time: ~14.2s.
+
+Lint:
+- Runner: `npm run lint:check` on `src/data-migration/infrastructure/destination/sql-server/query-regression/**/*.ts`.
+- Result: clean (no output, exit 0).
+
+## PR body counts confirmed
+
+| Metric                        | Before        | After          |
+|-------------------------------|---------------|----------------|
+| Charges emitted               | 115,010       | 115,010        |
+| Distinct external ids         | 115,010       | 115,010        |
+| Dangling POS references       | **88,193**    | **0**          |
+| Blank POS references (NULL)   | 0             | 605            |
+
+Cross-tenant (2026-08-18, PR body):
+- tucson: 118,162 pre-fix / 118,008 distinct (154 dedupe), 118,008 / 118,008 post-fix.
+- Illinois: 125,688 / 125,687 (1 dedupe), 125,687 / 125,687 post-fix.
+- high_desert: 191,137 / 191,040 (97 dedupe), 191,040 / 191,040 post-fix.
+- Long Island: 115,010 / 115,010 (0), 115,010 / 115,010 post-fix.
+
+## Decisions
+
+- Tests pass on PR branch → GREEN FLAG. Proceed to per-scenario execution.
+- Coverage matches AC1/AC2/AC3 fully. AC4/AC5 have PARTIAL coverage but the gap is compensated by PR-body evidence + documented open hazard.
+- No PR-side gap that would block QA — proceeding.

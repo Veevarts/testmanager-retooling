@@ -1,0 +1,118 @@
+TR-163 · TC-144 (IM-1147) · AC3 post-fix verify — dev survey-tool
+Executed 2026-08-14T19:06Z on https://surveytool.dev.veevart.ai (develop branch head)
+Fix under test: PR #63 "fix: replace DynamoDB scans with queries IM-1187"
+Merge commit: 85ca4f0bab79fe6c7e894490e778c911fab1f98f · CI Test+Deploy both success
+
+## Objetivo
+
+Re-ejecutar AC3 de IM-1147 después del fix de IM-1187 y confirmar que ninguna
+lectura pública ni admin hot depende de ScanCommand.
+
+AC3 literal:
+"Given the data model is reviewed, when access patterns are compared against the
+table/index design, then each supported application view has a documented DynamoDB
+query path without relying on broad scans for normal runtime behavior."
+
+## Contraste código pre-fix (main) vs post-fix (develop)
+
+Fuente: server/src/data/dynamodbStore.ts (fetched via gh api)
+
+| Métrica                  | main (pre-fix) | develop (post-fix) |
+|--------------------------|----------------|--------------------|
+| Total líneas             | 646            | 824                |
+| `this.scan` callsites    | 9              | 6                  |
+| `new ScanCommand`        | 1              | 1 (helper interno) |
+| `this.query` callsites   | 1              | 8                  |
+
+Scan callsites que SOBREVIVEN en develop (todos admin unbounded, documentados):
+- L157 `listFeatures()` — admin listing sin partition natural
+- L227 `listSurveys()` — admin listing sin partition natural
+- L266 `listActiveGeneralSurveys()` sin orgKey — legacy path NO usado por features.ts hoy
+- L439 `listEvents()` sin (respondentId && clientOrgId) — admin/inspection fallback
+- L484 `listOrganizations()` — admin listing sin partition natural
+- L727 `queryResponses()` fallback cuando filtros no dan GSI selectivo — admin
+- L781 helper `new ScanCommand(...)` — implementación interna del método .scan
+
+Ninguno de los 6 Scan que quedan está en el REQUEST-PATH PÚBLICO. El README documenta
+la tabla oficial de access paths (block "Normal request paths use keyed DynamoDB reads
+instead of broad table scans" en README.md L509).
+
+## Métodos hot convertidos Scan → Query GSI
+
+| Método                              | Antes (Scan)        | Después (Query GSI)                                    |
+|-------------------------------------|---------------------|--------------------------------------------------------|
+| `getFeatureBySlug(slug)`            | Scan+FE `slug=`     | GSI1 `SUBJECT_SLUG#<slug>`                             |
+| `listSurveysByFeatureId(featureId)` | Scan+FE `featureId=`| GSI2 `SUBJECT#<featureId>`                             |
+| `listActiveGeneralSurveys(orgKey)`  | Scan+FE 3 condic.   | GSI1 global + GSI1 `ORG#<orgKey>` (dedup)              |
+| `listEvents(respondent+org)`        | Scan+FE full        | Base PK `RESPONDENT#<org>#<respondentId>`              |
+| `listResponses(filters)`            | Scan+FE `entity=`   | Query GSI2/3/4/1 según filtro más específico           |
+| `getOrganizationBySalesforceOrgId`  | Scan+FE `sfOrgId=`  | GSI2 `SALESFORCE_ORG#<sfOrgId>`                        |
+| `hasActiveOrganization(sf/subd)`    | listOrganizations   | 2 Get puntuales (GSI2 sfOrg + GSI1 subdomain)          |
+| Nuevo: `getOrganizationBySubdomain` | n/a                 | GSI1 `SUBDOMAIN#<subdomain>`                           |
+
+## Test coverage añadido por el PR
+
+server/src/data/dynamodbStore.test.ts  (+188 líneas · 7 test cases nuevos)
+  - "queries subjects by slug and surveys by subject without scanning"
+  - "queries global and organization-scoped active general surveys"
+  - "queries active organizations by Salesforce Org ID and subdomain"
+  - "queries delivery events through the tenant-scoped respondent partition"
+  - "selects the most specific response GSI and keeps residual filters"
+  - "queries each organization-month partition for bounded response exports"
+  - "paginates Query results without falling back to Scan"
+
+server/src/routes/apiBoundary.test.ts  (+69 líneas · 1 test case nuevo)
+  - "serves after-login eligibility through DynamoDB queries without scans"
+    - Assertion inline: `assert(!(command instanceof ScanCommand), "public eligibility must not scan DynamoDB")`
+    - Verifica que la ruta pública NUNCA emite ScanCommand.
+
+CI: PR #63 run 31831338196 (Test) + 31831338159 (Deploy) — ambos SUCCESS.
+
+## Verificación LIVE contra dev
+
+Endpoint 1 — GET /api/surveys/general/eligible (public after-login, was Scan → GSI1 Query):
+  URL: https://surveytool.dev.veevart.ai/api/surveys/general/eligible?salesforceOrgId=00DEm00000V5eRWMAZ&respondentId=qa-tr163-ac3&userCreatedDate=2020-01-01T00:00:00.000Z
+  HTTP: 200 · time: 0.995s (cold) → 0.33s (warm, ver latency stress abajo)
+  Payload expone campos GSI del item (evidencia del index usado):
+    "GSI1PK": "GENERAL_SURVEYS#ACTIVE#ORG#global"   ← el partition key EXACTO que el fix consulta
+    "GSI1SK": "SCOPE#everyone#SURVEY#1"
+    "GSI2PK": "SUBJECT#2"
+    "GSI2SK": "SURVEY#1"
+  Ver dev-eligible-response.json para el payload completo.
+
+Endpoint 2 — GET /api/features/1/surveys (public, was Scan → GSI2 Query):
+  HTTP: 200 · time: 0.32s · payload: [] (no hay surveys para featureId=1)
+
+Endpoint 3 — GET /api/features/general-nps/surveys (public by-slug, was Scan+lookup → GSI1 Query):
+  HTTP: 200 · time: 0.37s · payload: []
+
+Endpoint 4 — GET /api/admin/features/general-nps/respondent-state/qa-tr163-ac3 (admin hot):
+  HTTP: 401 Authentication required (behavior correcto; requiere admin session)
+
+Endpoint 5 — POST /api/features/general-nps/impressions (hot path):
+  HTTP: 400 "surveyId is not eligible for this feature context"
+  Nota: este 400 es IM-1185 preexistente (after-login vs featureTrigger validator),
+        NO IM-1187. Fuera del alcance de este AC3 verify.
+
+Latency stress — 5 sequential calls a /api/surveys/general/eligible:
+  call-1: 0.332s · call-2: 0.325s · call-3: 0.329s · call-4: 0.338s · call-5: 0.382s
+  Promedio ≈ 0.34s post-cold. Query GSI es estable.
+
+## Veredicto AC3
+
+PASS. El adapter runtime en develop:
+1. Convierte los 5 métodos Scan hot del request-path a Query GSI (verificado por diff + grep + payload).
+2. Retiene Scan SOLO en 6 métodos admin unbounded documentados en README.
+3. Añade cobertura de tests (7 store-level + 1 API-boundary) que assertan `!(ScanCommand)` en public paths.
+4. CI verde (Test + Deploy success en el merge commit).
+5. Runtime dev responde 200 con latencia estable ~0.34s en los endpoints post-fix.
+
+## Nota de scope (release train)
+
+- Fix está mergeado a `develop` (dev tiene el fix).
+- Aún NO hay PR develop→staging ni staging→main con este fix. STG y PRD siguen
+  corriendo la versión Scan (última promotion a main de survey-tool: PR #55 del
+  2026-08-05, previa a IM-1187).
+- Esto NO gatea el veredicto QA de IM-1147: AC3 se validó donde el fix vive (dev)
+  y la promotion es un follow-up procedural del release train. La deuda queda
+  documentada en el resumen del TR-163 y en el comment de close-the-loop.

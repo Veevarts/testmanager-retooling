@@ -1,0 +1,55 @@
+TR-168 · TC-150 (IM-868) · Scenario 1 · AC1 — Los 3 campos de Credit Card Income objetivo alcanzan los valores POST-fix esperados tras Step Functions SUCCEEDED
+
+## Ejecución
+
+- POST /analytics/manual-runs disparado 2026-08-21 15:58:47 UTC por el usuario con su x-api-key.
+- executionArn: arn:aws:states:us-east-1:287043460717:execution:MonthlyKpiExtractionStateMachine-oskh2CpJjqY4:manual-20260821T155847-05f2c198
+- Status Step Functions: **SUCCEEDED** (verificado en AWS Console — screenshot recibido del usuario)
+- Duración: 00:01:13.464 (start 10:58:47 CLT / end 11:00:01 CLT)
+
+## Comparison matrix pre/post (CSM/VeevartHub prod, csm-prod alias)
+
+| Org      | Field                                            | Baseline (2026-08-18) | Expected POST (dev doc) | Observed POST (2026-08-21) | Δ observed | Δ expected | LastModified POST-run             | Verdict |
+|----------|--------------------------------------------------|----------------------:|------------------------:|---------------------------:|-----------:|-----------:|-----------------------------------|---------|
+| Textile  | Credit_Card_Income_Onsite__c                     |               8857.63 |                 8760.33 |                    8760.33 |      -97.30 |      -97.30 | 2026-08-21T15:59:38.000+0000       | PASS    |
+| DAC      | Credit_Card_Income_Onsite__c                     |            1797052.22 |              1796926.22 |                 1796926.22 |     -126.00 |     -126.00 | 2026-08-21T16:00:00.000+0000       | PASS    |
+| London   | Amount_Credit_Card_Transactions_Online__c        |             147968.42 |               146149.11 |                  147968.42 |        0.00 |    -1819.31 | 2026-08-12T04:23:45.000+0000       | **FAIL** |
+
+## Objective-fit verdict
+
+- Textile: pre-fix reproducía el sobre-conteo (8857.63) → post-fix alcanza el target state (8760.33 exacto) ✓
+- DAC: pre-fix reproducía el sobre-conteo (1797052.22) → post-fix alcanza el target state (1796926.22 exacto) ✓
+- London: pre-fix reproducía el sobre-conteo (147968.42) → post-fix DEBERÍA quedar en 146149.11 según dev doc pero se queda en 147968.42 (sin cambio). Objective NO alcanzado.
+
+## Anomalía crítica en London
+
+El registro de London Children's Museum (`a3wVs000001uIXxIAM`) NO fue tocado por la ejecución:
+
+- `LastModifiedDate` sigue en 2026-08-12T04:23:45 (fecha pre-baseline del dev, sin cambio desde entonces).
+- La ejecución en Step Functions completó con `SUCCEEDED` en 73 segundos.
+- Textile fue refreshed a los 51s (10:59:38), DAC a los 73s (11:00:00), London nunca.
+- Polling continuo desde 11:00:17 hasta 11:10:46 CLT (10+ min post-ejecución) NO detectó ningún update en el record de London.
+
+**Esto indica que el pipeline procesó 2 de los 3 subscriberOrgIds del payload sin errores visibles, pero silenciosamente omitió el tercero.** Cause raíz posible: dispatcher/Map iteration bug, extractor no-op silencioso, cambio de datos source entre 2026-08-14 y 2026-08-21, o publish-side false-negative.
+
+## Verdict scenario 1
+
+**FAIL** — 2/3 orgs alcanzan el objetivo del fix, pero London (uno de los 3 orgs explícitamente incluidos en el payload) NO se procesa. El objetivo del AC1 requiere los 3 valores exactos POST-fix; con uno faltante, el AC no se satisface.
+
+## Handoff al dev (bounce)
+
+Necesitamos investigación en Step Functions ExecutionHistory de la execution `manual-20260821T155847-05f2c198`:
+- ¿El Map/Iterator recibió 3 items o 2 en su input?
+- ¿La rama de London ejecutó completa (extract + compute + publish)?
+- ¿Hubo Caught / Retry / errorEqual silencioso que la marcó SUCCEEDED?
+- ¿El extractor devolvió 0 filas para el source org de London April 2026?
+
+## Nota sobre AC1 en Textile y DAC
+
+El fix del PR #34 (cap por POS Purchase Total) está confirmado funcional en Textile y DAC:
+- Deltas exactos (-97.30 y -126.00) al centavo.
+- Sin desviaciones en canales opuestos (ver scenario 2).
+- Sin cambios en counts (ver scenario 3).
+- Sin cambios en Adyen raw volume (ver scenario 4).
+
+El código del cap es correcto; el defecto está en el orquestador de la extracción o en un problema data-side específico de London.

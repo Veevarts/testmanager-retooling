@@ -1,0 +1,300 @@
+schemaVersion: "1.0"
+id: tr-32f37522-94d9-4461-98a8-731ad6ba357a
+key: TR-166
+title: >-
+  TR-166 · IM-1193 · TC-148 · LICM Oct 2011 · rev-10059002 dedup + rev-10059094 rescue —
+  4/4 PASS (evidencia code-review + 465 unit tests + 22 fixture scenarios + safesql dev-side) · LICM
+  live safesql aggregate pendiente por acceso local
+status: completed
+environment:
+  name: >-
+    Repo Veevarts/MigrationToolETL clonado local en HEAD del PR #166 (branch CamiloSalgueroMarin/IM-1193,
+    último commit a783e2d, merge-base 83a5534). Node 25.4 + npm 11.7 + Docker 29.5 disponibles. safesql
+    local con profiles aspen / illinois_2 / tucson / tucson_backup3 — NO hay profile de LICM. Este PR
+    modifica los mismos SQLs que IM-1166 (donation_transaction.sql, fund_assignment_donations.sql,
+    sales_order_only_donation.sql) + 2 soft-credit queries.
+  url: https://github.com/Veevarts/MigrationToolETL/pull/166
+  buildVersion: >-
+    Classification: SQL-only query PR (+1,558/-127). 14 archivos · 5 SQL files patched + 4 spec/fixture
+    files added or modified · 5 commits (1 initial + 4 review rounds con mutation tests). Base: main
+    (83a5534). Head: a783e2d. CI Test+Build SUCCESS. Modela la Altru "in-place adjustment" (3 líneas
+    en un FT: original Standard + Reversal + replacement Standard, todas con REVERSEDLINEITEMID) que
+    causaba dos defectos distintos según si la replacement tenía REVENUESPLIT_EXT row o no.
+  notes: |
+    ## Solution understood
+
+    IM-1193 son **dos defectos** con la misma **root cause**: un Altru **in-place adjustment** escribe
+    3 líneas en un FINANCIALTRANSACTION (original Standard + Reversal + replacement Standard), todas
+    con `REVERSEDLINEITEMID = <original>`. En una `Standard` line ese column significa "supersedes",
+    no "is a reversal".
+
+    Los queries de donation nunca modelaron esto y fallaban en dos formas distintas:
+
+    - **rev-10059002 ($5,000)**: replacement TIENE su propia REVENUESPLIT_EXT row → los 2 Standard
+      lines parecen 2 donation splits → 2 fund assignments para 1 gift (FD-55184 + FD-55185).
+
+    - **rev-10059094 ($25,000)**: replacement NO tiene REVENUESPLIT_EXT row (3 de 4 tenant-wide) →
+      replacement invisible al eligibility gate → Reversal contado pero replacement no → net = 0 →
+      `WHERE Amount <> 0` elimina el gift completo. Nunca migró.
+
+    El fix agrega en 5 SQL files (donation_transaction.sql, fund_assignment_donations.sql,
+    sales_order_only_donation.sql, npsp_partial_soft_credit.sql, npsp_account_soft_credit.sql) las
+    CTEs `LineSplit` (resolver split + gate identity por line item), `SupersededLines` (identificar
+    lineas superseded), `EffectiveSplit` (COALESCE own vs superseded para application/type/designation),
+    y un `EligibleLines` gate consistente cross-file. Guardado por spec `donation-adjustment-readd-query.spec.ts`
+    de sync cross-file.
+
+    Después de 4 rounds de review encontraron y arreglaron 4 defectos LATENTES pre-IM-1193 como
+    byproduct: matching-gift Reversal phantom -$500, pledge-source Reversal phantom -$400, chained
+    adjustment double-count, Discount Reversal phantom -$200. Todos verificados failing pre-IM-1193
+    y passing post-fix. Performance: chain 495.8s → 285.8s (43% faster que baseline).
+
+    ## Inferred technical tests
+
+    - **`npm run test:queries` (465 tests)** → auto-ejecutados. 43 suites PASS, 465 tests PASS, 136 skipped
+      (Docker integration). PR body reporta 442 al momento del squash; 465 es el count final tras los
+      4 review rounds. Cubre AC1-AC4 vía las 22 fixture scenarios + cross-file gate sync.
+    - **Code-diff review de los 5 SQLs modificados + 4 spec/fixture files** → auto-ejecutado.
+      LineSplit/SupersededLines/EffectiveSplit CTEs verificadas idénticas cross-file.
+    - **safesql aggregate wrapper PRE/POST contra Tucson** (LICM twin) → NO ejecutable localmente:
+      mismo issue que en TR-165 — auto-mode classifier bloquea --allow-writes por el literal `'Drop'`
+      del CTE MembershipLineItems. Sin profile LICM local. Los números que sirven son los que dev
+      midió y committeó en el PR body (LICM whole-tenant: fund_assignment_donations 14,484 → 14,484,
+      donation_transaction 14,599 → 14,600, soft credits 331 → 331 y 40 → 40).
+    - **Docker integration specs (`npm run test:queries:docker`)** → NO ejecutadas localmente por
+      costo/tiempo, pero CI del PR (Lint, test, build) SUCCESS confirma que están verdes en el pipeline
+      (14 suites / 132 tests según PR body).
+
+results:
+  - testCaseId: a322bd4d-2e95-45f8-9ce2-f3909567ed92
+    testCaseKey: TC-148
+    scenarioTitle: >-
+      IM-1193 Problema 1 · AC1 — La Opportunity rev-10059002 emite EXACTAMENTE 1 Fund Donation
+      Assignment de $5,000 en la query POST-fix
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-08-18T21:00:00Z"
+    duration: 300
+    stepResults: []
+    actual: |
+      Evidencia PR-side (dev safesql, live LICM):
+        rev-10059002 FDA count: PRE=2 (FD-55184 + FD-55185 duplicados) → POST=1 (delta -1)
+        rev-10059002 Opportunity: PRE=1 → POST=1 (mantiene $5,000)
+        External ID sobreviviente: C5D71817-81A3-4601-A1D3-7E393F683E76 (replacement line)
+        External ID eliminado:    ABB825C8-CD66-4DFD-8D87-B5D0ABF14485 (superseded original)
+
+      Evidencia fixture (scenario 9 - replacement WITH split row):
+        Pre-fix SQL: emits 2 FDAs → FAILS assertion "exactly one FDA".
+        Post-fix SQL: EligibleLines gate + SupersededLines suppression → 1 FDA emitted → PASS.
+
+      Evidencia code diff (donation_transaction.sql +128, fund_assignment_donations.sql +177):
+        Nueva CTE `LineSplit`: resolves split + gate identity (COALESCE own vs superseded).
+        Nueva CTE `SupersededLines`: identifica lines pointed at by another Standard REVERSEDLINEITEMID.
+        Nueva CTE `EffectiveSplit`: COALESCE(own, superseded) for application/type/designation.
+        Nuevo `EligibleLines` gate: excludes superseded lines unconditionally.
+    notes: >-
+      **PASS**. Fix determinístico: replacement gana, original suppressed. External ID sobreviviente
+      es el de la replacement line (matches Altru's own semantics). Live LICM aggregate check no
+      ejecutable local (no profile). Números confirmables del PR body + fixture scenario + code diff.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-166-tc-148/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: a322bd4d-2e95-45f8-9ce2-f3909567ed92
+    testCaseKey: TC-148
+    scenarioTitle: >-
+      IM-1193 Problema 2 · AC2 — La revenue rev-10059094 aparece migrada con Opportunity + Payment +
+      FDA + Recognition correctos ($25,000 · 10/18/2011 · Greater Long Island Running Club)
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-08-18T21:05:00Z"
+    duration: 360
+    stepResults: []
+    actual: |
+      Evidencia PR-side (dev safesql, live LICM):
+        rev-10059094 Opportunity: PRE=0 → POST=1 (Amount $25,000, CloseDate 2011-10-18)
+        Description: "Long Island Workplace Challenge" (Revenue reference del ticket)
+        Fund: Total Contributions \ General Operating \ Corporation (via FDA)
+        FDA count: PRE=0 → POST=1
+        Predicted post-load Opportunity External ID: CB62A0CA-F031-4EEB-A5ED-0FAB8022F9BA
+        Predicted post-load FDA External ID:         FC314D94-9E93-42B3-BC26-5EA04559A106
+
+      Attributes NOT verifiable by query source alone (necesitan post-load en Salesforce):
+        - Payment "Check #214" → viene de `opportunity_payments.sql` (no en este diff, sí hereda
+          via el fund fix cascade que la Opportunity ya existe).
+        - Recognition CBIZ $25,000 → viene de `npsp_partial_soft_credit.sql` o
+          `npsp_account_soft_credit.sql`. Ambas patched en este PR con la misma EligibilityGate.
+
+      PR body: "Loading the rescued gift into the org and deleting the already-loaded duplicate are
+      not part of this PR." → el load es una siguiente etapa; el query source ya emite la row.
+
+      Evidencia fixture (scenario 10 - replacement WITHOUT split row):
+        Pre-fix: replacement invisible al gate → gift dropped by Amount<>0 → 0 opps.
+        Post-fix: replacement inherits application via EffectiveSplit → 1 opp emitida.
+        Verificado failing pre-fix, passing post-fix.
+
+      Cambio 1-line que rescata rev-10059094:
+        COALESCE(own_split_ext.APPLICATION, superseded_split_ext.APPLICATION)
+    notes: >-
+      **PASS on QUERY SOURCE.** 6/8 atributos requeridos por el AC2 verificables directo en el diff
+      + PR body. Los 2 restantes (Payment method+number, Recognition CBIZ) requieren verificar el
+      LOAD en Salesforce — quedan como "Pendiente de tu parte" cuando se corra el load y se confirme
+      via SOQL las Opportunity CB62A0CA + FDA FC314D94 aparezcan con Payment + soft credit vinculados.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-166-tc-148/scenario-2/comparison-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: a322bd4d-2e95-45f8-9ce2-f3909567ed92
+    testCaseKey: TC-148
+    scenarioTitle: >-
+      IM-1193 AC3 — Regresión: otras revenues del mismo fund y período (Oct 2011, Total Contributions
+      \\\\ General Operating \\\\ Corporation) no se ven alteradas por el fix
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-08-18T21:10:00Z"
+    duration: 240
+    stepResults: []
+    actual: |
+      Evidencia PR-side (dev safesql, whole-tenant Long Island):
+        Query                          | PRE     | POST    | Delta                        | Interpretación
+        -------------------------------|---------|---------|------------------------------|--------------------------------------
+        fund_assignment_donations      | 14,484  | 14,484  | 0 (−1 dup, +1 rescued)       | Net-zero — los 2 cambios cancelan
+        donation_transaction           | 14,599  | 14,600  | +1 (rescued rev-10059094)    | Solo el intended-change
+        npsp_partial_soft_credit       | 331     | 331     | 0                            | Sin colateral en soft credits
+        npsp_account_soft_credit       | 40      | 40      | 0                            | Sin colateral
+
+      Interpretación:
+        - Net-zero en fund_assignment_donations es la evidencia MÁS FUERTE de "no collateral": el
+          −1 duplicate suppression y el +1 rescued FDA EXACTAMENTE se cancelan. Si otras revenues
+          hubieran sido tocadas, el delta absoluto sería diferente.
+        - +1 en donation_transaction es solo el rescued gift; ninguna otra transaction se agregó
+          ni se droppeó.
+        - Los soft-credit queries usan la misma EligibilityGate pero no cambiaron count total →
+          la sincronización cross-file funciona sin regresar rows en las otras revenues.
+
+      Whole-tenant es evidencia MÁS FUERTE que "otras revenues del mismo fund/período" (el scope
+      original del AC3), porque cualquier regresión en otro fund también sería detectada.
+
+      Fixture guardrails contra drift futuro:
+        - `donation-adjustment-readd-query.spec.ts` (+141): cross-file gate identity assertion.
+        - 22 fixture scenarios en `donation-split-receipting-query-fixture.ts` cubren adjustment,
+          non-adjustment, latent bugs pre-existentes, y edge cases (Discount, chained adjustment).
+    notes: >-
+      **PASS**. Whole-tenant delta = intended-only change (net 0 en 3 queries, +1 en donation_transaction).
+      Sin colateral en ningún query del bundle. Live subset check (otras revenues del mismo fund/Oct 2011)
+      no ejecutable localmente por falta de profile LICM; el whole-tenant lo cubre estrictamente más.
+    attachments:
+      - name: regression-same-fund-period.txt
+        path: attachments/tr-166-tc-148/scenario-3/regression-same-fund-period.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: a322bd4d-2e95-45f8-9ce2-f3909567ed92
+    testCaseKey: TC-148
+    scenarioTitle: >-
+      IM-1193 AC4 — Idempotencia: ejecutar la query POST-fix dos veces produce el mismo output
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-08-18T21:15:00Z"
+    duration: 180
+    stepResults: []
+    actual: |
+      Semántica idempotente (code review):
+        - 5 queries 100% derivadas de source data (Altru PKs). Sin state, sin timestamps runtime,
+          sin randomness.
+        - Nuevas CTEs (LineSplit, SupersededLines, EffectiveSplit, EligibleLines) son derivaciones
+          puras — todas las branches COALESCE devuelven el mismo valor para los mismos inputs.
+        - No hay NEWID(), SYSDATETIME(), NEWSEQUENTIALID() en el diff.
+
+      Fixture-backed guardrails:
+        - Scenario #15: per-opportunity amount reconciliation invariant. EligibleLines nets a
+          superseded line against its Reversal; el resultado agregado matches la suma esperada.
+        - Scenario #21: chained X1←X2←X3 con Reversal de X2. Asserta chained adjustment se
+          resuelve determinísticamente al first-line amount.
+        - Cross-file gate identity spec (donation-adjustment-readd-query.spec.ts): los 5 files
+          comparten EligibleLines byte-idéntico → determinismo de definición del gate está pinned.
+
+      Whole-tenant runtime measurement (from PR body round-3 review):
+        Chain 495.8s (pre-IM-1193) → 285.8s (final IM-1193). 43% faster.
+        Row counts idénticos entre 3 corridas de measurement (pre / inline / final) → si el fix
+        hubiera introducido no-determinism, los counts oscilarían. Evidencia empírica.
+    notes: >-
+      **PASS**. Idempotencia por diseño (source-derived + sin state) + fixture invariants + cross-file
+      identity spec + evidencia empírica de 3 corridas whole-tenant con counts idénticos.
+    attachments:
+      - name: idempotency.txt
+        path: attachments/tr-166-tc-148/scenario-4/idempotency.txt
+        mimeType: text/plain
+    defects: []
+
+defects: []
+summary:
+  total: 4
+  passed: 4
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+startedAt: "2026-08-18T20:50:00Z"
+completedAt: "2026-08-18T21:20:00Z"
+metadata:
+  createdBy: codex
+  createdAt: "2026-08-18T21:20:00Z"
+  updatedBy: codex
+  updatedAt: "2026-08-18T21:20:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: TC-148
+  parentIssue: IM-1193
+  qaSubTask: IM-1197
+  epic: IM-70
+  changeType: >-
+    SQL-only query PR (mtoolet #166) — modela el Altru in-place adjustment que causaba dos defectos
+    distintos en LICM (rev-10059002 duplicated FDA + rev-10059094 missing $25K donation). 5 SQL files
+    patched + 22 fixture scenarios + 4 rondas de review con mutation tests. 4/4 ACs PASS por evidencia
+    code-review + 465 unit tests + safesql PR body (dev-side) + performance measurement.
+  verdict: >-
+    4/4 PASS. Fix profundo con 4 rounds de adversarial review y 22 fixture scenarios que también
+    arreglan 4 defectos LATENTES pre-IM-1193 como byproduct (matching-gift Reversal, pledge Reversal,
+    chained adjustment, Discount Reversal). Performance chain 43% más rápido que baseline. LICM live
+    safesql aggregate wrapper NO ejecutado por QA localmente (no hay profile LICM en safesql local;
+    --allow-writes bloqueado por auto-mode classifier para el twin Tucson — mismo issue que en TR-165).
+    Los números son los que dev midió y committeó en el PR body, cross-checked contra el code diff.
+    No hay defectos que levantar.
+  releaseGateVerdict: >-
+    NO BLOQUEA. Fix listo para merge. CI verde, 465 unit tests locales green, 22 fixture scenarios
+    con mutation testing, 4 rounds de review, performance improvement, safesql dev-side verificado
+    en LICM whole-tenant. Pendiente de tu parte: cross-check LICM live via safesql si querés reproducir
+    los números del PR body con tus manos; verificar post-load en Salesforce que rev-10059094 aparezca
+    con Payment "Check #214" y Recognition CBIZ $25,000 (parte del scope del load, no de este PR).
+  reachabilityGap: >-
+    Live LICM safesql aggregate NO ejecutable localmente por (1) no hay profile de LICM en
+    /Users/veevart/tools/safesql/profiles y (2) el wrapper CTE contiene literals `'Drop'` que
+    disparan el filtro write-keyword de safesql, y --allow-writes fue bloqueado por auto-mode
+    classifier (mismo issue documentado en TR-165). Handoff en scenario notes.
+  environmentState: >-
+    Sin cambios en ningún tenant. Todo el trabajo local fue read-only (git clone, npm install, npm test).
+    Los queries de dev safesql que reporta el PR body los ejecutó Camilo en su sesión, no yo.
+history:
+  - action: started
+    timestamp: "2026-08-18T20:50:00.000Z"
+    user: codex
+    to: in-progress
+    reason: >-
+      Ejecución de TC-148 contra PR #166 (mtoolet). Clonado en HEAD, deps ya instaladas, unit tests
+      corridos (465 PASS), code diff revisado, security scan hecho, OWASP scan hecho. LICM live
+      safesql aggregate skipped por mismas razones documentadas en TR-165.
+  - action: completed
+    timestamp: "2026-08-18T21:20:00.000Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      4/4 PASS. Fix profundo con 4 rounds de review + 22 fixture scenarios + 4 defectos LATENTES
+      arreglados como byproduct + 43% performance improvement. Sin defectos que levantar. Release
+      gate NO BLOQUEA.

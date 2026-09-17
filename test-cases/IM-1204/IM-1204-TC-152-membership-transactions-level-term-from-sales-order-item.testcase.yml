@@ -1,0 +1,234 @@
+schemaVersion: "1.0"
+
+id: "12bb6293-b962-428f-b5e9-24fe278f91b9"
+key: "TC-152"
+title: "membership_transactions.sql resolves the level/term pair from SALESORDERITEMMEMBERSHIP first, so Membership Opportunities emit the level, program, price and program key that were actually sold — even when Altru rewrote MEMBERSHIPTRANSACTION via Go to Membership (IM-1204)"
+description: |
+  Test case para IM-1204 (Historia, priority High, "In QA Review") — epic IM-70 Altru Queries — QA Sub-task IM-1209.
+  Cliente reportante: Long Island Children's Museum. PR bajo prueba: Veevarts/MigrationToolETL #171 (draft).
+
+  Contexto: cuando un usuario entra por "Go to Membership" desde una transacción y cambia el nivel,
+  Altru reescribe MEMBERSHIPTRANSACTION.MEMBERSHIPLEVELID y MEMBERSHIPTRANSACTION.MEMBERSHIPLEVELTERMID
+  en el mismo registro. SALESORDERITEMMEMBERSHIP conserva el par (nivel, término) que la venta realmente
+  llevó, y SALESORDERITEM.DESCRIPTION — que Altru escribe una vez al momento de la venta y nunca reescribe —
+  lo sigue nombrando textualmente. membership_transactions.sql leía el par directamente de la transacción,
+  así que exportaba el valor ya modificado. El fallo es silencioso: el par nivel/término de la transacción
+  normalmente queda internamente consistente, así que el lookup de Membership Program sí resuelve — solo
+  que al programa equivocado. Por eso no se parece a IM-1106 (donde el par directamente no resuelve).
+
+  El fix (del PR #171) — en la primera rama UNION ALL de membership_transactions.sql, el par se resuelve
+  desde la línea de orden de venta primero y solo cae a la transacción cuando no hay línea:
+
+    LEFT JOIN MEMBERSHIPLEVEL     ml  ON COALESCE(soim.MEMBERSHIPLEVELID,     mt.MEMBERSHIPLEVELID)     = ml.ID
+    LEFT JOIN MEMBERSHIPLEVELTERM mlt ON COALESCE(soim.MEMBERSHIPLEVELTERMID, mt.MEMBERSHIPLEVELTERMID) = mlt.ID
+
+  Columnas corregidas: Name, Program_Name__c, vnfp__Membership_Price__c, vnfp__Membership_Program__c.
+
+  Impacto medido por el dev safesql (2026-08-20) — no es parejo entre tenants:
+
+    | Tenant      | Transacciones con línea de venta | Divergentes | Tasa   | Llaves / nombres / precios |
+    | Long Island | 45,444                           | 189         | 0.42%  | 183 / 182 / 96             |
+    | Tucson      | 19,617                           | 627         | 3.20%  | 627 / 627 / 16             |
+    | High Desert | 25,068                           | 21          | 0.08%  | 20 / 21 / 20               |
+    | Illinois    | 7,098                            | 1           | 0.01%  | 1 / 1 / —                  |
+
+  Tucson es el más afectado en términos absolutos y relativos, NO Long Island. Everson, Aspen, Kidstream
+  y MOAD estaban caídos el día de la medición y quedan pendientes de verificar.
+
+  Ejemplos de rev del ticket que se reproducen exactamente (Long Island):
+    - rev-11546037 (2025) — Family Memberships - Imagination Plus (1 year): Renew, $300 pagados = precio
+      del término Imagination Plus. PRE se exportaba como Imagination ($200). ← caso base 2025.
+    - rev-11203390 — ... Basic Family (1 year): Rejoin, $160 = término Basic Family. PRE se exportaba
+      como Basic Dual ($85). ← el síntoma "Basic Dual en vez de Basic Family".
+    - rev-11395298 (2024): vendió Exploration ($300), PRE leía Wonder ($100).
+    - rev-11070450 (2022): vendió Premium Extended Family ($260), PRE leía Premium Family ($200).
+    - rev-10833451 (2019): vendió Premium Extended Family ($240), PRE leía Basic Family ($160).
+    - rev-10841306 (2019): vendió Premium Family ($185), PRE leía Basic Family ($160).
+
+  Consecuencia en Salesforce: el campo "Recent Membership Transaction" de Membership Program salía del
+  programa equivocado porque el rollup se hacía sobre la Opportunity migrada con el nivel modificado. Al
+  corregir la query, el rollup queda correcto sin tocar nada en la org — no requiere fix Salesforce paralelo.
+
+  Riesgos abiertos (heredados del PR body y de las brechas de validación):
+    - No se cargó ningún subconjunto en un sandbox de Salesforce; todo está validado contra los datos de
+      origen (Altru SQL) y contra la query ejecutada, no contra una org. Confirmación end-to-end en la
+      Opportunity migrada + rollup del Membership Program queda como sandbox mock post-fix.
+    - Everson, Aspen, Kidstream, MOAD estaban caídos: sus tasas de divergencia y las invariantes de
+      seguridad (grano 1:1, término dentro de su propio nivel, 0 llaves colgadas) NO fueron verificadas.
+    - Hallazgo adyacente FUERA de scope (dev pide ticket aparte): MEMBERSHIPTRANSACTION.ACTION se
+      reescribe en la MISMA edición de "Go to Membership" que reescribe el nivel, y sigue alimentando
+      Membership_Upgraded_Downgraded__c y npe01__Membership_Origin__c. En las filas divergentes:
+      description dice "Renew" y ACTION no en ~10.6% (base 0.27%); ACTION = 'Upgrade' en ~12.7%
+      (base 5.4%); 'Downgrade' en ~9.5% (base 1.1%). Después de este fix una Opportunity afectada
+      reporta el nivel como se vendió pero el origen y el flag upgrade/downgrade como quedaron
+      después de la edición. Documentado en docs/altru-model-context.md. NO se cubre en este TC.
+    - IM-1106 sigue vigente: la llave del Membership Program sigue anclada en
+      MEMBERSHIPLEVELTERM.LEVELID (el level dueño del término), y este fix NO la cambia — solo
+      cambia el término/nivel que alimenta esa llave desde la línea de orden de venta primero.
+      Debe medirse 0 llaves colgadas PRE y 0 POST en Long Island.
+    - PR está en draft, base branch main. No merged. No deploy.
+    - safesql profile de longisland no está disponible localmente; los profiles alcanzables son
+      aspen, illinois_2, tucson (y otros según ~/tools/safesql/profiles). La validación cuantitativa
+      en Long Island depende del re-run del dev; en Tucson (627/19,617 = 3.20%) sí se puede validar
+      localmente y es la señal más grande.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Repo MigrationToolETL clonado en HEAD del PR #171 (branch autor: Camilo Salguero Marin) + acceso al commit base (main) para contraste PRE-fix."
+  - "safesql profile alcanzable — al menos uno de aspen / illinois_2 / tucson en /Users/veevart/tools/safesql/profiles. Tucson es el candidato preferido para la validación cuantitativa (627 divergentes / 3.20%, la señal más grande medible localmente). longisland NO está disponible localmente; su validación depende del re-run del dev en el mismo PR body."
+  - "Docker/colima levantado para el suite integration `npm run test:queries:docker` (12/12 tests dockerizados en membership_transactions + 15/15 POS suite compartida). Si docker no está, se marca DEFERRED y se sustituye con revert-proof a nivel spec estático (query-regression, 556 tests)."
+  - "Repo testmanager-retooling clonado para escribir el TR y las evidencias bajo attachments/tr-<NN>-tc-152/."
+  - "Los 6 rev de ejemplo del ticket accesibles vía safesql en el profile correspondiente (rev-11546037, rev-11203390, rev-11395298, rev-11070450, rev-10833451, rev-10841306) — todos en Long Island; si no hay profile longisland, se verifican los rev equivalentes que Camilo reporte en Tucson/High Desert."
+
+format: gherkin
+scenarios:
+  - title: "AC1 · membership_transactions.sql (rama order-backed del UNION ALL) resuelve el par nivel/término desde SALESORDERITEMMEMBERSHIP primero — los 4 campos derivados corrigen exactamente en 189 filas de 45,444 en Long Island (183 keys, 182 nombres, 96 precios; 0.42%)"
+    tags:
+      - ac-1
+      - regression-evidence
+      - longisland
+      - membership-transactions
+      - order-backed-branch
+    given:
+      - "el query membership_transactions.sql del PR #171 y el commit base (PRE-fix, main) disponibles"
+      - "un profile safesql alcanzable — idealmente longisland (dev-run) o tucson/high-desert para la señal cross-tenant"
+      - "las 4 columnas del contrato: Name, Program_Name__c, vnfp__Membership_Price__c, vnfp__Membership_Program__c"
+    when:
+      - "se ejecuta membership_transactions.sql PRE-fix contra el profile"
+      - "se ejecuta POST-fix contra el mismo profile"
+      - "se cuentan las filas con al menos una diferencia en cualquiera de las 4 columnas (la unión de las divergencias)"
+      - "se desglosa cuántas divergen específicamente en la llave del programa, en el nombre del nivel y en el precio del término"
+    then:
+      - "en Long Island: 45,444 filas totales con línea de orden de venta, 189 divergentes en la unión (0.42%)"
+      - "de las 189: 183 corrigen vnfp__Membership_Program__c (llave anclada al term del level dueño real)"
+      - "de las 189: 182 corrigen Name / Program_Name__c (nombre del nivel real vendido, ej. Imagination Plus vs Imagination)"
+      - "de las 189: 96 corrigen vnfp__Membership_Price__c (precio del término real, ej. $300 vs $200)"
+      - "las 45,255 filas NO divergentes producen exactamente el mismo output PRE = POST (no-op sobre pares consistentes)"
+      - "el fix se aplica SOLO en la rama order-backed del UNION ALL; la segunda rama (transaction-only sin línea de venta) permanece intacta (ver AC3)"
+
+  - title: "AC2 · los 6 rev del ticket se reproducen exactamente PRE-fix y quedan corregidos POST-fix — evidencia por año 2019/2022/2024/2025 en Long Island"
+    tags:
+      - ac-2
+      - regression-evidence
+      - longisland
+      - rev-examples
+      - go-to-membership
+    given:
+      - "los 6 rev nombrados en el ticket / draft PR body: rev-11546037 (2025), rev-11203390 (Basic Family), rev-11395298 (2024), rev-11070450 (2022), rev-10833451 (2019), rev-10841306 (2019)"
+      - "para cada rev, la línea SALESORDERITEMMEMBERSHIP correspondiente y la MEMBERSHIPTRANSACTION correspondiente disponibles en el source"
+    when:
+      - "se ejecuta membership_transactions.sql PRE-fix y POST-fix para cada rev"
+      - "se compara Name / Program_Name__c / vnfp__Membership_Price__c contra el nombre y precio que Altru escribió en SALESORDERITEM.DESCRIPTION (la fuente que nunca se reescribe) para cada rev"
+    then:
+      - "rev-11546037 PRE = Imagination ($200); POST = Imagination Plus ($300) — coincide con description 'Family Memberships - Imagination Plus (1 year): Renew'"
+      - "rev-11203390 PRE = Basic Dual ($85); POST = Basic Family ($160) — coincide con description '... Basic Family (1 year): Rejoin'"
+      - "rev-11395298 PRE = Wonder ($100); POST = Exploration ($300)"
+      - "rev-11070450 PRE = Premium Family ($200); POST = Premium Extended Family ($260)"
+      - "rev-10833451 PRE = Basic Family ($160); POST = Premium Extended Family ($240)"
+      - "rev-10841306 PRE = Basic Family ($160); POST = Premium Family ($185)"
+      - "en los 6 rev, la llave vnfp__Membership_Program__c POST resuelve contra el Membership Program del nivel realmente vendido (no queda N/A ni queda apuntando al programa del nivel modificado)"
+
+  - title: "AC3 · fallback intacto — las 80,821 membership transactions sin línea de orden de venta permanecen leyendo el par nivel/término desde MEMBERSHIPTRANSACTION (misma rama de transaction-only del UNION ALL), 0 filas de esa población cambian de comportamiento"
+    tags:
+      - ac-3
+      - fallback
+      - transaction-only-branch
+      - no-op
+    given:
+      - "el conteo dev-reportado: 80,821 de 126,265 membership transactions totales NO resuelven ninguna orden de venta (soim.SALESORDERITEMID IS NULL)"
+      - "esa población alimenta la segunda rama del UNION ALL (transaction-only) que este PR NO toca"
+    when:
+      - "se ejecuta membership_transactions.sql PRE-fix y POST-fix"
+      - "se filtra solo la población que cae en la rama transaction-only (sin línea de orden)"
+    then:
+      - "el conteo de la rama transaction-only PRE = 80,821 = POST"
+      - "los 4 campos derivados (Name, Program_Name__c, vnfp__Membership_Price__c, vnfp__Membership_Program__c) son idénticos PRE = POST en toda esa población"
+      - "para las transacciones sin línea, el COALESCE cae a MEMBERSHIPTRANSACTION (mt.MEMBERSHIPLEVELID, mt.MEMBERSHIPLEVELTERMID) — el mismo comportamiento que había antes"
+      - "el fix es aditivo, no regresivo: solo cambia el subconjunto order-backed cuya línea de venta discrepa con la transacción"
+
+  - title: "AC4 · impacto cross-tenant medido — Tucson es el más afectado (627 / 19,617 = 3.20%, no Long Island), y High Desert / Illinois también reciben corrección; Everson / Aspen / Kidstream / MOAD quedan pendientes"
+    tags:
+      - ac-4
+      - cross-tenant
+      - tucson
+      - high-desert
+      - illinois
+      - re-run-planning
+      - missing-doc
+    given:
+      - "profiles safesql alcanzables — mínimo tucson (627 divergentes, 3.20%, la señal más grande medible)"
+      - "los conteos dev-reportados por tenant: Long Island 45,444 → 189 (0.42%) / Tucson 19,617 → 627 (3.20%) / High Desert 25,068 → 21 (0.08%) / Illinois 7,098 → 1 (0.01%)"
+    when:
+      - "se ejecuta membership_transactions.sql PRE-fix y POST-fix contra cada profile alcanzable"
+      - "para cada tenant se cuenta la unión de divergencias (any of the 4 columns) y se desglosa por llave / nombre / precio"
+    then:
+      - "Tucson: 19,617 filas con línea de orden, 627 divergen en la unión (3.20%) — 627 llaves, 627 nombres, 16 precios cambian POST-fix"
+      - "High Desert: 25,068 filas, 21 divergentes (0.08%) — 20 llaves, 21 nombres, 20 precios cambian POST-fix"
+      - "Illinois: 7,098 filas, 1 divergente (0.01%) — 1 llave, 1 nombre cambian POST-fix (0 precios)"
+      - "el re-run de producción y la comunicación al cliente debe planearse con los conteos por tenant, no con el número de Long Island"
+      - "Everson, Aspen, Kidstream, MOAD: NO medidos (DB fleet caído el día del safesql del dev); quedan como missing-doc/pending y el re-run debe cubrirlos antes de deploy"
+
+  - title: "AC5 · invariantes de seguridad y regresión — grano 1:1 preservado (SALESORDERITEMMEMBERSHIP = 45,444 = MT en Long Island), compuerta de inclusión intacta (ningún WHERE toca ml/mlt/prog), IM-1106 preservado (0 llaves colgadas PRE = 0 POST), tests dockerizados 12/12 + query-regression 556 verdes + revert-proof: revirtiendo la línea COALESCE el test específico de la deriva falla"
+    tags:
+      - ac-5
+      - safety-invariants
+      - im-1106-preserved
+      - revert-proof
+      - integration-docker
+      - query-regression
+      - lint
+      - build
+    given:
+      - "el HEAD del PR #171 checked out"
+      - "docker/colima levantado (o degradación documentada a revert-proof estático)"
+      - "el commit base (main) para el revert-proof"
+    when:
+      - "se corren los 12 tests dockerizados de membership_transactions + los 15 tests del POS suite que comparte el fixture"
+      - "se corre npm run lint:check, npm test -- --runInBand query-regression (556 tests) y npm run build"
+      - "se cuentan filas de SALESORDERITEMMEMBERSHIP por MEMBERSHIPTRANSACTION.ID contra el total de MT (grain check)"
+      - "se cuenta la salida total de membership_transactions.sql PRE vs POST (inclusion gate check)"
+      - "se cuentan llaves vnfp__Membership_Program__c que NO resuelven contra membership_program.sql (IM-1106 gate) PRE y POST"
+      - "se revierte solo la línea COALESCE (dejando el resto del PR) y se corren los tests"
+    then:
+      - "grano preservado: SALESORDERITEMMEMBERSHIP tiene exactamente 1 fila por MEMBERSHIPTRANSACTION (dev: 45,444 = 45,444 en Long Island); ningún fan-out del JOIN a soim"
+      - "compuerta de inclusión intacta: el conteo total de filas emitidas PRE = POST en cada tenant (ningún WHERE del query toca ml, mlt o prog; el COALESCE es idempotente cuando soim.* IS NULL)"
+      - "IM-1106 preservado: 0 llaves colgadas PRE = 0 llaves colgadas POST (la llave sigue anclada en MEMBERSHIPLEVELTERM.LEVELID / mlt.ID; el fix solo cambia el mlt de entrada, no el shape de la llave)"
+      - "12/12 tests dockerizados PASS, 15/15 POS suite PASS, 556 tests query-regression PASS, lint:check limpio, build OK"
+      - "revert-proof: revirtiendo solo la línea COALESCE, el test de la deriva Go-to-Membership FALLA — evidencia de que el test sí atrapa el bug (no es cosmético)"
+
+tags:
+  - im-1204
+  - im-70
+  - im-1209
+  - altru
+  - altru-queries
+  - migration
+  - migration-tool-etl
+  - pr-171
+  - membership-transactions
+  - membership-opportunities
+  - go-to-membership
+  - salesorderitemmembership
+  - membership-level
+  - membership-program-lookup
+  - im-1106-preserved
+  - longisland
+  - tucson
+  - high-desert
+  - illinois
+  - source-side
+  - safesql
+  - sql-only
+  - high
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-24T13:52:07Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-24T13:52:07Z"
+  version: 1

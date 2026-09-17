@@ -1,0 +1,28 @@
+AC7 Salesforce Org ID 18 validation — live matrix vs POST /api/admin/organizations (dev)
+Executed 2026-08-14 (env: development, SURVEY_TOOL_ENV unset → default development)
+
+Each case sent as POST to https://surveytool.dev.veevart.ai/api/admin/organizations behind
+the authenticated admin session (Google SSO cookie).
+
+| # | Case                     | Sent salesforceOrgId       | Sent subdomain   | Expected             | HTTP | Server error                                                    | Verdict |
+|---|--------------------------|----------------------------|------------------|----------------------|------|-----------------------------------------------------------------|---------|
+| 1 | XOR: both fields present | 00Dxxxxxxxxxxxxxxxx        | qa-tc145-both    | 400 (XOR reject)     | 400  | Provide either salesforceOrgId or subdomain, but not both       | PASS    |
+| 2 | Positive: 00D + 15 chars | 00D111111111111111         | -                | 201 created          | 201  | (created id=3, cleanup DELETE→204)                              | PASS    |
+| 3 | Negative: 17 chars       | 00D11111111111111          | -                | 400 (format reject)  | 400  | salesforceOrgId must be 18 characters and start with 00D        | PASS    |
+| 4 | Negative: 19 chars       | 00D1111111111111111        | -                | 400 (format reject)  | 400  | salesforceOrgId must be 18 characters and start with 00D        | PASS    |
+| 5 | Negative: wrong prefix   | AAA111111111111111         | -                | 400 (format reject)  | 400  | salesforceOrgId must be 18 characters and start with 00D        | PASS    |
+| 6 | Negative: both empty     | ""                         | ""               | 400 (XOR reject)     | 400  | Provide either salesforceOrgId or subdomain, but not both       | PASS    |
+| 7 | Negative: special chars  | 00D!!!!!!!!!!!!!!!         | -                | 400 (format reject)  | 400  | salesforceOrgId must be 18 characters and start with 00D        | PASS    |
+
+Regex source: SALESFORCE_ORG_ID_RE = /^00D[a-zA-Z0-9]{15}$/  (server/src/routes/organizations.ts:9)
+
+Notes:
+  · Case 6 "both empty" hits the XOR branch, not the format branch. Server treats empty
+    strings as "no identifier", so the XOR check fires with the "neither" case. This is
+    fine because the fallback UX still rejects the request.
+  · The regex correctly rejects Non-alphanumeric characters in the 15-char tail (case 7).
+  · The API also rejected case 2 duplicate on re-run (409 "Salesforce Org ID already
+    exists" until DELETE cleanup completed) — proves the uniqueness index is live.
+  · No junk left behind. Every 201 was followed by a 204 DELETE within the same call.
+
+Verdict: AC7 PASS (positive + all 5 negative cases confirmed) · AC6 dev XOR PASS.

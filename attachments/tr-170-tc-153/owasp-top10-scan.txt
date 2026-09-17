@@ -1,0 +1,62 @@
+TR-170 · TC-153 (IM-1205) · OWASP Top 10 (2021) applicability scan
+
+Change scope: pure SQL query fix — 4 SQL edits (2 CTE column additions + 2 COALESCE anchor
+changes) + 1 new LEFT JOIN + 1 new WindowDate column + WHERE gate switch from PostedDate to
+WindowDate. Plus test/fixture/docs scaffolding. No new endpoints, no auth changes, no
+dependencies, no infra, no storage schema changes. The query surface reads one additional
+source column (`FINANCIALTRANSACTION.CALCULATEDDATE`) via a new LEFT JOIN keyed on
+`FINANCIALTRANSACTIONLINEITEM.FINANCIALTRANSACTIONID` (existing NOT NULL column, PK on the
+join target). No injection, no auth, no logging surface expanded.
+
+### A01 · Broken Access Control — N/A
+No RBAC/ACL/permission/role code touched.
+
+### A02 · Cryptographic Failures — N/A
+No crypto, no secrets, no transport.
+
+### A03 · Injection — Applicable, PASS
+The SQL diff is 4 edits: 2 CTEs get a projected `FINANCIALTRANSACTIONID` column (static
+reference, no user input), 2 COALESCE anchors add `own_ft.CALCULATEDDATE` as position #2
+(static reference), 1 new LEFT JOIN on primary key. New WindowDate column also static. No
+new parameters. safesql runs the query read-only through parameterized mssql driver.
+Verdict: PASS.
+
+### A04 · Insecure Design — Applicable, PASS
+The redesign strengthens integrity: the pipeline now anchors the fund assignment's Posted
+Date on the transaction that OWNS the membership line, matching the accounting semantics
+Altru actually shows. The COALESCE 4-tier keeps InstallmentDate (recurring path) as
+position #1, so IM-904 is preserved by construction. Round-1 review found the emit-vs-gate
+overlap in the split-receipting branch and fixed it (separate WindowDate column) — the
+inclusion gate cannot silently shift under a windowed run.
+Verdict: PASS.
+
+### A05 · Security Misconfiguration — N/A
+No infrastructure or configuration changes.
+
+### A06 · Vulnerable & Outdated Components — N/A
+package.json untouched — no dependencies added, updated, or downgraded.
+
+### A07 · Identification & Auth Failures — N/A
+No auth surface. safesql credentials (Keychain-backed) unchanged.
+
+### A08 · Software & Data Integrity Failures — Applicable, PASS
+This PR is a data-integrity FIX, not a regression. Pre-fix state: for 34 line-items in
+Long Island (10 to a different month, 2 to a different year) the exported Fund Assignment
+carried the payment-processing date instead of the order-owned membership date. Plus 10
+positive LI rows dated on a Refund child. Post-fix: 33 of 34 rows match the Altru
+"Go to membership" date exactly; the 1 row that doesn't match has no underlying membership
+transaction (add-on/order-backed shape the membership date doesn't describe). Row grain
+preserved (97,014 = 97,014), 0 blank posted dates, IM-904 preserved (0 recurring cambian
+en ningún tenant).
+Verdict: PASS (this PR CLOSES an A08 gap, does not introduce one).
+
+### A09 · Security Logging & Monitoring Failures — N/A
+No logging surface. safesql's default output policy (redacts strings, keeps numerics) is
+not affected by this change.
+
+### A10 · Server-Side Request Forgery — N/A
+No outbound requests, no URLs, no user input to any external service.
+
+## Summary
+- 4 Applicable · 4 PASS · 0 FAIL · 6 N/A
+- No security defect raised. No blocker.

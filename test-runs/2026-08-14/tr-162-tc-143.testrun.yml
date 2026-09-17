@@ -1,0 +1,143 @@
+schemaVersion: "1.0"
+id: tr-660546bb-e1eb-4102-a80c-183b2ef233a0
+key: TR-162
+title: >-
+  TR-162 · IM-969 · TC-143 · AC5+AC6 cross-org audience isolation LIVE deep-dive — 1/1 PASS + IM-1185 preexistente
+  re-confirmado + bonus 409 overlap-guard
+status: completed
+environment:
+  name: >-
+    survey-tool dev (https://surveytool.dev.veevart.ai) admin autenticado via Google SSO.
+    Deep-dive incremental sobre TR-158 (que dejó AC5+AC6 marcado PASS-heredado-por-API sin
+    ejercicio live cross-org). Este TR ejercita en vivo los endpoints reales
+    /api/surveys/general/eligible + /api/admin/features/general-nps/respondent-state +
+    POST /impressions|/dismissals contra 3 orgs distintas (Auctifera in-audience,
+    VNFP out-of-audience, random other-org, no-org).
+  url: https://github.com/Veevarts/survey-tool/pull/58
+  buildVersion: >-
+    IM-969 en Rechazado por IM-1185 High (Is Ready for Dev). Este TR reejerce AC5+AC6 en
+    vivo cross-org para cerrar el gap de evidencia. La misma corrida re-confirma IM-1185
+    en vivo (POST /impressions → 400 "surveyId is not eligible for this feature context")
+    y encuentra evidencia bonus: 409 al intentar activar dos general surveys con audiencia
+    superpuesta.
+results:
+  - testCaseId: 9fcc8577-5fca-4e24-8fa7-d883d4472164
+    testCaseKey: TC-143
+    scenarioTitle: "IM-969 AC5 + AC6 — Targeting specific organizations delivers only to the selected ones, and the selected list stays exactly as saved after reloading or editing (LIVE cross-org deep-dive)"
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-08-14T17:55:00Z"
+    duration: 900
+    stepResults: []
+    actual: |
+      Setup: Survey #2 activada con audienceDetails="00DEm00000V5eRWMAZ" (Auctifera only),
+      maxImpressions=1, maxDismissals=1, triggerDetails="generalTrigger=afterLogin, loginDelaySeconds=30".
+      Antes fue necesario desactivar Survey #1 (audience=everyone) porque el server rechazó
+      con 409 "An active general survey already applies to this audience (survey 1)".
+      Esa 409 es evidencia bonus del guard de overlap.
+
+      Matriz cross-org contra `/api/surveys/general/eligible` (after-login endpoint):
+      - A. salesforceOrgId=00DEm00000V5eRWMAZ (Auctifera in audience) → 200, 1 survey (Survey #2)
+      - B. clientOrgId=flow-site-19432-dev-ed (VNFP subdomain, NOT in audience) → 200, 0 surveys
+      - C. salesforceOrgId=00D000000000999AAA (random other org, NOT registered) → 200, 0 surveys
+      - D. sin ninguna org key → 200, 0 surveys (general surveys requieren org)
+      - E. salesforceOrgId=00dem00000v5erwmaz (lowercase Auctifera) → 200, 0 surveys (observation, no defect)
+
+      Admin `/respondent-state` confirma la razón del rechazo:
+      - Auctifera qa-tr162-auct → survey_2 eligible=true, reason=null
+      - VNFP     qa-tr162-vnfp → survey_2 eligible=false, reason="audience"
+      - Other    qa-tr162-other → survey_2 eligible=false, reason="audience"
+
+      IM-1185 preexistente re-confirmado en vivo:
+      - POST /api/features/general-nps/impressions con {surveyId:2, respondentId:"qa-tr162-impress", salesforceOrgId:"00DEm00000V5eRWMAZ"} → 400 "surveyId is not eligible for this feature context"
+      - POST /api/features/general-nps/dismissals con mismo body → 400 mismo error
+      Los parámetros maxImpressions=1 + maxDismissals=1 se persisten correctamente pero
+      NUNCA se aplican en runtime para after-login general surveys porque la ruta
+      /impressions|/dismissals valida contra selectEligibleSurveysForFeature con
+      triggerMode="featureTrigger", y afterLogin surveys no matchean ese filtro.
+
+      Cleanup: Survey #2 revertida a inactive + limits=null; Survey #1 reactivada con
+      audience=everyone + afterLogin+7s. Estado final verificado idéntico al baseline.
+    notes: >-
+      **Audience isolation cross-org: PASS confirmado en vivo**. Auctifera SÍ recibe la
+      survey org-scoped; VNFP + other-org + no-org NO la reciben (0 surveys y reason
+      explícito="audience" del admin respondent-state). Cierra el gap de TR-158 que
+      había marcado AC5+AC6 PASS-heredado-por-API. **Config persistence: PASS**. **Runtime
+      enforcement de maxImpressions/maxDismissals: BLOQUEADO por IM-1185 preexistente
+      High (Is Ready for Dev)** — reproducido live. Sin cambios en el estado dev
+      post-corrida.
+    attachments:
+      - name: cross-org-isolation-live-walkthrough.txt
+        path: attachments/tr-162-tc-143/scenario-1/cross-org-isolation-live-walkthrough.txt
+        mimeType: text/plain
+      - name: 03-cross-org-eligibility-matrix.json
+        path: attachments/tr-162-tc-143/scenario-1/03-cross-org-eligibility-matrix.json
+        mimeType: application/json
+      - name: 01-baseline-surveys-list.png
+        path: attachments/tr-162-tc-143/scenario-1/01-baseline-surveys-list.png
+        mimeType: image/png
+      - name: 02-surveys-list-after-config.png
+        path: attachments/tr-162-tc-143/scenario-1/02-surveys-list-after-config.png
+        mimeType: image/png
+      - name: 04-survey-2-active-with-limits.png
+        path: attachments/tr-162-tc-143/scenario-1/04-survey-2-active-with-limits.png
+        mimeType: image/png
+      - name: 05-edit-form-audience-auctifera-only.png
+        path: attachments/tr-162-tc-143/scenario-1/05-edit-form-audience-auctifera-only.png
+        mimeType: image/png
+      - name: 06-final-surveys-state-restored.png
+        path: attachments/tr-162-tc-143/scenario-1/06-final-surveys-state-restored.png
+        mimeType: image/png
+    defects:
+      - jiraKey: "IM-1185"
+        url: "https://veevart.atlassian.net/browse/IM-1185"
+        severity: "High"
+        summary: "After-login General Survey: impressions and dismissals are rejected with 400, so maxImpressions and maxDismissals can never fire (preexistente, re-confirmado en TR-162)"
+
+defects:
+  - jiraKey: "IM-1185"
+    url: "https://veevart.atlassian.net/browse/IM-1185"
+    severity: "High"
+    summary: "After-login General Survey: impressions and dismissals are rejected with 400, so maxImpressions and maxDismissals can never fire — preexistente, ya en cola de dev (Is Ready for Dev). Re-confirmado LIVE en TR-162."
+
+summary:
+  total: 1
+  passed: 1
+  failed: 0
+  blocked: 0
+  notRun: 0
+  skipped: 0
+  passRate: 100
+
+startedAt: "2026-08-14T17:50:00Z"
+completedAt: "2026-08-14T18:00:00Z"
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-14T18:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-14T18:00:00Z"
+  version: 1
+  planKey: null
+  testCaseKey: "TC-143"
+  parentIssue: "IM-969"
+  qaSubTask: "IM-1181"
+  epic: "IM-970"
+  changeType: "deep-dive incremental — cierra el gap de AC5+AC6 (cross-org audience isolation) que TR-158 dejó como PASS-heredado-por-API. Reejerce en vivo cross-org contra 3 orgs (Auctifera in-audience, VNFP out-of-audience, random other-org, no-org)."
+  verdict: "1/1 PASS + 1 defecto preexistente re-confirmado (IM-1185 High). Audience isolation cross-org PASS live: Auctifera SÍ, VNFP+other+no-org NO. Config persistence PASS. Runtime enforcement BLOQUEADO por IM-1185. Bonus: 409 overlap-guard sano. Sin cambios en el estado dev post-corrida."
+  reachabilityGap: "Ninguno para AC5+AC6. Los 4 endpoints ejercidos son públicos + admin + POST widget."
+  releaseGateVerdict: "NO BLOQUEA MÁS DE LO QUE YA BLOQUEABA. IM-969 sigue Rechazado por IM-1185 preexistente. Este TR NO cambia el veredicto de release — cierra el gap de evidencia de audience isolation que hasta ahora era heredada por API. Cuando IM-1185 se resuelva, IM-969 debería volver a QA."
+  environmentState: "Estado post-corrida idéntico al baseline. Survey #1 active + everyone + afterLogin+7s. Survey #2 inactive + Auctifera + featureTrigger + limits=null. Survey #3 sin cambios. Orgs Auctifera + VNFP sin cambios."
+
+history:
+  - action: "started"
+    timestamp: "2026-08-14T17:50:00.000Z"
+    user: "codex"
+    to: "in-progress"
+    reason: "Deep-dive AC5+AC6 request del usuario: validar que la config org-scoped no aplica a otras orgs, con especial atención a los parámetros Max dismissals, Tries between shows, Max shows per day. Es incremental sobre TR-158."
+  - action: "completed"
+    timestamp: "2026-08-14T18:00:00.000Z"
+    user: "codex"
+    from: "in-progress"
+    to: "completed"
+    reason: "1/1 PASS. Audience isolation cross-org PASS en vivo: Auctifera in-audience recibe la survey; VNFP + other-org + no-org retornan lista vacía; admin respondent-state explicita reason='audience'. Config maxImpressions=1 + maxDismissals=1 persiste correctamente. Runtime enforcement bloqueado por IM-1185 preexistente High (re-confirmado live: POST /impressions y /dismissals retornan 400). Bonus: server rechaza dos general surveys con audiencia superpuesta activas (409). Estado dev revertido; sin defectos nuevos levantados."

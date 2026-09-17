@@ -1,0 +1,43 @@
+Regression plan · TR-165 · IM-1166 / TC-147
+
+## Technical regression items
+
+| # | Item                                                  | Type | Risk   | Check method                                                                                                     | Verdict |
+|---|-------------------------------------------------------|------|--------|------------------------------------------------------------------------------------------------------------------|---------|
+| 1 | donation_transaction.sql — POS lookup vs Opportunity  | Tech | High   | CTE-identity spec: 10 shared CTEs of the two files stay byte-identical after whitespace normalize (spec asserts) | PASS    |
+| 2 | Emission-gate symmetry (donation vs no-order)         | Tech | High   | Emission-gate spec: FROM-JOIN + trailing WHERE of both files compared line-by-line, exactly one allowed extra    | PASS    |
+| 3 | SQL type-precedence trap (IM-770) — uncast branch     | Tech | Critical | Cast-per-branch spec: every COALESCE branch of vnfp__POS_Purchase__c must be CAST/CONVERT to NVARCHAR              | PASS    |
+| 4 | Pledges cascade (sales_order_only_pledge.sql)         | Tech | Low    | Pre-existing key mint via sales_order_only_pledge.sql; PR does not touch it; unit specs unchanged                | PASS    |
+| 5 | Payments cascade (opportunity_payments.sql)           | Tech | Low    | opportunity_payments.sql carries no POS lookup; PR does not touch it (documented in PR body)                     | PASS    |
+| 6 | Refund fund-assignment asymmetry                       | Tech | Med    | query-chain.live.spec.ts: asserts 0 refund fund-assignment parents with unresolved sales order per tenant        | PASS    |
+| 7 | Auctifera__Status__c signals for synthetic purchase   | Tech | Med    | Derived from same signals as donation_transaction.sql StageName; verified by walkthrough in PR body               | PASS    |
+| 8 | Membership no-order key (IM-1160 twin)                | Tech | Low    | Membership variant is pre-existing (a8380f9 merged prior); PR does not touch membership queries                  | PASS    |
+| 9 | Registry wiring (extractor.registry.ts)               | Tech | Low    | New extractor + specification + pipeline registered; module tests pass                                            | PASS    |
+| 10| Charge without order (IM-1184 / IM-1192 related)      | Tech | Med    | Documented as known gap in PR body; IM-1184 has its own fix in PR #167 (IM-1192)                                 | PASS (documented as scope-exception) |
+
+## Security regression items
+
+| # | Item                                                  | Type  | Risk   | Check method                                                                                                     | Verdict |
+|---|-------------------------------------------------------|-------|--------|------------------------------------------------------------------------------------------------------------------|---------|
+| S1 | Secrets / credentials in diff                        | Sec   | High   | grep -iE "(password\|api[_-]?key\|secret\|token\|bearer\|\\.env\|-----BEGIN)" over the PR diff                       | PASS (only the testcontainer helper generates a random SA password scoped to Docker; not persisted)  |
+| S2 | SQL injection via string concatenation                | Sec   | High   | grep for concat of user input into SQL text in the modified files                                                | PASS (all bindings via typed @params; CONCAT/CAST are SQL server-side)                                |
+| S3 | PII leakage in error messages / logs                  | Sec   | Med    | Inspect new extractor + specification for exception handling that surfaces row values                            | PASS (no additional logging; extractor mirrors existing sales_order_only_membership2 pattern)         |
+| S4 | Vulnerable deps introduced                            | Sec   | Med    | `npm audit --json` on PR branch                                                                                  | PASS (no new dependencies introduced by PR #165)                                                      |
+| S5 | RBAC / access-control regression                      | Sec   | Low    | The mssql client role in the pipeline is unchanged (still Migration reader)                                       | PASS                                                                                                  |
+
+## OWASP Top 10 (2021) applicability scan
+
+| # | Category                                       | Applicable? | Check method                                                                     | Verdict |
+|---|------------------------------------------------|-------------|----------------------------------------------------------------------------------|---------|
+| A01 | Broken Access Control                        | N/A         | No auth changes in scope; SQL query fix on backend pipeline                     | N/A     |
+| A02 | Cryptographic Failures                       | N/A         | No key/crypto operations in scope                                                | N/A     |
+| A03 | Injection                                    | Applicable  | Typed @params via mssql lib; no string concat with user input; CONCAT is SQL side | PASS    |
+| A04 | Insecure Design                              | N/A         | No design change in security-relevant flow                                       | N/A     |
+| A05 | Security Misconfiguration                    | N/A         | No infra/config touched                                                          | N/A     |
+| A06 | Vulnerable and Outdated Components           | Applicable  | `npm audit --json` shows no new advisories from PR (no new deps)                 | PASS    |
+| A07 | Identification and Authentication Failures   | N/A         | No auth flow touched                                                             | N/A     |
+| A08 | Software and Data Integrity Failures         | Applicable  | CI signed on the PR commits; no CI-config bypass in scope; mutation tests deep    | PASS    |
+| A09 | Security Logging and Monitoring Failures     | N/A         | No logging change in scope                                                       | N/A     |
+| A10 | Server-Side Request Forgery                  | N/A         | No outbound HTTP added                                                           | N/A     |
+
+Summary: 3 Applicable · 3 PASS · 0 FAIL · 7 N/A. No High/Critical blockers.

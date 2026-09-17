@@ -1,0 +1,158 @@
+schemaVersion: "1.0"
+
+id: a322bd4d-2e95-45f8-9ce2-f3909567ed92
+key: "TC-148"
+title: "Long Island Children's Museum · Oct 2011 · TD Charitable Foundation duplicated FDA (rev-10059002) + Greater Long Island Running Club missing donation $25K (rev-10059094)"
+
+description: |
+  Cobertura QA para IM-1193 (Fund Assignments Duplicados rev-10059002 y Donation de $25K
+  Faltante rev-10059094 — Oct 2011), del epic IM-70 Altru Queries. QA Sub-task: IM-1197.
+  Cliente objetivo: Long Island Children's Museum (LICM). Fund:
+  Total Contributions \ General Operating \ Corporation. Período: Octubre 2011.
+
+  Dos problemas concretos, del mismo fund, del mismo mes:
+
+  **Problema 1 (rev-10059002)** — La Opportunity "TD Charitable Foundation $5000 Donation
+  10/21/2011" (SF Id 006Vw00000XN3YhIAL) tiene 2 Fund Donation Assignments SUCCEEDED con el
+  mismo monto ($5,000) pero diferentes Implementation External IDs (FD-55184 y FD-55185).
+  Ambos comparten el mismo Revenue ID de origen (rev-10059002) — evidencia de duplicado
+  generado por la migración. El fix debe dejar EXACTAMENTE 1 FDA de $5,000 por rev-10059002.
+
+  **Problema 2 (rev-10059094)** — Una donation de $25,000 del 10/18/2011 al mismo fund NO
+  fue migrada:
+    Constituent: Greater Long Island Running Club, Inc.
+    Revenue reference: "Long Island Workplace Challenge"
+    Payment method: Check #214
+    Post status: Posted (activity pending) — Post date: 10/31/2011
+    Recognition credits: CBIZ ($25,000.00)
+  El fix debe hacer que esta revenue aparezca en Salesforce con Opportunity + payment +
+  fund assignment + soft credit correspondientes.
+
+  Riesgos abiertos (ver open-risks):
+  · La descripción NO tiene ACs formales — inferidos del impacto documentado; cualquier
+    ambigüedad se cierra con Camilo al momento de ejecutar.
+  · No hay PR ligado en la descripción — hay que resolverlo en el executor (qa-test-executor).
+  · Validación cuantitativa depende del safesql profile de LICM (no existe hoy en local:
+    solo aspen / illinois_2 / tucson). Sin ese profile la ejecución queda parcialmente
+    manual (aggregate contra staging o exportación de CSV).
+  · Priority High + status "In QA Review" indican que dev claim que ya está listo.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-08-18T20:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-08-18T20:00:00Z"
+  version: 1
+  parentIssue: "IM-1193"
+  qaSubTask: "IM-1197"
+  epic: "IM-70"
+  reposInScope:
+    - "altru-queries"
+
+type: integration
+priority: high
+status: active
+format: gherkin
+
+estimatedDurationMinutes: 75
+
+tags:
+  - im-1193
+  - im-70
+  - im-1197
+  - altru
+  - queries
+  - licm
+  - long-island-childrens-museum
+  - fund-assignments
+  - donations
+  - duplicates
+  - missing-data
+  - oct-2011
+
+preconditions:
+  - "Repo dueño de la query de Fund Assignments (probablemente `MigrationToolETL` bajo `Veevarts/`, mismo repo que IM-1166 / IM-1160) clonado en HEAD del PR + acceso al commit base para contraste PRE-fix."
+  - "safesql profile de LICM disponible (o dump anonimizado equivalente) para reproducir rev-10059002 (Opportunity 006Vw00000XN3YhIAL, TD Charitable Foundation $5000) y rev-10059094 ($25K Greater Long Island Running Club, Check #214). Sin profile local esta validación quedaría parcialmente manual."
+  - "Query de extracción de Fund Assignments identificada (fund_assignment_donations.sql u otra) y query de extracción de Opportunities/Donations identificada — son los archivos que el PR modifica."
+  - "Método documentado para observar el estado POST — sea aggregate SQL, CSV export, o consulta a la tabla staging."
+  - "Acceso Salesforce a LICM (org o sandbox) para verificar el estado real post-load si el fix se ejecutó ya contra ese ambiente. Si NO se ejecutó, este TC valida solo la query source (dev safesql) y el load queda como scope aparte."
+
+scenarios:
+  - title: "IM-1193 Problema 1 · AC1 — La Opportunity rev-10059002 emite EXACTAMENTE 1 Fund Donation Assignment de $5,000 en la query POST-fix"
+    tags:
+      - ac-1
+      - happy-path
+      - licm
+      - regression-evidence
+      - duplicated-fda
+      - rev-10059002
+    given: |
+      Given el profile safesql de LICM (o dump equivalente) cargado en el runner
+      And la query de Fund Assignments en el commit base del PR (PRE-fix)
+    when: |
+      When se ejecuta la query PRE-fix filtrada por Revenue ID rev-10059002 y se cuentan filas de FDA
+      And luego se ejecuta la query POST-fix sobre el mismo Revenue ID
+    then: |
+      Then el conteo PRE = 2 fund assignments para rev-10059002 (FD-55184 y FD-55185, $5,000 cada uno)
+      And el conteo POST = 1 fund assignment para rev-10059002 (solo el correcto sobrevive)
+      And el monto de ese único FDA es $5,000.00 (no $10,000 acumulado)
+      And el Implementation External ID del FDA sobreviviente es determinístico entre corridas (no oscila entre FD-55184 y FD-55185)
+      And el fund es "Total Contributions \\ General Operating \\ Corporation"
+
+  - title: "IM-1193 Problema 2 · AC2 — La revenue rev-10059094 aparece migrada con Opportunity + Payment + FDA + Recognition correctos ($25,000 · 10/18/2011 · Greater Long Island Running Club)"
+    tags:
+      - ac-2
+      - happy-path
+      - licm
+      - regression-evidence
+      - missing-donation
+      - rev-10059094
+    given: |
+      Given el profile safesql de LICM cargado en el runner
+      And la query de Donations/Opportunities + Fund Assignments + Recognition en el commit base (PRE-fix)
+    when: |
+      When se ejecuta la query PRE-fix filtrada por Revenue ID rev-10059094
+      And luego se ejecuta la query POST-fix sobre el mismo Revenue ID
+    then: |
+      Then el conteo PRE = 0 opportunities emitidas para rev-10059094
+      And el conteo POST = 1 opportunity emitida para rev-10059094 con Amount $25,000.00 y CloseDate 2011-10-18
+      And el constituent asignado es "Greater Long Island Running Club, Inc."
+      And el fund del assignment emitido es "Total Contributions \\ General Operating \\ Corporation"
+      And existe un Payment emitido con método "Check" y número "214"
+      And existe UN soft credit (recognition) por CBIZ de $25,000.00 vinculado a esta Opportunity
+      And la Revenue Reference emitida es "Long Island Workplace Challenge"
+      And el post-status del payment es "Posted" con Post Date 2011-10-31
+
+  - title: "IM-1193 AC3 — Regresión: otras revenues del mismo fund y período (Oct 2011, Total Contributions \\\\ General Operating \\\\ Corporation) no se ven alteradas por el fix"
+    tags:
+      - ac-3
+      - regression
+      - licm
+      - same-fund-same-period
+    given: |
+      Given el conjunto de revenues de LICM con fund "Total Contributions \\ General Operating \\ Corporation" y período Oct 2011 EXCLUYENDO rev-10059002 y rev-10059094
+    when: |
+      When se ejecuta la query PRE-fix sobre ese conjunto
+      And se ejecuta la query POST-fix sobre el mismo conjunto
+    then: |
+      Then el conteo de Opportunities es idéntico PRE vs POST
+      And el conteo de Fund Assignments es idéntico PRE vs POST
+      And el conteo de Payments es idéntico PRE vs POST
+      And el conteo de Recognition/soft credits es idéntico PRE vs POST
+      And el monto total (SUM Amount) es idéntico PRE vs POST
+      And no aparecen duplicados nuevos ni omisiones en las revenues del mismo grupo
+
+  - title: "IM-1193 AC4 — Idempotencia: ejecutar la query POST-fix dos veces produce el mismo output"
+    tags:
+      - ac-4
+      - regression
+      - idempotency
+    given: |
+      Given la query POST-fix sobre el dataset LICM completo
+    when: |
+      When se ejecuta la query dos veces sobre el mismo dataset
+    then: |
+      Then el CHECKSUM_AGG de la salida es idéntico entre las dos corridas
+      And el conteo de filas es idéntico
+      And los Implementation External IDs generados son idénticos entre corridas
+      And el fix es determinístico (no depende de timestamps ni randomness)
