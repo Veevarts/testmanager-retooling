@@ -1,0 +1,49 @@
+EL PUNTO CIEGO DE JSDOM, REPRODUCIDO — TC-173 / IM-1233
+
+El ticket afirma que la suite estuvo verde contra una pagina rota. QA no lo dio por
+bueno: lo reprodujo.
+
+QUE SE HIZO
+En un worktree aislado sobre 403ab82, se revirtio UNA linea de
+src/features/csm/components/MyDaySuggestedPanel.tsx, la que decide como se oculta el
+cuerpo del panel, dejandola como estaba antes del arreglo:
+
+    - className={`${isOpen ? "flex" : "hidden"} flex-col gap-2.5 px-4 pb-4 pt-1`}
+    + className={`flex flex-col gap-2.5 px-4 pb-4 pt-1`}
+
+El atributo `hidden={!isOpen}` se dejo intacto, que es exactamente el estado del codigo
+cuando se reporto el defecto: el atributo puesto, la clase constante.
+
+RESULTADO
+
+    codigo correcto  (403ab82)          : 82/82 PASS
+    codigo con el bug reintroducido     : 82/82 PASS   <-- ni un solo test cambia
+
+La suite NO distingue las dos versiones. Entre esos 82 tests estan, en
+MyDayTasksTab.test.tsx:
+
+    linea 249   await waitFor(() => expect(body).toBeVisible());
+    linea 299   expect(screen.getByTestId("suggested-panel-body")).not.toBeVisible();
+    linea 324   expect(screen.getByTestId("suggested-panel-body")).toBeVisible();
+
+POR QUE PASA
+`toBeVisible()` de jest-dom, sobre jsdom, decide leyendo el atributo `hidden` y los
+estilos en linea. NO resuelve la cascada de una hoja de estilos: jsdom no aplica el CSS
+de Tailwind. En un navegador real, Tailwind emite `[hidden]{display:none}` en la capa
+base y `.flex` en utilities; a igual especificidad gana la que se declara despues, que es
+la utility, asi que el cuerpo "colapsado" se quedaba con display:flex, con su caja de
+relleno y su lugar en el arbol de accesibilidad.
+
+QUE SIGNIFICA PARA ESTA REVIEW
+Que ninguna afirmacion de este test run sobre el colapso se apoya en la suite. Las nueve
+mediciones de colapso salen de getComputedStyle en un navegador real contra el entorno
+desplegado. Ver ui/live-ui-matrix.txt.
+
+QUE RECOMIENDA QA
+Una sola asercion en el nivel e2e, donde SI hay navegador y SI hay CSS:
+
+    await expect(page.getByTestId("suggested-panel-body")).toBeHidden();
+
+El repo ya tiene Playwright configurado (scripts e2e, e2e:ui, directorio e2e/). Hoy sus
+specs de CSM son de API. Un unico spec de interfaz que abra My Day y afirme eso cerraria
+la clase entera de defecto, no solo esta instancia. Levantado como observacion O1.

@@ -1,0 +1,384 @@
+schemaVersion: "1.0"
+id: tr-ea4c77b9-c6c8-423d-a6de-d1179e50b952
+key: TR-190
+title: >-
+  TR-190 · IM-1233 · TC-173 · CSM suggested tasks collapsed by default — 6/7 PASS, 1 escenario
+  superado por un PR posterior. El colapso es real en navegador, y QA reprodujo el punto ciego que
+  dejo a la suite verde contra la pagina rota.
+status: completed
+environment:
+  name: >-
+    Interfaz desplegada en https://migration.dev.rtl.veevartapp.com, rol CSM, vista "View as:
+    Emily Clever" (38 cuentas), sobre My Day y las pestañas Tasks de dos cuentas. Suites del repo
+    corridas en un worktree aislado de Veevarts/MigrationAppFrontend en 403ab82, con su propio
+    npm ci. Ninguna escritura de negocio: lo unico que se modifico fueron claves de interfaz en el
+    almacenamiento de sesion del propio navegador de QA.
+  buildVersion: >-
+    UI/Frontend-only — componentes y hooks de React del modulo CSM, sin backend, sin dependencias
+    nuevas, sin infraestructura. PRs 195 (ef07c5b), 196 (f0a217e) y 197 (403ab82). El build
+    desplegado es POSTERIOR: incluye el PR 200 (048eb5d).
+startedAt: "2026-09-21T16:05:00Z"
+completedAt: "2026-09-21T17:35:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El panel de sugerencias abria expandido y tapaba el trabajo propio del CSM. La solucion lo abre
+  cerrado y deja el conteo en el encabezado como todo lo que cuesta cuando el CSM no quiere
+  triar ahora.
+
+  El colapso combina TRES mecanismos, y ninguno sobra: la clase (`hidden` contra `flex`) hace el
+  ocultamiento real en el navegador, el atributo `hidden` acompaña para tecnologia asistiva que lo
+  lea directo, y un renderizado condicional deja el cuerpo SIN HIJOS, de modo que las tarjetas y
+  sus manejadores no estan montados mientras el panel esta cerrado. El cuerpo se queda en el DOM
+  para que `aria-controls` del disparador resuelva.
+
+  La preferencia vive en `sessionStorage`, no en `localStorage`: "por la sesion" es lo que pide el
+  AC, y `localStorage` habria derrotado en silencio el colapsado por defecto en el siguiente
+  ingreso. La clave es POR SUPERFICIE — `csm.my-day.suggested-panel-open` y
+  `csm.account.{id}.suggested-panel-open` — porque una sola clave compartida hacia que abrirlo en
+  cualquier cuenta lo abriera en My Day y al reves. My Day conserva la clave original a proposito,
+  para no perder lo guardado antes del cambio.
+
+  ## Inferred technical tests
+
+  Es interfaz pura, asi que la prueba no manual correcta tiene dos mitades.
+
+  La primera es ejecutar las suites del repo y, sobre todo, MEDIR SI SIRVEN: el ticket afirma que
+  estuvieron verdes contra una pagina rota, y esa afirmacion se podia comprobar reintroduciendo el
+  defecto. La segunda es ejercitar los cuatro criterios en la interfaz desplegada leyendo
+  `getComputedStyle`, el contenido real del almacenamiento y el contador de navegaciones del
+  documento, mas dos inyecciones de fallo sobre el codigo desplegado: almacenamiento bloqueado y
+  endpoint de sugerencias caido.
+
+  Todo resulto ejecutable aqui. Ningun escenario quedo pendiente de una persona.
+
+  ## Lo que el ticket declara final NO es lo que esta desplegado
+
+  El ticket dice "completed by #197 403ab82". El entorno sirve algo posterior: el panel trae el
+  boton "View all suggested tasks" y la vista el filtro "Due today", los dos del PR 200
+  (048eb5d). El hook de persistencia es BYTE-IDENTICO entre 403ab82 y main, asi que los cuatro
+  criterios se leen igual sobre el build desplegado; el componente si cambio. La consecuencia
+  concreta esta en el escenario 7.
+
+results:
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      AC1 · The suggestions panel opens collapsed on both surfaces, and the collapse is real
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-21T16:08:00Z"
+    stepResults: []
+    actual: |
+      Medido en el navegador, que es el unico lugar donde esta pregunta se puede contestar.
+
+      My Day -> Tasks, sesion sin preferencia previa:
+
+        display computado            none
+        atributo hidden              presente
+        clase aplicada               "hidden flex-col gap-2.5 px-4 pb-4 pt-1"
+        rect                         0 x 0
+        offsetParent                 null  (fuera del flujo de maquetado)
+        hijos del cuerpo             0     (las tarjetas ni estan montadas)
+        aria-expanded del control    false
+
+      Pestaña Tasks de una cuenta, con My Day YA ABIERTO en la misma sesion:
+
+        display computado            none
+        aria-expanded                false
+        hijos                        0
+
+      Los tres mecanismos se observan a la vez: la clase gana la cascada, el atributo acompaña, y
+      el renderizado condicional deja el cuerpo vacio. El defecto historico era que el primero
+      NO ganaba, y por eso esta medicion es la que importa.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el cuerpo colapsado conservaba display:flex, su
+      caja de relleno y su lugar en el arbol de accesibilidad -> display:none, rect 0x0, fuera de
+      maquetado y sin hijos, en las dos superficies -> SI.
+    notes: >-
+      **PASS.** Es el escenario que justifica todo el enfoque de este run: la suite del repo no puede distinguir este estado del roto. Ver scenario-0-unit-tests/jsdom-blind-spot.txt.
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+      - name: 01-ac1-panel-colapsado-my-day.png
+        path: attachments/tr-190-tc-173/ui/01-ac1-panel-colapsado-my-day.png
+        mimeType: image/png
+      - name: 03-ac3-cuenta-colapsada-con-my-day-abierto.png
+        path: attachments/tr-190-tc-173/ui/03-ac3-cuenta-colapsada-con-my-day-abierto.png
+        mimeType: image/png
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      AC2 · The collapsed header states how many suggestions are waiting
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-21T16:09:00Z"
+    stepResults: []
+    actual: |
+      El conteo del encabezado se contrasto contra las tarjetas reales al abrir:
+
+        superficie                encabezado colapsado     tarjetas al abrir    coincide
+        My Day (Emily Clever)     "Suggested tasks · 2"          2                SI
+        Cuenta Alliance           "Suggested tasks · 5+"         5                SI (tope)
+        Cuenta American Museum    "Suggested tasks · 5+"         5                SI (tope)
+        My Day (vista propia)     "Suggested tasks · 0"          -                SI
+
+      EL CASO DE FALLO TAMBIEN SE EJERCITO. Se intercepto la peticion de sugerencias devolviendo
+      500 y se recargo la vista:
+
+        encabezado con la carga caida   "Suggested tasks · unavailable"
+        NO dice                         "· 0"
+        panel                           sigue colapsado
+
+      Es la distincion que el codigo persigue a proposito: "· 0" seria afirmar que no hay nada que
+      atender, y con la carga caida eso no se sabe. La interceptacion se retiro al terminar y el
+      encabezado volvio a "· 2".
+
+      pre-fix -> post-fix -> objetivo cumplido?: sin encabezado con conteo no habia forma de saber
+      cuantas sugerencias esperaban sin expandir -> el conteo aparece, coincide con las tarjetas,
+      marca el desborde con "+" y distingue el fallo del vacio -> SI.
+    notes: "**PASS.** Los cuatro estados del conteo observados, incluido el de error."
+    attachments:
+      - name: 02-ac2-expandido-dos-tarjetas.png
+        path: attachments/tr-190-tc-173/ui/02-ac2-expandido-dos-tarjetas.png
+        mimeType: image/png
+      - name: 05-ac2-carga-fallida-unavailable.png
+        path: attachments/tr-190-tc-173/ui/05-ac2-carga-fallida-unavailable.png
+        mimeType: image/png
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      AC3 · The expand preference survives moving around and dies with the session
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-21T16:10:00Z"
+    stepResults: []
+    actual: |
+      Recorrido completo de la preferencia dentro de una sesion y a traves de su final:
+
+        accion                                          resultado del panel
+        abrir en My Day                                 abierto · clave = "true"
+        ir a la pestaña SF Cases                        el panel se DESMONTA
+        volver a Tasks                                  abierto   <- sobrevivio al desmontaje
+        recarga real del documento                      abierto   <- sobrevivio a la recarga
+        limpiar el almacenamiento y recargar            CERRADO   <- muere con la sesion
+        abrir de nuevo                                  clave = "true"
+        cerrar                                          clave = "false"
+
+        localStorage con claves del panel               ninguna
+
+      El desmontaje al cambiar de pestaña es el dato que importa: prueba que el estado NO vive en
+      el componente, que es exactamente lo que este AC pide y lo que en su momento se reporto
+      cumplido sin estarlo. La recarga se confirmo con una marca puesta en `window` que se pierde
+      cuando el documento se recarga de verdad.
+
+      Que la clave quede en "false" al cerrar, y no solo en "true" al abrir, demuestra que la
+      preferencia guarda los dos sentidos: un CSM que lo cierra a proposito no se lo encuentra
+      abierto al volver.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el estado se perdia en cada desmontaje, que ocurre
+      en cada cambio de pestaña y cada navegacion -> sobrevive a pestaña, navegacion y recarga, y
+      muere al cerrar la sesion -> SI.
+    notes: "**PASS.** Cubierto ademas por 9 tests del dev sobre el hook, todos verdes."
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+      - name: hook-tests-403ab82.log
+        path: attachments/tr-190-tc-173/scenario-0-unit-tests/hook-tests-403ab82.log
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      AC3 · One surface's preference does not answer for another
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-21T16:11:00Z"
+    stepResults: []
+    actual: |
+      Tres claves conviviendo, distintas, observadas a la vez:
+
+        csm.my-day.suggested-panel-open                                        = true
+        csm.account.c54e7cdf-844c-48ea-94ea-e42799d7cd26.suggested-panel-open  = true
+        csm.account.0b7dcaf0-441a-4059-b34b-a52eedd08b06.suggested-panel-open  = true
+
+      Con My Day abierto, las dos cuentas abrieron COLAPSADAS. Es la fuga que el ticket declara
+      cerrada, comprobada en vez de asumida. My Day conserva la clave original, como el codigo
+      dice que hace para no perder lo guardado antes del cambio.
+
+      EL RIESGO R3 DEL TEST CASE QUEDA DESCARTADO. El hook inicializa con
+      `useState(() => readStoredOpen(storageKey))`, que solo corre al montar; si el panel no se
+      desmontara al cambiar de cuenta, arrastraria el estado de la anterior y el siguiente toggle
+      escribiria en la clave equivocada. Se probo con cambio de ruta por cliente, sin recarga de
+      documento, EN LOS DOS SENTIDOS:
+
+        cuenta A abierta  -> cuenta B     el panel aparece CERRADO    (leyo la clave de B)
+        cuenta B cerrada  -> cuenta A     el panel aparece ABIERTO    (leyo la clave de A)
+
+      El panel remonta en cada cambio de cuenta y vuelve a leer. Probarlo en un solo sentido no
+      habria bastado: si solo hubiera ido de la cerrada a la abierta, un panel que arrastrara el
+      estado habria dado el mismo resultado por casualidad.
+
+      pre-fix -> post-fix -> objetivo cumplido?: una sola clave compartida hacia que abrirlo en
+      cualquier cuenta lo abriera en My Day y al reves -> una clave por superficie, aisladas, y sin
+      arrastre al navegar entre cuentas -> SI.
+    notes: "**PASS.** Riesgo R3 levantado en el bundle y descartado con evidencia."
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+      - name: 03-ac3-cuenta-colapsada-con-my-day-abierto.png
+        path: attachments/tr-190-tc-173/ui/03-ac3-cuenta-colapsada-con-my-day-abierto.png
+        mimeType: image/png
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: "AC4 · Expanding the panel does not reload the page"
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-21T16:09:30Z"
+    stepResults: []
+    actual: |
+      Se puso una marca en `window` antes de expandir y se conto la navegacion del documento.
+
+        tras expandir             la marca SIGUE VIVA · navegaciones del documento = 1
+        tras cambiar de pestaña   la marca sigue viva
+        tras cambiar de cuenta    la marca sigue viva · navegaciones = 1
+        tras recargar a proposito la marca se PIERDE
+
+      El ultimo renglon es el control negativo y es lo que hace valida la medicion: demuestra que
+      la marca detecta una recarga cuando la hay, asi que su supervivencia en los otros pasos
+      significa algo en vez de ser un supuesto.
+
+      Tampoco se repiten peticiones: abrir el panel no dispara una nueva llamada de sugerencias,
+      porque los datos ya estaban cargados. El estado de la pantalla se conserva entero.
+
+      pre-fix -> post-fix -> objetivo cumplido?: n/a, el AC pide que NO ocurra algo -> no ocurre
+      ninguna navegacion ni recarga al expandir, verificado con un control negativo -> SI.
+    notes: >-
+      **PASS.** Es el unico AC que NINGUN test del dev cubre; QA lo cubrio con la marca en window y el contador de navegaciones.
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      The panel stays usable and collapsed when session storage is unavailable
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-21T16:12:00Z"
+    stepResults: []
+    actual: |
+      Se inyecto el fallo sobre el codigo desplegado, haciendo que `getItem` y `setItem` lancen
+      SecurityError, como ocurre en modo privado o con el almacenamiento del sitio deshabilitado:
+
+        el panel monta                CERRADO    <- el defecto por defecto es el seguro
+        abrir y cerrar                sigue funcionando (5 tarjetas al abrir)
+        errores en pagina             ninguno
+        la preferencia                simplemente no se recuerda
+
+      Importa que el fallo por defecto sea CERRADO y no abierto: si la guarda hubiera devuelto
+      true al no poder leer, un CSM en modo privado tendria el panel abierto siempre, que es
+      justo la molestia que la historia viene a arreglar.
+
+      pre-fix -> post-fix -> objetivo cumplido?: n/a, es un borde de robustez -> degrada al
+      comportamiento por defecto sin romper la pantalla -> SI.
+    notes: "**PASS.** El hook captura el error en las dos direcciones, leer y escribir."
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+    testCaseKey: TC-173
+    scenarioTitle: >-
+      The overflow mark promises suggestions that cannot be reached yet
+    scenarioIndex: 6
+    status: skipped
+    stepResults: []
+    actual: |
+      NO APLICA AL BUILD DESPLEGADO. La premisa del escenario dejo de ser cierta, y no por un
+      error al escribirlo: era cierta en el commit que el ticket declara final.
+
+      El escenario nacio de un comentario en el codigo de 403ab82 que dice que "show more" (R14)
+      no esta entregado, de modo que el "+" del encabezado afirmaba que hay mas sugerencias sin
+      ofrecer ninguna forma de llegar a ellas. En el entorno desplegado SI hay forma:
+
+        encabezado                    "Suggested tasks · 5+"
+        tarjetas en el panel           5   (el tope)
+        boton al final de la lista     "View all suggested tasks"
+        modal que abre                 "All suggested tasks — Everything still pending for this
+                                        account, highest score first."
+        tarjetas en el modal           6   (las 5 del tope mas la que quedaba fuera)
+
+      Llego en el PR 200 (048eb5d), dos PRs despues del que el ticket da por final. El comentario
+      del codigo que dice que no esta entregado quedo desactualizado.
+
+      Se marca SKIPPED y no PASSED a proposito: los pasos de este escenario afirman que no existe
+      forma de alcanzar esas sugerencias, y QA observo lo contrario. Darlo por aprobado seria
+      afirmar algo que no se vio.
+    notes: >-
+      **SKIPPED — el riesgo que este escenario venia a documentar esta resuelto.** Se levanta como observacion O2, que no es defecto: conviene actualizar el comentario del codigo y, si el equipo lo quiere, cerrar R14 en el ticket que lo siga.
+    attachments:
+      - name: 04-overflow-modal-view-all.png
+        path: attachments/tr-190-tc-173/ui/04-overflow-modal-view-all.png
+        mimeType: image/png
+      - name: live-ui-matrix.txt
+        path: attachments/tr-190-tc-173/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+summary:
+  total: 7
+  passed: 6
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 1
+  passRate: 86
+
+history:
+  - action: run-started
+    timestamp: "2026-09-21T16:05:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: "Arranca la ejecucion de TC-173 sobre los PRs 195, 196 y 197 de MigrationAppFrontend."
+  - action: run-completed
+    timestamp: "2026-09-21T17:35:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      Los cuatro criterios de aceptacion se cumplen, medidos en la interfaz desplegada y no en
+      jsdom: el colapso es real (display none, rect 0x0, fuera de maquetado, sin hijos), el
+      encabezado da el conteo y distingue el fallo del vacio, la preferencia sobrevive a pestaña,
+      navegacion y recarga y muere con la sesion, y expandir no recarga, con control negativo. El
+      aislamiento por superficie esta comprobado y el riesgo R3 del test case descartado navegando
+      entre cuentas en los dos sentidos. Suites 9/9 y 82/82. El septimo escenario queda SKIPPED
+      porque su premisa la resolvio un PR posterior al que el ticket declara final. Sin defectos.
+      Dos observaciones, y la primera es la que importa: la suite del repo NO detecta el defecto
+      historico de esta misma historia, reproducido y comprobado.
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-21T16:05:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-21T17:35:00Z"

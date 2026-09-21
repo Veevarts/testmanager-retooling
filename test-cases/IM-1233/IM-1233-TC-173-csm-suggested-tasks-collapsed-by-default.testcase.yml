@@ -1,0 +1,205 @@
+schemaVersion: "1.0"
+
+id: "30d6bddc-2ed8-413a-9cc2-e51190c8a43f"
+key: "TC-173"
+title: "CSM OS suggested tasks panel collapsed by default"
+
+description: |
+  Cobertura QA de IM-1233 (CSM OS: collapse suggested tasks by default), bajo el epic IM-1229
+  (CSM OS: Feedback). Sub-tarea de QA: IM-1287. Repositorio en alcance:
+  Veevarts/MigrationAppFrontend, PRs 195 (ef07c5b), 196 (f0a217e) y 197 (403ab82), los tres
+  mergeados a main.
+
+  El panel de sugerencias abria expandido y tapaba el trabajo propio del CSM. La historia pide que
+  abra colapsado, que el encabezado diga cuantas sugerencias hay, que la preferencia de
+  abrir/cerrar sobreviva dentro de la sesion, y que expandir no recargue la pagina. El panel vive
+  en dos superficies: My Day -> Tasks y la pestaña Tasks de cada cuenta.
+
+  POR QUE ESTA COBERTURA NO SE APOYA EN LA SUITE DEL REPO. El propio ticket registra dos defectos
+  que aparecieron durante su desarrollo, y los dos son la misma cosa: un test verde de acuerdo con
+  una implementacion rota o ausente.
+
+  - El panel NUNCA estuvo colapsado de verdad. Tailwind emite `[hidden]{display:none}` en la capa
+    base y `.flex` en utilities; a igual especificidad ganaba el `flex` constante, asi que el
+    cuerpo colapsado conservaba su caja de relleno y su lugar en el arbol de accesibilidad. jsdom
+    NO puede ver eso, porque `toBeVisible()` lee el atributo y no el estilo computado. La suite
+    estaba verde contra una pagina rota.
+  - El AC de persistencia por sesion se reporto cumplido cuando todavia no estaba implementado.
+
+  En consecuencia, todo lo que este caso afirme sobre el colapso se verifica en un navegador real
+  contra `getComputedStyle`, nunca contra aserciones de jsdom ni contra el reporte del dev.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. Hay que confirmar que el entorno donde se valida sirve `403ab82` o posterior antes de
+    calificar nada. Los tres PRs estan en main, pero un verde sobre un despliegue anterior no
+    prueba nada.
+  - R2. `useSuggestedPanelOpen` inicializa con `useState(() => readStoredOpen(storageKey))`, que
+    solo corre al montar. Si al navegar de una cuenta a otra el panel no se desmonta, el estado de
+    la cuenta anterior sobrevive y el siguiente toggle escribiria en la clave de la cuenta nueva.
+    Hay que probarlo navegando entre dos cuentas, no recargando cada una por separado.
+  - R3. El agrupamiento por categoria de product-tag esta descopado a IM-1237. Los AC hablan de
+    "grupos", pero hoy se entrega un unico panel con su conteo. Los criterios se leen sobre ese
+    panel; si IM-1237 entra despues, el colapso deberia bajar al nivel de categoria.
+  - R4. El `+` del conteo afirma que hay mas sugerencias, pero "show more" no esta entregado, asi
+    que no hay forma de alcanzarlas. El codigo lo registra como decision consciente, no como
+    descuido, y aplica a las dos superficies.
+  - R5. El ticket declara cerrado el hueco de la clave compartida entre superficies. QA lo verifica
+    por su cuenta en vez de darlo por hecho, porque es precisamente el tipo de afirmacion que ya
+    fallo una vez en esta historia.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "El entorno de CSM OS sirve `403ab82` o posterior; se confirmo contra que build corre antes de empezar (ver riesgo R1)."
+  - "Se entra con un usuario de rol CSM que tenga sugerencias pendientes en My Day."
+  - "Se identifican dos cuentas distintas con pestaña Tasks y con sugerencias, para poder probar el aislamiento entre superficies."
+  - "La sesion del navegador arranca limpia, sin claves previas de panel en el almacenamiento de sesion."
+  - "Se sabe leer el estilo computado del cuerpo del panel en el navegador, porque el atributo por si solo no prueba el colapso."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The suggestions panel opens collapsed on both surfaces, and the collapse is real"
+    tags:
+      - ac-1
+      - happy-path
+      - functional-ui
+      - computed-style
+      - regression-evidence
+      - screenshot-per-step
+    given:
+      - "el CSM abre la sesion sin ninguna preferencia guardada para el panel"
+      - "hay sugerencias pendientes tanto en My Day como en la pestaña Tasks de una cuenta"
+    when:
+      - "entra a My Day y abre la pestaña Tasks"
+      - "observa el panel de sugerencias sin tocarlo"
+      - "repite la observacion en la pestaña Tasks de una cuenta"
+    then:
+      - "en las dos superficies el panel aparece cerrado y no se ve ninguna tarjeta de sugerencia"
+      - "el cuerpo del panel no ocupa espacio: su estilo computado resuelve a oculto, no solo lleva el atributo"
+      - "el control de apertura queda anunciado como contraido para lectores de pantalla"
+      - "la flecha del encabezado apunta hacia la derecha, sin girar"
+      - "las tarjetas de sugerencia no estan montadas mientras el panel esta cerrado"
+      - "se capturo una pantalla por cada paso"
+
+  - title: "AC2 · The collapsed header states how many suggestions are waiting"
+    tags:
+      - ac-2
+      - happy-path
+      - functional-ui
+    given:
+      - "el panel de sugerencias esta cerrado"
+    when:
+      - "el CSM lee el encabezado del panel sin abrirlo"
+    then:
+      - "el encabezado nombra el panel y muestra el numero de sugerencias que contiene"
+      - "cuando existen mas sugerencias de las que el tope deja traer, el numero aparece seguido de un mas"
+      - "el numero del encabezado coincide con la cantidad de tarjetas que se ven al abrir el panel"
+      - "cuando la carga de sugerencias falla, el encabezado lo dice en vez de mostrar cero, porque cero seria afirmar que no hay nada que atender"
+
+  - title: "AC3 · The expand preference survives moving around and dies with the session"
+    tags:
+      - ac-3
+      - happy-path
+      - session-persistence
+    given:
+      - "el CSM esta en My Day con el panel cerrado"
+    when:
+      - "abre el panel"
+      - "se va a otra pestaña de la vista y vuelve a Tasks"
+      - "navega a otra pantalla del producto y regresa a My Day"
+      - "recarga la pagina"
+      - "cierra la pestaña del navegador y entra de nuevo en una sesion nueva"
+    then:
+      - "al volver de la otra pestaña el panel sigue abierto, sin tener que abrirlo otra vez"
+      - "al regresar desde otra pantalla sigue abierto"
+      - "tras recargar sigue abierto, porque la preferencia vive en el almacenamiento de sesion"
+      - "en la sesion nueva el panel vuelve a aparecer cerrado, porque la preferencia no debe sobrevivir al cierre de sesion"
+      - "volver a cerrarlo tambien se recuerda: la preferencia guarda los dos sentidos, no solo el de abrir"
+
+  - title: "AC3 · One surface's preference does not answer for another"
+    tags:
+      - ac-3
+      - regression-evidence
+      - edge-case
+    given:
+      - "el CSM tiene el panel cerrado en My Day y en las dos cuentas de prueba"
+    when:
+      - "abre el panel en la pestaña Tasks de la primera cuenta"
+      - "va a My Day"
+      - "va a la pestaña Tasks de la segunda cuenta"
+      - "y despues navega directamente de la segunda cuenta a la primera, sin pasar por ninguna otra pantalla"
+    then:
+      - "My Day sigue mostrando el panel cerrado"
+      - "la segunda cuenta muestra el panel cerrado"
+      - "la primera cuenta lo sigue mostrando abierto"
+      - "al navegar directo entre cuentas, cada una muestra su propia preferencia y no arrastra la de la anterior"
+      - "la preferencia guardada de My Day conserva la clave que ya usaba, para que lo guardado antes del cambio no se pierda"
+
+  - title: "AC4 · Expanding the panel does not reload the page"
+    tags:
+      - ac-4
+      - happy-path
+    given:
+      - "el CSM esta en My Day con el panel cerrado y con otro estado visible en la pantalla, como un filtro aplicado o una posicion de scroll"
+    when:
+      - "expande el panel"
+      - "y lo vuelve a cerrar"
+    then:
+      - "las sugerencias aparecen sin que la pantalla se reconstruya"
+      - "el resto del estado de la pantalla sigue como estaba: el filtro aplicado no se pierde y la posicion no salta"
+      - "no se dispara ninguna navegacion ni recarga del documento"
+      - "abrir el panel no vuelve a pedir las sugerencias al servidor si ya estaban cargadas"
+
+  - title: "The panel stays usable and collapsed when session storage is unavailable"
+    tags:
+      - edge-case
+      - ac-1
+      - ac-3
+      - resilience
+    given:
+      - "el navegador tiene el almacenamiento de sesion bloqueado, como ocurre en modo privado o con las cookies de sitio deshabilitadas"
+    when:
+      - "el CSM entra a My Day y abre la pestaña Tasks"
+      - "abre y cierra el panel"
+    then:
+      - "el panel aparece cerrado, que es el comportamiento por defecto y el seguro"
+      - "abrir y cerrar sigue funcionando dentro de la pantalla"
+      - "la pantalla no muestra ningun error ni deja de responder por no poder guardar la preferencia"
+      - "la preferencia simplemente no se recuerda, que es la degradacion aceptable"
+
+  - title: "The overflow mark promises suggestions that cannot be reached yet"
+    tags:
+      - missing-doc
+      - edge-case
+    given:
+      - "una superficie tiene mas sugerencias candidatas de las que el tope deja traer"
+    when:
+      - "el CSM lee el encabezado y despues abre el panel"
+    then:
+      - "el encabezado indica que hay mas sugerencias de las mostradas"
+      - "al abrir el panel no existe ninguna forma de ver esas sugerencias adicionales"
+      - "se deja constancia de que esto es una decision registrada y no un descuido, y de que aplica a las dos superficies"
+      - "se documenta para el equipo el riesgo de que un CSM crea que esta viendo su lista completa"
+
+tags:
+  - im-1233
+  - im-1229
+  - im-1287
+  - csm-os
+  - migration-app-frontend
+  - my-day
+  - suggested-tasks
+  - collapse
+
+estimatedDuration: 65
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-21T16:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-21T16:30:00Z"
+  version: 1

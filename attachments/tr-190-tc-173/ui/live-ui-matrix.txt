@@ -1,0 +1,140 @@
+EJECUCION EN LA INTERFAZ DESPLEGADA — TC-173 / IM-1233
+Entorno: https://migration.dev.rtl.veevartapp.com · rol CSM · vista "View as: Emily Clever" (38 cuentas)
+Fecha  : 2026-09-21
+
+QUE BUILD ESTA DESPLEGADO
+El ticket declara la historia completada por 403ab82 (PR 197). El entorno sirve algo
+POSTERIOR: el panel trae el boton "View all suggested tasks" y la vista trae el filtro
+"Due today", los dos del PR 200 (048eb5d), que es dos PRs mas nuevo. Tambien estan las
+tres pestañas de My Day del PR 199. El hook de persistencia es byte-identico entre
+403ab82 y main, asi que los AC 1-4 se leen igual; lo que cambia es el desenlace del
+riesgo del desborde (ver al final).
+
+--------------------------------------------------------------------------------------
+AC1 · COLAPSADO DE VERDAD  — la medicion que la suite no puede hacer
+--------------------------------------------------------------------------------------
+My Day -> Tasks, sesion sin preferencia previa:
+
+    display computado            none
+    atributo hidden              presente
+    clase aplicada               "hidden flex-col gap-2.5 px-4 pb-4 pt-1"
+    rect                         0 x 0
+    offsetParent                 null  (fuera del flujo de maquetado)
+    hijos del cuerpo             0     (las tarjetas ni siquiera estan montadas)
+    aria-expanded del control    false
+
+Pestaña Tasks de una cuenta, con My Day YA ABIERTO en la misma sesion:
+
+    display computado            none
+    aria-expanded                false
+    hijos                        0
+
+Los tres mecanismos que el componente combina se observan a la vez: la clase gana la
+cascada, el atributo acompaña para tecnologia asistiva, y el renderizado condicional
+deja el cuerpo sin hijos. El defecto historico era que el primero no ganaba.
+
+--------------------------------------------------------------------------------------
+AC2 · EL ENCABEZADO DICE CUANTAS HAY
+--------------------------------------------------------------------------------------
+    superficie                encabezado colapsado     tarjetas al abrir    coincide
+    My Day (Emily Clever)     "Suggested tasks · 2"          2                SI
+    Cuenta Alliance           "Suggested tasks · 5+"         5                SI (tope)
+    Cuenta American Museum    "Suggested tasks · 5+"         5                SI (tope)
+    My Day (vista propia)     "Suggested tasks · 0"          -                SI
+
+El "0" se observo con la carga EXITOSA y sin sugerencias.
+
+EL CASO DE FALLO SI SE EJERCITO. Se intercepto la peticion de sugerencias en el navegador
+(GET .../api/csm/tasks/suggestions) devolviendo 500, y se recargo la vista:
+
+    encabezado con la carga caida   "Suggested tasks · unavailable"
+    panel                           sigue colapsado
+    NO dice                         "· 0"
+
+Es la distincion que el codigo persigue a proposito: "· 0" seria afirmar que no hay nada
+que atender, y con la carga caida eso no se sabe. La interceptacion se retiro al terminar
+y el encabezado volvio a "Suggested tasks · 2".
+
+--------------------------------------------------------------------------------------
+AC3 · LA PREFERENCIA SOBREVIVE A LA SESION, Y SOLO A LA SESION
+--------------------------------------------------------------------------------------
+    accion                                          resultado del panel
+    abrir en My Day                                 abierto · clave = "true"
+    ir a la pestaña SF Cases                        el panel se DESMONTA
+    volver a Tasks                                  abierto      <- sobrevivio al desmontaje
+    recarga real del documento (marca de window     abierto      <- sobrevivio a la recarga
+      perdida, confirma que fue recarga)
+    limpiar el almacenamiento y recargar            CERRADO      <- muere con la sesion
+      (equivale a sesion nueva)
+    abrir de nuevo                                  clave = "true"
+    cerrar                                          clave = "false"   <- guarda los dos sentidos
+
+    localStorage con claves del panel               ninguna      <- es sessionStorage, no localStorage
+
+El desmontaje al cambiar de pestaña es el dato que importa: prueba que el estado NO vive
+en el componente, que es justo lo que el AC pide y lo que en su momento se reporto
+cumplido sin estarlo.
+
+--------------------------------------------------------------------------------------
+AC3 · CADA SUPERFICIE RESPONDE POR SI MISMA
+--------------------------------------------------------------------------------------
+Claves observadas en el almacenamiento de sesion, las tres a la vez y distintas:
+
+    csm.my-day.suggested-panel-open                                        = true
+    csm.account.c54e7cdf-844c-48ea-94ea-e42799d7cd26.suggested-panel-open  = true
+    csm.account.0b7dcaf0-441a-4059-b34b-a52eedd08b06.suggested-panel-open  = true
+
+Con My Day abierto, la cuenta Alliance abrio COLAPSADA. Es exactamente la fuga que el
+ticket declara cerrada, comprobada en vez de asumida. My Day conserva la clave original,
+como el codigo dice que hace para no perder lo guardado antes del cambio.
+
+RIESGO R3 DEL TEST CASE, DESCARTADO. El hook inicializa con
+useState(() => readStoredOpen(storageKey)), que solo corre al montar; si el panel no se
+desmontara al cambiar de cuenta, arrastraria el estado de la anterior. Se probo con un
+cambio de ruta por cliente, sin recarga de documento, EN LOS DOS SENTIDOS:
+
+    cuenta A abierta   -> cuenta B    el panel aparece CERRADO   (leyo la clave de B)
+    cuenta B cerrada   -> cuenta A    el panel aparece ABIERTO   (leyo la clave de A)
+
+El panel remonta en cada cambio de cuenta y vuelve a leer. No hay fuga.
+
+--------------------------------------------------------------------------------------
+AC4 · EXPANDIR NO RECARGA
+--------------------------------------------------------------------------------------
+Se puso una marca en window antes de expandir y se conto la navegacion del documento.
+
+    tras expandir            la marca SIGUE VIVA · navegaciones del documento = 1
+    tras cambiar de pestaña  la marca sigue viva
+    tras cambiar de cuenta   la marca sigue viva · navegaciones = 1
+    tras recargar a proposito la marca se PIERDE  <- control negativo: la medicion sirve
+
+El control negativo importa: demuestra que la marca detecta una recarga cuando la hay,
+asi que su supervivencia en los otros pasos significa algo.
+
+--------------------------------------------------------------------------------------
+BORDE · SIN ALMACENAMIENTO DE SESION
+--------------------------------------------------------------------------------------
+Se inyecto el fallo sobre el codigo desplegado, haciendo que getItem y setItem lancen
+SecurityError, como en modo privado o con el almacenamiento del sitio deshabilitado:
+
+    el panel monta                CERRADO     <- el defecto por defecto es el seguro
+    abrir y cerrar                sigue funcionando dentro de la pantalla (5 tarjetas)
+    errores en pagina             ninguno
+    la preferencia                simplemente no se recuerda
+
+--------------------------------------------------------------------------------------
+EL DESBORDE: EL RIESGO DEL TEST CASE YA NO APLICA
+--------------------------------------------------------------------------------------
+El test case levanto que el "+" prometia sugerencias inalcanzables, porque el comentario
+del codigo en 403ab82 dice que "show more" (R14) no esta entregado. En el build
+desplegado SI esta:
+
+    encabezado                    "Suggested tasks · 5+"
+    tarjetas en el panel           5   (el tope)
+    boton al final de la lista     "View all suggested tasks"
+    modal que abre                 "All suggested tasks — Everything still pending for
+                                    this account, highest score first."
+    tarjetas en el modal           6   (las 5 del tope mas la que quedaba fuera)
+
+Llego en el PR 200, posterior al commit que el ticket declara final. El comentario del
+codigo que dice que no esta entregado quedo desactualizado.
