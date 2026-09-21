@@ -1,0 +1,242 @@
+schemaVersion: "1.0"
+
+id: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+key: "TC-174"
+title: "CSM OS suggestion disposal: accept, decline and the accept-vs-ignore record"
+
+description: |
+  Cobertura QA de IM-1234 (CSM OS: add "Mark as Done" and "Ignore" actions to suggested tasks), bajo
+  el epic IM-1229 (CSM OS: Feedback). Sub-tarea de QA: IM-1288. Repositorios en alcance:
+  Veevarts/MigrationAppBackend "PR #379" (3dece481, mergeado a main) y Veevarts/MigrationAppFrontend
+  "PRs #195..#202" (ef07c5b .. 9692eb7, todos en main).
+
+  La historia pide dos formas de sacar una sugerencia de la lista sin borrarla: una que significa "ya
+  lo hice" y otra que significa "no". El registro se conserva, las dos disposiciones se distinguen en
+  el modelo de datos, cada accion deja quien y cuando, y el resultado tiene que poder consultarse para
+  medir la tasa de aceptacion de lo que propone la IA.
+
+  LO ENTREGADO NO SE LLAMA COMO EL TITULO. Por decision del product owner (ruling R9 del PR), una
+  sugerencia solo se puede Aceptar o Declinar: completar no es una operacion valida sobre algo que
+  todavia no es una tarea. Entonces "Ignore" es **Decline**, y "Mark as Done" es el **Mark Complete**
+  que ya existia sobre la tarea ya aceptada, en la lista o arrastrando la tarjeta a Done. Los
+  criterios se leen contra esas acciones, no contra el titulo del ticket.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. Hay que confirmar que el entorno donde se valida sirve el backend de "PR #379" y un frontend
+    igual o posterior a "PR #202" antes de calificar nada. Los dos estan en main, pero un verde sobre
+    un despliegue anterior no prueba nada.
+  - R2. Dos criterios no tienen ninguna superficie de producto: el de quien y cuando vive en
+    `csm_os.task_state_log` y en `task_suggestion_batch_items.released_by`, y el de la consulta vive
+    en un bloque SQL dentro de `docs/operating-system/execution-logs/im-1229-backlog.md` entrada 11.
+    Ninguna pantalla ni endpoint los expone. Sin acceso de lectura a la base del CSM OS esos dos
+    criterios quedan sin ejecutar, no aprobados por inferencia.
+  - R3. Ruling R21 del propio PR: no debe desplegarse solo. Desde R11 una sugerencia sin accionar ya
+    no se expira sino que vuelve al pool, y las dos superficies que filtraban por expiracion (la lista
+    de acciones de My Day y el badge `suggested_tasks_count` del portafolio) dejaron de podarse y
+    crecen sin tope. El arreglo esta en un follow-up PR. Es el vecino mas cercano de este cambio y
+    hay que medir si el entorno bajo prueba lo trae.
+  - R4. Mostrar la tasa de aceptacion salio a IM-1284 el 2026-09-17. Este caso NO prueba endpoint ni
+    pantalla de reporte: prueba que el dato existe y se puede consultar, nada mas.
+  - R5. El bucket `unaccounted` de la consulta deberia dar 0. `sf-cases-worker` puede producir un
+    `Rejected` sin `deleted_at` (backlog entrada 5), que es una forma que ninguna disposicion describe.
+    Si sale mayor que cero es un hallazgo, no ruido.
+  - R6. La pestaña Deleted dice "Deleted items are kept for 30 days" y en el backend no hay ningun
+    barrido que lo cumpla. Hoy eso juega a favor del criterio de conservar el registro, pero la copia
+    le promete al CSM algo que el producto no hace, y el dia que si lo haga se lleva por delante el
+    denominador del reporte, porque la membresia de batch cae en cascada con la accion.
+  - R7. El PR cubre ocho historias del epic a la vez y suma 17k lineas. Esta cobertura se queda en la
+    rebanada de IM-1234 y solo toca lo demas donde el propio PR declara que el cambio de esta historia
+    lo afecta.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "El entorno de CSM OS sirve el backend de \"PR #379\" y un frontend igual o posterior a \"PR #202\"; se confirmo contra que build corre antes de empezar (ver riesgo R1)."
+  - "Se entra con un usuario de rol CSM que tenga al menos tres sugerencias pendientes del dia en My Day."
+  - "Se sabe si el entorno trae el follow-up que repone la poda de My Day y del badge de portafolio, porque de eso depende como se lee el escenario de regresion."
+  - "Para los criterios de trazabilidad y de consulta hace falta lectura sobre la base del CSM OS; si no se tiene, esos escenarios se ejecutan como pendientes y no se califican."
+  - "Se anota el estado inicial de las pestañas Completed y Deleted, porque los escenarios cuentan filas que entran y salen de ellas."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · A suggestion offers exactly two dispositions, and completing is not one of them"
+    tags:
+      - ac-1
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+      - regression-evidence
+    given:
+      - "el CSM esta en My Day, pestaña Tasks, con el panel de sugerencias abierto"
+    when:
+      - "revisa los controles que ofrece una tarjeta de sugerencia"
+      - "abre el detalle de esa misma sugerencia"
+    then:
+      - "la tarjeta ofrece aceptar, declinar y ver el detalle, y ninguna otra accion"
+      - "no hay forma de marcar la sugerencia como hecha sin aceptarla antes"
+      - "el detalle de una sugerencia ofrece las mismas dos disposiciones, no una tercera"
+      - "se deja escrito que aceptar y declinar son las dos acciones que el ticket pide, con otros nombres"
+      - "se capturo una pantalla por cada paso, numeradas 01 en adelante, bajo attachments del test run"
+
+  - title: "AC1 · \"I did this\" is the accepted task being completed, not the suggestion"
+    tags:
+      - ac-1
+      - ac-2
+      - happy-path
+      - functional-ui
+    given:
+      - "el CSM tiene una sugerencia pendiente en el panel"
+    when:
+      - "acepta la sugerencia"
+      - "busca la tarea resultante en su lista de tareas"
+      - "la marca como completada desde la fila"
+      - "revisa la pestaña de completadas"
+    then:
+      - "al aceptar, la sugerencia sale del panel y aparece como tarea propia sin crear ningun caso de Salesforce"
+      - "la tarea aceptada conserva el mismo registro: mismo titulo, misma cuenta y las mismas fuentes que mostraba la sugerencia"
+      - "marcarla como completada la saca de la lista abierta y la deja en completadas con su fecha de resolucion"
+      - "reabrirla la devuelve a la lista abierta y le limpia la fecha de resolucion"
+      - "arrastrar la tarjeta a la columna de hechas en el tablero produce el mismo resultado que marcarla desde la fila"
+
+  - title: "AC2 · Declining removes the suggestion from view and keeps the record"
+    tags:
+      - ac-2
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+    given:
+      - "el CSM tiene una sugerencia pendiente en el panel"
+    when:
+      - "la declina"
+      - "revisa el panel de sugerencias y la pestaña de eliminados"
+      - "usa el deshacer del aviso que aparece al declinar"
+      - "vuelve a declinarla y esta vez la restaura desde la pestaña de eliminados"
+    then:
+      - "la sugerencia desaparece del panel en el momento"
+      - "sigue existiendo: aparece en la pestaña de eliminados, identificada como sugerencia y con la fecha en que se elimino"
+      - "el deshacer del aviso la devuelve al panel de sugerencias, no a la lista de tareas"
+      - "restaurar desde la pestaña de eliminados tambien la devuelve al panel de sugerencias, porque vuelve al estado que tenia antes de eliminarse"
+      - "una tarea ya aceptada que se elimina vuelve, al restaurarse, a la columna de la que salio, y una completada vuelve completada"
+
+  - title: "AC3 · The four dispositions stay distinguishable from one another"
+    tags:
+      - ac-3
+      - edge-case
+      - data-model
+    given:
+      - "el CSM tiene varias sugerencias del dia en el panel"
+    when:
+      - "acepta una, declina otra y deja una tercera sin tocar"
+      - "consulta donde quedo cada una"
+    then:
+      - "la aceptada se ve en las tareas del CSM y no en el panel ni en eliminados"
+      - "la declinada se ve solo en eliminados y se puede restaurar"
+      - "la que quedo sin tocar sigue en el panel"
+      - "una sugerencia que un lote posterior ya no carga deja de mostrarse en el panel pero no queda ni aceptada ni declinada: vuelve al conjunto de candidatas y puede reaparecer"
+      - "las cuatro situaciones se distinguen entre si sin ambiguedad, y ninguna se confunde con un borrado real"
+
+  - title: "AC4 · Every disposition records who did it and when"
+    tags:
+      - ac-4
+      - traceability
+      - needs-db
+    given:
+      - "se acaba de aceptar una sugerencia, declinar otra y completar la tarea que salio de la aceptada"
+    when:
+      - "se consulta el registro de cambios de estado de esas tres acciones"
+    then:
+      - "cada cambio de estado dejo una entrada con el autor y el momento en que ocurrio"
+      - "el autor corresponde al usuario que hizo clic, no a un valor generico del sistema"
+      - "la entrada quedo junto con el cambio de estado y no despues, de modo que no existe un cambio sin su registro"
+      - "cuando un lote suelta una sugerencia por una regeneracion forzada por otra persona, queda anotado quien la forzo; la corrida automatica del dia queda sin autor, que es lo esperado"
+
+  - title: "AC5 · The accept-vs-ignore rate is answerable and its buckets add up"
+    tags:
+      - ac-5
+      - reporting
+      - needs-db
+    given:
+      - "ya hay un lote del dia con sugerencias aceptadas, declinadas y sin accionar"
+    when:
+      - "se ejecuta la consulta de disposiciones que el repositorio documenta para esta historia"
+    then:
+      - "devuelve, por CSM y por dia, cuantas se aceptaron, cuantas se ignoraron y cuantas quedaron sin respuesta"
+      - "las categorias no se solapan y suman exactamente el total de sugerencias que el lote llego a mostrar"
+      - "lo que quedo sin accionar no cuenta como rechazo, porque no responder no es una decision"
+      - "una sugerencia que se arrastro varios dias aparece en el lote de cada dia, asi que la tasa del portafolio se cuenta por sugerencia y no sumando dias"
+      - "la categoria residual, la que ninguna disposicion describe, sale en cero; si no, se reporta como hallazgo"
+
+  - title: "Acting twice on the same suggestion fails closed"
+    tags:
+      - negative
+      - fail-closed
+      - edge-case
+    given:
+      - "hay una sugerencia pendiente en el panel"
+    when:
+      - "se la declina y enseguida se intenta aceptarla"
+      - "en otra prueba, se intenta completar una sugerencia sin aceptarla primero"
+      - "en otra prueba, se intenta restaurar algo que no esta eliminado"
+    then:
+      - "la segunda accion sobre una sugerencia ya declinada se rechaza y explica que ya esta eliminada"
+      - "completar una sugerencia se rechaza: solo se llega a hecha pasando por aceptada"
+      - "restaurar algo que no esta eliminado se rechaza en vez de dejar el registro en un estado que nadie puede abandonar"
+      - "en los tres casos no queda ningun registro a medias ni desaparece nada de las vistas"
+
+  - title: "The Deleted tab promises a retention that nothing enforces"
+    tags:
+      - missing-doc
+      - edge-case
+      - data-retention
+    given:
+      - "el CSM abre la pestaña de eliminados"
+    when:
+      - "lee el aviso de conservacion que encabeza la lista"
+      - "se busca en el producto que lo cumpla"
+    then:
+      - "el aviso le dice al CSM que lo eliminado se guarda por un tiempo limitado"
+      - "no existe ningun proceso que borre esas filas cuando pasa ese tiempo"
+      - "se deja constancia de la contradiccion: hoy conserva mas de lo que promete, que es lo que el criterio pide, pero la copia describe otra cosa"
+      - "se advierte que si algun dia se implementa ese borrado, se lleva consigo la historia con la que se calcula la tasa de aceptacion"
+
+  - title: "The two surfaces that used to be pruned by expiry no longer are"
+    tags:
+      - regression
+      - regression-evidence
+      - edge-case
+    given:
+      - "el entorno bajo prueba tiene sugerencias que ningun lote del dia esta mostrando"
+    when:
+      - "se abre la lista de acciones de My Day"
+      - "se lee el contador de sugerencias del portafolio"
+      - "se comparan esos dos numeros con lo que el panel de sugerencias muestra"
+    then:
+      - "queda registrado si el entorno trae ya el arreglo que repone la poda de esas dos superficies"
+      - "si no lo trae, los dos numeros incluyen sugerencias que el panel ya no muestra y crecen sin bajar"
+      - "se reporta la diferencia entre lo que el panel muestra y lo que esas dos superficies cuentan, con el numero medido"
+      - "se deja claro que esto viene del cambio de esta historia y no de un dato viejo del entorno"
+
+tags:
+  - im-1234
+  - im-1229
+  - im-1288
+  - csm-os
+  - migration-app-backend
+  - migration-app-frontend
+  - suggested-tasks
+  - accept-decline
+  - soft-delete
+  - reporting
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-21T17:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-21T17:20:00Z"
+  version: 1

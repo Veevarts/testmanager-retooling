@@ -1,0 +1,33 @@
+TC-174 / IM-1234 — ¿PUEDE fallar la red de seguridad?
+=====================================================
+
+El harness `npm run csm-os:tasks:verify:local` corre los adaptadores reales contra un
+Postgres real (contenedor aislado qa-tc174-pg, pgvector:pg16, base csmos_tasks creada
+desde db/migrations de este arbol). Linea base limpia: 347/347 checks passed, exit 0.
+
+Verde no es evidencia si no puede ponerse rojo. Tres mutaciones, una por criterio de
+IM-1234, cada una revertida despues de medir (arbol de git limpio al terminar):
+
+  mutacion                                                     | resultado
+  -------------------------------------------------------------|---------------------------
+  M1  softDelete deja de escribir `deleted_at`                  | 3 checks FAIL
+      (AC2: declinar conserva el registro y lo saca de la vista) | 344/347
+      FAIL declined rows carry deleted_at
+      FAIL a second decline is refused, not a silent overwrite
+      FAIL state_before_delete was NOT overwritten with Rejected
+  -------------------------------------------------------------|---------------------------
+  M2  logTransition() no escribe la fila de auditoria           | 2 checks FAIL
+      (AC4: quien y cuando)                                     | 345/347
+      FAIL both transitions were audited
+      FAIL ...and both directions are audited
+  -------------------------------------------------------------|---------------------------
+  M3  en el MARKDOWN del backlog, el bucket `ignored` pasa de   | 2 checks FAIL
+      `deleted_at IS NOT NULL` a `IS NULL`                      | 345/347
+      (AC5: la tasa es consultable)                             |
+      FAIL ignored counts the declined row
+      FAIL the buckets sum to total — nothing is silently dropped
+
+M3 es la mas informativa: NO se toco ni una linea de codigo. Editar el bloque SQL dentro de
+`docs/operating-system/execution-logs/im-1229-backlog.md` puso la suite en rojo, lo que prueba
+que la consulta del reporte se EJECUTA desde ese archivo y no puede pudrirse en silencio.
+Es la diferencia entre "la query esta documentada" y "la query esta viva".

@@ -1,0 +1,35 @@
+Escenario 4 (AC3) — las cuatro disposiciones, donde se ven
+==========================================================
+
+EN EL ENTORNO DE DEV (observado)
+  disposicion          | donde aparece                    | medido
+  ---------------------|----------------------------------|----------------------------
+  aceptada             | lista Open / tablero             | Open 0 -> 1 al aceptar;
+                       | no en el panel, no en Deleted    | panel 2 -> 1
+  declinada            | pestaña Deleted, restaurable     | Deleted 0 -> 1 al declinar;
+                       |                                  | Restore la devuelve al panel
+  pendiente            | panel de sugerencias del dia     | GET /csm/tasks/suggestions ->
+                       |                                  | {batchDate 2026-09-21, cap 5,
+                       |                                  |  items 1, stale false}
+  fuera del lote /     | solo el conjunto de candidatas   | GET /csm/tasks/suggestions/pool
+  devuelta al pool     | ("View all suggested tasks")     | -> items 10, remaining 217
+                       |                                  |    = 227 candidatas, contra
+                       |                                  |    un tope de 5 en el panel
+
+  Las cuatro se distinguen sin ambiguedad y ninguna es un borrado real: las 227 candidatas
+  siguen existiendo, la declinada sigue existiendo y vuelve con Restore.
+
+EN LA BASE (Postgres real local, fixture propio de QA — ver scenario-6/)
+  disposicion          | state     | batch_id | deleted_at | expired_at
+  ---------------------|-----------|----------|------------|------------
+  pendiente            | Suggested | SET      | NULL       | NULL
+  aceptada             | New       | SET      | NULL       | NULL
+  declinada            | Rejected  | SET      | SET        | NULL
+  devuelta al pool     | Suggested | NULL     | NULL       | NULL
+  expirada (heredada)  | Rejected  | SET      | NULL       | SET
+
+  La cuarta y la primera comparten estado y solo las separa un puntero mutable, que es
+  exactamente el motivo por el que la historia de pertenencia a lote se guarda aparte y
+  no se sobrescribe. Medido sobre el fixture: la membresia de la devuelta al pool quedo
+  CERRADA con motivo `returned_to_pool` y con el autor que la solto, y las otras cinco
+  quedaron abiertas.

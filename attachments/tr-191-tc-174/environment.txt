@@ -1,0 +1,44 @@
+TC-174 / TR-191 — contra que estuvo corriendo esto (riesgo R1)
+==============================================================
+
+FRONTEND desplegado en dev
+  https://migration.dev.rtl.veevartapp.com/  ->  assets/index-DTlapIiO.js
+  El chunk assets/useTaskSuggestions-eOagxggE.js contiene, verificado por grep sobre el
+  bundle servido: suggestion-accept, suggestion-decline, suggestion-details,
+  suggested-panel-view-all (PR 200), "Deleted items are kept for 30 days", task-restore,
+  "Suggestion declined", /accept, /decline, /restore, /complete.
+  La pantalla renderizo las tres pestañas Tasks / SF Cases / Playbooks (PR 199 + 198),
+  el panel de sugerencias y las sub-pestañas Open / Completed / Deleted.
+  => el dev sirve PR 195..#200 o posterior.
+
+BACKEND desplegado en dev
+  https://zu76ogw8dg.execute-api.us-east-1.amazonaws.com/dev/api
+  GET /csm/tasks/suggestions/pool?ownerId=... -> 200 {items, nextCursor, remaining}
+  Esa ruta la introduce el PR #388, posterior a #379 (3dece481) y a #385.
+  GET /csm/workspace/accounts devuelve `suggestedTasksCount` Y `suggestedTasksRemaining`,
+  que es la forma con tope del PR #385 (ruling R12, el follow-up que el #379 exige).
+  => el dev sirve #379 mas el follow-up, no #379 solo. El riesgo R3 del test case queda
+     acotado por medicion, no por suposicion.
+
+TRAMPA DE MEDICION QUE COSTO UN FALSO NEGATIVO
+  La primera carga de /csm/my-day mostro la pantalla ANTERIOR: una pestaña
+  "Suggested Tasks · 228" y 228 tarjetas `my-day-task-card`, sin panel de sugerencias.
+  Parecia "la funcionalidad no esta desplegada". No lo era: el navegador servia un
+  index.html cacheado.
+    performance.getEntriesByType('resource') -> index-BRdzYlZp.js
+    el index.html vivo referencia        -> index-DTlapIiO.js
+  Tras limpiar caches y recargar con query nueva, la pantalla correcta aparecio.
+  Cualquier veredicto de UI sobre un entorno desplegado debe empezar comparando el asset
+  que el navegador cargo contra el que el servidor referencia.
+
+BASE DE DATOS
+  No se consulto la Aurora de dev: no hay acceso de lectura desde aqui.
+  Los criterios de trazabilidad (quien/cuando) y de consulta (tasa aceptado vs ignorado)
+  se ejecutaron contra un Postgres real local levantado desde db/migrations de este arbol,
+  con los adaptadores reales del producto (ver scenario-0-harness/). Es ejecucion del
+  codigo del producto, no inferencia — pero NO es el dato de dev, y asi se reporta.
+
+USUARIO / DATOS
+  Sesion: evansri.mondragonp@veevart.com (Admin), "View as: Emily Clever"
+  (ownerId 005Vs00000EpDBHIA3), que es el CSM sembrado del entorno de dev.
+  Ninguna organizacion de Salesforce fue tocada. Ninguna accion sobre produccion.

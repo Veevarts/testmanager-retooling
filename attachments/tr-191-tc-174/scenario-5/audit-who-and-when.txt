@@ -1,0 +1,39 @@
+Escenario 5 (AC4) — quien y cuando
+==================================
+
+1. LA BASE NO ADMITE UN CAMBIO DE ESTADO DE USUARIO SIN AUTOR
+
+   csm_os.task_state_log tiene:
+     CHECK ((source = 'user') = (actor_sub IS NOT NULL))
+     created_at timestamptz NOT NULL DEFAULT now()
+
+   Ejecutado:
+     INSERT ... (action_id, from_state, to_state, actor_sub) VALUES (..., NULL);
+     -> ERROR: new row violates check constraint "task_state_log_actor_matches_source"
+
+     INSERT ... (action_id, from_state, to_state, actor_sub) VALUES (..., 'qa-tc174-actor');
+     -> INSERT 0 1
+        to_state | actor_sub      | source | has_timestamp
+        New      | qa-tc174-actor | user   | t
+
+   "Quien" no es opcional por convencion: lo impone el esquema. Una transicion de usuario
+   sin autor no se puede escribir.
+
+2. EL PRODUCTO ESCRIBE ESA FILA, Y SE PUEDE COMPROBAR QUE LA ESCRIBE
+
+   El harness ejecutado (347/347) incluye "both transitions were audited" y
+   "...and both directions are audited" sobre complete / reopen reales.
+   Mutacion M2: `logTransition()` deja de escribir -> esos dos checks se ponen en rojo
+   (345/347). Ver scenario-0-harness/mutation-matrix.txt.
+
+3. QUIEN SOLTO UNA SUGERENCIA AJENA
+   Una regeneracion forzada por otra persona cierra la membresia de lote estampando
+   `task_suggestion_batch_items.released_by` con su cognito_sub; la corrida automatica del
+   dia la deja en NULL. Medido en el fixture: released_by = 'qa-tc174-actor' en la fila
+   cerrada con motivo `returned_to_pool`, NULL en las abiertas.
+
+LIMITE DE ESTA EVIDENCIA
+  Todo esto corrio contra un Postgres real local construido desde las migraciones de este
+  arbol, con los adaptadores del producto. NO se consulto la Aurora de dev (sin acceso de
+  lectura). Lo que queda probado es el mecanismo ejecutandose, no las filas que dejaron
+  hoy mis clics en dev.

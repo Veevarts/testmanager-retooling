@@ -1,0 +1,546 @@
+schemaVersion: "1.0"
+id: tr-0ab4f94a-c6b5-4440-885c-7b71d37af777
+key: TR-191
+title: >-
+  TR-191 · IM-1234 · TC-174 · Disponer de una sugerencia: aceptar, declinar y el registro de
+  la tasa — 8/9 PASS, 1 FAIL. Los cinco criterios se cumplen; la pestaña Deleted etiqueta mal
+  lo que restaura.
+status: completed
+environment:
+  name: >-
+    Interfaz y API desplegadas en https://migration.dev.rtl.veevartapp.com (API
+    zu76ogw8dg.execute-api.us-east-1.amazonaws.com/dev/api), rol Admin con "View as: Emily
+    Clever" (ownerId 005Vs00000EpDBHIA3), el CSM sembrado del entorno de dev. Los criterios de
+    trazabilidad y de consulta se ejecutaron contra un Postgres real local (contenedor aislado
+    qa-tc174-pg, pgvector:pg16) construido desde db/migrations de Veevarts/MigrationAppBackend en
+    main, con los adaptadores reales del producto. Ninguna organizacion de Salesforce fue tocada.
+    Nada de produccion.
+  buildVersion: >-
+    Mixed — backend NestJS sobre Aurora ("PR #379", 3dece481) mas frontend React del modulo CSM
+    ("PRs #195..#202"). El entorno sirve algo POSTERIOR a lo que el ticket declara final:
+    GET /csm/tasks/suggestions/pool responde 200 (lo introduce el "PR #388") y el badge del
+    portafolio ya viene con tope y contador de resto, que es la forma del "PR #385", el follow-up
+    que el propio "PR #379" exige antes de desplegarse.
+startedAt: "2026-09-21T21:55:00Z"
+completedAt: "2026-09-21T22:25:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Una sugerencia de la IA deja de ser una tarea. Ahora es una propuesta con exactamente dos
+  salidas: Accept la convierte en tarea en el mismo registro y sin crear caso de Salesforce, y
+  Decline la marca `Rejected` con `deleted_at`, o sea borrado blando y restaurable.
+
+  El titulo del ticket quedo viejo. El product owner dicto (ruling R9 del PR) que completar no es
+  una operacion valida sobre algo que todavia no es tarea, asi que "Ignore" es Decline y
+  "Mark as Done" es el Mark Complete que ya existia sobre la tarea ya aceptada. Los criterios se
+  leen contra lo entregado, no contra el titulo.
+
+  La pieza fina esta abajo: `state` por si solo NO separa las disposiciones. Desde el ruling R11
+  una sugerencia que nadie acciono vuelve al conjunto de candidatas en vez de expirar, y queda
+  igual de `Suggested` que una pendiente — las separa un puntero mutable. Por eso la pertenencia
+  a lote se guarda en una tabla append-only con su propio disparador: "fue mostrada alguna vez"
+  es un hecho del pasado y no una propiedad de la fila de hoy, y es el denominador de la tasa.
+
+  ## Inferred technical tests
+
+  Tres mitades, y las tres resultaron ejecutables aqui:
+
+  1. La interfaz desplegada, para los criterios que el CSM ve: que disposiciones ofrece una
+     sugerencia, donde queda cada una, y que devuelve Restore.
+  2. La API desplegada, para los negativos: actuar dos veces, completar sin aceptar, restaurar lo
+     no borrado.
+  3. Un Postgres real local con los adaptadores del producto, para los dos criterios que no
+     tienen ninguna superficie: quien/cuando y la consulta de la tasa. No hay acceso de lectura a
+     la Aurora de dev, asi que esto es el mecanismo ejecutandose, no el dato de dev, y se reporta
+     asi.
+
+  Ningun escenario quedo pendiente de una persona.
+
+  ## Verde no es evidencia si no puede ponerse rojo
+
+  El harness del repo dio 347/347 contra Postgres real. Eso solo dice que paso. Tres mutaciones,
+  una por criterio, revertidas despues (arbol de git limpio al terminar):
+
+    - quitar `deleted_at` del borrado blando         -> 3 checks en rojo
+    - dejar de escribir la fila de auditoria         -> 2 checks en rojo
+    - editar el bloque SQL DEL MARKDOWN del backlog  -> 2 checks en rojo
+
+  La tercera es la que vale: no se toco una linea de codigo. La consulta del reporte se ejecuta
+  desde el archivo de documentacion, asi que no puede pudrirse en silencio.
+
+  ## La trampa que casi produce un falso negativo
+
+  La primera carga de My Day mostro la pantalla ANTERIOR — una pestaña "Suggested Tasks · 228",
+  sin panel de sugerencias — y parecia que la funcionalidad no estaba desplegada. No lo era: el
+  navegador tenia cacheado un index.html viejo (cargo index-BRdzYlZp.js mientras el servidor
+  referencia index-DTlapIiO.js). Cualquier veredicto de interfaz sobre un entorno desplegado
+  empieza comparando el asset que el navegador cargo contra el que el servidor sirve.
+
+results:
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: >-
+      AC1 · A suggestion offers exactly two dispositions, and completing is not one of them
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-21T22:06:00Z"
+    stepResults: []
+    actual: |
+      Leido del DOM de la interfaz desplegada, no del codigo.
+
+      Tarjeta de sugerencia, botones presentes:
+
+        suggestion-title     el titulo, que abre el detalle
+        suggestion-accept    "Accept"
+        suggestion-decline   "Decline"
+        suggestion-details   "Details"
+
+      No hay ningun control para completar o marcar como hecha sobre la sugerencia. Idem en la
+      segunda tarjeta del panel.
+
+      Detalle de la sugerencia, estado "Suggested":
+
+        task-detail-accept      "Accept task"
+        task-detail-decline     "Decline"
+        task-detail-review-sf   "Review & Create SF Case…"
+
+      Precision honesta: el detalle SI tiene un tercer boton, pero no es una tercera forma de
+      disponer de la sugerencia — crea el caso de Salesforce y, con reserva previa, la acepta en
+      el mismo paso. Tampoco ofrece "Delete": borrar es de la tarea ya aceptada.
+
+      Y el producto lo dice por su cuenta cuando se le pide lo que no ofrece: POST /complete
+      sobre una sugerencia responde 409 "Invalid task transition: Suggested → Done. Allowed from
+      Suggested: [New, Rejected]".
+
+      pre-fix -> post-fix -> objetivo cumplido?: el ticket pedia dos acciones para disponer de una
+      sugerencia -> la tarjeta ofrece dos y solo dos, y la tercera vía posible esta cerrada por la
+      maquina de estados -> SI.
+    notes: >-
+      **PASS.** Tres capturas, una por paso.
+    attachments:
+      - name: 01-my-day-tasks-panel-collapsed.png
+        path: attachments/tr-191-tc-174/scenario-1/01-my-day-tasks-panel-collapsed.png
+        mimeType: image/png
+      - name: 02-panel-expanded-two-cards-accept-decline-details.png
+        path: attachments/tr-191-tc-174/scenario-1/02-panel-expanded-two-cards-accept-decline-details.png
+        mimeType: image/png
+      - name: 03-detail-modal-suggested-accept-decline-only.png
+        path: attachments/tr-191-tc-174/scenario-1/03-detail-modal-suggested-accept-decline-only.png
+        mimeType: image/png
+      - name: observations.txt
+        path: attachments/tr-191-tc-174/scenario-1/observations.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: >-
+      AC1 · "I did this" is the accepted task being completed, not the suggestion
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-21T22:08:00Z"
+    stepResults: []
+    actual: |
+      El recorrido completo, medido paso a paso:
+
+        Accept en la tarjeta      POST /csm/tasks/0b91a664-.../accept -> 201
+                                  panel 2 -> 1, "Open · 0" -> "Open · 1"
+                                  NINGUNA llamada de creacion de caso de Salesforce en la traza
+                                  de red: aceptar ya no crea el caso, es otra operacion
+        la tarea en Open          mismo titulo, misma cuenta (Tesla Science Center) y los mismos
+                                  chips CSM / Fundraising que traia la sugerencia: es el mismo
+                                  registro, no una copia
+        Mark complete en la fila  "Open · 1" -> 0, "Completed · 0" -> 1
+                                  la region viva anuncia "... marked complete."
+        pestaña Completed         la fila con su marca y un boton Reopen
+        Reopen                    "Completed · 1" -> 0, "Open · 0" -> 1
+                                  anuncio "... reopened."
+
+      Esta es exactamente la ruta que el ticket llama "Mark as Done": no existe sobre la
+      sugerencia, existe sobre la tarea en la que la sugerencia se convirtio.
+
+      pre-fix -> post-fix -> objetivo cumplido?: "marcar como hecha" no tenia donde vivir en una
+      sugerencia -> vive en la tarea aceptada, con ida y vuelta (completar y reabrir) y sin tocar
+      Salesforce -> SI.
+    notes: >-
+      **PASS.** El ida y vuelta importa: reabrir limpia la fecha de resolucion, que es la otra
+      cara de la restriccion de la base que exige esa fecha en los estados terminales.
+    attachments:
+      - name: 01-accepted-moves-to-open-list.png
+        path: attachments/tr-191-tc-174/scenario-2/01-accepted-moves-to-open-list.png
+        mimeType: image/png
+      - name: 02-completed-tab-holds-the-marked-task.png
+        path: attachments/tr-191-tc-174/scenario-2/02-completed-tab-holds-the-marked-task.png
+        mimeType: image/png
+      - name: flow.txt
+        path: attachments/tr-191-tc-174/scenario-2/flow.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "AC2 · Declining removes the suggestion from view and keeps the record"
+    scenarioIndex: 2
+    status: failed
+    executedAt: "2026-09-21T22:09:00Z"
+    stepResults: []
+    actual: |
+      Cuatro pasos de cinco hacen lo que el criterio pide. El quinto no.
+
+        Decline                   panel "· 1" -> "· 0" y el vacio dice "All suggestions triaged."
+                                  "Deleted · 0" -> "Deleted · 1"
+                                  aviso "Suggestion declined" con accion "Undo"
+        pestaña Deleted           encabezado "Deleted items are kept for 30 days."
+                                  fila: "... · Task · deleted Sep 21, 2026"  [Restore]
+                                  ^^^^ AQUI FALLA
+        Restore                   Deleted 1 -> 0, panel 0 -> 1: vuelve AL PANEL DE SUGERENCIAS,
+                                  no al tablero
+        Decline + Undo            panel 1 -> 0 -> 1, Deleted 1 -> 0: el deshacer del aviso la
+                                  devuelve al panel
+
+      LO QUE FALLA. La fila dice "Task" cuando es una sugerencia declinada. Deberia decir
+      "Suggested task", porque restaurarla la devuelve al panel y no al tablero — y ese es
+      justamente el dato que el CSM necesita antes de tocar Restore.
+
+      La API devuelve lo necesario para acertar:
+
+        { "kind": "task", "state": "Rejected", "stateBeforeDelete": "Suggested", ... }
+
+      El backend deriva `kind` de `state`, que tras declinar vale `Rejected` para una sugerencia
+      y para una tarea, asi que `kind` vale 'task' en los dos casos. El DTO del backend agrego
+      `stateBeforeDelete` explicitamente para esta etiqueta y lo dejo escrito en el comentario del
+      campo. El frontend etiqueta con `kind`, y su esquema de validacion ni siquiera parsea
+      `stateBeforeDelete`: el campo llega en la respuesta y se descarta. Cero ocurrencias del
+      nombre en todo el repositorio de frontend.
+
+      Correccion: dos lineas del frontend, una en el esquema y otra en la etiqueta.
+
+      pre-fix -> post-fix -> objetivo cumplido?: declinar debia conservar el registro y sacarlo de
+      la vista -> lo conserva, lo saca, lo restaura correctamente al estado previo, PERO la
+      pestaña que lo muestra no distingue que es -> NO, por la etiqueta.
+    notes: >-
+      **FAIL.** No hay perdida de dato y la base distingue bien: falla la etiqueta, en la
+      distincion que el propio comentario del frontend dice que importa. Reportado en IM-1234 y
+      comentado en el "PR #196" de MigrationAppFrontend.
+    attachments:
+      - name: 01-declined-leaves-panel-toast-undo-deleted-1.png
+        path: attachments/tr-191-tc-174/scenario-3/01-declined-leaves-panel-toast-undo-deleted-1.png
+        mimeType: image/png
+      - name: defect-deleted-tab-labels-a-declined-suggestion-as-task.txt
+        path: attachments/tr-191-tc-174/scenario-3/defect-deleted-tab-labels-a-declined-suggestion-as-task.txt
+        mimeType: text/plain
+      - name: flow.txt
+        path: attachments/tr-191-tc-174/scenario-3/flow.txt
+        mimeType: text/plain
+    defects:
+      - title: >-
+          La pestaña Deleted etiqueta "Task" a una sugerencia declinada, asi que el CSM no sabe a
+          donde la va a devolver Restore
+        severity: low
+        jiraKey: IM-1234
+        url: "https://veevart.atlassian.net/browse/IM-1234?focusedCommentId=24891"
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "AC3 · The four dispositions stay distinguishable from one another"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-21T22:12:00Z"
+    stepResults: []
+    actual: |
+      En el entorno de dev, cada disposicion tiene su lugar y ninguna se confunde con un borrado:
+
+        aceptada          lista Open / tablero; no en el panel, no en Deleted
+        declinada         solo en Deleted, y vuelve con Restore
+        pendiente         panel del dia: GET /csm/tasks/suggestions -> batchDate 2026-09-21,
+                          cap 5, items 1, stale false
+        fuera del lote    solo el conjunto de candidatas: GET /csm/tasks/suggestions/pool ->
+                          items 10 + remaining 217 = 227 candidatas, contra un tope de 5
+
+      En la base, sobre un fixture propio de QA con las cinco formas que el esquema admite:
+
+        disposicion          state       batch_id   deleted_at   expired_at
+        pendiente            Suggested   SET        NULL         NULL
+        aceptada             New         SET        NULL         NULL
+        declinada            Rejected    SET        SET          NULL
+        devuelta al pool     Suggested   NULL       NULL         NULL
+        expirada (heredada)  Rejected    SET        NULL         SET
+
+      La cuarta y la primera comparten estado y solo las separa un puntero mutable. Por eso se
+      midio tambien la historia de pertenencia: la devuelta al pool quedo con su membresia CERRADA,
+      con motivo `returned_to_pool` y con el autor que la solto; las otras cinco, abiertas.
+
+      pre-fix -> post-fix -> objetivo cumplido?: "las dos" del criterio son en realidad cuatro
+      -> las cuatro se distinguen, en pantalla y en base, y la que el estado no separa la separa
+      una tabla que no se sobrescribe -> SI.
+    notes: >-
+      **PASS.** El criterio pedia dos estados distinguibles; lo entregado distingue cuatro, que es
+      lo que hizo falta cuando "no responder" dejo de descartar la sugerencia.
+    attachments:
+      - name: dispositions-matrix.txt
+        path: attachments/tr-191-tc-174/scenario-4/dispositions-matrix.txt
+        mimeType: text/plain
+      - name: verify-task-suggestions-local-347.log
+        path: attachments/tr-191-tc-174/scenario-0-harness/verify-task-suggestions-local-347.log
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "AC4 · Every disposition records who did it and when"
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-21T22:14:00Z"
+    stepResults: []
+    actual: |
+      El "quien" no depende de que alguien se acuerde de escribirlo: lo impone el esquema.
+
+        csm_os.task_state_log
+          CHECK ((source = 'user') = (actor_sub IS NOT NULL))
+          created_at timestamptz NOT NULL DEFAULT now()
+
+      Ejecutado contra el Postgres real:
+
+        INSERT ... actor_sub = NULL
+          -> ERROR: violates check constraint "task_state_log_actor_matches_source"
+        INSERT ... actor_sub = 'qa-tc174-actor'
+          -> INSERT 0 1 ; to_state New | actor_sub qa-tc174-actor | source user | timestamp si
+
+      Una transicion de usuario sin autor NO SE PUEDE ESCRIBIR. Y que el producto escriba esa fila
+      quedo probado por su contrario: el harness verifica "both transitions were audited" sobre un
+      completar/reabrir real, y al anular la escritura de la auditoria esos dos checks se ponen en
+      rojo.
+
+      Para la regeneracion forzada por otra persona, la atribucion vive en el cierre de la
+      membresia: `released_by` con clave foranea a los usuarios, y NULL para la corrida automatica
+      del dia. Medido en el fixture.
+
+      pre-fix -> post-fix -> objetivo cumplido?: hacia falta saber quien dispuso de cada sugerencia
+      y cuando -> cada transicion deja autor y momento en la misma transaccion, y la base rechaza
+      lo contrario -> SI.
+    notes: >-
+      **PASS, con el limite dicho.** Esto corrio contra un Postgres local construido desde las
+      migraciones de este arbol con los adaptadores del producto. No se consulto la Aurora de dev
+      porque no hay acceso de lectura: es el mecanismo ejecutandose, no las filas que dejaron hoy
+      mis clics en dev.
+    attachments:
+      - name: audit-who-and-when.txt
+        path: attachments/tr-191-tc-174/scenario-5/audit-who-and-when.txt
+        mimeType: text/plain
+      - name: mutation-M2-no-audit-row.txt
+        path: attachments/tr-191-tc-174/scenario-0-harness/mutation-M2-no-audit-row.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "AC5 · The accept-vs-ignore rate is answerable and its buckets add up"
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-21T22:16:00Z"
+    stepResults: []
+    actual: |
+      La consulta no se copio a mano: se extrajo del bloque SQL de la entrada 11 del backlog del
+      repositorio — el mismo archivo y el mismo bloque que el harness ejecuta — y se corrio sobre
+      un fixture propio de QA con las seis situaciones que la consulta nombra.
+
+        owner_id       | batch_date | total | accepted | ignored | expired | still_pending | released | unaccounted
+        qa-tc174-owner | 2026-09-21 |     6 |        1 |       1 |       1 |             1 |        1 |           1
+
+        6 = 1 + 1 + 1 + 1 + 1 + 1. Las categorias no se solapan y suman el total: nada se cae en
+        silencio, y lo que ninguna disposicion describe sale a la vista en vez de faltar.
+
+        Tasa del lote = aceptadas / (aceptadas + ignoradas) = 1/2 = 50%.
+        Lo devuelto al pool queda FUERA del denominador: no responder no es rechazar, y meterlo
+        reportaria a un CSM de vacaciones como si hubiera rechazado la semana.
+
+      Consulta del portafolio, contando cada sugerencia UNA vez: accepted 1, ignored 1. Importa
+      porque una sugerencia que se arrastra varios dias es miembro de varios lotes, asi que sumar
+      la columna entre filas la contaria varias veces.
+
+      Y la consulta no puede pudrirse: cambiar el predicado del bucket `ignored` EN EL MARKDOWN,
+      sin tocar una linea de codigo, puso el harness en rojo.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el criterio pedia que lo ignorado fuera consultable
+      para medir la calidad de lo que propone la IA -> la consulta existe, corre, cuadra, y esta
+      amarrada a la suite para que siga cuadrando -> SI.
+    notes: >-
+      **PASS.** Mostrar esa tasa en una pantalla o un endpoint salio a IM-1284 el 2026-09-17 y
+      NO se prueba aqui. Este escenario prueba que el dato es consultable, que es lo que el
+      criterio pide.
+    attachments:
+      - name: reporting-query-output.txt
+        path: attachments/tr-191-tc-174/scenario-6/reporting-query-output.txt
+        mimeType: text/plain
+      - name: documented-query-as-executed.sql
+        path: attachments/tr-191-tc-174/scenario-6/documented-query-as-executed.sql
+        mimeType: text/plain
+      - name: qa-fixture.sql
+        path: attachments/tr-191-tc-174/scenario-6/qa-fixture.sql
+        mimeType: text/plain
+      - name: mutation-M3-ignored-predicate.txt
+        path: attachments/tr-191-tc-174/scenario-0-harness/mutation-M3-ignored-predicate.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "Acting twice on the same suggestion fails closed"
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-21T22:11:00Z"
+    stepResults: []
+    actual: |
+      Ejecutado contra el backend de dev, sobre una sugerencia real:
+
+        POST /complete sobre una sugerencia   409  "Invalid task transition: Suggested → Done.
+                                                    Allowed from Suggested: [New, Rejected]."
+        POST /restore sobre algo no borrado   409  "Task ... is not deleted."
+        POST /decline (primera vez)           201  state = Rejected
+        POST /decline (segunda vez)           409  "Task ... is already deleted."
+        POST /accept despues de declinar      409  "Task ... is deleted; restore it before
+                                                    changing its state."
+        POST /restore (devolver el entorno)   201  state = Suggested
+
+      Ningun 500, ningun 200 silencioso, ningun registro a medias, y ninguna vista quedo
+      inconsistente. El primer mensaje enumera las transiciones permitidas, que es la regla del
+      ticket dicha por el producto: desde una sugerencia se llega a aceptada o a declinada, y
+      "hecha" no esta en la lista.
+
+      pre-fix -> post-fix -> objetivo cumplido?: dos clics, una pestaña vieja o un reintento no
+      deben poder dejar la sugerencia en un estado imposible -> cada camino invalido responde 409
+      con el motivo, y el registro no se mueve -> SI.
+    notes: >-
+      **PASS.** El entorno quedo como estaba: la sugerencia volvio al panel.
+    attachments:
+      - name: negative-api-matrix.txt
+        path: attachments/tr-191-tc-174/scenario-7/negative-api-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "The Deleted tab promises a retention that nothing enforces"
+    scenarioIndex: 7
+    status: passed
+    executedAt: "2026-09-21T22:18:00Z"
+    stepResults: []
+    actual: |
+      La pantalla dice, encabezando la lista de eliminados:
+
+        "Deleted items are kept for 30 days."
+
+      En el backend no hay nada que lo cumpla. Las unicas sentencias que borran acciones de
+      verdad estan en el harness de pruebas limpiando sus propios fixtures. Ninguna busqueda de
+      retencion, purga o barrido devuelve un proceso, cron o lambda que borre esas filas.
+
+      Hoy eso juega a favor del criterio: el registro se conserva mas de lo prometido, que es
+      exactamente lo que el ticket pide. El problema es de otro tipo. Al CSM se le dice que lo que
+      declina se limpia solo en un mes, y no es cierto — decide sobre informacion falsa.
+
+      Y al reves: el dia que ese barrido se implemente se lleva el denominador del reporte. La
+      membresia de lote cae en cascada con la accion, asi que borrar la sugerencia borra el hecho
+      de que fue mostrada, y la tasa de aceptacion de los lotes viejos se recalcularia sobre un
+      total mas chico sin que nada avise.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el criterio pedia que no fuera un borrado real
+      -> no lo es, nada borra nunca -> SI, y queda anotada la contradiccion con la copia.
+    notes: >-
+      **PASS con observacion.** No es defecto del cambio: es una promesa de interfaz sin respaldo.
+      O se corrige la copia, o el barrido que la cumpla tiene que respetar la historia de lote.
+    attachments:
+      - name: retention-copy-vs-code.txt
+        path: attachments/tr-191-tc-174/scenario-8/retention-copy-vs-code.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "a31e7e95-a522-4d56-82de-4ace3f88f224"
+    testCaseKey: TC-174
+    scenarioTitle: "The two surfaces that used to be pruned by expiry no longer are"
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-21T22:13:00Z"
+    stepResults: []
+    actual: |
+      Medido en dev para el CSM bajo prueba:
+
+        panel de sugerencias del dia       1 item, con tope 5
+        badge del portafolio, por cuenta   5, y ademas devuelve un contador de resto -> ES la
+                                           forma con tope del follow-up que el PR exige
+        lista de acciones de My Day        227 `suggested` (1095 acciones en total), SIN tope
+        conjunto de candidatas             227 (10 + 217 restantes)
+
+      Lo que se puede afirmar:
+
+        1. El entorno SI trae el arreglo del badge. Ese lado de la regresion esta cubierto.
+        2. La lista de acciones de My Day sigue sin tope: 227 contra un panel de 5. Es una entrada
+           abierta del backlog del repo, ahora con numero.
+        3. Hoy no es visible para el CSM: la pantalla nueva ya no pinta esa lista. El endpoint sin
+           tope quedo servido pero no dibujado.
+        4. Donde SI se vio: con el index.html viejo en cache, la pantalla anterior mostro 228
+           tarjetas. Cualquier cliente que siga llamando a ese endpoint — una pestaña sin recargar
+           — le muestra al CSM 228 sugerencias donde el producto nuevo le muestra 5.
+
+      Lo que NO se puede afirmar desde afuera: cuanto de esas 227 es acumulacion por el cambio de
+      esta historia y cuanto es el conjunto de candidatas que ese endpoint ya mostraba antes.
+      Separarlo pide leer la base de dev, que no esta disponible aqui.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el PR avisa que su cambio deja dos superficies sin
+      podar -> una ya esta arreglada en el entorno y la otra sigue sin tope pero ya no se pinta
+      -> SI en cuanto a registrar el estado con numeros, que es lo que el escenario pedia.
+    notes: >-
+      **PASS.** El escenario pedia dejar registrado si el entorno trae el arreglo y medir la
+      diferencia; ambas cosas estan. El tercer paso del caso pedia ademas atribuir la diferencia a
+      este cambio, y eso se declara explicitamente como no determinable sin la base de dev, en vez
+      de afirmarlo.
+    attachments:
+      - name: surface-drift-measurements.txt
+        path: attachments/tr-191-tc-174/scenario-9/surface-drift-measurements.txt
+        mimeType: text/plain
+      - name: environment.txt
+        path: attachments/tr-191-tc-174/environment.txt
+        mimeType: text/plain
+    defects: []
+
+summary:
+  total: 9
+  passed: 8
+  failed: 1
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 89
+
+history:
+  - action: run-started
+    timestamp: "2026-09-21T21:55:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-174 sobre el "PR #379" de MigrationAppBackend y los
+      "PRs #195..#202" de MigrationAppFrontend.
+  - action: run-completed
+    timestamp: "2026-09-21T22:25:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      Los cinco criterios de aceptacion se cumplen, leidos contra lo entregado (Accept/Decline mas
+      Mark Complete sobre la tarea aceptada) y no contra el titulo del ticket. Ocho escenarios en
+      verde, uno en rojo: la pestaña Deleted etiqueta "Task" a una sugerencia declinada porque el
+      frontend decide con un campo que tras declinar ya no distingue, ignorando el que el backend
+      agrego para esa etiqueta y que su esquema ni siquiera parsea. Correccion de dos lineas.
+      Historia devuelta a Rechazado con el detalle, y comentada en el "PR #196". El harness del
+      repo dio 347/347 contra Postgres real y tres mutaciones probaron que esos checks pueden
+      ponerse en rojo, incluida una que solo edito el markdown del backlog. Dos observaciones sin
+      defecto: la retencion de 30 dias que la pantalla promete y nada cumple, y la lista de
+      acciones de My Day que sigue sin tope aunque ya no se pinta.
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-21T21:55:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-21T22:25:00Z"

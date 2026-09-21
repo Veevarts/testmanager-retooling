@@ -1,0 +1,13 @@
+BEGIN;
+INSERT INTO csm_os.users (cognito_sub, email) VALUES ('qa-tc174-actor','qa-tc174@example.test') ON CONFLICT (cognito_sub) DO NOTHING;
+INSERT INTO csm_os.task_suggestion_batches (id, owner_id, batch_date, cap, generated) VALUES ('11111111-1111-4111-8111-111111111111','qa-tc174-owner', DATE '2026-09-21', 5, 6);
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa1-1111-4111-8111-111111111111','QA TC-174 accepted','New','qa-tc174-owner',NULL,NULL,'11111111-1111-4111-8111-111111111111',NULL);
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa2-1111-4111-8111-111111111111','QA TC-174 declined','Rejected','qa-tc174-owner',now(),NULL,'11111111-1111-4111-8111-111111111111',now());
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa3-1111-4111-8111-111111111111','QA TC-174 pending','Suggested','qa-tc174-owner',NULL,NULL,'11111111-1111-4111-8111-111111111111',NULL);
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa4-1111-4111-8111-111111111111','QA TC-174 released','Suggested','qa-tc174-owner',NULL,NULL,'11111111-1111-4111-8111-111111111111',NULL);
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa5-1111-4111-8111-111111111111','QA TC-174 expired-legacy','Rejected','qa-tc174-owner',NULL,now(),'11111111-1111-4111-8111-111111111111',now());
+INSERT INTO csm_os.control_tower_actions (id,title,state,owner_id,deleted_at,expired_at,suggestion_batch_id,resolved_at) VALUES ('aaaaaaa6-1111-4111-8111-111111111111','QA TC-174 bare-rejected','Rejected','qa-tc174-owner',NULL,NULL,'11111111-1111-4111-8111-111111111111',now());
+SELECT set_config('csm_os.membership_reason','returned_to_pool', true);
+SELECT set_config('csm_os.membership_actor','qa-tc174-actor', true);
+UPDATE csm_os.control_tower_actions SET suggestion_batch_id = NULL WHERE id = 'aaaaaaa4-1111-4111-8111-111111111111';
+COMMIT;

@@ -1,0 +1,57 @@
+DEFECTO — la pestaña Deleted llama "Task" a una sugerencia declinada
+====================================================================
+Escenario 3 (AC2). Todo lo demas del escenario paso; este paso no.
+
+LO QUE SE VE
+  Tras declinar la sugerencia "Ticketing checkout errors reported after the latest release",
+  la fila en la pestaña Deleted dice:
+
+      Ticketing checkout errors reported after the latest release
+      Tesla Science Center · Task · deleted Sep 21, 2026            [Restore]
+
+  Deberia decir "Suggested task". Restaurarla, de hecho, la devuelve al PANEL DE
+  SUGERENCIAS (medido: panel 0 -> 1, Deleted 1 -> 0), no al tablero.
+
+LO QUE DEVUELVE LA API (GET /csm/tasks?ownerId=...&view=deleted)
+  {
+    "id": "24d4de75-c7f0-4fc9-812f-90c309b5f832",
+    "kind": "task",                  <-- de aqui sale la etiqueta
+    "state": "Rejected",
+    "stateBeforeDelete": "Suggested", <-- el campo que SI sabe la respuesta
+    "deletedAt": "2026-09-21T22:09:20.624Z",
+    "origin": "ai"
+  }
+
+POR QUE PASA, EN UNA LINEA DE CADA LADO
+  backend  src/csm/tasks/domain/task.ts:184
+      kind: row.state === 'Suggested' ? 'suggested' : 'task',
+  backend  src/csm/tasks/domain/task.ts:60-64  (el comentario del propio campo)
+      "stateBeforeDelete: What Restore would put the row back into. The Deleted tab needs
+       it to label a row 'Suggested task' vs 'Task': once declined, `state` is 'Rejected'
+       for both and `kind` can no longer tell them apart."
+  frontend src/features/csm/components/MyDayTasksArchive.tsx:140
+      task.kind === "suggested" ? "Suggested task" : "Task"
+
+  El backend agrego `stateBeforeDelete` explicitamente para esta etiqueta y dejo escrito que
+  `kind` no puede distinguirlas. El frontend etiqueta con `kind`. Ademas, el esquema zod del
+  frontend (src/features/csm/schemas/tasks.ts) ni siquiera parsea `stateBeforeDelete`:
+  el campo llega en la respuesta y se descarta. Busqueda en todo el repo de frontend:
+  0 ocurrencias de "stateBeforeDelete".
+
+  Consecuencia: en la pestaña Deleted, una sugerencia declinada y una tarea borrada se ven
+  identicas, y el CSM no puede saber a donde va a volver lo que restaure — que es
+  exactamente la distincion que el comentario del frontend dice que importa:
+      "Which of the two things this was matters: restoring a declined suggestion puts it
+       back in the Suggested panel, restoring a task puts it back on the board."
+
+CORRECCION MINIMA (dos lineas, ambas en el frontend)
+  1. schemas/tasks.ts — parsear el campo que ya llega:
+       stateBeforeDelete: taskStateSchema.nullable(),
+  2. MyDayTasksArchive.tsx:140 — etiquetar con el:
+     - task.kind === "suggested" ? "Suggested task" : "Task"
+     + task.stateBeforeDelete === "Suggested" ? "Suggested task" : "Task"
+
+ALCANCE
+  No hay perdida de dato: el registro se conserva, se distingue en la base y Restore hace lo
+  correcto. Es la etiqueta la que miente. Afecta a las dos superficies que muestran la
+  pestaña Deleted.
