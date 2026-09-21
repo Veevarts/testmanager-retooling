@@ -1,0 +1,217 @@
+schemaVersion: "1.0"
+
+id: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+key: "TC-172"
+title: "General NPS targeting to manually entered specific users"
+
+description: |
+  Cobertura QA de IM-1271 (Target General NPS to manually entered users), bajo el epic IM-970
+  (NPS Survey Tool delivery). Sub-tarea de QA: IM-1286. Repositorio en alcance: Veevarts/survey-tool,
+  "PR #76" (rama story/general-nps-specific-users-v1-IM-1271, mergeada a develop en ceae03b1).
+
+  La historia habilita `Specific users` como audiencia de la General NPS: el administrador escribe
+  a mano Salesforce User IDs o emails, el guardado exige al menos un identificador, y la
+  elegibilidad de la General NPS filtra por coincidencia contra respondentId o respondentEmail.
+  Como esos identificadores no estan asociados a una organizacion, esta primera version trata la
+  audiencia manual como alcance GLOBAL de activacion, asi que choca con cualquier otra General NPS
+  activa.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. El PR esta mergeado a `develop`, no a `main`. Antes de ejecutar hay que confirmar contra
+    que rama corre el entorno donde se valida; un verde sobre un entorno que sirve otra rama no
+    prueba nada.
+  - R2. Los identificadores manuales NO se verifican contra Salesforce (fuera de alcance por
+    decision del ticket). Un ID mal tipeado falla cerrado y en silencio: el administrador no
+    recibe ninguna senal de que nadie va a recibir la encuesta.
+  - R3. El ticket declara el alcance como "global", pero la elegibilidad de General NPS sigue
+    exigiendo que el embebedor mande organizacion: sin clientOrgId ni salesforceOrgId no se lista
+    ninguna General NPS, tambien con audiencia manual. "Global" aplica a la ACTIVACION, no a la
+    ENTREGA. El ticket no lo documenta.
+  - R4. El PR deja de exponer `audienceDetails` en las respuestas publicas de encuesta (la lista de
+    IDs y emails queda solo en el endpoint de admin). Es un cambio de contrato que los AC no
+    describen; hay que verificar que protege la lista y que ningun consumidor publico dependia de
+    ese campo.
+  - R5. El endurecimiento del casing del Salesforce User ID queda explicitamente fuera y se sigue
+    en IM-1280. Hoy el matcher normaliza todo a minusculas, de modo que dos IDs que solo difieren
+    en mayusculas se tratan como el mismo.
+  - R6. El alcance excluye crear usuarios o contactos en Salesforce y verificar la existencia de
+    los identificadores, asi que la validacion vive en el entorno de dev del survey-tool y no toca
+    ninguna organizacion de Salesforce.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "El entorno de survey-tool sirve el codigo del \"PR #76\"; se confirmo contra que rama corre antes de empezar (ver riesgo R1)."
+  - "El administrador puede entrar a la pantalla Surveys y existe el subject `general-nps`."
+  - "Existe al menos una organizacion activa con su Salesforce Org ID conocido, para poder mandar contexto de organizacion en las llamadas de elegibilidad."
+  - "Se reservan dos identificadores de prueba con prefijo reconocible: un Salesforce User ID y un email, ninguno usado por otra encuesta."
+  - "Se conoce el estado inicial de las General NPS activas, porque el escenario de activacion depende de si ya hay una."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · An administrator targets a General NPS survey to manually entered users end to end"
+    tags:
+      - ac-1
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+    given:
+      - "el administrador esta en la pantalla Surveys del survey-tool"
+      - "el subject `general-nps` esta disponible para crear una encuesta general"
+    when:
+      - "abre el formulario de creacion y selecciona el subject `general-nps`"
+      - "revisa las opciones de audiencia que ofrece el formulario"
+      - "selecciona la opcion de audiencia para usuarios especificos"
+      - "escribe un Salesforce User ID y un email en el campo de identificadores, uno por linea"
+      - "guarda la encuesta"
+    then:
+      - "la opcion de usuarios especificos aparece junto a las de todos y de organizacion / museo, tanto en los radios del flujo enfocado como en el selector del formulario de edicion"
+      - "el campo de identificadores queda visible con su texto de ayuda sobre separar por linea, coma o punto y coma"
+      - "la encuesta se guarda sin error y queda listada como General"
+      - "al reabrirla, la audiencia sigue siendo la de usuarios especificos y los dos identificadores se conservan tal como se escribieron"
+      - "se capturo una pantalla por cada paso, numeradas 01 en adelante, bajo attachments del test run"
+
+  - title: "AC2 · Saving is blocked when the specific-user audience has no identifier"
+    tags:
+      - ac-2
+      - negative
+      - functional-ui
+    given:
+      - "el administrador esta creando una General NPS sobre el subject `general-nps`"
+      - "ya selecciono la audiencia de usuarios especificos"
+    when:
+      - "deja el campo de identificadores completamente vacio, o solo con espacios en blanco"
+      - "intenta guardar la encuesta"
+    then:
+      - "el guardado se bloquea y no se crea ninguna encuesta"
+      - "aparece el dialogo de validacion navegable con el mensaje que pide agregar al menos un ID o email de destinatario"
+      - "al usar el dialogo para ir al problema, el foco aterriza en el campo de identificadores de usuarios especificos y no en otro control de audiencia"
+      - "el resto de lo cargado en el formulario sigue intacto despues de cerrar el dialogo"
+
+  - title: "AC3 · A configured Salesforce User ID makes the survey eligible for that respondent"
+    tags:
+      - ac-3
+      - happy-path
+      - eligibility
+    given:
+      - "existe una General NPS activa con audiencia de usuarios especificos y un Salesforce User ID configurado"
+      - "el resto de reglas de entrega se cumplen: la organizacion es activa, la fecha de creacion del usuario supera el retraso configurado y el destinatario no respondio antes"
+    when:
+      - "el embebedor pide las encuestas generales elegibles mandando ese mismo Salesforce User ID como respondentId"
+    then:
+      - "la respuesta incluye exactamente esa encuesta"
+      - "la coincidencia se resuelve sin distinguir mayusculas de minusculas, conforme a la normalizacion vigente del matcher"
+      - "la encuesta devuelta llega sin la lista de identificadores configurados"
+
+  - title: "AC4 · A configured email matches the runtime email regardless of casing"
+    tags:
+      - ac-4
+      - happy-path
+      - eligibility
+    given:
+      - "existe una General NPS activa con audiencia de usuarios especificos y un email configurado"
+      - "el resto de reglas de entrega se cumplen"
+    when:
+      - "el embebedor pide las encuestas generales elegibles mandando ese email con una combinacion distinta de mayusculas y minusculas, y un respondentId que NO esta en la lista"
+    then:
+      - "la respuesta incluye la encuesta, porque el email coincide aunque el ID no este configurado"
+      - "basta con que coincida uno de los dos identificadores, no los dos"
+
+  - title: "AC5 · The survey is withheld and fails closed when no identifier matches"
+    tags:
+      - ac-5
+      - negative
+      - eligibility
+      - fail-closed
+    given:
+      - "existe una General NPS activa con audiencia de usuarios especificos"
+      - "el resto de reglas de entrega se cumplen para el destinatario evaluado"
+    when:
+      - "el embebedor pide las encuestas generales elegibles con un respondentId y un email que no estan en la lista configurada"
+    then:
+      - "la respuesta viene vacia y no expone ninguna encuesta"
+      - "el rechazo es por audiencia, no por otra regla de entrega"
+      - "una audiencia de usuarios especificos sin ningun identificador guardado tampoco deja pasar a nadie"
+
+  - title: "AC6 · Manual targeting is a global activation scope and collides with any other active General NPS"
+    tags:
+      - ac-6
+      - edge-case
+      - activation-scope
+    given:
+      - "ya existe una General NPS activa, sea con audiencia de todos o acotada a una organizacion"
+    when:
+      - "el administrador intenta activar otra General NPS con audiencia de usuarios especificos"
+    then:
+      - "la activacion se rechaza por conflicto de alcance y se explica que ya hay una General NPS activa"
+      - "no quedan dos General NPS activas a la vez"
+      - "si en cambio se cambia una General NPS existente de audiencia de organizacion a usuarios especificos, su alcance de organizacion queda limpio y la encuesta pasa a comportarse como global"
+      - "mandar un alcance de organizacion en una actualizacion posterior no vuelve a fijarlo mientras la audiencia siga siendo de usuarios especificos"
+
+  - title: "AC7 · The existing audiences and feature surveys keep behaving as before"
+    tags:
+      - ac-7
+      - regression
+    given:
+      - "existen encuestas con las audiencias previas: General NPS para todos, General NPS acotada a una organizacion, y una encuesta de feature con destinatarios especificos"
+    when:
+      - "se evalua la elegibilidad de cada una con el contexto que ya les correspondia antes del cambio"
+    then:
+      - "la General NPS para todos sigue alcanzando a cualquier destinatario de una organizacion activa"
+      - "la General NPS acotada a una organizacion sigue entregandose solo dentro de esa organizacion y sigue exigiendo al menos una organizacion para poder activarse"
+      - "la encuesta de feature con destinatarios especificos sigue filtrando por ID o email igual que antes"
+      - "el disparador de la General NPS, el retraso por fecha de creacion del usuario y la regla de una sola respuesta por destinatario quedan sin cambios"
+
+  - title: "The list of targeted identifiers is not exposed on public survey responses"
+    tags:
+      - missing-doc
+      - security
+      - data-exposure
+    given:
+      - "existe una General NPS con audiencia de usuarios especificos y varios identificadores configurados"
+    when:
+      - "se consulta la encuesta y las encuestas elegibles por los caminos publicos que usa el embebedor"
+      - "se consulta la misma encuesta por el camino de administracion"
+    then:
+      - "ninguna respuesta publica incluye la lista de identificadores configurados"
+      - "la respuesta de administracion si la incluye, para que el administrador pueda revisarla y editarla"
+      - "se deja constancia de que este comportamiento no esta descrito en los criterios de aceptacion y de si algun consumidor publico dependia de ese campo"
+
+  - title: "A matching email alone is not enough: General NPS still requires a respondent ID and an organization"
+    tags:
+      - missing-doc
+      - edge-case
+      - eligibility
+    given:
+      - "existe una General NPS activa con audiencia de usuarios especificos y un email configurado"
+    when:
+      - "el embebedor pide las encuestas elegibles mandando ese email pero sin respondentId"
+      - "y en una segunda prueba, manda el identificador correcto pero sin contexto de organizacion"
+    then:
+      - "en ambos casos la respuesta viene vacia"
+      - "el primer caso se rechaza porque falta el destinatario, antes siquiera de evaluar la audiencia"
+      - "el segundo caso se rechaza porque sin organizacion no se lista ninguna encuesta general, aunque el alcance de activacion sea global"
+      - "se documenta la diferencia entre alcance global de ACTIVACION y requisitos de contexto para la ENTREGA, porque el ticket no la distingue"
+
+tags:
+  - im-1271
+  - im-970
+  - im-1286
+  - survey-tool
+  - general-nps
+  - manual-targeting
+  - specific-users
+  - audience-targeting
+
+estimatedDuration: 95
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-21T15:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-21T15:00:00Z"
+  version: 1

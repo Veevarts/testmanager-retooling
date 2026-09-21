@@ -1,0 +1,79 @@
+EJECUCION EN LA INTERFAZ DESPLEGADA — AC1, AC2 (y confirmacion en vivo de AC6 y S8)
+Entorno: https://surveytool.dev.veevart.ai · rama develop · sesion de administrador
+Fecha  : 2026-09-21
+
+VERIFICACION DE QUE EL ENTORNO TIENE EL PR 76
+  cliente: el bundle desplegado (/assets/index-CWNKzj_m.js) contiene el identificador
+           "survey-specific-users" 3 veces. Ese id NACE en el PR 76; el pre-fix usaba
+           "survey-audience-details" como destino de la validacion y no tenia id en el
+           textarea. Marcadores presentes: "To specific users", "Specific users",
+           "survey-specific-users", "Respondent IDs or emails".
+  servidor: al intentar crear una segunda General NPS manual el servidor respondio
+           409 "An active general survey already applies to this audience (survey 26)."
+           El pre-fix habria respondido 400 "General surveys can only target everyone
+           or organizations." Queda probado que AMBOS lados estan desplegados.
+
+AC1 · Tres opciones de audiencia en General NPS
+  paso 1  01-surveys-list.png                      listado de encuestas, boton Add survey
+  paso 2  02-ac1-tres-opciones-de-audiencia.png    subject "General NPS" seleccionado
+          El formulario entro en modo general: Type queda fijo en "NPS (0-10)" como campo
+          de solo lectura y aparece el bloque "General NPS delivery" con
+          "Show after User.CreatedDate 30 days" y "Show after login 30 seconds".
+          Los tres radios presentes:
+              To everyone                     (marcado por defecto)
+              To an organization / museum
+              To specific users               <- la opcion nueva
+  paso 3  03-ac1-campo-de-identificadores.png      al marcar "To specific users" aparece
+          "Respondent IDs or emails (required)" con el texto de ayuda sobre separar por
+          linea, coma o punto y coma, y el placeholder de ejemplo.
+  paso 6  06-ac1-identificadores-cargados.png      dos identificadores cargados
+  paso 7  07-ac1-valores-persistidos-al-reabrir.png
+          Tras guardar y reabrir con Edit, el SEGUNDO control de audiencia (el desplegable
+          del formulario de edicion) ofrece las mismas tres opciones y tiene "Specific
+          users" seleccionada. Los identificadores se conservan textualmente:
+              "005QaTc172AAA\nqa.tc172@example.com"
+          y la pregunta principal tambien.
+
+  Estado persistido (GET /api/admin/surveys/26):
+      audience              specific_users
+      audienceDetails       005QaTc172AAA\nqa.tc172@example.com
+      isGeneralSurvey       true
+      generalClientOrgId    null        <- forzado a null por audiencia manual
+      accountCreatedDelayDays 30
+      type / scale          nps / 10
+
+AC2 · Guardado bloqueado sin identificadores
+  paso 4  04-ac2-dialogo-de-validacion.png
+          Con la pregunta principal cargada y el campo de identificadores VACIO, pulsar
+          Create no crea nada y abre el dialogo "Complete required information" con un
+          unico problema listado:
+              "Add at least one respondent ID or email for the specific user audience."
+          y su boton "Go to field".
+  paso 5  05-ac2-foco-en-el-campo-correcto.png
+          Al pulsar "Go to field", document.activeElement es:
+              id       survey-specific-users
+              tag      TEXTAREA
+              label    Respondent IDs or emails (required)
+              aria-required true
+          Es EXACTAMENTE el cambio del PR: antes el destino de la validacion era
+          "survey-audience-details", el contenedor, y no el campo que hay que llenar.
+          El formulario sigue montado y la pregunta principal intacta tras cerrar.
+
+AC6 confirmado en vivo
+  Con la encuesta 26 activa (era la unica General NPS activa del entorno), crear otra
+  General NPS con audiencia manual devolvio:
+      409 {"error":"An active general survey already applies to this audience (survey 26)."}
+  No se creo nada. El mensaje nombra la encuesta en conflicto, que es lo que necesita un
+  administrador para resolverlo.
+
+S8 confirmado en vivo
+  GET /api/surveys/26            (publico) -> audienceDetails: null
+  GET /api/admin/surveys/26      (admin)   -> audienceDetails: "005QaTc172AAA\nqa.tc172@example.com"
+  El resto de la encuesta (pregunta, audiencia, tipo, escala) si viaja por el camino
+  publico; solo se omite la lista de destinatarios.
+
+DATOS DE PRUEBA DEJADOS EN EL ENTORNO
+  Encuesta id 26, prefijo "QA TC-172", CONSERVADA y DESACTIVADA al terminar.
+  Antes de esta corrida el entorno no tenia ninguna General NPS activa; al cerrar quedo
+  igual (0 generales activas), para no bloquear la activacion de otras encuestas generales.
+  No se borro nada ni se toco ninguna encuesta ajena.

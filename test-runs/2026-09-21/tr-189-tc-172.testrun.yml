@@ -1,0 +1,463 @@
+schemaVersion: "1.0"
+id: tr-7f3a6c21-0b58-4e9d-9c14-2a8d5e7b4f60
+key: TR-189
+title: >-
+  TR-189 · IM-1271 · TC-172 · General NPS targeting to manually entered specific users — 9/9 PASS.
+  La audiencia manual entrega solo a quien coincide y falla cerrado con todos los demas; ademas el
+  PR cierra una exposicion previa de la lista de destinatarios por los endpoints publicos.
+status: completed
+environment:
+  name: >-
+    Repositorio Veevarts/survey-tool: pre-fix 1ad3b4ce contra post-fix ceae03b1, un solo commit de
+    distancia (squash merge del PR 76). Suites node:test del server y del client, mas siete pruebas
+    escritas por QA sobre el mismo harness de frontera de API con store en memoria. Los escenarios
+    de interfaz se ejercitaron en https://surveytool.dev.veevart.ai (rama develop) con sesion de
+    administrador y captura por paso. Ninguna organizacion de Salesforce fue tocada.
+  buildVersion: >-
+    Mixed — backend/API (routes/surveys.ts, routes/features.ts, lib/surveyRuntime.ts) + UI
+    (pages/SurveysPage.tsx) + docs (README.md). Sin cambios de dependencias ni de infraestructura.
+startedAt: "2026-09-21T14:10:00Z"
+completedAt: "2026-09-21T15:15:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Antes de este PR la General NPS solo admitia dos audiencias. El formulario escondia el radio de
+  usuarios especificos cuando la encuesta era general, y si por cualquier via llegaba esa audiencia
+  al servidor, `validateGeneralSurveyScope` la rechazaba con "General surveys can only target
+  everyone or organizations."
+
+  El PR habilita la tercera audiencia de punta a punta. En el cliente extrae `SURVEY_AUDIENCE_OPTIONS`
+  como unica fuente para los dos controles de audiencia (los radios del flujo enfocado y el
+  desplegable del formulario de edicion), con lo que la opcion deja de depender de una condicion
+  duplicada. En el servidor `generalSurveyScope` declara `specific_users` como alcance GLOBAL,
+  `surveyAllowsClientOrg` deja pasar esa audiencia, y `selectEligibleGeneralSurveys` suma un filtro
+  nuevo que exige coincidencia contra la lista configurada mediante el matcher que ya existia desde
+  IM-967. `generalClientOrgId` se fuerza a null cuando la audiencia es manual, en el create y en el
+  update, porque un destinatario suelto no pertenece a ninguna organizacion.
+
+  Efecto lateral no descrito en los criterios de aceptacion: el PR agrega `toPublicSurvey`, que
+  anula `audienceDetails` en las respuestas publicas. Ver el escenario 8: cierra una exposicion
+  PREEXISTENTE.
+
+  ## Inferred technical tests
+
+  El cambio no tiene superficie de datos ni de org, asi que la prueba no manual correcta es doble.
+  Primero, ejecutar las suites del repo sobre los dos commits y, sobre todo, injertar los tests del
+  PR en el codigo pre-fix para comprobar que EJERCITAN el cambio en vez de acompañarlo. Segundo,
+  escribir pruebas propias contra las rutas reales para los caminos que el dev no cubre: casing del
+  Salesforce User ID, vaciado de la lista por API, regresion de las audiencias previas sobre General
+  NPS, y los dos requisitos de contexto que el ticket no documenta.
+
+  Los AC1 y AC2 viven en la pantalla y el cliente no tiene harness de componentes, asi que se
+  ejecutaron en vivo sobre el entorno desplegado con captura por paso.
+
+  ## Verificacion de que el entorno desplegado tiene el cambio
+
+  Riesgo R1 del test case: el PR esta mergeado a `develop`, no a `main`
+  (`git merge-base --is-ancestor ceae03b1 origin/main` da falso). Se comprobo el entorno por los dos
+  lados antes de calificar nada. Cliente: el bundle servido contiene el id `survey-specific-users`,
+  que nace en este PR. Servidor: el intento de activar una segunda General NPS manual devolvio 409
+  con el mensaje nuevo, no el 400 del pre-fix.
+
+  ## Correccion de metodo durante la ejecucion
+
+  Una primera version de la prueba del retraso por fecha de creacion mandaba `today` en el cuerpo de
+  la peticion publica y daba un falso positivo de defecto. El endpoint publico NO acepta override de
+  fecha: `toSurveyDeliveryContext` solo lo permite con `allowDateOverride`, reservado a consultas de
+  admin. Se corrigio la prueba para calcular las fechas relativas al dia real del servidor ANTES de
+  calificar el escenario. No habia defecto.
+
+results:
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC1 · An administrator targets a General NPS survey to manually entered users end to end
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-21T14:58:00Z"
+    stepResults: []
+    actual: |
+      Ejecutado en la interfaz desplegada, con captura por paso.
+
+      Al seleccionar el subject "General NPS" el formulario entra en modo general: el Type queda fijo
+      en "NPS (0-10)" como campo de solo lectura y aparece el bloque "General NPS delivery" con
+      "Show after User.CreatedDate 30 days" y "Show after login 30 seconds". Con ese modo activo, los
+      tres radios de audiencia estan presentes:
+
+        To everyone                    (marcado por defecto)
+        To an organization / museum
+        To specific users              <- la opcion que agrega el ticket
+
+      Al marcarla aparece "Respondent IDs or emails (required)" con su texto de ayuda sobre separar
+      por linea, coma o punto y coma. Se cargaron dos identificadores, uno por linea, y se guardo.
+
+      Al reabrir con Edit, el SEGUNDO control de audiencia (el desplegable del formulario de edicion)
+      ofrece las mismas tres opciones y tiene "Specific users" seleccionada, que es lo que el AC pide
+      al hablar de la opcion "disponible junto a" las otras dos. Los valores se conservan textuales:
+
+        audience              specific_users
+        audienceDetails       005QaTc172AAA\nqa.tc172@example.com
+        isGeneralSurvey       true
+        generalClientOrgId    null
+        accountCreatedDelayDays 30
+
+      pre-fix -> post-fix -> objetivo cumplido?: el radio de usuarios especificos estaba oculto para
+      encuestas generales y el servidor rechazaba esa audiencia con 400 -> la opcion aparece en los
+      dos controles, se guarda y persiste -> SI.
+    notes: >-
+      **PASS.** Siete capturas numeradas bajo attachments/tr-189-tc-172/ui/. La encuesta de prueba (id 26, prefijo "QA TC-172") se conserva DESACTIVADA: el entorno no tenia ninguna General NPS activa antes de la corrida y quedo igual al cerrar.
+    attachments:
+      - name: live-ui-matrix.txt
+        path: attachments/tr-189-tc-172/ui/live-ui-matrix.txt
+        mimeType: text/plain
+      - name: 02-ac1-tres-opciones-de-audiencia.png
+        path: attachments/tr-189-tc-172/ui/02-ac1-tres-opciones-de-audiencia.png
+        mimeType: image/png
+      - name: 03-ac1-campo-de-identificadores.png
+        path: attachments/tr-189-tc-172/ui/03-ac1-campo-de-identificadores.png
+        mimeType: image/png
+      - name: 06-ac1-identificadores-cargados.png
+        path: attachments/tr-189-tc-172/ui/06-ac1-identificadores-cargados.png
+        mimeType: image/png
+      - name: 07-ac1-valores-persistidos-al-reabrir.png
+        path: attachments/tr-189-tc-172/ui/07-ac1-valores-persistidos-al-reabrir.png
+        mimeType: image/png
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC2 · Saving is blocked when the specific-user audience has no identifier
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-21T14:59:00Z"
+    stepResults: []
+    actual: |
+      Con la pregunta principal cargada y el campo de identificadores vacio, pulsar Create no crea
+      nada y abre el dialogo "Complete required information" con un unico problema listado:
+
+        "Add at least one respondent ID or email for the specific user audience."   [Go to field]
+
+      Al pulsar "Go to field", el elemento con el foco es:
+
+        id             survey-specific-users
+        tag            TEXTAREA
+        label          Respondent IDs or emails (required)
+        aria-required  true
+
+      Es exactamente el cambio del PR: antes el destino de la validacion era
+      "survey-audience-details", el contenedor, y no el campo que el administrador debe llenar. El
+      formulario sigue montado y la pregunta principal intacta tras cerrar el dialogo.
+
+      La validacion es SIMETRICA entre crear y actualizar: un PUT con audienceDetails vacio sobre una
+      encuesta ya creada devuelve 400 y la lista previa sigue vigente. No hay camino por el que una
+      encuesta manual quede activa con la lista vacia.
+
+      pre-fix -> post-fix -> objetivo cumplido?: en el pre-fix ni siquiera se podia llegar a este
+      estado y el 400 del servidor hablaba de la audiencia, no del campo faltante -> el bloqueo ocurre
+      con el mensaje correcto y lleva al campo exacto -> SI.
+    notes: "**PASS.**"
+    attachments:
+      - name: 04-ac2-dialogo-de-validacion.png
+        path: attachments/tr-189-tc-172/ui/04-ac2-dialogo-de-validacion.png
+        mimeType: image/png
+      - name: 05-ac2-foco-en-el-campo-correcto.png
+        path: attachments/tr-189-tc-172/ui/05-ac2-foco-en-el-campo-correcto.png
+        mimeType: image/png
+      - name: live-ui-matrix.txt
+        path: attachments/tr-189-tc-172/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC3 · A configured Salesforce User ID makes the survey eligible for that respondent
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-21T14:40:00Z"
+    stepResults: []
+    actual: |
+      El test del dev cubre el ID con el MISMO casing con que se configuro, asi que QA escribio la
+      prueba de casing que faltaba. Con "005EmABCdefGHIjk" configurado:
+
+        respondentId 005EmABCdefGHIjk   (exacto)       -> [encuesta]
+        respondentId 005emabcdefghijk   (minusculas)   -> [encuesta]
+        respondentId 005EMABCDEFGHIJK   (mayusculas)   -> [encuesta]
+        respondentId 005EmABCdefGHIjX   (otro ID)      -> []
+
+      La encuesta devuelta llega con audienceDetails en null, o sea sin la lista de destinatarios.
+
+      pre-fix -> post-fix -> objetivo cumplido?: en el pre-fix la encuesta no se puede ni crear
+      (400) -> entrega por ID, insensible a mayusculas, y retiene al que no esta -> SI.
+
+      NOTA ligada al riesgo R5: esa insensibilidad es la normalizacion vigente que el ticket manda
+      respetar, pero implica que dos Salesforce User IDs que solo difieran en mayusculas se tratan
+      como el mismo. El endurecimiento esta declarado fuera de alcance y se sigue en IM-1280.
+    notes: "**PASS.**"
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-3-4-5-eligibility/comparison-matrix.txt
+        mimeType: text/plain
+      - name: qa-authored-tests-postfix.log
+        path: attachments/tr-189-tc-172/scenario-0-unit-tests/qa-authored-tests-postfix.log
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC4 · A configured email matches the runtime email regardless of casing
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-21T14:40:00Z"
+    stepResults: []
+    actual: |
+      Con "allowed@example.com" configurado y un respondentId que NO esta en la lista, mandar
+      respondentEmail "Allowed@Example.com" devuelve la encuesta. Basta con que coincida UNO de los
+      dos identificadores, no los dos: el matcher compara el ID y el email contra la misma lista
+      normalizada y le alcanza con un acierto.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la audiencia no existia para General NPS -> el email
+      coincide sin importar el casing y entrega -> SI.
+    notes: "**PASS.** Cubierto tanto por el test del dev como por el de QA, por caminos distintos."
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-3-4-5-eligibility/comparison-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC5 · The survey is withheld and fails closed when no identifier matches
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-21T14:40:00Z"
+    stepResults: []
+    actual: |
+      Con un respondentId y un email que no estan en la lista, la respuesta viene vacia. El rechazo
+      es por AUDIENCIA y no por otra regla de entrega, y esto se prueba de forma directa: el test del
+      dev instrumenta el store y cuenta las lecturas de historial de respuestas y de eventos en el
+      caso bloqueado. El contador queda en 0, o sea que el filtro corta antes de mirar el historial.
+
+      Tres formas de "nadie coincide", todas retenidas:
+        identificadores distintos                      -> []
+        lista con un solo ID y llega otro              -> []
+        intento de dejar la lista vacia por PUT        -> 400, no se puede llegar a ese estado
+
+      pre-fix -> post-fix -> objetivo cumplido?: la audiencia no existia -> falla cerrado por los tres
+      caminos, sin filtrar la existencia de la encuesta -> SI.
+    notes: >-
+      **PASS.** El fallo cerrado es la propiedad de seguridad central de este ticket, porque los identificadores no se verifican contra Salesforce: si el emparejamiento fallara abierto, una encuesta mal configurada llegaria a todo el mundo.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-3-4-5-eligibility/comparison-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC6 · Manual targeting is a global activation scope and collides with any other active General NPS
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-21T15:00:00Z"
+    stepResults: []
+    actual: |
+      Confirmado en el harness Y en vivo sobre el entorno desplegado.
+
+      En vivo: con la encuesta 26 activa, crear otra General NPS con audiencia manual devolvio
+
+        409 {"error":"An active general survey already applies to this audience (survey 26)."}
+
+      y no se creo nada. El mensaje nombra la encuesta en conflicto, que es lo que un administrador
+      necesita para resolverlo.
+
+      En el harness, la transicion inversa tambien se verifico: una General NPS de organizacion que
+      pasa a audiencia manual queda con generalClientOrgId en null, y un PUT posterior que intente
+      volver a fijarlo se ignora mientras la audiencia siga siendo manual. Despues del cambio, la
+      encuesta se entrega desde OTRA organizacion, que es lo que significa "global".
+
+      pre-fix -> post-fix -> objetivo cumplido?: el pre-fix devolvia 400 "esta audiencia no se admite
+      para encuestas generales" -> ahora devuelve 409 "esta audiencia se admite, pero su alcance es
+      global y ya hay otra activa" -> SI. La diferencia no es el codigo de estado sino su significado.
+    notes: >-
+      **PASS.** No queda estado intermedio en el que una encuesta sea a la vez global y de una organizacion: el campo se fuerza a null en create y en update.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-6-activation/comparison-matrix.txt
+        mimeType: text/plain
+      - name: live-ui-matrix.txt
+        path: attachments/tr-189-tc-172/ui/live-ui-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      AC7 · The existing audiences and feature surveys keep behaving as before
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-21T14:45:00Z"
+    stepResults: []
+    actual: |
+      El test del dev solo cubre la regresion de las encuestas de feature. QA agrego el resto, que es
+      donde estaba el riesgo real: `surveyAllowsClientOrg` ahora devuelve true para specific_users, y
+      habia que comprobar que eso no ensancha el alcance de las otras audiencias.
+
+        General NPS everyone, destinatario de la organizacion A      -> entregada
+        General NPS everyone, destinatario de la organizacion B      -> entregada
+        General NPS organization con lista vacia                     -> 400, sigue exigiendo >= 1
+        Retraso de 30 dias sobre audiencia manual, a los 12 dias     -> retenida
+        Retraso de 30 dias sobre audiencia manual, a los 40 dias     -> entregada
+        Una respuesta por destinatario, despues de responder         -> no se repite
+        Encuesta de feature, respondentId que coincide               -> entregada
+        Encuesta de feature, email con otro casing                   -> entregada
+        Encuesta de feature, respondentId ajeno                      -> retenida
+
+      El retraso y la regla de una-respuesta se verificaron SOBRE UNA ENCUESTA CON AUDIENCIA MANUAL,
+      que es donde podrian haberse perdido: la audiencia entra por una rama nueva del filtro, pero
+      las reglas de entrega siguen evaluandose en el mismo evaluateSurveyEligibility de siempre.
+
+      Suites completas sobre ceae03b1: server 119/119, client 64/64. Linea base pre-fix 117/117 y
+      62/62. Los tests nuevos son 2 y 2; ningun test preexistente cambio de resultado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: nueve comportamientos previos medidos, nueve
+      identicos -> SI.
+    notes: "**PASS.** Sin regresiones."
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-7-regression/comparison-matrix.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-189-tc-172/regression-results.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      The list of targeted identifiers is not exposed on public survey responses
+    scenarioIndex: 7
+    status: passed
+    executedAt: "2026-09-21T15:02:00Z"
+    stepResults: []
+    actual: |
+      El hallazgo mas importante de esta corrida, y no esta en ningun criterio de aceptacion.
+
+      Al correr el test del PR "targets surveys to explicit respondent IDs or emails" contra el
+      codigo PRE-FIX, la asercion que falla es exactamente esta:
+
+        actual:   [ '005PayAAA\nimplementation@example.com' ]
+        expected: [ null ]
+
+      Es decir: ANTES de este PR, cualquier llamador anonimo que pidiera las encuestas de una feature
+      recibia, dentro del cuerpo de la encuesta, la lista de Salesforce User IDs y DIRECCIONES DE
+      CORREO que el administrador habia cargado como destinatarios. No hacia falta coincidir con la
+      audiencia: la lista viajaba en la respuesta.
+
+      NO es un defecto de este PR. Es un hueco PREEXISTENTE, en las encuestas de feature con
+      specific_users que existen desde IM-967, que este PR cierra con toPublicSurvey. Ni la
+      descripcion del PR ni el ticket lo mencionan.
+
+      Verificado en vivo sobre el entorno desplegado:
+        GET /api/surveys/26        (publico) -> audienceDetails: null
+        GET /api/admin/surveys/26  (admin)   -> audienceDetails: "005QaTc172AAA\nqa.tc172@example.com"
+
+      El reparto es el correcto: el administrador necesita ver y editar la lista, y las rutas de
+      admin estan detras de requireAdminAuth, que cubre todo el namespace /api/admin. El resto de la
+      encuesta (pregunta, audiencia, tipo, escala) si viaja por el camino publico; solo se omite la
+      lista.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la lista de destinatarios era publica -> ya no lo es,
+      y el camino de admin la conserva -> SI.
+    notes: >-
+      **PASS.** Se levanta la observacion O1, que no es defecto de este PR: conviene que el equipo sepa que la exposicion existia antes, para valorar si algun entorno con encuestas specific_users de feature estuvo publicando correos, y que este cambio de contrato no esta documentado en el ticket.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-8-exposure/comparison-matrix.txt
+        mimeType: text/plain
+      - name: dev-tests-on-prefix-server.log
+        path: attachments/tr-189-tc-172/scenario-0-unit-tests/dev-tests-on-prefix-server.log
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "dcb92b0c-8c8f-465c-b03d-d98c69b3f47b"
+    testCaseKey: TC-172
+    scenarioTitle: >-
+      A matching email alone is not enough: General NPS still requires a respondent ID and an organization
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-21T14:45:00Z"
+    stepResults: []
+    actual: |
+      Dos requisitos de contexto que el ticket no distingue, verificados con pruebas propias:
+
+        organizacion + respondentId que coincide                 -> entregada
+        organizacion + SOLO email que coincide, sin respondentId -> [] (general_respondent_missing)
+        organizacion + respondentId ajeno + email que coincide   -> entregada
+        SIN organizacion + respondentId que coincide             -> []
+
+      El ticket declara la audiencia manual como alcance GLOBAL. Eso es cierto para la ACTIVACION
+      (choca con cualquier otra General NPS activa), pero NO exime al embebedor de mandar organizacion
+      en la ENTREGA: selectEligibleGeneralSurveys devuelve vacio cuando no hay clave de organizacion
+      en el contexto, sea cual sea la audiencia.
+
+      Ademas, para General NPS la comprobacion de respondentId corre ANTES de evaluar la audiencia.
+      Un administrador que cargue SOLO emails, y cuyo embebedor no mande respondentId, no entregara
+      la encuesta a nadie.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los AC dicen "after all other delivery rules pass",
+      asi que el comportamiento observado los cumple -> SI, sin incumplimiento.
+    notes: >-
+      **PASS.** Se levanta la observacion O2, que no es defecto: el ticket usa "global" para dos cosas distintas y eso puede llevar a un administrador a esperar entrega sin contexto de organizacion. El README del PR si documenta el requisito de respondentId; el de organizacion no lo documenta ninguno de los dos.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-189-tc-172/scenario-9-context/comparison-matrix.txt
+        mimeType: text/plain
+      - name: qaTc172.test.ts
+        path: attachments/tr-189-tc-172/scenario-0-unit-tests/qaTc172.test.ts
+        mimeType: text/plain
+    defects: []
+
+summary:
+  total: 9
+  passed: 9
+  failed: 0
+  notRun: 0
+  blocked: 0
+  skipped: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-21T14:10:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: "Arranca la ejecucion de TC-172 sobre el PR 76 de Veevarts/survey-tool."
+  - action: run-completed
+    timestamp: "2026-09-21T15:15:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      Ejecucion completa de los nueve escenarios. Los siete criterios de aceptacion se cumplen: la
+      audiencia manual aparece en los dos controles, el guardado se bloquea y lleva al campo exacto,
+      la entrega funciona por ID y por email sin importar mayusculas, falla cerrado cuando nadie
+      coincide, el alcance global produce 409 contra otra General NPS activa, y las audiencias
+      previas no se movieron. Suites 119/119 y 64/64; los tests del PR injertados en el codigo
+      pre-fix fallan 3 en server y 1 en client, lo que prueba que ejercitan el cambio. Siete pruebas
+      propias de QA cubren los huecos: 7/7 post-fix, 0/7 pre-fix. Regresion tecnica 7/7 y de
+      seguridad 6/6; OWASP 5 aplicables, 5 PASS. Sin defectos. Dos observaciones: la exposicion
+      previa de la lista de destinatarios que este PR cierra sin documentarlo, y el doble sentido de
+      "global" entre activacion y entrega.
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-21T14:10:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-21T15:15:00Z"

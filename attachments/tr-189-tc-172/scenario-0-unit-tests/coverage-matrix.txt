@@ -1,0 +1,56 @@
+COBERTURA DE PRUEBAS AUTOMATIZADAS — TC-172 / IM-1271 / PR 76
+pre-fix 1ad3b4ce  ->  post-fix ceae03b1 (squash merge, un solo commit de distancia)
+
+SUITES DEL REPO
+  post-fix ceae03b1 : server 119/119 PASS · client 64/64 PASS
+  pre-fix  1ad3b4ce : server 117/117 PASS · client 62/62 PASS   (linea base propia)
+
+PRUEBA DE QUE LOS TESTS DEL PR EJERCITAN EL CAMBIO
+Se injertaron los DOS archivos de test del PR 76 sobre el codigo pre-fix, sin tocar
+nada mas, y se corrieron. Entrada identica, codigo distinto:
+
+  server  116/119  -> 3 FAIL
+    1. "targets General NPS surveys to manually entered respondent IDs or emails"
+       pre-fix : { error: "General surveys can only target everyone or organizations." }
+       post-fix: { error: "Specific user audience requires at least one respondent ID or email." }
+       -> pre-fix la audiencia manual NO EXISTIA para General NPS.
+    2. "clears organization scope when a General NPS survey is updated to specific users"
+       pre-fix : 400   post-fix: 200
+    3. "targets surveys to explicit respondent IDs or emails"
+       pre-fix : audienceDetails = '005AllowedAAA; implementation@example.com'
+       post-fix: audienceDetails = null
+       -> pre-fix el endpoint PUBLICO devolvia la lista de destinatarios.
+
+  client  46/47 -> 1 FAIL
+    SyntaxError: el modulo './SurveysPage' no exporta 'SURVEY_AUDIENCE_OPTIONS'
+    -> la constante compartida entre los dos controles de audiencia nace en el PR 76.
+
+MAPA AC -> TEST DEL DEV
+  AC1 opcion disponible          client SurveysPage.test.ts "uses the same audience options
+                                 for create and edit controls"  [nivel unitario, NO pantalla]
+  AC2 guardado bloqueado         server apiBoundary 400 "Specific user audience requires..."
+                                 client "validation dialog" targetId survey-specific-users
+                                 [nivel unitario, NO pantalla]
+  AC3 match por User ID          server apiBoundary, mismo casing unicamente
+  AC4 match por email            server apiBoundary, casing distinto  CUBIERTO
+  AC5 sin coincidencia           server apiBoundary, [] + 0 lecturas de historial  CUBIERTO
+  AC6 alcance global / colision  server apiBoundary 409 + limpieza de generalClientOrgId  CUBIERTO
+  AC7 regresion audiencias       PARCIAL: solo encuestas de feature; no cubre everyone
+                                 ni organization en General NPS, ni retraso, ni una-respuesta
+  S8  lista no expuesta          server apiBoundary, publico null / admin con valor  CUBIERTO
+  S9  requisitos de contexto     NO CUBIERTO
+
+HUECOS QUE QA CUBRIO CON PRUEBAS PROPIAS  (qaTc172.test.ts, 7 tests)
+  AC3  casing del Salesforce User ID: exacto, minusculas, mayusculas y un ID que no esta
+  AC5  vaciar la lista por PUT
+  AC7  retraso por fecha de creacion y una-respuesta-por-destinatario sobre audiencia manual
+  AC7  everyone y organization en General NPS + colision + organizacion sin identificadores
+  AC7  encuestas de feature: positivo, negativo y no exposicion de la lista
+  S9   email sin respondentId
+  S9   identificador correcto sin organizacion
+
+  post-fix 7/7 PASS · pre-fix 0/7 PASS (los 7 fallan)
+
+NOTA: los AC1 y AC2 quedan cubiertos solo a nivel unitario por el dev. El cliente no
+tiene harness de componentes (sin testing-library, jsdom, vitest ni jest), asi que la
+PANTALLA real no la ejercita ningun test. Es la misma observacion O6 levantada en TR-186.
