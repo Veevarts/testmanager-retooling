@@ -1,0 +1,59 @@
+RE-TEST del defecto — 2026-09-22
+================================
+El dev corrigio en el "PR #203" (167bcae, mergeado a main hoy 13:02 UTC):
+"fix(csm): the Deleted tab says what a row was, from stateBeforeDelete (IM-1234)".
+
+1. EL BUILD DESPLEGADO ES EL DEL FIX
+   index.html vivo -> assets/index-Cept_9p_.js  (ayer: index-DTlapIiO.js)
+   chunk useTaskSuggestions-BCFy-ZXR.js contiene `stateBeforeDelete`
+   El navegador cargo index-Cept_9p_.js (comparado contra el <script src> vivo).
+
+2. EN PANTALLA, LAS DOS FILAS YA SE DISTINGUEN
+   Se dejaron las dos en la pestaña Deleted a proposito, juntas:
+
+     Renewal is 45 days out and the champion has gone quiet
+       Tesla Science Center · Task · deleted Sep 22, 2026          [Restore]
+     Ticketing checkout errors reported after the latest release
+       Tesla Science Center · Suggested task · deleted Sep 22, 2026 [Restore]
+
+   La primera es una TAREA aceptada y luego borrada (stateBeforeDelete: "New").
+   La segunda es una SUGERENCIA declinada (stateBeforeDelete: "Suggested").
+   Mismo `state` (Rejected) y mismo `kind` (task) en las dos: solo las separa el campo
+   que el fix empezo a leer. Antes ambas decian "Task".
+
+   Restore devolvio cada una a su sitio: la sugerencia a Suggested, la tarea a New.
+   El entorno quedo exactamente como estaba antes del re-test.
+
+3. LA SUITE AHORA PUEDE FALLAR — que era la otra mitad del hallazgo
+   El defecto habia sobrevivido porque el fixture del repo llevaba
+   `kind: 'suggested'` sobre un `state: 'Rejected'`, una forma que el backend NO puede
+   emitir; con esa mentira, la asercion existente pasaba con el bug puesto.
+
+   Linea base en 167bcae:
+     MyDayTasksArchive.test.tsx + MyDayTasksTab.test.tsx   97/97 PASS
+
+   Inyeccion de fallo — se revierte la etiqueta al campo viejo:
+     - task.stateBeforeDelete === "Suggested" ? "Suggested task" : "Task"
+     + task.kind === "suggested" ? "Suggested task" : "Task"
+     ->  4 tests FAIL, en los DOS archivos (el nuevo y el que antes pasaba con el bug)
+     ->  93/97
+
+   Es decir: el fix trae su propia red, y la red detecta exactamente el defecto que se
+   reporto. Mutacion revertida despues de medir.
+
+4. EL CONTRATO DEL ESQUEMA HACE LO QUE SU COMENTARIO PROMETE
+   El fix declaro el campo `nullable()` y no `optional()`, afirmando que si el backend
+   dejara de mandarlo el parse debe fallar en vez de silenciar la etiqueta. Test propio
+   de QA contra el esquema (creado, ejecutado y borrado, no se comitea al repo del dev):
+
+     acepta la forma que el backend emite hoy            PASS
+     FALLA si la clave desaparece del wire               PASS
+     acepta null en una fila no borrada                  PASS   (3/3)
+
+5. ALCANCE DEL FIX — sin efectos fuera de su radio
+   8 archivos: el componente, el esquema, el fixture compartido, dos specs y tres
+   archivos del harness de desarrollo. Nada de backend, ninguna dependencia nueva.
+   Suite completa del repo: 2611 PASS, 9 skipped, 2 FAIL — los dos fallos son AJENOS
+   (ver pre-existing-failures.txt).
+
+VEREDICTO: el escenario 3 de TC-174 pasa a PASS. Defecto cerrado.
