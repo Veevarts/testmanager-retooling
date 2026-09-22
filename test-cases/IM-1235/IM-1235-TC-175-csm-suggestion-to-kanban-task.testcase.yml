@@ -1,0 +1,215 @@
+schemaVersion: "1.0"
+
+id: "7dee2b26-3a10-4083-8ced-633d4dcdf6cc"
+key: "TC-175"
+title: "CSM OS: turning a suggestion into a task on the CSM's own board"
+
+description: |
+  Cobertura QA de IM-1235 (CSM OS: convert a suggested task into a CSM OS kanban task), bajo el epic
+  IM-1229 (CSM OS: Feedback). Sub-tarea de QA: IM-1289. Repositorios en alcance:
+  Veevarts/MigrationAppBackend "PR #379" (3dece481) y Veevarts/MigrationAppFrontend "PR #195"
+  (ef07c5b), con el estado desplegado posterior a ambos.
+
+  La historia pide poder llevarse una sugerencia al tablero propio sin obligarla a pasar por un caso
+  de Salesforce: que la accion exista, que la tarea llegue con el titulo, la descripcion, la cuenta y
+  la fuente de la sugerencia, que la sugerencia quede ligada a esa tarea y salga de la lista activa, y
+  que desde la tarea se pueda volver al origen.
+
+  LO ENTREGADO TIENE UNA SOLA ENTIDAD, Y LOS CRITERIOS SUPONEN DOS. Esta es la tension que gobierna
+  toda la cobertura. Aceptar NO crea un segundo registro: muta la fila existente de `Suggested` a
+  `New`. De ahi se siguen tres cosas que hay que medir en vez de dar por buenas:
+
+  - "pre-llenada con titulo, descripcion, cuenta y fuente" se cumple por construccion, porque no hay
+    copia de la que se pueda caer nada. Lo que QA verifica es que efectivamente NADA cambie, campo por
+    campo, y no que la copia haya salido bien.
+  - "la sugerencia queda ligada a la tarea creada" se cumple por identidad: son la misma fila, el
+    mismo id. No hay enlace que seguir porque no hay dos cosas que enlazar.
+  - "navegar de la tarea de vuelta a la sugerencia original" NO tiene objeto al que volver: la
+    sugerencia dejo de existir como tal en el momento en que se convirtio. Lo que si sobrevive es la
+    ruta a la FUENTE (el email, la llamada o la señal de salud), que es cosa distinta de la que el
+    criterio nombra. La cobertura mide lo que se puede observar y deja escrita la diferencia.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. La accion no se llama como el criterio. El ticket pide "Create as task" y lo entregado es
+    **Accept**, el mismo boton que IM-1234 usa como una de las dos disposiciones de una sugerencia.
+    Un solo control sirve a dos historias: aceptar es, a la vez, decir "esto me sirve" y "conviertelo
+    en tarea mia". Los criterios se leen contra lo entregado, pero la diferencia de nombre se reporta.
+  - R2. El ticket afirma que al convertir se le quita al titulo el prefijo `(AI) `. En el codigo ese
+    recorte se aplica en CUALQUIER lectura de tarea, tambien cuando la fila todavia es sugerencia, asi
+    que el titulo no deberia cambiar en la conversion. Hay que comprobar que es byte identico antes y
+    despues, en vez de repetir la afirmacion del ticket.
+  - R3. El campo de columna no sirve para saber si algo esta en el tablero: una sugerencia ya reporta
+    la columna de pendientes antes de aceptarse, por decision de diseño, para que el campo nunca
+    falte. La aparicion en el tablero se verifica mirando el tablero.
+  - R4. Convertir no tiene vuelta atras. La maquina de estados no ofrece volver de tarea a sugerencia;
+    lo unico parecido es borrar la tarea y restaurarla, y eso la devuelve a pendiente, no al panel de
+    sugerencias. Quien acepte por error no tiene como deshacerlo. Los criterios no lo piden, pero es
+    consecuencia directa de mutar en sitio.
+  - R5. La historia depende de que exista la seccion de tareas con su tablero (IM-1239), entregada en
+    los mismos PRs. Si el tablero no estuviera, esta historia no se puede probar.
+  - R6. Hay que confirmar contra que build corre el entorno antes de calificar nada, comparando el
+    asset que el navegador carga contra el que sirve el index; un verde sobre un build cacheado no
+    prueba nada.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "El entorno de CSM OS sirve el backend del \"PR #379\" o posterior y un frontend con la seccion de tareas y su tablero; se confirmo contra que build corre antes de empezar (ver riesgo R6)."
+  - "Se entra con un usuario de rol CSM que tenga al menos dos sugerencias pendientes del dia, y al menos una con fuente y con cuenta asociada."
+  - "Se anota, antes de tocar nada, el contenido completo de la sugerencia que se va a convertir: titulo, descripcion, cuenta, fuentes, urgencia y fecha."
+  - "Se conoce el estado inicial de la lista de tareas abiertas y del tablero, porque los escenarios cuentan filas que entran."
+  - "Se sabe que aceptar no tiene vuelta atras, asi que se elige a proposito la sugerencia sobre la que se va a trabajar."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The action to take a suggestion onto the board is offered on every suggestion"
+    tags:
+      - ac-1
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+    given:
+      - "el CSM esta en la seccion de tareas con el panel de sugerencias abierto"
+      - "hay mas de una sugerencia pendiente"
+    when:
+      - "revisa los controles que ofrece cada tarjeta de sugerencia"
+      - "abre el detalle de una de ellas"
+    then:
+      - "todas las tarjetas ofrecen la accion que lleva la sugerencia al tablero, no solo la primera"
+      - "el detalle de la sugerencia ofrece la misma accion"
+      - "se deja constancia del nombre con el que la accion se entrego, que no es el que pide el criterio"
+      - "se capturo una pantalla por cada paso, numeradas 01 en adelante, bajo attachments del test run"
+
+  - title: "AC2 · The resulting task arrives with everything the suggestion had"
+    tags:
+      - ac-2
+      - happy-path
+      - functional-ui
+    given:
+      - "se anoto el contenido completo de una sugerencia con cuenta y con fuente"
+    when:
+      - "el CSM la convierte en tarea propia"
+      - "abre la tarea resultante y compara campo por campo con lo anotado"
+    then:
+      - "el titulo es identico al que mostraba la sugerencia, sin recortes ni añadidos"
+      - "la descripcion, la cuenta, la urgencia y la fecha son las mismas"
+      - "las fuentes siguen siendo las mismas y en la misma cantidad"
+      - "no aparece ningun campo vacio que antes tuviera valor, que es lo unico que podria perderse"
+
+  - title: "AC3 · The suggestion leaves the active list, and the task is that same suggestion"
+    tags:
+      - ac-3
+      - happy-path
+      - identity
+      - regression-evidence
+    given:
+      - "el panel de sugerencias muestra un numero conocido de sugerencias pendientes"
+    when:
+      - "el CSM convierte una de ellas"
+      - "revisa el panel, la lista de tareas abiertas y el identificador de la tarea resultante"
+    then:
+      - "el panel baja exactamente en una y la sugerencia convertida ya no se ofrece ahi"
+      - "la tarea aparece en la lista de tareas abiertas del CSM"
+      - "la tarea lleva el mismo identificador que tenia la sugerencia: el vinculo entre ambas es que son la misma"
+      - "no se creo un segundo registro: la cuenta de sugerencias mas tareas no aumenta"
+
+  - title: "AC4 · From the task, the CSM can get back to what originated it"
+    tags:
+      - ac-4
+      - happy-path
+      - functional-ui
+    given:
+      - "la tarea proviene de una sugerencia que tenia al menos una fuente"
+    when:
+      - "el CSM abre la tarea ya convertida"
+      - "usa la fuente para ir al origen"
+    then:
+      - "la tarea sigue mostrando la fuente que traia la sugerencia"
+      - "la fuente sigue siendo navegable y abre el origen: el correo, la llamada o la señal de salud que la motivo"
+      - "el origen que abre es el mismo al que llevaba desde la sugerencia, no otro"
+
+  - title: "The criteria assume two records and there is one, so there is no suggestion to go back to"
+    tags:
+      - missing-doc
+      - ac-3
+      - ac-4
+      - edge-case
+    given:
+      - "una sugerencia ya fue convertida en tarea"
+    when:
+      - "se busca la sugerencia original en el panel, en el conjunto de candidatas y en la pestaña de eliminados"
+      - "se busca en la tarea algun camino de vuelta a esa sugerencia"
+    then:
+      - "la sugerencia no aparece en ninguna de las tres partes, porque dejo de existir como sugerencia"
+      - "desde la tarea se puede volver a la fuente, pero no a la sugerencia, que es cosa distinta de lo que el criterio nombra"
+      - "se deja constancia de que los criterios de vinculo y de navegacion se cumplen por identidad y no por enlace, y de que el ticket lo declara asi"
+      - "se documenta el riesgo de que alguien lea el criterio esperando dos registros y disponga la trazabilidad sobre ese supuesto"
+
+  - title: "Converting a suggestion touches nothing outside the CSM's own board"
+    tags:
+      - regression
+      - regression-evidence
+    given:
+      - "el CSM tiene sugerencias pendientes y un tablero con sus columnas"
+    when:
+      - "convierte una sugerencia en tarea"
+      - "revisa el tablero, los casos de Salesforce y la cola de otro CSM"
+    then:
+      - "la tarea aparece en la columna de pendientes del tablero, comprobado mirando el tablero y no el campo que la fila reporta"
+      - "no se creo ningun caso de Salesforce por convertirla"
+      - "la cola de sugerencias y de tareas de otro CSM queda igual que antes"
+      - "el resto de la pantalla no se recarga ni pierde el estado que tenia"
+
+  - title: "Converting cannot be undone"
+    tags:
+      - missing-doc
+      - edge-case
+    given:
+      - "el CSM convirtio una sugerencia por error"
+    when:
+      - "busca la forma de devolverla al panel de sugerencias"
+      - "prueba el camino mas cercano: borrar la tarea y restaurarla"
+    then:
+      - "no existe ninguna accion que devuelva la tarea a ser sugerencia"
+      - "borrarla y restaurarla la devuelve a pendiente en el tablero, no al panel de sugerencias"
+      - "se deja constancia de que es consecuencia directa de convertir mutando la fila, y de que los criterios no pidieron reversibilidad"
+      - "se documenta para el equipo el costo de un clic equivocado, que hoy es quedarse con una tarea que nadie pidio"
+
+  - title: "Converting something that is no longer a suggestion fails closed"
+    tags:
+      - negative
+      - fail-closed
+    given:
+      - "hay una sugerencia pendiente y una tarea ya convertida"
+    when:
+      - "se intenta convertir dos veces la misma sugerencia"
+      - "se intenta convertir una sugerencia que ya fue descartada"
+    then:
+      - "la segunda conversion se rechaza y explica que esa fila ya no es una sugerencia"
+      - "convertir algo descartado se rechaza por estar eliminado, y pide restaurarlo antes"
+      - "en ningun caso queda un registro a medias ni desaparece nada de las listas"
+      - "los conteos del panel y de la lista de tareas quedan consistentes despues de los rechazos"
+
+tags:
+  - im-1235
+  - im-1229
+  - im-1289
+  - csm-os
+  - migration-app-backend
+  - migration-app-frontend
+  - suggested-tasks
+  - kanban
+  - accept
+
+estimatedDuration: 70
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-22T15:55:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-22T15:55:00Z"
+  version: 1
