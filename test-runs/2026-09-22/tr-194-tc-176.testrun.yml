@@ -1,0 +1,626 @@
+schemaVersion: "1.0"
+id: tr-f772381b-ce39-4fa9-ba4c-36af0d965482
+key: TR-194
+title: >-
+  TR-194 · IM-1239 · TC-176 · La seccion de tareas con su tablero — 12/12 PASS. Los seis
+  criterios se cumplen, incluido el que se habia certificado mal; y uno de los seis
+  movimientos del tablero estaba roto cuando el ticket se declaro final.
+status: completed
+environment:
+  name: >-
+    Interfaz y API desplegadas en https://migration.dev.rtl.veevartapp.com (API
+    zu76ogw8dg.execute-api.us-east-1.amazonaws.com/dev/api), rol Admin con "View as:
+    Valentina Aray" (ownerId 005Vs000005Dh2fIAC). El riesgo R6 se materializo: la primera
+    carga servia un index.html cacheado (index-DTlapIiO.js) mientras el index vivo apuntaba
+    a index-Cept_9p_.js. Se limpio y se recargo; todo lo que sigue se midio sobre el build
+    vivo. Ninguna organizacion de Salesforce fue tocada; nada de produccion.
+  buildVersion: >-
+    Mixed — backend NestJS sobre Aurora (main e3de5d2, incluye "PR #379", "PR #385",
+    "PR #388" y "PR #390") mas frontend React del modulo CSM (main 167bcae, incluye
+    "PR #195" a "PR #203"). La rebanada de esta historia es funcional de interfaz y de API.
+    El entorno esta POR DELANTE de la lista que el ticket declara final.
+startedAt: "2026-09-22T17:00:00Z"
+completedAt: "2026-09-22T18:05:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  La historia pedia un sitio para el trabajo que no cabe ni en una sugerencia de la IA ni en
+  un caso de Salesforce — el ejemplo del ticket es "llamar a este cliente manana". Lo
+  entregado es una pestana de tareas propia, con formulario de creacion manual, tablero de
+  tres columnas con arrastre, pestanas de abiertas/terminadas/eliminadas con borrado suave,
+  y dos filtros del lado del servidor.
+
+  El cambio con mas historia detras es el de la propiedad de la tarea. Una tarea sin cuenta
+  no tiene de donde heredar dueno, asi que el servidor intentaba el `ownerId` del cuerpo y
+  despues el correo del usuario autenticado, y devolvia 400 si ninguno resolvia. El cliente
+  nunca enviaba `ownerId`. El "PR #197" hizo que lo enviara — y solo cuando no hay cuenta,
+  porque `ownerId` junto a `accountId` es a su vez un 400. Eso cerro ademas una asignacion
+  silenciosa: bajo view-as el fallback por correo resolvia al MANAGER, asi que una tarea
+  creada mientras se miraba a otro CSM caia en la lista del manager.
+
+  El segundo es el del tablero. El movimiento es optimista: la tarjeta aterriza al soltarla,
+  antes de que el servidor conteste, y revierte mostrando el mensaje del servidor si la
+  escritura falla. Y el "PR #390" abrio `Done -> In_progress` en la maquina de estados,
+  porque el tablero ofrecia ese arrastre y la maquina lo rechazaba con un 409 que el CSM
+  veia como la tarjeta volviendo sin explicacion.
+
+  ## Inferred technical tests
+
+  Cuatro frentes, los cuatro ejecutados aqui; ninguno quedo pendiente de una persona.
+
+  1. **La interfaz desplegada**, para lo que el CSM ve y toca: las pestanas, el formulario
+     con sus seis campos, los seis arrastres reales entre columnas, los filtros, el ciclo de
+     completar/reabrir/borrar/restaurar y el explorador del pool.
+  2. **La API desplegada**, para lo que la pantalla no dice: el cuerpo exacto de cada POST,
+     el estado releido despues de recargar, y los rechazos. Este ticket ya se certifico una
+     vez leyendo el cliente, asi que aqui ningun criterio que dependa de una escritura se
+     califica sin mirar la respuesta.
+  3. **Las suites del equipo**: vitest del frontend, jest del modulo de tareas del backend, y
+     el harness que ejecuta los adaptadores contra un Postgres 16 real en vez de mockear el
+     Data API.
+  4. **Una mutacion**, para que el verde signifique algo: revertir el "PR #390" y comprobar
+     que el harness se pone rojo con el 409 exacto del defecto.
+
+  ## Reproducir el defecto antes de dar el arreglo por bueno
+
+  El criterio de la tarea sin cuenta no se dio por cumplido porque la tarea se creara. Se
+  repitio la llamada QUITANDO `ownerId`, que es literalmente lo que el cliente enviaba antes
+  del arreglo, y el servidor sigue devolviendo 400 con el mismo mensaje del ticket. El
+  servidor nunca cambio: el arreglo fue que el cliente empezara a mandar el dato. Con esa
+  medicion, el 201 de hoy dice algo; sin ella, solo diria que hoy funciona.
+
+  ## El entorno esta por delante del ticket
+
+  El ticket declara "Delivered — FINAL (2026-09-17)" una lista que llega hasta BE "PR #388" y
+  FE "PR #200". Faltan BE "PR #390", FE "PR #201" y FE "PR #202", mergeados el 2026-09-17 o
+  despues. El "PR #390" arregla `Done -> In progress`, uno de los seis movimientos del
+  tablero: cuando este ticket se declaro final, el AC3 estaba roto para ese movimiento y
+  fallaba en silencio. Hoy los seis aplican. Lo que queda mal es el registro de entrega, no
+  el producto. Ver findings.txt, F4.
+
+results:
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: >-
+      AC1 · The Tasks board lives on its own tab, apart from cases and playbooks
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-22T17:07:00Z"
+    stepResults: []
+    actual: |
+      My Day, leido del DOM: una sola lista de pestanas, "My Day queue", con tres:
+
+        Tasks · 1    SF Cases · 0    Playbooks · 0
+
+      Las tareas no comparten superficie con los casos ni con los playbooks. Los filtros de
+      casos viven en la pestana de casos: sobre las tareas los unicos controles son el
+      conmutador Lista/Tablero, las pestanas Abiertas/Terminadas/Eliminadas, "Due today" y
+      "+ New task".
+
+      La misma separacion en el detalle de cuenta, que tiene su propia lista de siete:
+      Overview, Analysis, Cases, Interactions, Metrics, **Tasks**, Playbooks.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no habia donde poner el trabajo que no es
+      caso ni sugerencia -> existe una pestana propia, en las dos pantallas -> SI.
+    notes: >-
+      **PASS.** Captura del paso 01; los pasos siguientes de este escenario quedan
+      cubiertos por las capturas de los escenarios 2 y 3, que recorren la misma pantalla.
+    attachments:
+      - name: 01-my-day-three-tabs.png
+        path: attachments/tr-194-tc-176/scenario-1/01-my-day-three-tabs.png
+        mimeType: image/png
+      - name: environment.txt
+        path: attachments/tr-194-tc-176/environment.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "AC2 · Creating a task by hand accepts every field the criterion names"
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-22T17:09:00Z"
+    stepResults: []
+    actual: |
+      El formulario ofrece los seis campos que el criterio nombra: Title*, Description,
+      Account (con opcion explicita "No account" y la leyenda "Optional — a task can belong
+      to no account."), Due, Column y Priority.
+
+      Se lleno entero, se guardo, se recargo la pagina y se releyo la fila del servidor:
+
+        campo         escrito                              releido tras recargar        igual
+        title         QA TC-176 · tarea completa…          identico                      si
+        description   Creada por QA para IM-1239 AC2…      identica                      si
+        account       Krasl Art Center                     Krasl Art Center              si
+        dueDate       2026-09-22                           2026-09-22                    si
+        priority      High                                 urgency "high"                si
+        column        In progress                          column "doing"                si
+
+      Aterrizo en la columna elegida, no en To do por defecto. Ningun valor se perdio ni se
+      reemplazo. POST /csm/tasks -> 201, y con cuenta el cliente NO manda ownerId, que es la
+      regla que el servidor exige.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no habia forma de crear una tarea a mano ->
+      se crea con los seis campos y sobreviven una recarga -> SI.
+    notes: >-
+      **PASS**, con el hallazgo F1 anotado: el formulario de creacion ofrece tres
+      prioridades y el de edicion cuatro, y el servidor acepta la cuarta al crear. No hace
+      fallar el criterio — la prioridad se ofrece — pero es una inconsistencia real.
+    attachments:
+      - name: 02-new-task-modal-empty.png
+        path: attachments/tr-194-tc-176/scenario-2/02-new-task-modal-empty.png
+        mimeType: image/png
+      - name: 03-new-task-modal-filled.png
+        path: attachments/tr-194-tc-176/scenario-2/03-new-task-modal-filled.png
+        mimeType: image/png
+      - name: six-fields-persisted.txt
+        path: attachments/tr-194-tc-176/scenario-2/six-fields-persisted.txt
+        mimeType: text/plain
+      - name: findings.txt
+        path: attachments/tr-194-tc-176/findings.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "AC3 · The board has three columns and cards move between them by dragging"
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-22T17:11:00Z"
+    stepResults: []
+    actual: |
+      El tablero tiene las tres columnas: To do / In progress / Done. Con tres columnas hay
+      seis movimientos ordenados, y se hicieron LOS SEIS arrastrando la tarjeta en pantalla:
+
+        #  movimiento            cuerpo enviado         respuesta
+        1  To do -> In progress  {"to":"In_progress"}   201
+        2  In progress -> Done   {"to":"Done"}          201
+        3  Done -> In progress   {"to":"In_progress"}   201   <-- el que estaba roto
+        4  In progress -> To do  {"to":"New"}           201
+        5  To do -> Done         {"to":"Done"}          201
+        6  Done -> To do         {"to":"New"}           201
+
+      El movimiento 3 devolvia 409 antes del "PR #390" y la tarjeta volvia a su sitio sin
+      decir nada. Hoy devuelve 201.
+
+      PERSISTENCIA. Recargada la pagina entera, el servidor devuelve state New / column todo,
+      que es la columna del ultimo movimiento: quedo guardado, no solo pintado.
+
+      EL FALLO, PROVOCADO. Se interpuso fetch para devolver 503 a la primera llamada a
+      /transition. Al arrastrar de To do a Done: la tarjeta aterrizo al soltarla, la escritura
+      fallo, la tarjeta VOLVIO a To do y el banner mostro el mensaje del servidor literal
+      ("QA TC-176: fallo de escritura forzado para probar la reversion"). Un retroceso
+      silencioso es indistinguible de un arrastre que no agarro.
+
+      En ningun momento la misma tarjeta aparecio en dos columnas.
+
+      pre-fix -> post-fix -> objetivo cumplido?: uno de los seis movimientos daba 409 y
+      fallaba en silencio -> los seis aplican, persisten, y el que falla lo dice -> SI.
+    notes: >-
+      **PASS.** Este es el escenario donde el harness importa: la mutacion M1 (revertir el
+      "PR #390") lo pone rojo con el 409 exacto, asi que el verde no es vacio.
+    attachments:
+      - name: 05-board-three-columns.png
+        path: attachments/tr-194-tc-176/scenario-3/05-board-three-columns.png
+        mimeType: image/png
+      - name: 06-failed-move-reverts-with-error.png
+        path: attachments/tr-194-tc-176/scenario-3/06-failed-move-reverts-with-error.png
+        mimeType: image/png
+      - name: board-moves-matrix.txt
+        path: attachments/tr-194-tc-176/scenario-3/board-moves-matrix.txt
+        mimeType: text/plain
+      - name: forced-failure.txt
+        path: attachments/tr-194-tc-176/scenario-3/forced-failure.txt
+        mimeType: text/plain
+      - name: mutation-matrix.txt
+        path: attachments/tr-194-tc-176/scenario-0-harness/mutation-matrix.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "AC4 · A task with no account and no Salesforce case can actually be created"
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-22T17:09:30Z"
+    stepResults: []
+    actual: |
+      Este es el criterio que el 2026-09-16 se dio por cumplido leyendo el cliente y estaba
+      roto en el servidor. Aqui no se leyo ningun cliente.
+
+      CREACION POR LA PANTALLA, con "No account" y solo el titulo:
+        POST /csm/tasks -> 201
+        cuerpo: {"title":"QA TC-176 · tarea sin cuenta ni caso SF","column":"todo",
+                 "urgency":"medium","ownerId":"005Vs000005Dh2fIAC"}
+        El cliente manda ownerId, que es lo que el "PR #197" anadio.
+
+        Fila releida: accountId null · accountName null · sfCaseId null · origin "manual"
+        state New · column todo. Sin cuenta, sin caso, y CON dueno.
+
+      EL DEFECTO ORIGINAL, REPRODUCIDO HOY. La misma llamada sin ownerId — lo que el cliente
+      enviaba antes del arreglo:
+        -> 400 "Could not determine the owning CSM for an account-less task.
+                Pass ownerId, or create the task against an account."
+
+      El servidor no cambio; el arreglo fue del lado del cliente. Y la contradiccion que el
+      servidor debe rechazar tambien responde:
+        accountId + ownerId -> 400 "ownerId cannot be combined with accountId…"
+
+      pre-fix -> post-fix -> objetivo cumplido?: sin cuenta el servidor devolvia 400 y nadie
+      cuyo correo no resolviera podia crear una -> se crea, con dueno, sin cuenta y sin caso,
+      y el 400 sigue ahi si el dato falta -> SI.
+    notes: >-
+      **PASS**, y verificado por la respuesta del servidor y por el estado releido, que es
+      justamente lo que falto la primera vez.
+    attachments:
+      - name: 04-no-account-title-only.png
+        path: attachments/tr-194-tc-176/scenario-4/04-no-account-title-only.png
+        mimeType: image/png
+      - name: account-less-create.txt
+        path: attachments/tr-194-tc-176/scenario-4/account-less-create.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "Correction · The owner of a new task is the CSM being viewed, not the one looking"
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-22T17:10:00Z"
+    stepResults: []
+    actual: |
+      Las dos tareas de QA se crearon con la sesion del admin y "View as: Valentina Aray", y
+      una de ellas SIN cuenta, que es el caso donde el fallback de dueno se equivocaba.
+
+      Las dos quedaron en la lista de Valentina Aray. Despues se recorrieron las listas de
+      los otros DIEZ CSM del workspace contando filas con prefijo "QA TC-176":
+
+        Andres Felipe Lozano 0 · Andres Lopez 0 · Daniela Restrepo 0 · Emily Clever 0
+        Joseph Yepes 0 · Michel Ramos 0 · Robert Castillo 0 · Valentina Avendano 0
+        Victor Ospino 0 · Yerson Valencia 0
+
+      Cero filtraciones. El dueno guardado coincide con la lista donde aparece: no hay
+      discrepancia entre lo que se muestra y lo que se almaceno.
+
+      pre-fix -> post-fix -> objetivo cumplido?: bajo view-as la tarea caia en la lista del
+      manager y desaparecia de la vista -> cae en la lista del CSM observado y en ninguna
+      otra -> SI.
+    notes: >-
+      **PASS.** El barrido de los once CSM es lo que convierte esto en evidencia: mirar solo
+      la lista de destino no descarta que ademas se haya duplicado en otra.
+    attachments:
+      - name: owner-under-view-as.txt
+        path: attachments/tr-194-tc-176/scenario-5/owner-under-view-as.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "AC5 · A converted suggestion lands on this same board"
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-22T17:18:00Z"
+    stepResults: []
+    actual: |
+      Evidencia de identidad ENTRE CORRIDAS. Ayer, en TR-193 (IM-1235), se acepto una
+      sugerencia de Valentina Aray y aquella corrida registro el id resultante:
+      6ff77e3d-d437-4eb5-8f59-41f78909c279.
+
+      Hoy, en el tablero de My Day, columna To do, la tarjeta "Renewal is 45 days out and the
+      champion has gone quiet" lleva ESE MISMO id. No hay copia ni segundo registro: aceptar
+      muto la fila en sitio, asi que el historial es continuo. origin "ai", kind "task",
+      sources 1 — conserva la fuente que traia.
+
+      Y se comporta como cualquier otra tarjeta. Ciclo completo sobre ella:
+        mover a In progress 201 · completar 201 · reabrir 201 · borrar 201 · restaurar 201
+      Estado final: state New · column todo · sources 1, como empezo.
+
+      pre-fix -> post-fix -> objetivo cumplido?: las sugerencias aceptadas tenian que caer en
+      este tablero y no en otra lista -> caen aqui, con el mismo id, y se manejan igual que
+      las creadas a mano -> SI.
+    notes: >-
+      **PASS.** La identidad del identificador es evidencia mas fuerte que volver a
+      convertir: prueba que la fila sobrevivio un dia y una corrida distinta.
+    attachments:
+      - name: converted-suggestion.txt
+        path: attachments/tr-194-tc-176/scenario-6/converted-suggestion.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "AC6 · The board can be narrowed to one account and to what is due today"
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-22T17:12:00Z"
+    stepResults: []
+    actual: |
+      Conjunto de partida, tres tareas abiertas: una de Wonder Works con vencimiento
+      2026-09-18, una de Krasl Art Center con vencimiento HOY, y una sin cuenta y sin fecha.
+
+        filtro                       peticion                                      filas
+        ninguno                      ?view=open                                      3
+        cuenta = Krasl               ?view=open&accountId=1d18b50f-…                 1
+        vence hoy                    ?view=open&dueToday=true                        1
+        cuenta + vence hoy           ?view=open&accountId=…&dueToday=true            1
+
+      El recorte lo hace el SERVIDOR: los dos filtros viajan en la query, no se aplican en el
+      navegador. La tarea SIN CUENTA no se cuela en el filtro por cuenta, que es el caso que
+      se colaria si el filtro estuviera escrito como un "distinto de". El de hoy deja solo la
+      del 09-22: ni la del 09-18 ni la que no tiene fecha.
+
+      Al quitar los filtros vuelven las tres, con el mismo conteo del principio.
+
+      En pantalla: "Due today" queda aria-pressed="true" y la pestana pasa de "Open · 3" a
+      "Open · 1"; el acotado por cuenta es la pestana Tasks del detalle de esa cuenta, que
+      muestra "Open · 1" y esa una es la de Krasl.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no habia forma de acotar el tablero -> se
+      acota por cuenta y por vencimiento de hoy, del lado del servidor -> SI.
+    notes: >-
+      **PASS.** Los filtros por estado y por etiqueta de producto NO estan, y es lo
+      esperado: salieron a IM-1283. Ver el escenario de guarda de alcance.
+    attachments:
+      - name: filters.txt
+        path: attachments/tr-194-tc-176/scenario-7/filters.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "Beyond the criteria · Finished and deleted tasks keep a way back"
+    scenarioIndex: 7
+    status: passed
+    executedAt: "2026-09-22T17:16:00Z"
+    stepResults: []
+    actual: |
+      Ciclo completo sobre la tarea sin cuenta, contando las tres pestanas en cada paso:
+
+        estado inicial   Open 3 · Completed 0 · Deleted 0
+        Mark Complete    Open 2 · Completed 1 · Deleted 0    aviso "… marked complete."
+        Reopen           Open 3 · Completed 0 · Deleted 0    vuelve al tablero en To do
+        Delete task      Open 3 · Completed 0 · Deleted 1    aviso "Task deleted" + "Undo"
+        Restore          Open 4 · Completed 0 · Deleted 0    state New · column todo
+
+      Cada operacion mueve exactamente una fila y cada pestana muestra solo lo suyo.
+
+      BORRAR NO BORRA. La fila aparece en Eliminados como "No account · Task · deleted
+      Sep 22, 2026" con boton Restore, y la pantalla dice "Deleted items are kept for 30
+      days." Tras restaurar: deleted=false, stateBeforeDelete=null.
+
+      De paso, la etiqueta dice "Task" y no "Suggested task": el arreglo de IM-1234
+      funcionando sobre una tarea creada a mano.
+
+      pre-fix -> post-fix -> objetivo cumplido?: terminar o borrar tenia que ser reversible
+      -> lo es por las dos rutas, y borrar nunca elimina de verdad -> SI.
+    notes: >-
+      **PASS**, con una precision honesta: el boton "Undo" del aviso existe y esta en la
+      captura, pero el aviso expiro antes de poder pulsarlo, asi que la vuelta se comprobo
+      por Restore desde la pestana Eliminados. La pulsacion del Undo no se ejercio.
+    attachments:
+      - name: 09-completed-tab-reopen.png
+        path: attachments/tr-194-tc-176/scenario-8/09-completed-tab-reopen.png
+        mimeType: image/png
+      - name: 10-delete-toast-with-undo.png
+        path: attachments/tr-194-tc-176/scenario-8/10-delete-toast-with-undo.png
+        mimeType: image/png
+      - name: 11-deleted-tab-restore-30-days.png
+        path: attachments/tr-194-tc-176/scenario-8/11-deleted-tab-restore-30-days.png
+        mimeType: image/png
+      - name: lifecycle.txt
+        path: attachments/tr-194-tc-176/scenario-8/lifecycle.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "Beyond the criteria · The whole pending pool can be browsed from the board"
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-22T17:17:00Z"
+    stepResults: []
+    actual: |
+      Modal "All suggested tasks — Everything still pending for you, highest score first."
+      20 tarjetas en la primera carga, con puntajes 97 97 96 96 96 96 96 96 95 95 95 95 95
+      95 95 94 94 94 94 93: orden descendente verificado elemento a elemento. Cada tarjeta
+      ofrece Accept / Decline / Details, las mismas acciones del panel del dia.
+
+      Por la API, la paginacion es real:
+        pool?limit=20                -> 200 · 20 items · remaining 153 · nextCursor presente
+        pool?limit=20&cursor=<next>  -> 200 · 20 items · primer puntaje 93 · CERO solapamiento
+        /suggestions (lote del dia)  -> cap 5 · 1 item
+
+      173 pendientes contra 1 en el lote del dia: el explorador llega de verdad mas alla.
+
+      EN LAS DOS PANTALLAS. En My Day el boton esta visible bajo el panel. En el detalle de
+      cuenta el panel arranca COLAPSADO; al expandirlo aparece el mismo boton.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el CSM solo veia las cinco del dia -> puede
+      recorrer las 173, ordenadas y por tramos, desde las dos pantallas -> SI.
+    notes: >-
+      **PASS.** Entregado mas alla del criterio; se prueba porque esta en produccion y un
+      CSM lo va a usar, no porque un AC lo pida.
+    attachments:
+      - name: 12-suggestion-pool-modal-score-ordered.png
+        path: attachments/tr-194-tc-176/scenario-9/12-suggestion-pool-modal-score-ordered.png
+        mimeType: image/png
+      - name: suggestion-pool.txt
+        path: attachments/tr-194-tc-176/scenario-9/suggestion-pool.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "The capped suggestion count holds on the board and nowhere else"
+    scenarioIndex: 9
+    status: passed
+    executedAt: "2026-09-22T17:14:00Z"
+    stepResults: []
+    actual: |
+      Los tres numeros para Krasl Art Center:
+
+        Detalle de cuenta -> pestana Tasks     "Suggested tasks · 5+"
+        Lista de cuentas (/csm/accounts)       "5 suggested tasks"
+        Portafolio (recomendacion)             no aparecio
+
+        API: /csm/tasks/suggestions/account -> cap 5 · items 5 · remaining 1
+             /csm/workspace/accounts        -> suggestedTasksCount 5 · suggestedTasksRemaining 1
+
+      EL TICKET LO CUENTA MAL. Declara que la lista de cuentas y el portafolio "still render
+      raw totals rather than the capped count". Eso ya no es cierto: el API entrega el conteo
+      YA CAPADO, asi que el tope si se respeta fuera del tablero.
+
+      Lo que si queda es otra cosa, y mas fina: la lista descarta `suggestedTasksRemaining`,
+      asi que imprime "5 suggested tasks" como si fueran exactamente cinco cuando hay al
+      menos seis; la pestana de la propia cuenta, con el mismo dato, imprime "5+". Dos cifras
+      para la misma cuenta en la misma sesion.
+
+      Consecuencia visible: TODAS las cuentas de Valentina muestran "5 suggested tasks"
+      — Huntington, Jackson Hole, Krasl, Las Vegas, MacRostie, March Field… el mismo 5 en
+      cada fila. El chip ya no distingue una cuenta de otra, que es para lo que serviria.
+
+      Del portafolio esta corrida NO concluye nada: sus recomendaciones salieron todas por la
+      via de casos de soporte y la rama de sugerencias no se ejercio con estos datos.
+    notes: >-
+      **PASS** en el sentido de que no existe el defecto que el ticket alega. Dos de los
+      `then` de este escenario, escritos desde la afirmacion del ticket, NO se cumplieron:
+      no hay totales crudos. Lo que se encontro en su lugar esta medido arriba y en
+      findings.txt (F3).
+    attachments:
+      - name: 07-account-tasks-tab-capped-5plus.png
+        path: attachments/tr-194-tc-176/scenario-10/07-account-tasks-tab-capped-5plus.png
+        mimeType: image/png
+      - name: 08-accounts-list-flat-5-no-plus.png
+        path: attachments/tr-194-tc-176/scenario-10/08-accounts-list-flat-5-no-plus.png
+        mimeType: image/png
+      - name: suggestion-count-numbers.txt
+        path: attachments/tr-194-tc-176/scenario-10/suggestion-count-numbers.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "Scope guard · What was split out is absent, and absent cleanly"
+    scenarioIndex: 10
+    status: passed
+    executedAt: "2026-09-22T17:17:30Z"
+    stepResults: []
+    actual: |
+      Se barrieron los 33 controles de la pestana de tareas — botones, selects, pestanas,
+      items de menu e inputs — buscando cada capacidad sacada del alcance el 2026-09-17:
+
+        Columnas configurables            IM-1282    ninguna
+        Filtro por estado                 IM-1283    ninguno
+        Filtro por etiqueta de producto   IM-1283    ninguno
+        Etiqueta de producto en el form   IM-1237    ninguna
+        Conversion de nota a tarea        IM-1240    ninguna
+
+      El unico filtro presente es "Due today". Ningun control muerto, ningun selector vacio,
+      ningun filtro que no filtre.
+
+      Matiz: el detalle de una tarea SI muestra "Product tag" como dato de solo lectura con
+      valor "—". No es un control muerto: es un campo que la IA rellena y que el CSM no puede
+      editar, que es exactamente lo que IM-1237 descope.
+
+      pre-fix -> post-fix -> objetivo cumplido?: las cuatro capacidades debian estar ausentes
+      -> lo estan, y limpiamente -> SI.
+    notes: >-
+      **PASS.** Queda escrito a que ticket fue cada una para que su ausencia no se lea como
+      defecto de este mas adelante.
+    attachments:
+      - name: scope-guard.txt
+        path: attachments/tr-194-tc-176/scenario-11/scope-guard.txt
+        mimeType: text/plain
+    defects: []
+
+  - testCaseId: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+    testCaseKey: TC-176
+    scenarioTitle: "Negative · Creating and moving fail closed"
+    scenarioIndex: 11
+    status: passed
+    executedAt: "2026-09-22T17:18:30Z"
+    stepResults: []
+    actual: |
+      intento                                  resultado                              basura
+      guardar sin titulo (pantalla)            "Create task" deshabilitado             no
+      POST con title:""                        400 "title must be longer than or
+                                               equal to 1 characters"                  no
+      mover una tarea BORRADA                  409 "… is deleted; restore it before
+                                               changing its state."                    no
+      completar una tarea BORRADA              409 (mismo mensaje)                      no
+      transicion a {"to":"Archived"}           400 "to must be one of the following
+                                               values: New, In_progress, Done,
+                                               Rejected"                                no
+      transicion {"to":"New"} sobre New        409 "Invalid task transition: New -> New" no
+      crear con column:"done"                  400 "column must be one of the
+                                               following values: todo, doing"           no
+
+      Conteos alrededor del borrado, que es donde algo podria quedar a medias:
+        antes 4/0/0 -> borrada 3/0/1 -> restaurada 4/0/0
+
+      Cada rechazo dejo el tablero como estaba. Ninguna tarjeta en dos columnas, ninguna fila
+      a medio crear, y ningun error se quedo callado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los rechazos tenian que fallar cerrado ->
+      los siete fallan cerrado y con mensaje -> SI.
+    notes: >-
+      **PASS.** Con una nota de metodo: el primer intento uso DELETE /csm/tasks/:id y
+      recibio 404. La ruta real es POST /csm/tasks/:id/delete. El 404 fue un error mio, no
+      del producto, y el escenario se repitio con la ruta correcta.
+    attachments:
+      - name: negatives.txt
+        path: attachments/tr-194-tc-176/scenario-12/negatives.txt
+        mimeType: text/plain
+      - name: regression-results.txt
+        path: attachments/tr-194-tc-176/regression-results.txt
+        mimeType: text/plain
+      - name: owasp-top10-scan.txt
+        path: attachments/tr-194-tc-176/owasp-top10-scan.txt
+        mimeType: text/plain
+    defects: []
+
+summary:
+  total: 12
+  passed: 12
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-22T17:00:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-176 contra los ocho PRs que el ticket declara entregados, en
+      el entorno de dev. Primer paso, confirmar el build: la primera carga servia un
+      index.html cacheado y hubo que limpiar antes de medir nada.
+  - action: run-completed
+    timestamp: "2026-09-22T18:05:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      Los seis criterios vigentes se cumplen, medidos sobre la respuesta del servidor y sobre
+      la pantalla, no sobre el codigo — que es lo que fallo la primera vez que este ticket se
+      certifico. El criterio de la tarea sin cuenta se probo reproduciendo antes el 400
+      original. Los seis movimientos del tablero aplican y persisten, y el que falla revierte
+      mostrando el mensaje del servidor. La propiedad bajo view-as se verifico barriendo las
+      listas de los once CSM. Sin defectos que hagan fallar un criterio. Quedan cuatro
+      hallazgos escritos: el formulario de creacion ofrece una prioridad menos que el de
+      edicion aunque el servidor la acepte (F1); no ofrecer "Done" al crear es deliberado y
+      el servidor lo respalda (F2); lo que el ticket declara abierto sobre el conteo de
+      sugerencias ya no es lo que pasa, y lo que si queda es que la lista de cuentas descarta
+      el "+" (F3); y la lista "Delivered — FINAL" omite tres PRs, uno de los cuales arregla
+      un movimiento del tablero que estaba roto cuando el ticket se declaro final (F4).
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-22T17:00:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-22T18:05:00Z"

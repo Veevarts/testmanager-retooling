@@ -1,0 +1,107 @@
+
+> operating-system-backend@0.0.1 csm-os:tasks:verify:local
+> ts-node -r tsconfig-paths/register scripts/csm-os/verify-task-suggestions-local.ts
+
+
+seed
+
+content_key normalization: TS and SQL agree
+  ok   normalize "Follow up on the pledge button"
+  ok   sha1 "Follow up on the pledge button"
+  ok   normalize "  Follow   UP  \n on the PLEDGE button "
+  ok   sha1 "  Follow   UP  \n on the PLEDGE button "
+  ok   normalize "\tCall the director\n"
+  ok   sha1 "\tCall the director\n"
+  ok   normalize " Call the director "
+  ok   sha1 " Call the director "
+  ok   normalize "\r\nCall\tthe\u000bdirector\f"
+  ok   sha1 "\r\nCall\tthe\u000bdirector\f"
+  ok   normalize "Ünicode  spacing\ttest"
+  ok   sha1 "Ünicode  spacing\ttest"
+  ok   normalize "It's a quoted 'thing'"
+  ok   sha1 "It's a quoted 'thing'"
+  ok   normalize "trailing spaces    "
+  ok   sha1 "trailing spaces    "
+
+view filters (open / completed / deleted), expiry hidden everywhere
+  ok   open view = New + In_progress
+  ok   completed view = Done
+  ok   deleted view = soft-deleted only, NOT expired
+  ok   an expired row appears in NO view: expired + Rejected
+  ok   an expired row appears in NO view: expired + New (would match the open view)
+  ok   an expired row appears in NO view: expired + Done (would match the completed view)
+  ok   an expired row appears in NO view: expired + deleted (would match the deleted view)
+  ok   a pending suggestion is not in the task views either
+  ok   (AI) prefix is stripped on the way out
+  ok   kind is derived from state
+  ok   accountHealth is the raw SF value
+  ok   stateBeforeDelete survives to the DTO
+
+GET /csm/tasks?accountId= narrows on the server (R22)
+  ok   without accountId the owner still sees every account
+  ok   with accountId the list is only that account
+  ok   ...in the completed view too
+  ok   ...and the deleted view
+  ok   another CSM's account returns NOTHING, not their tasks
+  ok   ...and it IS visible to the CSM who owns it
+
+R12: the account suggested slice is a deterministic top-N
+  ok   the slice honours the cap
+  ok   ordered by score DESC, then created_at DESC on a tie
+  ok   ...and remaining counts what the cap left out
+  ok   an unscored suggestion sorts AFTER a low-scored one (NULLS LAST)
+  ok   remaining is 0 when the cap exceeds the pile
+  ok   a slice of exactly cap returns cap rows
+  ok   ...and remaining 0 — the case items.length === cap cannot tell (R23)
+  ok   another CSM gets nothing from this CSM's account
+  ok   an accepted suggestion leaves the slice
+  ok   ...and remaining follows it down: 2 before the accept, 1 after, same cap
+
+R12: the portfolio badge shows the capped count and the remainder
+  ok   the badge shows the CAP, not the pile
+  ok   ...and remaining carries the rest
+  ok   a cap equal to the pile shows all of it
+  ok   ...with remaining 0, not "more exist"
+  ok   a cap above the pile shows the pile
+  ok   ...and never a negative remainder
+  ok   a suggestion owned by another CSM is not counted on this CSM's badge
+  ok   ...and the panel shows exactly what the badge counts
+  ok   a declined suggestion leaves the badge
+
+N2: the suggestion pool paginates without skipping or repeating
+  ok   paging the pool visits every row exactly once, in score order
+  ok   ...no row is REPEATED across pages
+  ok   ...and no row is SKIPPED
+  ok   remaining is accurate on EVERY page, not just the last
+  ok   a row inserted mid-pagination does not duplicate an already-seen row
+  ok   ...and the pages after it are the same rows, in the same order
+  ok   a NEGATIVE score outranks an unscored row (COALESCE(score,-1) would invert this)
+  ok   the last page reports remaining 0 and no cursor
+  ok   without accountId the pool spans the owner's whole portfolio
+  ok   another CSM's pool on this account is EMPTY, not this CSM's rows
+
+N3: due-today narrows the task list, on both shapes
+  ok   only the task due that day comes back
+  ok   ...and a task with NO due date is excluded, not included
+  ok   without the filter all three are still there — it is additive
+  ok   the filter works without an account too (My Day)
+  ok   a day with nothing due returns NOTHING, not the whole list
+
+board moves: every column drag applies, and resolved_at follows
+  ok   todo → doing applies
+  ok   doing → done applies, and stamps resolved_at
+ConflictException: Invalid task transition: Done → In_progress. Allowed from Done: [New, Rejected].
+    at TaskStateService.assertTransition (/private/tmp/claude-501/-Users-veevart-Desktop-testmanager-retooling/92c04aef-7c31-4c1c-93eb-b5e9022751ff/scratchpad/be/src/csm/tasks/application/task-state.service.ts:357:23)
+    at TaskStateService.transition (/private/tmp/claude-501/-Users-veevart-Desktop-testmanager-retooling/92c04aef-7c31-4c1c-93eb-b5e9022751ff/scratchpad/be/src/csm/tasks/application/task-state.service.ts:81:14)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async move (/private/tmp/claude-501/-Users-veevart-Desktop-testmanager-retooling/92c04aef-7c31-4c1c-93eb-b5e9022751ff/scratchpad/be/scripts/csm-os/verify-task-suggestions-local.ts:4111:9)
+    at async verifyBoardMovesAndResolvedAt (/private/tmp/claude-501/-Users-veevart-Desktop-testmanager-retooling/92c04aef-7c31-4c1c-93eb-b5e9022751ff/scratchpad/be/scripts/csm-os/verify-task-suggestions-local.ts:4143:5)
+    at async main (/private/tmp/claude-501/-Users-veevart-Desktop-testmanager-retooling/92c04aef-7c31-4c1c-93eb-b5e9022751ff/scratchpad/be/scripts/csm-os/verify-task-suggestions-local.ts:169:9) {
+  response: {
+    message: 'Invalid task transition: Done → In_progress. Allowed from Done: [New, Rejected].',
+    error: 'Conflict',
+    statusCode: 409
+  },
+  status: 409,
+  options: {}
+}

@@ -1,0 +1,285 @@
+schemaVersion: "1.0"
+
+id: "6d803687-48c7-41af-8ff9-56cf0a74c875"
+key: "TC-176"
+title: "CSM OS: a Tasks board that holds the work that fits neither a suggestion nor a case"
+
+description: |
+  Cobertura QA de IM-1239 (CSM OS: standalone Tasks section (kanban) independent of suggested tasks
+  and Salesforce cases), bajo el epic IM-1229 (CSM OS: Feedback). Sub-tarea de QA: IM-1291.
+  Repositorios en alcance: Veevarts/MigrationAppBackend "PR #379" (3dece481), "PR #385" (55b71dc6) y
+  "PR #388" (12ac7437); Veevarts/MigrationAppFrontend "PR #195" (ef07c5b), "PR #196" (f0a217e),
+  "PR #197" (403ab82), "PR #199" (0e0e16e) y "PR #200" (048eb5d). Todos mergeados.
+
+  La historia nace de una queja concreta: no todo el trabajo de un CSM cabe en un caso de Salesforce
+  ni en una sugerencia de la IA. El ejemplo del ticket es "llamar a este cliente mañana", y hoy no
+  hay donde ponerlo. Lo que se pide es una seccion de tareas propia, con tablero de pendientes, en
+  curso y terminadas, donde el CSM cree sus tareas a mano, las arrastre, las filtre y reciba tambien
+  las que vienen de aceptar una sugerencia.
+
+  ESTE TICKET YA SE CERTIFICO MAL UNA VEZ, Y ESO GOBIERNA LA COBERTURA. El 16-09-2026 se dio por
+  cumplido el criterio de crear tareas sin cuenta leyendo el cliente: el modal decia que la cuenta
+  era opcional, el guard de envio solo exigia titulo y el cliente omitia la clave cuando no habia
+  cuenta. Todo cierto, y la funcion no servia. El bloqueo estaba una capa mas abajo: sin cuenta no
+  hay de donde heredar dueño, la API intentaba el `ownerId` del cuerpo, luego el correo del que
+  llamaba, y devolvia 400; el cliente nunca enviaba `ownerId`. Lo encontro el product owner probando
+  en dev, no una revision nuestra. Se arreglo en "PR #197", que ademas cerro una asignacion
+  silenciosa: bajo view-as el fallback resolvia al MANAGER, asi que una tarea creada mientras se veia
+  a otro CSM caia en la lista del manager. Por eso aqui nada se califica por lectura de codigo: cada
+  criterio se mide sobre la respuesta del servidor y sobre la pantalla.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. El alcance se recorto el 17-09-2026. Columnas configurables (IM-1282), filtros por estado y
+    por etiqueta de producto (IM-1283), la etiqueta de producto en el formulario (IM-1237) y la
+    conversion de nota a tarea (IM-1240) NO se entregan aqui. Su ausencia es lo esperado y se
+    verifica como tal, no como defecto; lo que si seria defecto es que quedaran a medias.
+  - R2. Verificar leyendo el cliente ya fallo en este mismo ticket. Todo criterio que dependa de una
+    escritura se comprueba contra el servidor y contra el estado releido, nunca contra el formulario.
+  - R3. El movimiento de tarjetas es optimista: la tarjeta aterriza al soltarla, antes de que el
+    servidor conteste. Un verde al arrastrar no prueba que se haya guardado; hay que recargar. Y hay
+    que provocar el fallo para ver que revierte Y muestra el error, que es lo que "PR #197" añadio.
+  - R4. El tope de sugerencias que el producto muestra solo se respeta en la pestaña de tareas de la
+    cuenta. La lista de cuentas y la recomendacion del portafolio siguen mostrando el total crudo. El
+    ticket lo declara abierto y sin ticket propio, asi que se documenta con numeros, no se ignora.
+  - R5. Esta historia y IM-1235 se entregaron en los mismos PRs y comparten tablero. Aceptar una
+    sugerencia no tiene vuelta atras, asi que la sugerencia que se use aqui se elige a proposito.
+  - R6. Hay que confirmar contra que build corre el entorno antes de calificar nada, comparando el
+    asset que el navegador carga contra el que sirve el index vivo; un verde sobre un build cacheado
+    no prueba nada.
+
+type: functional
+priority: medium
+status: active
+
+preconditions:
+  - "El entorno de CSM OS sirve el backend de \"PR #388\" o posterior y el frontend de \"PR #200\" o posterior; se confirmo contra que build corre antes de empezar (ver riesgo R6)."
+  - "Se entra con un usuario de rol CSM que tenga tareas propias, al menos dos cuentas distintas representadas entre ellas y fechas de vencimiento distintas, una de ellas hoy."
+  - "Se anota, antes de tocar nada, el conteo de tareas abiertas, terminadas y eliminadas, porque varios escenarios cuentan filas que entran y salen."
+  - "Hay acceso a la vista de otro CSM (view-as) y forma de mirar la lista de tareas del manager, que es lo que exige el escenario de dueño."
+  - "Hay al menos una cuenta con mas sugerencias pendientes que el tope que el producto muestra, que es lo que exige el escenario del conteo."
+  - "Se sabe que aceptar una sugerencia no tiene vuelta atras (IM-1235), asi que se elige a proposito la sugerencia con la que se va a trabajar."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The Tasks board lives on its own tab, apart from cases and playbooks"
+    tags:
+      - ac-1
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+    given:
+      - "el CSM abre su dia con tareas, casos de Salesforce y playbooks disponibles"
+    when:
+      - "recorre las pestañas que ofrece la pantalla del dia"
+      - "abre el detalle de una cuenta y recorre las mismas pestañas ahi"
+    then:
+      - "las tareas viven en una pestaña propia, separada de la de casos y de la de playbooks"
+      - "los filtros de casos viven en la pestaña de casos y no se aplican sobre las tareas"
+      - "la misma separacion se repite en el detalle de la cuenta, no solo en la pantalla del dia"
+      - "se capturo una pantalla por cada paso, numeradas 01 en adelante, bajo attachments del test run"
+
+  - title: "AC2 · Creating a task by hand accepts every field the criterion names"
+    tags:
+      - ac-2
+      - happy-path
+      - functional-ui
+    given:
+      - "el CSM esta en la pestaña de tareas con el formulario de creacion abierto"
+    when:
+      - "llena titulo, descripcion, cuenta, fecha de vencimiento, prioridad y la columna que hace de estado"
+      - "guarda, recarga la pantalla y vuelve a abrir la tarea"
+    then:
+      - "el formulario ofrece los seis campos que el criterio nombra"
+      - "la tarea queda creada con exactamente los valores que se escribieron"
+      - "aterriza en la columna que se eligio, no en otra por defecto"
+      - "tras recargar los valores siguen ahi: ninguno se perdio ni se reemplazo por un default al releer"
+
+  - title: "AC3 · The board has three columns and cards move between them by dragging"
+    tags:
+      - ac-3
+      - happy-path
+      - functional-ui
+      - screenshot-per-step
+    given:
+      - "el tablero muestra las columnas de pendientes, en curso y terminadas"
+      - "hay al menos una tarjeta en pendientes"
+    when:
+      - "arrastra la tarjeta a en curso y luego a terminadas"
+      - "recarga la pantalla y vuelve a mirar el tablero"
+      - "provoca un fallo de escritura y repite el arrastre"
+    then:
+      - "la tarjeta aterriza en la columna de destino en el momento de soltarla, sin esperar al servidor"
+      - "tras recargar sigue en la columna a la que se movio: el movimiento quedo guardado y no solo pintado"
+      - "cuando la escritura falla la tarjeta vuelve a su columna anterior y el error se le muestra al CSM"
+      - "en ningun momento la misma tarjeta aparece en dos columnas a la vez"
+
+  - title: "AC4 · A task with no account and no Salesforce case can actually be created"
+    tags:
+      - ac-4
+      - happy-path
+      - regression-evidence
+      - functional-ui
+    given:
+      - "el CSM tiene el formulario de creacion abierto y no va a asociar ninguna cuenta"
+    when:
+      - "elige explicitamente la opcion de sin cuenta y guarda con lo minimo, solo el titulo"
+      - "mira la respuesta del servidor, no solo lo que pinta la pantalla"
+      - "busca la tarea en el tablero y la abre"
+    then:
+      - "el servidor acepta la creacion: no responde 400 ni ningun otro error"
+      - "la tarea aparece en el tablero, sin cuenta y sin caso de Salesforce asociado"
+      - "la tarea tiene dueño asignado aunque no haya cuenta de la que heredarlo"
+      - "el veredicto sale de la respuesta y del estado releido, porque este criterio ya se dio por cumplido una vez leyendo solo el cliente y estaba roto"
+
+  - title: "Correction · The owner of a new task is the CSM being viewed, not the one looking"
+    tags:
+      - ac-4
+      - regression
+      - edge-case
+      - view-as
+    given:
+      - "el usuario puede ver el CSM OS de otro CSM y comparar ambas listas de tareas"
+    when:
+      - "crea una tarea mientras esta viendo el tablero de otro CSM"
+      - "revisa en que lista quedo y a quien figura asignada"
+    then:
+      - "la tarea queda en la lista del CSM que se estaba viendo"
+      - "no aparece en la lista del manager ni en la de quien la creo"
+      - "el dueño guardado coincide con la lista donde aparece, sin discrepancia entre lo mostrado y lo almacenado"
+      - "se repite con una tarea sin cuenta, que es el caso donde el fallback de dueño se equivocaba"
+
+  - title: "AC5 · A converted suggestion lands on this same board"
+    tags:
+      - ac-5
+      - happy-path
+      - regression-evidence
+      - identity
+    given:
+      - "el CSM tiene al menos una sugerencia pendiente elegida a proposito"
+    when:
+      - "la acepta y busca la tarea resultante"
+      - "la trata como a cualquier otra tarjeta: la arrastra, la completa, la borra y la restaura"
+    then:
+      - "la tarea aparece en la columna de pendientes de este mismo tablero y no en otra lista"
+      - "conserva el identificador que tenia como sugerencia, asi que el historial queda continuo"
+      - "se comporta igual que las tareas creadas a mano en arrastre, completado, borrado y restauracion"
+      - "no se creo un registro adicional: el total de sugerencias mas tareas no aumenta"
+
+  - title: "AC6 · The board can be narrowed to one account and to what is due today"
+    tags:
+      - ac-6
+      - happy-path
+      - functional-ui
+    given:
+      - "el CSM tiene tareas de al menos dos cuentas, alguna sin cuenta, y con fechas de vencimiento distintas"
+    when:
+      - "filtra por una cuenta"
+      - "filtra por lo que vence hoy"
+      - "quita los filtros"
+    then:
+      - "con el filtro de cuenta quedan solo las tareas de esa cuenta, y el recorte lo hace el servidor y no el navegador"
+      - "las tareas sin cuenta no se cuelan en el resultado de un filtro por cuenta"
+      - "con el filtro de hoy quedan solo las que vencen hoy: ni las de ayer ni las de mañana"
+      - "al quitar los filtros vuelve el conjunto completo que habia al empezar, con el mismo conteo"
+
+  - title: "Beyond the criteria · Finished and deleted tasks keep a way back"
+    tags:
+      - regression
+      - edge-case
+      - delivered-beyond-ac
+    given:
+      - "el CSM tiene tareas abiertas, al menos una terminada y al menos una borrada"
+    when:
+      - "recorre las pestañas de abiertas, terminadas y eliminadas"
+      - "reabre la terminada y restaura la borrada"
+      - "borra una tarea y usa el deshacer del aviso"
+    then:
+      - "cada pestaña muestra solo lo suyo y los conteos cuadran con lo que se ve"
+      - "reabrir devuelve la tarea al tablero y restaurar la saca de eliminados"
+      - "el deshacer del aviso revierte el borrado sin dejar una tarea a medias"
+      - "borrar nunca elimina de verdad: la tarea sigue recuperable y el aviso dice por cuanto tiempo"
+
+  - title: "Beyond the criteria · The whole pending pool can be browsed from the board"
+    tags:
+      - regression
+      - edge-case
+      - delivered-beyond-ac
+    given:
+      - "hay mas sugerencias pendientes de las que el panel del dia alcanza a mostrar"
+    when:
+      - "abre el explorador del conjunto completo desde la pestaña de tareas y desde el detalle de cuenta"
+      - "recorre la lista hasta que deja de traer mas"
+    then:
+      - "el explorador lista sugerencias mas alla de las del dia, ordenadas por puntaje y cargando por tramos"
+      - "ofrece las mismas acciones que el panel: aceptar, descartar y ver el detalle"
+      - "aceptar desde ahi deja la tarea en este mismo tablero, igual que aceptar desde el panel"
+      - "esta disponible en las dos pantallas, no solo en una"
+
+  - title: "The capped suggestion count holds on the board and nowhere else"
+    tags:
+      - missing-doc
+      - edge-case
+      - ac-1
+    given:
+      - "una cuenta tiene mas sugerencias pendientes que el tope que el producto muestra"
+    when:
+      - "anota el numero que anuncia la pestaña de tareas de esa cuenta"
+      - "lo compara con el que anuncian la lista de cuentas y la recomendacion del portafolio"
+    then:
+      - "la pestaña de la cuenta respeta el tope"
+      - "la lista de cuentas y la recomendacion del portafolio muestran el total crudo, que es otro numero para la misma cuenta"
+      - "se deja constancia con los tres numeros y con el archivo donde se calcula cada uno"
+      - "se documenta que el ticket lo declara abierto y sin ticket propio, y el riesgo de que el CSM vea dos cifras distintas de lo mismo en la misma sesion"
+
+  - title: "Scope guard · What was split out is absent, and absent cleanly"
+    tags:
+      - scope-fit
+      - edge-case
+      - missing-doc
+    given:
+      - "el alcance se recorto el 17-09-2026 y cuatro capacidades salieron a sus propios tickets"
+    when:
+      - "busca en el tablero columnas configurables, filtro por estado, filtro por etiqueta de producto y conversion de nota a tarea"
+    then:
+      - "ninguna de las cuatro esta presente, que es exactamente lo esperado"
+      - "ninguna aparece a medias: no hay controles muertos, ni selectores vacios, ni filtros que no filtren"
+      - "se deja constancia de a que ticket fue cada una (IM-1282, IM-1283, IM-1237, IM-1240) para que su ausencia no se lea como defecto de este"
+
+  - title: "Negative · Creating and moving fail closed"
+    tags:
+      - negative
+      - fail-closed
+    given:
+      - "el formulario de creacion esta abierto y el tablero tiene tarjetas"
+    when:
+      - "intenta guardar una tarea sin titulo"
+      - "intenta mover una tarjeta mientras la escritura al servidor falla"
+      - "intenta abrir o mover una tarea que ya fue borrada"
+    then:
+      - "guardar sin titulo se rechaza y el formulario dice que falta"
+      - "cada rechazo deja el tablero como estaba: ninguna tarea a medias, ninguna tarjeta duplicada"
+      - "los conteos de abiertas, terminadas y eliminadas quedan consistentes despues de cada rechazo"
+      - "ningun error se queda callado: cada fallo se le muestra al CSM"
+
+tags:
+  - im-1239
+  - im-1229
+  - im-1291
+  - csm-os
+  - migration-app-backend
+  - migration-app-frontend
+  - tasks
+  - kanban
+  - drag-and-drop
+  - filters
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-22T17:10:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-22T17:10:00Z"
+  version: 1

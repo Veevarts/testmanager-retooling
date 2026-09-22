@@ -1,0 +1,420 @@
+
+> operating-system-backend@0.0.1 csm-os:tasks:verify:local
+> ts-node -r tsconfig-paths/register scripts/csm-os/verify-task-suggestions-local.ts
+
+
+seed
+
+content_key normalization: TS and SQL agree
+  ok   normalize "Follow up on the pledge button"
+  ok   sha1 "Follow up on the pledge button"
+  ok   normalize "  Follow   UP  \n on the PLEDGE button "
+  ok   sha1 "  Follow   UP  \n on the PLEDGE button "
+  ok   normalize "\tCall the director\n"
+  ok   sha1 "\tCall the director\n"
+  ok   normalize " Call the director "
+  ok   sha1 " Call the director "
+  ok   normalize "\r\nCall\tthe\u000bdirector\f"
+  ok   sha1 "\r\nCall\tthe\u000bdirector\f"
+  ok   normalize "Ünicode  spacing\ttest"
+  ok   sha1 "Ünicode  spacing\ttest"
+  ok   normalize "It's a quoted 'thing'"
+  ok   sha1 "It's a quoted 'thing'"
+  ok   normalize "trailing spaces    "
+  ok   sha1 "trailing spaces    "
+
+view filters (open / completed / deleted), expiry hidden everywhere
+  ok   open view = New + In_progress
+  ok   completed view = Done
+  ok   deleted view = soft-deleted only, NOT expired
+  ok   an expired row appears in NO view: expired + Rejected
+  ok   an expired row appears in NO view: expired + New (would match the open view)
+  ok   an expired row appears in NO view: expired + Done (would match the completed view)
+  ok   an expired row appears in NO view: expired + deleted (would match the deleted view)
+  ok   a pending suggestion is not in the task views either
+  ok   (AI) prefix is stripped on the way out
+  ok   kind is derived from state
+  ok   accountHealth is the raw SF value
+  ok   stateBeforeDelete survives to the DTO
+
+GET /csm/tasks?accountId= narrows on the server (R22)
+  ok   without accountId the owner still sees every account
+  ok   with accountId the list is only that account
+  ok   ...in the completed view too
+  ok   ...and the deleted view
+  ok   another CSM's account returns NOTHING, not their tasks
+  ok   ...and it IS visible to the CSM who owns it
+
+R12: the account suggested slice is a deterministic top-N
+  ok   the slice honours the cap
+  ok   ordered by score DESC, then created_at DESC on a tie
+  ok   ...and remaining counts what the cap left out
+  ok   an unscored suggestion sorts AFTER a low-scored one (NULLS LAST)
+  ok   remaining is 0 when the cap exceeds the pile
+  ok   a slice of exactly cap returns cap rows
+  ok   ...and remaining 0 — the case items.length === cap cannot tell (R23)
+  ok   another CSM gets nothing from this CSM's account
+  ok   an accepted suggestion leaves the slice
+  ok   ...and remaining follows it down: 2 before the accept, 1 after, same cap
+
+R12: the portfolio badge shows the capped count and the remainder
+  ok   the badge shows the CAP, not the pile
+  ok   ...and remaining carries the rest
+  ok   a cap equal to the pile shows all of it
+  ok   ...with remaining 0, not "more exist"
+  ok   a cap above the pile shows the pile
+  ok   ...and never a negative remainder
+  ok   a suggestion owned by another CSM is not counted on this CSM's badge
+  ok   ...and the panel shows exactly what the badge counts
+  ok   a declined suggestion leaves the badge
+
+N2: the suggestion pool paginates without skipping or repeating
+  ok   paging the pool visits every row exactly once, in score order
+  ok   ...no row is REPEATED across pages
+  ok   ...and no row is SKIPPED
+  ok   remaining is accurate on EVERY page, not just the last
+  ok   a row inserted mid-pagination does not duplicate an already-seen row
+  ok   ...and the pages after it are the same rows, in the same order
+  ok   a NEGATIVE score outranks an unscored row (COALESCE(score,-1) would invert this)
+  ok   the last page reports remaining 0 and no cursor
+  ok   without accountId the pool spans the owner's whole portfolio
+  ok   another CSM's pool on this account is EMPTY, not this CSM's rows
+
+N3: due-today narrows the task list, on both shapes
+  ok   only the task due that day comes back
+  ok   ...and a task with NO due date is excluded, not included
+  ok   without the filter all three are still there — it is additive
+  ok   the filter works without an account too (My Day)
+  ok   a day with nothing due returns NOTHING, not the whole list
+
+board moves: every column drag applies, and resolved_at follows
+  ok   todo → doing applies
+  ok   doing → done applies, and stamps resolved_at
+  ok   done → doing applies, and CLEARS resolved_at (the bug the PO hit)
+  ok   done → todo still applies, and clears resolved_at too
+  ok   todo → done applies
+  ok   doing → todo applies
+  ok   Rejected → In_progress clears resolved_at as well
+
+IM-1239: a task with no account at all
+  ok   an account-less task is visible in the owner-scoped open view
+  ok   accountId is null
+  ok   accountName is null
+  ok   origin is manual
+  ok   column derives from state
+  ok   dueDate is a plain date
+  ok   score stays NULL, never 0
+
+PATCH writes only the keys present
+  ok   title updated
+  ok   description untouched by an absent key
+  ok   dueDate untouched by an absent key
+  ok   an explicit null CLEARS the due date
+  ok   an explicit null clears the product tag
+  ok   team still untouched
+  ok   renaming a manual task leaves content_key NULL (it never had one)
+  ok   the agent row starts inside the dedup index
+  ok   renaming onto another agent row's title succeeds
+  ok   ...the new title is stored
+  ok   ...and the renamed row leaves the dedup index
+  ok   ...while the row that owns the slot keeps it
+  ok   a worker row can still be renamed
+  ok   ...but KEEPS its content_key, so the worker cannot re-create it
+  ok   patchTask refuses a deleted row
+  ok   ...and the deleted row's title is unchanged
+  ok   an empty patch of a deleted row is refused too
+  ok   patchTask refuses a expired row
+  ok   ...and the expired row's title is unchanged
+  ok   an empty patch of a expired row is refused too
+
+decline / restore round-trips
+  ok   decline reports the state it left
+  ok   declined rows carry deleted_at
+  ok   declined rows carry resolved_at (0006 CHECK)
+  ok   declined rows do NOT carry expired_at
+  ok   state_before_delete remembers Suggested
+  ok   a second decline is refused, not a silent overwrite
+  ok   state_before_delete was NOT overwritten with Rejected
+  ok   restore returns to Suggested
+  ok   restore clears deleted_at
+  ok   restore clears resolved_at in the same statement
+  ok   restore clears state_before_delete
+  ok   there is a batch to restore into
+  ok   a restored suggestion is back in the CURRENT batch panel
+  ok   restoring a deleted Done task returns it to Done
+  ok   ...and it keeps the ORIGINAL completion time, not the delete time
+  ok   restored Done task is back in the completed view
+
+complete / reopen clears resolved_at
+  ok   completing sets resolved_at
+  ok   reopen moves back to New
+  ok   reopen CLEARS resolved_at (the CHECK cuts both ways)
+  ok   both transitions were audited
+
+an expired suggestion is inert at the DB layer as well
+  ok   applyTransition refuses to accept it
+  ok   softDelete refuses it
+  ok   claimApproval refuses it
+  ok   the row is exactly as it was
+  ok   ...still expired
+  ok   ...still not deleted
+  ok   ...and never claimed
+
+claim-first: two clicks can never open two Cases
+  ok   claiming a Suggested task also accepts it
+  ok   the claim marker is set
+  ok   a second claim is refused
+  ok   external_id is persisted
+  ok   the case link row exists
+  ok   the case is mirrored into support_cases immediately
+  ok   ...with the API NAME, not the label the CSM picked
+  ok   the task reads back the LABEL the CSM picked
+  ok   the case is mirrored even with no status reported
+  ok   ...defaulting to the API NAME, not the label 'New'
+  ok   ...and it reads back as the label
+  ok   claiming an accepted task does NOT move it
+  ok   ...and a concurrent second claim still loses
+  ok   reverting releases the claim
+  ok   reverting leaves the state alone
+  ok   a released claim can be retried
+  ok   claiming moved it to New
+  ok   reverting a Suggested claim puts it BACK to Suggested
+  ok   ...and releases the claim
+  ok   ...and both directions are audited
+  ok   a concurrent transition is NOT rolled back by the revert
+  ok   ...its resolved_at survives (0006 CHECK holds)
+  ok   ...and the claim is released anyway
+  ok   the external_id anchor is committed even with no account to mirror
+[31m[Nest] 42768  - [39m09/22/2026, 12:06:17 PM [31m  ERROR[39m [38;5;3m[AuroraTaskRepository] [39m[31mORPHANED SALESFORCE CASE: created SHOULD-NOT-LAND for task a1ec0bf4-fe1c-4d90-9030-5f6ba6cefd16, but persisting external_id failed. The task holds its claim and will keep answering 409 until the Case is linked manually: Task a1ec0bf4-fe1c-4d90-9030-5f6ba6cefd16 no longer holds the Salesforce Case claim (concurrent modification?).[39m
+  ok   a second finalize is refused once the anchor is set
+  ok   ...and the original Case Id is untouched
+
+sf-case-options: the picker serves labels, the write path values
+  ok   the mirror is served as the LABEL a CSM would be shown
+  ok   ...paired with the API NAME, which is a different string
+  ok   ...falling back to the value when the label is blank
+  ok   ...and an inactive option is not offered at all
+  ok   the endpoint offers labels only — an API name never reaches the CSM
+  ok   choosing a mirrored label resolves to its API name for the write
+  ok   ...and a label the mirror does not offer is a 400
+  ok   a label with an apostrophe resolves without breaking anything
+  ok   with no mirror, the fallback list still resolves New to its API name
+  ok   ...and a label that IS its own API name resolves to itself
+
+sources: chips, labels and the Source modal reads
+  ok   chips are ordered by position and labelled type + date
+  ok   listSources returns all three refs
+  ok   email cc comes out of the metadata jsonb
+  ok   email recipients come out of the text[]
+  ok   email direction drives the badge
+  ok   thread message count is computed
+  ok   call attendees parse out of jsonb
+  ok   call duration is read
+  ok   health explanation is read
+  ok   health assessment resolves its account name
+  ok   a ref that does not exist reads as absent, not as an error
+
+daily generation: carry-over, release, dedup, counters
+  ok   day 1 generated a batch
+  ok   candidates are the un-batched pipeline rows
+  ok   nothing was pending on day 1
+  ok   the dedup set carries the normalized open-task title
+  ok   day 2 sees day 1 batch items as pending
+  ok   day 2 generated a batch
+  ok   carried_over counts only what was already pending
+  ok   generated counts new entrants + inserts
+  ok   returned_to_pool counts what was released
+  ok   an un-carried suggestion is STILL Suggested
+  ok   ...with its batch id cleared, so it is an ordinary candidate again
+  ok   ...and expired_at NULL — nothing expired it
+  ok   ...and resolved_at NULL — it was not resolved either
+  ok   ...and deleted_at NULL (it was never a decline)
+  ok   ...and no resolution note, because nothing resolved it
+  ok   ...and it matches the candidate-pool predicate exactly
+  ok   the panel shows exactly the batch items
+  ok   a carried-over candidate gets the AI team the model assigned
+  ok   ...and the AI product tag
+  ok   a carried-over worker candidate gets its call source backfilled
+  ok   ...with a rendered label, not a bare type
+  ok   the released one is not among them
+  ok   the composed row stores the AI team
+  ok   ...and the AI product tag
+  ok   ...and leaves the CSM fields empty
+  ok   ...and its score
+  ok   ...and its batch date
+  ok   content_key is the sha1 of the normalized title
+  ok   created_by is the marker the dedup indexes are scoped to
+  ok   day 3 generated
+  ok   a duplicate insert is swallowed by the dedup index, not counted as generated
+  ok   ...and the carry-over is still counted
+  ok   only ONE row with that text exists
+  ok   an existing batch is served as-is
+  ok   ...without ranking again
+  ok   force regenerates the same date
+  ok   ...in place, not as a second row for the day
+  ok   getLatestBatch returns the newest date
+
+advisory lock: two concurrent loads produce ONE batch
+  ok   both concurrent loads reached the ranking step
+  ok   one load generated and the other found it
+  ok   exactly ONE batch row exists for the date
+  ok   exactly one plan's row survived
+  ok   ...and it is one of the two runs, not a merge of both
+
+two concurrent FORCED regenerations do not corrupt the batch
+  ok   the contended batch was seeded
+  ok   ...with the row neither forced run keeps already in it
+  ok   both forced runs reached the ranking step
+  ok   one forced run applied and the other stood down
+  ok   only ONE forced plan was applied
+  ok   ...and it is one of the two runs, not a merge
+  ok   the suggestion the winning run carried over is still IN the batch
+  ok   the suggestion neither run kept was released from the batch
+  ok   ...and is Suggested, not resolved
+  ok   ...with expired_at still NULL
+  ok   the regenerated panel does not exceed the cap
+
+a forced regeneration releases rather than destroys
+  ok   day one generated
+  ok   ...and the row it will later release is IN a batch to start with
+  ok   the forced run generated
+  ok   ...and released exactly one suggestion
+  ok   ...and the owner has exactly as many pending suggestions as before
+  ok   the released row is STILL Suggested
+  ok   ...with a NULL batch id
+  ok   ...expired_at NULL
+  ok   ...resolved_at NULL
+  ok   ...deleted_at NULL
+  ok   a release writes no state-log row, because no state changed
+  ok   the released row KEEPS its membership row, closed not deleted
+  ok   ...stamped with the admin who forced the run (R5, restored)
+  ok   the carried-over row keeps ONE uninterrupted membership
+  ok   the next day generated
+  ok   ...and the released row was offered to it as a candidate
+  ok   ...and the round trip completes: it is batched again
+  ok   ...still Suggested, never resolved
+  ok   the generator is told the released candidate was already shown once
+  ok   ...and the re-claim APPENDS a second membership episode
+
+IM-1234: the documented accept-vs-ignore query actually runs
+  ok   the query emits the six buckets this fixture is built for
+  ok   ...and the catalogue exercises `accepted`
+  ok   ...and the catalogue exercises `ignored`
+  ok   ...and the catalogue exercises `expired`
+  ok   ...and the catalogue exercises `still_pending`
+  ok   ...and the catalogue exercises `released`
+  ok   ...and the catalogue exercises `unaccounted`
+  ok   the released fixture starts with ONE open membership
+  ok   ...and the release CLOSES it rather than deleting it
+  ok   a released-then-accepted row has NO pointer but IS accepted
+  ok   the carried-over fixture is a member of BOTH batches
+  ok   the query returns a row for the seeded batch
+  ok   accepted counts every accepted row, Done and carried-over included
+  ok   ignored counts the declined row
+  ok   expired counts the expired row
+  ok   still_pending counts the untouched one
+  ok   unaccounted surfaces the bare Rejected row
+  ok   released counts the one handed back to the pool
+  ok   ...and total counts every seeded row
+  ok   the earlier batch still reports the suggestion it showed
+  ok   ...with total 1
+  ok   ...and the accept credited to it as well as to the later batch
+  ok   the accepted suggestion both rows credit is ONE action in TWO batches
+  ok   the portfolio-wide accept-vs-ignore query runs
+  ok   ...counting each suggestion ONCE, not once per batch that showed it
+  ok   ...and not undercounting either: at least one batch worth of accepts
+  ok   ...and exactly as many as an independently shaped oracle finds (accepted)
+  ok   ...and the same for ignored
+  ok   the buckets sum to total — nothing is silently dropped
+
+IM-1235 AC4: an accepted task keeps its source chips
+  ok   the suggestion has its source chip
+  ok   ...and it is a task now
+  ok   ...still carrying the same chip
+  ok   ...pointing at the same source row, so the modal still opens it
+  ok   ...and the id never changed, which is what makes the link work
+
+an empty run is rolled back: nothing released, no batch row
+  ok   there is a batched pending suggestion an empty run would release
+[33m[Nest] 42768  - [39m09/22/2026, 12:06:19 PM [33m   WARN[39m [38;5;3m[AuroraTaskSuggestionRepository] [39m[33mSuggestion run for owner 00596775719-443302 on 2026-09-11 ended with no items; rolled back, nothing released.[39m
+  ok   the run reports empty
+  ok   the pending suggestion still belongs to its batch after the rolled-back run
+  ok   no batch row was written for the failed run
+  ok   the control run generated
+  ok   ...and it DID release the pending row from its batch
+  ok   ...leaving it Suggested, not resolved
+  ok   ...and expired_at still NULL
+
+a failing batch-row write takes the release with it
+  ok   both are in a batch to start with
+  ok   the run failed
+  ok   ...and the release rolled back with it: the row keeps its batch id
+
+a generation cannot reach another CSM
+  ok   the scoping run generated
+  ok   another CSM's suggestion still belongs to their own batch
+  ok   ...and was not written to at all — same updated_at
+  ok   ...still Suggested
+  ok   ...still no expired_at
+  ok   only this owner's own suggestion entered the batch
+
+the apply transaction takes its lock bound from the request budget
+  ok   the budget probe generated
+  ok   lock_timeout is bound to the supplied budget
+  ok   idle_in_transaction_session_timeout too
+
+the two-commit finalize survives a failing enrichment
+[33m[Nest] 42768  - [39m09/22/2026, 12:06:20 PM [33m   WARN[39m [38;5;3m[AuroraTaskRepository] [39m[33mSF Case 500Cmucxeg4nh58do6 linked to task 90fb16be-db54-4118-83b5-b1fded37997a, but the local mirror write failed (the sf-cases cron will rebuild it): injected enrichment failure[39m
+  ok   a failing enrichment does not fail the request
+  ok   the external_id anchor is committed even though the enrichment threw
+  ok   ...and the enrichment really did not land
+
+content_key on the real INSERT path
+  ok   the boundary-title run generated
+  ok   the INSERT computed content_key over the same normalization
+
+sf-cases worker: the state machine only moves tasks forward
+  ok   an In_progress task is NOT dragged back to New by an untriaged Case
+  ok   a task already at New stays New
+  ok   ...and was not rewritten at all: the no-op guard held
+  ok   a terminal task is never reopened
+  ok   the refused backward move logs NOTHING
+  ok   the no-op row logs nothing either
+  ok   and neither does the terminal row the guard skipped
+  ok   the forward move New -> In_progress still applies
+  ok   ...and the forward move IS logged
+  ok   ...from the state it really left
+  ok   ...to the state it reached
+  ok   ...with no actor, because no human did it
+  ok   ...and source 'sf-sync', which is what lets a consumer measuring CSM behaviour filter it out
+  ok   a closed Case drives its task to Done
+  ok   ...with resolved_at set, which the terminal CHECK requires
+
+the candidate-pool index covers the query it was added for
+  ok   the adapter still orders the candidate pool (extractor found it)
+  ok   the index exists
+  ok   the index key list IS the candidate query ORDER BY, term for term and in order
+  ok   the index is partial on `state = 'Suggested'::csm_os.action_state`
+  ok   the index is partial on `suggestion_batch_id IS NULL`
+  ok   the index is partial on `deleted_at IS NULL`
+  ok   the index is partial on `expired_at IS NULL`
+
+batch membership is append-only and agrees with the pointer (R20)
+  ok   every batched suggestion has an OPEN membership for that batch
+  ok   ...and no OPEN membership outlives the pointer that created it
+  ok   every closed membership names a reason a reader can branch on
+  ok   ...and both generation reasons really occurred in this run
+  ok   the three restore candidates include the owner’s newest batch
+  ok   the restored suggestion comes back as Suggested
+  ok   ...re-pointed at the owner’s MOST RECENT batch, of three candidates
+  ok   ...and restore() CLOSED the old membership, naming itself
+  ok   ...stamped with the CSM who restored it, not left NULL
+  ok   ...and opened a new one on the batch it was re-pointed at
+  ok   a second OPEN membership for one action is refused by the index
+  ok   a closed membership with no reason is refused
+  ok   an unknown release reason is refused
+  ok   a batch row with surviving memberships REFUSES to be deleted
+  ok   every row of a multi-row statement sees the reason it was given
+  ok   ...and the NEXT statement does NOT inherit it — it gets `moved`
+
+347/347 checks passed
