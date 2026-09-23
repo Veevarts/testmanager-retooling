@@ -1,0 +1,64 @@
+TC-178 / IM-1272 — COBERTURA DE TESTS DEL PR
+Fecha: 2026-09-23 · Commit 7236983
+
+ARCHIVOS DE PRUEBA QUE EL PR TOCA
+  membership-transactions-query.spec.ts .................. 57 tests (escaneo de palabras)
+  membership-program-linkage-query.integration.spec.ts ... 18 tests (docker, SQL Server real)
+  membership-program-linkage-query-fixture.ts ............ fixture
+
+RESULTADO DE EJECUTARLOS EN LA RAMA DEL PR
+  escaneo de palabras ..... 57/57 PASS  (0,43 s)
+  integracion docker ...... 18/18 PASS  (92,6 s)   <- ver nota de entorno abajo
+
+ONCE TESTS NUEVOS, Y QUE AC CUBRE CADA UNO
+
+  AC1 — el reembolso parcial deja de marcar Closed Lost
+    [integracion] keeps a partially refunded membership transaction Closed Won
+    [integracion] still stages a fully refunded membership transaction Closed Lost
+    [escaneo]     does not stage Closed Lost from REFUNDSTATUS in the membership-transaction branch
+    [escaneo]     keeps REFUNDSTATUS out of every StageName branch
+
+  AC2 — la rama por orden intercambia la prueba en las dos direcciones
+    [integracion] keeps a partially refunded order-backed membership Closed Won
+    [integracion] still stages a fully refunded order-backed membership Closed Lost
+    [integracion] stages an order-backed membership Closed Lost when the dollars are
+                  complete but the quantity flag is not          <-- LA SEGUNDA DIRECCION
+    [escaneo]     does not stage Closed Lost from REFUNDSTATUS in the order-backed branch
+    [escaneo]     gates the order-backed branch on the dollar-complete refund CTE instead
+
+  Regresion de grano
+    [integracion] emits exactly one Opportunity per refunded membership
+
+VALORACION DE LA COBERTURA
+
+  El dev SI anadio cobertura, y buena. Lo destacable es el septimo test: cubre
+  explicitamente la direccion contraria del intercambio — dolares completos con bandera de
+  cantidad incompleta — que es justo la que un autor apurado habria omitido y la que
+  convierte "libera 2" en "libera 2 y pierde 4". Que ese test exista dice que el autor
+  entendio que su cambio no es una relacion de subconjunto.
+
+  HUECO: ningun test cubre el escenario 6 de este TC (el hueco del RefundMatchRank que el
+  cambio deja sin respaldo). Es coherente con que el PR lo declare fuera de alcance, pero
+  significa que esa parte la tuvo que cubrir QA con medicion sobre datos reales. Ver
+  ../scenario-6/ y ../findings.txt (F1).
+
+NOTA DE ENTORNO — LA PRIMERA CORRIDA FALLO, Y NO FUE EL PR
+
+  La primera ejecucion del spec de docker dio 18/18 FAIL, todos con el mismo mensaje:
+  "Log message 'SQL Server is now ready for client connections' not received after 60000ms".
+  Se conserva ese log en integration-docker-FIRST-RUN-env-timeout.log en vez de ocultarlo.
+
+  Antes de atribuirlo a nada se midio: se arranco el mismo contenedor a mano y SQL Server
+  tardo 94 SEGUNDOS en quedar listo, contra los 60 que el spec espera por defecto. La
+  maquina tiene el runtime de contenedores con 4 CPU y 6 GiB y otros dos contenedores
+  corriendo. Es entorno, no codigo, y no se reporta como defecto del PR.
+
+  Para poder ejecutar igualmente los tests se subio EN LOCAL y de forma temporal el timeout
+  de arranque del contenedor (`.withStartupTimeout(300000)`), se corrio, y se revirtio el
+  archivo. Solo se toco cuanto se espera a que la base arranque; ninguna asercion se
+  modifico. El spec que se mergea sigue teniendo los 60 s por defecto.
+
+  Observacion menor que se deriva de esto (F4 en findings): 60 s de margen para arrancar
+  SQL Server 2022 es ajustado. En una maquina cargada o en un runner de CI compartido, esa
+  suite falla por tiempo sin que nada del producto este mal. Subir ese timeout en el propio
+  spec ahorraria diagnosticos falsos.

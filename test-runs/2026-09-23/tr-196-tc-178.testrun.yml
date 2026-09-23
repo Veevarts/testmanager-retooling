@@ -1,0 +1,350 @@
+schemaVersion: "1.0"
+id: tr-d9faba70-0023-4846-86ef-cf005d9b1157
+key: TR-196
+title: >-
+  TR-196 · IM-1272 · TC-178 · Un reembolso parcial ya no cierra la membresia como perdida —
+  6/6 PASS, el intercambio se midio en las dos direcciones, y 32 de las 221 liberadas caen
+  en el punto ciego que el propio PR deja sin respaldo.
+status: completed
+environment:
+  name: >-
+    Fuente de Altru de Long Island en SQL Server, alcanzada con un perfil de solo lectura a
+    traves del bastion. Todas las consultas de solo lectura y con salida puramente
+    numerica: ningun nombre, importe individual ni dato personal salio de la base. No se
+    escribio en ninguna fuente ni en ninguna organizacion de Salesforce; la de Long Island
+    es productiva del cliente. Suite del equipo ejecutada en local contra SQL Server 2022
+    en contenedor. Los detalles de red quedan fuera de este artefacto a proposito: este
+    repositorio es publico.
+  buildVersion: >-
+    SQL-only con cobertura de tests del dev — Veevarts/MigrationToolETL commit 7236983 de
+    la rama CamiloSalgueroMarin/IM-1272-membership-type-update ("PR #182", ABIERTO y no
+    borrador, sin mergear ni desplegar; merge-base con main 8b522c3). El cambio toca dos
+    ramas de StageName en membership_transactions.sql; el resto del diff son specs, fixture
+    y documentacion. El veredicto queda atado a ese commit: si el PR cambia, caduca.
+startedAt: "2026-09-23T13:45:00Z"
+completedAt: "2026-09-23T15:00:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  `SALESORDER.REFUNDSTATUS` es una columna calculada por
+  `UFN_SALESORDER_GETREFUNDSTATUS_BULK()` y cuenta CANTIDADES, no dinero: lee 2
+  ("reembolsado por completo") en cuanto la cantidad acreditada iguala la del articulo, sin
+  importar cuanto dinero volvio. Una orden de membresia de un solo articulo pasa a 2 con
+  cualquier linea de reembolso — incluida la diferencia de precio que Altru emite cuando el
+  personal baja de nivel una membresia por "Go to Membership", con el socio conservando una
+  membresia pagada y activa.
+
+  Las dos ramas de `StageName` probaban esa bandera ANTES de las dos compuertas de dolares
+  que IM-762 habia anadido, asi que la prueba de cantidad anulaba a la de dinero justo en
+  el caso para el que IM-762 existia. El arreglo son dos movimientos distintos:
+
+  - Rama de transaccion: el branch `REFUNDSTATUS = 2 -> Closed Lost` se ELIMINA. Queda
+    apoyada solo en `#RefundedSalesOrders` y `#RefundedMembershipTransactions`.
+  - Rama respaldada por orden: esa rama nunca tuvo compuerta de dinero propia, asi que la
+    prueba se SUSTITUYE — entra un `LEFT JOIN #RefundedSalesOrders` sobre la propia orden.
+
+  Por que importa mas que una columna de etapa: `MembershipService` de NFPFundraising
+  construye la membresia vigente de un socio UNICAMENTE con oportunidades `Closed Won`. Una
+  membresia mal marcada como perdida deja de alimentar el registro del socio, que es
+  exactamente como se reporto el sintoma.
+
+  IMPORTANTE PARA QUIEN LEA ESTE VEREDICTO: el titulo del ticket habla del TIPO de
+  membresia, y eso NO es lo que aqui se valida. El tipo lo arreglo IM-1204 y esta en
+  produccion desde el 24-08-2026. Ver F3 en findings.
+
+  ## Inferred technical tests
+
+  Cuatro frentes, los cuatro ejecutados; ninguno quedo pendiente de una persona.
+
+  1. **Comparacion PRE/POST fila a fila sobre datos reales.** El riesgo de medir una
+     consulta de 1.117 lineas con 15 tablas temporales es acabar probando la reescritura
+     propia. Asi que no se reescribio: se tomo el archivo del PR tal cual — sus #temp, su
+     FROM, sus joins y su WHERE intactos — y se sustituyo UNICAMENTE la lista de columnas
+     de las dos ramas del UNION, anadiendo junto a la clasificacion nueva la anterior. Las
+     dos se calculan sobre la misma fila en una sola pasada, asi que la identidad fila a
+     fila es por construccion y no algo que haya que cuadrar despues.
+  2. **Las dos direcciones del intercambio**, contadas por separado. El PR advierte
+     explicitamente que no se describa como "solo libera"; medir una sola direccion habria
+     dado un veredicto falso.
+  3. **Los seis registros del ticket**, por su identificador de ingreso VIGENTE — los de la
+     descripcion ya no encuentran nada desde IM-1206.
+  4. **El hueco del ranking de reembolsos**, que el PR declara fuera de alcance pero deja
+     sin el respaldo que tenia. Se midio en tres pasos hasta cruzarlo con el conjunto
+     liberado. Es el unico sitio donde este cambio pudo introducir algo, y es donde esta el
+     hallazgo con mas sustancia de la corrida.
+
+  ## Dos banderas de safesql, y por que
+
+  `--allow-writes` porque el archivo hace `DROP` y `SELECT INTO`. Antes de usarla se
+  verifico que TODO destino de escritura es una tabla temporal de sesion: ninguna tabla
+  origen se toca. `--allow-wildcard` por un `SELECT * INTO #temp` que ya venia en la
+  consulta del PR.
+
+results:
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      AC1 · Partial refunds stop being staged as lost, and full refunds stay lost
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-23T14:44:00Z"
+    stepResults: []
+    actual: |
+      Rama de transaccion, misma entrada contra las dos versiones del CASE:
+
+        en ordenes con la bandera de cantidad (no-Drop) ....... 494
+        de ellas, ya filtradas por las compuertas de dinero ... 273  -> siguen perdidas
+        las restantes ........................................ 221  -> pasan a ganadas
+        Closed Lost   611 -> 390     Closed Won   97.043 -> 97.264
+        filas emitidas       97.654 -> 97.654 (identicas)
+
+      Las 273 que devolvieron todo el dinero siguen marcadas como perdidas, que es lo
+      correcto, y las 221 parciales se liberan. Ninguna de las 221 esta marcada por las
+      compuertas de dinero, asi que liberarlas no pierde ningun reembolso real.
+
+      El conteo total de filas no cambia: el arreglo reclasifica, no filtra ni duplica.
+
+      Contraste con lo declarado: el PR dice 493 y 220; se midieron 494 y 221. La
+      diferencia esta contenida — 494 - 273 = 221 igual que 493 - 273 = 220 — y el conteo
+      filtrado por dinero no se movio. Es una transaccion mas que entro en la poblacion
+      desde la medicion del autor del 16-09. Deriva de datos, no desacuerdo de metodo: si
+      el metodo difiriera no coincidirian las otras nueve cifras. Ver F2.
+
+      pre-fix -> post-fix -> objetivo cumplido?: 221 membresias con reembolso parcial
+      salian como perdidas -> salen como ganadas, y las completas siguen perdidas -> SI.
+
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      AC2 · The order-backed branch swaps the test in both directions
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-23T14:44:00Z"
+    stepResults: []
+    actual: |
+      Este es el escenario que el PR pide expresamente que no se cuente a medias, y sale
+      exacto en las cuatro cifras:
+
+        filas respaldadas por orden sobre ordenes con la bandera ... 117   (declarado 117)
+        siguen perdidas por compuerta de dinero ................... 115   (declarado 115)
+        liberadas (perdida -> ganada) .............................   2   (declarado 2)
+        NUEVAS PERDIDAS (ganada -> perdida) .......................   4   (declarado 4)
+
+        Closed Lost 117 -> 119     Closed Won 4 -> 2
+        filas emitidas 121 -> 121 (identicas, sin abanico del join nuevo)
+
+      Las 4 que pasan a perderse son ordenes que Altru lee como parcialmente reembolsadas
+      POR CANTIDAD — un pedido de varios articulos con solo algunos acreditados — pero cuyo
+      dinero devuelto si cubre el total. La direccion es correcta: el dinero volvio entero.
+
+      En la rama de transaccion las nuevas perdidas son 0, tambien como el PR declara,
+      porque ahi las dos compuertas de dolares ya se aplicaban antes del predicado que se
+      elimino.
+
+      Se reporta, como el PR pide, como 2 liberadas Y 4 nuevas perdidas. No es una relacion
+      de subconjunto y un informe que solo midiera lo liberado seria falso.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la rama probaba cantidad -> prueba
+      importe, y el saldo neto es +2 perdidas con las cuatro cifras cuadrando -> SI.
+
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      AC1 · The six reported records come out as won
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-23T14:45:00Z"
+    stepResults: []
+    actual: |
+      Los seis, buscados por su identificador de ingreso VIGENTE (IM-1206 los cambio del
+      pago a la orden; los de la descripcion del ticket ya no encuentran nada):
+
+        rev-10833452   Closed Lost -> Closed Won    bandera 1, compuerta 0
+        rev-10841307   Closed Lost -> Closed Won    bandera 1, compuerta 0
+        rev-11070451   Closed Lost -> Closed Won    bandera 1, compuerta 0
+        rev-11203390   Closed Lost -> Closed Won    bandera 1, compuerta 0
+        rev-11395299   Closed Lost -> Closed Won    bandera 1, compuerta 0
+        rev-11546037   Closed Lost -> Closed Won    bandera 1, compuerta 0
+
+      Seis de seis, todos en la rama de transaccion. Los seis tienen la bandera de cantidad
+      activa y ninguna compuerta de dinero, que es exactamente la firma del defecto: se
+      marcaban como perdidos por haber contado articulos en vez de dolares.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los seis salian perdidos y dejaban de
+      alimentar la membresia del socio -> los seis salen ganados -> SI.
+
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      The reclassification does not reach anything outside the refunded population
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-23T14:44:00Z"
+    stepResults: []
+    actual: |
+      Dos comprobaciones, las dos limpias en ambas ramas.
+
+      GRANO. El riesgo estructural del cambio era el `LEFT JOIN #RefundedSalesOrders` nuevo
+      de la rama por orden: si esa tabla tuviera mas de una fila por orden, abanicaria.
+
+        rama de transaccion   filas 97.654 = distintas 97.654
+        rama por orden        filas    121 = distintas    121
+
+      Ningun identificador aparece dos veces. El join trae una fila por orden, como el
+      comentario del PR afirma, y ahora esta medido y no solo afirmado.
+
+      ALCANCE. Se conto cuantas filas cambian de clasificacion de una forma que NO sea
+      entre Closed Won y Closed Lost — es decir, si algo entra o sale de Prospecting o de
+      Pledged:
+
+        cambios de otra forma   0 en la rama de transaccion, 0 en la rama por orden
+
+      Las unicas filas que se mueven son las de las dos poblaciones declaradas. Como ambas
+      clasificaciones se calculan sobre la misma fila en una sola pasada, esto es identidad
+      fila a fila y no una coincidencia de totales.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el cambio debia tocar solo la poblacion
+      reembolsada -> no toca nada mas y no altera el grano -> SI.
+
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      Group sales, where the flag really does measure money, are left alone
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-23T14:44:00Z"
+    stepResults: []
+    actual: |
+      En las ordenes de venta a grupos `UFN_SALESORDER_GETREFUNDSTATUS_BULK()` calcula la
+      bandera comparando importes (`AMOUNTPAID = REFUNDS`) y no cantidades. Es la unica
+      poblacion donde la bandera SI significaba dinero, asi que liberar una de ahi seria
+      soltar un reembolso genuinamente completo.
+
+        filas liberadas que son de venta a grupos:
+          rama de transaccion ... 0     (el PR declara 0 de 220)
+          rama por orden ........ 0
+
+      Cero en las dos ramas. El PR no estaba apoyandose en una casualidad.
+
+      Nota de metodo: `revenue_so` es un OUTER APPLY que solo proyecta ID, STATUSCODE y
+      REFUNDSTATUS, asi que la venta a grupos no se podia leer de ese alias. Se resolvio con
+      una subconsulta escalar sobre la MISMA orden que el CASE de StageName resuelve —
+      escalar sobre clave primaria, incapaz de alterar el grano, como confirma el escenario
+      anterior.
+
+      pre-fix -> post-fix -> objetivo cumplido?: ninguna venta a grupos debia liberarse ->
+      ninguna se libera -> SI.
+
+  - testCaseId: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+    testCaseKey: TC-178
+    scenarioTitle: >-
+      The refund ranking gap loses its backstop and has to be measured
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-23T14:49:00Z"
+    stepResults: []
+    actual: |
+      Medido en tres pasos, porque la primera cifra enganaba.
+
+      PASO 1 — tamano bruto del ranking:
+        particiones (reembolso, membresia) ....... 585
+        con mas de una transaccion candidata ..... 463
+        transacciones fuera del rango 1 .......... 1.290
+        maximo de candidatas en una particion .... 19
+
+      Ese 1.290 es una cota superior, no el hueco: que una membresia tenga historico no
+      significa que el reembolso lo abarque. Reportarlo tal cual habria exagerado el
+      problema.
+
+      PASO 2 — afinado por importe, con el mismo criterio que usa la compuerta de dolares
+      del propio archivo:
+        el reembolso no cubre ni a la mas nueva (parcial) ... 240
+        el reembolso cubre a la mas nueva Y SOBRA ........... 196
+        transacciones anteriores detras de esas 196 ......... 386
+
+      PASO 3 — el cruce que importa, contra el conjunto que el PR libera:
+        filas del export en ese conjunto ..................... 348
+        DE ELLAS, LIBERADAS POR ESTE PR ......................  32
+        lo mismo en la rama por orden ........................   0
+
+      32 de las 221 liberadas — un 14,5% — son transacciones que no son la mas reciente de
+      su particion y cuyo reembolso cubre de sobra a la que si lo es. Antes estaban marcadas
+      como perdidas por la bandera de cantidad; ahora no, y la rama B no puede alcanzarlas
+      porque el ranking las descarta.
+
+      ESTO NO PRUEBA QUE ESAS 32 ESTEN MAL. El excedente de un reembolso puede pertenecer
+      legitimamente a la transaccion mas reciente. Para decidirlo haria falta una regla que
+      diga a que transaccion pertenece cada dolar de un reembolso, y ni el ticket ni el PR
+      la dan. Tampoco es un defecto introducido: el ranking es anterior y el PR no lo toca.
+
+      Se documenta como pregunta abierta al autor (F1), que es lo que el escenario pedia:
+      decir cuantas hay aunque sean cero, y dejar constancia de que el gap es anterior al
+      PR y de que este PR le quita el respaldo que tenia. Son 32 filas; revisarlas a mano
+      es viable antes de la recarga.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el escenario pedia medir el hueco y decir
+      cuanto es -> queda medido, acotado y cruzado con el conjunto liberado -> SI.
+
+defects: []
+
+summary:
+  total: 6
+  passed: 6
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-23T13:45:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-178 contra el commit 7236983. Primer paso, la suite del
+      equipo: 57/57 en el escaneo de palabras, y el spec de docker fallando 18/18 por
+      timeout de arranque del contenedor, que se diagnostico como entorno antes de
+      atribuirlo a nada.
+  - action: run-completed
+    timestamp: "2026-09-23T15:00:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      6/6. El defecto desaparece: 223 membresias con reembolso parcial dejan de exportarse
+      como perdidas, y las que devolvieron todo el dinero siguen perdidas. El intercambio
+      de la rama por orden se midio en las DOS direcciones y sus cuatro cifras coinciden al
+      digito con lo declarado — 117/115/2 y 4 nuevas perdidas —, que era el riesgo
+      principal de esta cobertura. Los seis registros del ticket salen ganados. El grano no
+      cambia y nada se mueve fuera de las dos poblaciones declaradas. Cinco hallazgos, uno
+      con sustancia: 32 de las 221 liberadas caen en el punto ciego del ranking de
+      reembolsos que este PR deja sin respaldo (F1), y merecen una respuesta del autor
+      antes de la recarga aunque no hagan fallar ningun criterio. Los otros: dos conteos
+      declarados difieren en +1 por deriva de datos de una semana (F2); el titulo del
+      ticket sigue describiendo otro arreglo, el de IM-1204 (F3); la suite de integracion
+      tiene 60 s para arrancar SQL Server y en la maquina de QA tarda 94, lo que produce un
+      diagnostico falso (F4); y solo se midio Long Island, con Tucson aun sin medir siendo
+      el tenant mas afectado (F5). Sin defectos de seguridad: OWASP 3 aplicables, 3 PASS,
+      7 N/A.
+
+tags:
+  - im-1272
+  - im-70
+  - im-1295
+  - altru
+  - migration
+  - migration-tool-etl
+  - membership
+  - refund
+  - long-island
+  - query
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-23T13:45:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-23T15:00:00Z"

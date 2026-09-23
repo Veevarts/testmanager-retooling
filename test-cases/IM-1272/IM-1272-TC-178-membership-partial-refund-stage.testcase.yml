@@ -1,0 +1,192 @@
+schemaVersion: "1.0"
+
+id: "cd6357bb-4257-4f25-bfab-b7a690d3d18b"
+key: "TC-178"
+title: "Membership export: a partial refund no longer closes the membership as lost"
+
+description: |
+  Cobertura QA de IM-1272 (Membership query not taking updated membership type after client
+  modifies it — Long Island Children's Museum, Caso 1), bajo el epic IM-70 (Altru Queries).
+  Sub-tarea de QA: IM-1295. Repositorio en alcance: Veevarts/MigrationToolETL "PR #182", rama
+  CamiloSalgueroMarin/IM-1272-membership-type-update.
+
+  LO QUE EL TITULO DICE NO ES LO QUE ESTE PR ENTREGA, Y ESA DISTINCION MANDA SOBRE TODA LA
+  COBERTURA. El ticket se reporto como "la consulta no toma el tipo de membresia actualizado".
+  Ese problema ya lo arreglo IM-1204, en produccion desde el 24-08-2026, y el propio autor
+  confirma haber revuelto los seis registros y verlos hoy con el tipo correcto. Lo que este PR
+  arregla es un SEGUNDO defecto, independiente, que encontro al investigar: esos mismos seis
+  registros se exportan como `Closed Lost`, y Salesforce construye la membresia vigente de un
+  socio UNICAMENTE con oportunidades `Closed Won`. Una membresia mal marcada como perdida deja
+  de alimentar el registro del socio, que es exactamente como se manifesto el sintoma. Probar
+  aqui "el tipo de membresia" seria probar IM-1204, no este PR.
+
+  El mecanismo, que es lo que hay que verificar y no repetir: `SALESORDER.REFUNDSTATUS` es una
+  columna calculada por `UFN_SALESORDER_GETREFUNDSTATUS_BULK()` y cuenta CANTIDADES, no dinero.
+  Lee 2 ("reembolsado por completo") en cuanto la cantidad acreditada iguala la cantidad del
+  articulo, sin importar cuanto dinero volvio. Una orden de membresia de un solo articulo pasa
+  a 2 con cualquier linea de reembolso — incluida la diferencia de precio que Altru emite
+  cuando el personal baja de nivel una membresia por "Go to Membership", con el socio
+  conservando una membresia pagada y activa. Las dos ramas de `StageName` probaban esa bandera
+  ANTES de las compuertas de dolares que IM-762 habia anadido, asi que la prueba de cantidad
+  anulaba a la de dinero justo en el caso para el que IM-762 existia.
+
+  El cambio son dos movimientos distintos, y conviene no confundirlos:
+
+  - Rama de transaccion: el branch `REFUNDSTATUS = 2 -> Closed Lost` se ELIMINA. La rama queda
+    apoyada solo en `#RefundedSalesOrders` y `#RefundedMembershipTransactions`.
+  - Rama respaldada por orden: esa rama nunca tuvo compuerta de dinero propia, asi que la
+    prueba se SUSTITUYE, no se borra: entra un `LEFT JOIN #RefundedSalesOrders` sobre la propia
+    orden de la fila.
+
+  EL INTERCAMBIO VA EN LAS DOS DIRECCIONES Y NO ES UNA RELACION DE SUBCONJUNTO. El propio PR
+  advierte que no se describa como "solo libera": libera 220 + 2 filas, pero tambien pierde 4
+  ordenes que antes estaban ganadas, porque el dinero devuelto si cubria el total aunque Altru
+  las leyera como parciales por cantidad. Medir una sola direccion daria un veredicto falso.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. El "PR #182" esta ABIERTO y sin mergear ni desplegar. No esta en borrador, a diferencia
+    del de IM-1223. El veredicto queda atado al commit que se pruebe; si el PR cambia, caduca.
+  - R2. El desajuste entre el titulo del ticket y el contenido del PR. Si alguien lee el
+    veredicto esperando una validacion del tipo de membresia, va a concluir mal. Queda escrito.
+  - R3. Tucson NO se pudo medir (safesql no conecto el 17-09-2026) y es el tenant mas afectado
+    por IM-1204, con 3,20% frente al 0,42% de Long Island. Everson, Aspen, Kidstream, MOAD e
+    Illinois tampoco estan medidos. Lo que no se alcance se declara sin verificar, no se rellena.
+  - R4. La recarga del export a la org de Long Island queda FUERA de alcance: es la org
+    productiva del cliente y QA no escribe ahi. La verificacion es sobre la consulta, no sobre
+    el resultado en Salesforce.
+  - R5. La divergencia `Closed Lost` + POS `Sold` — las 4 nuevas perdidas mas 116 filas que ya
+    tienen esa forma en main — la declara el propio PR fuera del alcance de IM-1272. Se mide y
+    se reporta, no se exige arreglada aqui.
+  - R6. El `RefundMatchRank = 1` de la rama B queda ahora como unico camino para un reembolso
+    cuya linea no apunta al reparto de ingreso de la propia membresia, y solo marca la
+    transaccion mas nueva. Es preexistente, pero antes lo respaldaba la bandera de cantidad que
+    este PR quita: pasa de gap teorico a gap con carga.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Hay perfil de solo lectura para la fuente de Long Island; es la fuente donde el PR declara todos sus numeros."
+  - "Se puede obtener la consulta en sus dos versiones, la de la rama base y la del \"PR #182\", para correr la misma entrada contra las dos."
+  - "Se anota el commit exacto que se prueba, porque el PR sigue abierto y el veredicto queda atado a el."
+  - "Todas las consultas son de solo lectura. No se escribe en ninguna fuente ni en ninguna org; la de Long Island es productiva del cliente."
+  - "Se sabe que el tipo de membresia NO es el objeto de esta cobertura: eso es IM-1204 y ya esta en produccion."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · Partial refunds stop being staged as lost, and full refunds stay lost"
+    tags:
+      - ac-1
+      - happy-path
+      - long-island
+    given:
+      - "la rama de transaccion probaba la bandera de cantidad antes que las compuertas de dinero"
+    when:
+      - "se ejecuta la version base sobre Long Island y se cuentan las membresias marcadas como perdidas entre las que estan en ordenes con la bandera de reembolso total"
+      - "se ejecuta la version del PR con la misma entrada y se cuenta lo mismo"
+    then:
+      - "de las 493 transacciones de membresia sobre esas ordenes, las 273 que si devolvieron todo el dinero siguen marcadas como perdidas"
+      - "las otras 220 dejan de estar perdidas y pasan a ganadas, que es el defecto que el PR arregla"
+      - "ninguna de esas 220 resulta ser un reembolso completo medido por dinero, con lo que liberarlas no pierde ningun caso real"
+      - "el conteo total de filas de la consulta no cambia: el arreglo reclasifica, no filtra ni duplica"
+
+  - title: "AC2 · The order-backed branch swaps the test in both directions"
+    tags:
+      - ac-2
+      - regression
+      - behavioral-diff
+    given:
+      - "esa rama nunca tuvo compuerta de dinero propia, asi que la prueba se sustituye en vez de borrarse"
+    when:
+      - "se comparan las dos versiones sobre las filas respaldadas por orden"
+      - "se cuentan por separado las que se liberan y las que pasan a perderse"
+    then:
+      - "de las 117 filas sobre ordenes con la bandera de reembolso total, 115 siguen perdidas y 2 se liberan"
+      - "ademas 4 ordenes que antes estaban ganadas pasan a perderse, porque el dinero devuelto si cubria el total"
+      - "esas 4 se identifican una por una y se confirma que su reembolso cubre el importe de la orden"
+      - "el resultado se reporta como 2 liberadas y 4 nuevas perdidas, no como si el cambio solo liberara"
+      - "en la rama de transaccion no aparece ninguna fila que pase a perderse, porque ahi las compuertas de dinero ya se aplicaban"
+
+  - title: "AC1 · The six reported records come out as won"
+    tags:
+      - ac-1
+      - regression-evidence
+      - long-island
+    given:
+      - "el ticket nombra seis registros, y el PR advierte que sus identificadores de ingreso cambiaron con IM-1206"
+    when:
+      - "se buscan los seis por su identificador nuevo, no por el que figura en la descripcion del ticket"
+      - "se mira su clasificacion en las dos versiones"
+    then:
+      - "los seis se encuentran en la fuente y estan entre las 220 que el PR dice liberar"
+      - "en la version base los seis salen marcados como perdidos, que es el defecto reportado"
+      - "en la version del PR los seis salen como ganados"
+      - "se deja constancia de que buscarlos por los identificadores de la descripcion no los encuentra, y de cual es el identificador vigente de cada uno"
+
+  - title: "The reclassification does not reach anything outside the refunded population"
+    tags:
+      - regression
+      - behavioral-diff
+    given:
+      - "el cambio toca dos ramas de una consulta que exporta decenas de miles de filas"
+    when:
+      - "se compara, fila por fila, la clasificacion que emite la version base contra la del PR"
+      - "se mira si el nuevo enlace a la tabla de ordenes reembolsadas altera el grano de filas"
+    then:
+      - "las unicas filas que cambian de clasificacion son las de las dos poblaciones declaradas, y ninguna otra"
+      - "el numero de filas es identico en las dos corridas: el enlace nuevo trae una fila por orden y no multiplica"
+      - "ningun identificador de fila aparece dos veces despues del cambio"
+      - "se deja constancia de que lo verificado es identidad fila a fila y no solo que los totales cuadren"
+
+  - title: "Group sales, where the flag really does measure money, are left alone"
+    tags:
+      - edge-case
+      - fail-closed
+    given:
+      - "en las ordenes de venta a grupos la bandera se calcula comparando importes y no cantidades"
+    when:
+      - "se cuentan, entre las filas que el cambio libera, las que pertenecen a una orden de venta a grupos"
+    then:
+      - "ninguna de las filas liberadas es de venta a grupos, tal como el PR declara"
+      - "si apareciera alguna, se reporta como defecto: ahi la bandera si significaba dinero y liberarla seria perder un reembolso real"
+      - "se deja constancia de que esta es la unica poblacion donde la bandera de cantidad no es enganosa"
+
+  - title: "The refund ranking gap loses its backstop and has to be measured"
+    tags:
+      - missing-doc
+      - edge-case
+    given:
+      - "al quitar la bandera de cantidad, una de las compuertas de dinero queda como unico camino para cierto tipo de reembolso"
+      - "esa compuerta conserva solo la transaccion mas reciente de cada membresia"
+    when:
+      - "se cuentan las membresias con un reembolso que abarca varias de sus transacciones"
+      - "se mira cuantas de esas transacciones quedan sin marcar"
+    then:
+      - "se dice cuantas hay, aunque sean cero"
+      - "si existen, se registra cuantas transacciones quedan sin marcar y si alguna deberia haberse perdido"
+      - "se deja constancia de que el gap es anterior a este PR y de que este PR le quita el respaldo que tenia"
+      - "se documenta como pregunta abierta para el autor, no como defecto introducido por el cambio"
+
+tags:
+  - im-1272
+  - im-70
+  - im-1295
+  - altru
+  - migration
+  - migration-tool-etl
+  - membership
+  - refund
+  - long-island
+  - query
+
+estimatedDuration: 105
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-23T13:30:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-23T13:30:00Z"
+  version: 1

@@ -1,0 +1,109 @@
+TC-178 / IM-1272 — MATRIZ DE COMPARACION PRE vs POST
+Fecha de ejecucion: 2026-09-23
+Commit probado: 7236983 (rama CamiloSalgueroMarin/IM-1272-membership-type-update, "PR #182")
+Merge-base contra main: 8b522c3
+Fuente: Long Island. Consulta de solo lectura, salida puramente numerica.
+
+------------------------------------------------------------------------------------------
+METODO — POR QUE ESTO ES FIEL Y NO UNA REIMPLEMENTACION
+------------------------------------------------------------------------------------------
+`membership_transactions.sql` son 1.117 lineas con 15 tablas temporales. Reescribir su
+logica para medirla habria puesto a prueba mi reescritura, no el PR.
+
+Lo que se hizo (script en instrument-query.py, consulta resultante en 01-stage-diff.sql):
+
+  · Se toma el archivo del PR TAL CUAL: sus 15 #temp, su FROM, sus joins y su WHERE quedan
+    intactos, byte a byte.
+  · Se sustituye UNICAMENTE la lista de columnas de las dos ramas del UNION.
+  · La clasificacion POST es copia literal del CASE que trae el PR.
+  · La clasificacion PRE es ese mismo CASE con el unico cambio que el PR introduce
+    revertido: en la rama de transaccion, el branch `REFUNDSTATUS = 2 -> Closed Lost`
+    reinstalado en su posicion original; en la rama por orden,
+    `obm_rso.SalesOrderID IS NOT NULL` devuelto a `obm.SalesOrderRefundStatus = 2`.
+  · Ambas clasificaciones se calculan sobre LA MISMA FILA, en una sola pasada. No son dos
+    corridas que haya que cuadrar: es identidad fila a fila por construccion.
+
+Sin ventana de fechas (todos los anios), que es lo que el ticket pide para la recarga.
+
+Dos banderas de safesql fueron necesarias y conviene justificarlas:
+  --allow-writes    porque el archivo hace DROP/SELECT INTO. Se verifico antes de usarla
+                    que TODO destino de escritura es una tabla temporal de sesion: ninguna
+                    tabla origen se toca.
+  --allow-wildcard  por un `SELECT * INTO #OrderBackedMembershipFinancialTransactions` que
+                    ya venia en la consulta del PR.
+
+------------------------------------------------------------------------------------------
+RAMA DE TRANSACCION
+------------------------------------------------------------------------------------------
+Metrica                                 PRE      POST    Delta   AC     Objetivo?  Veredicto
+filas emitidas                        97654     97654       0    reg    SI         PASS
+filas distintas                       97654     97654       0    reg    SI         PASS
+en ordenes con bandera (no-Drop)        494       494       0    AC1    -          medido
+   de ellas, ya filtradas por dinero    273       273       0    AC1    SI         PASS
+Closed Lost                             611       390    -221    AC1    SI         PASS
+Closed Won                            97043     97264    +221    AC1    SI         PASS
+liberadas (perdida -> ganada)             -       221    +221    AC1    SI         PASS
+nuevas perdidas (ganada -> perdida)       -         0       0    AC2    SI         PASS
+cambios de otra forma                     -         0       0    reg    SI         PASS
+liberadas de venta a grupos               -         0       0    neg    SI         PASS
+
+------------------------------------------------------------------------------------------
+RAMA RESPALDADA POR ORDEN
+------------------------------------------------------------------------------------------
+Metrica                                 PRE      POST    Delta   AC     Objetivo?  Veredicto
+filas emitidas                          121       121       0    reg    SI         PASS
+filas distintas                         121       121       0    reg    SI         PASS
+en ordenes con bandera                  117       117       0    AC2    -          medido
+   de ellas, ya filtradas por dinero    115       115       0    AC2    SI         PASS
+Closed Lost                             117       119      +2    AC2    SI         PASS
+Closed Won                                4         2      -2    AC2    SI         PASS
+liberadas (perdida -> ganada)             -         2      +2    AC2    SI         PASS
+nuevas perdidas (ganada -> perdida)       -         4      +4    AC2    SI         PASS
+cambios de otra forma                     -         0       0    reg    SI         PASS
+liberadas de venta a grupos               -         0       0    neg    SI         PASS
+
+------------------------------------------------------------------------------------------
+CONTRASTE CON LO DECLARADO EN EL PR
+------------------------------------------------------------------------------------------
+Declarado                        Medido    Coincide
+493 transacciones sobre la bandera  494     NO, +1
+273 ya filtradas por dinero         273     SI, exacto
+220 liberadas                       221     NO, +1
+0 nuevas perdidas en esta rama        0     SI, exacto
+117 filas por orden                 117     SI, exacto
+115 siguen perdidas                 115     SI, exacto
+2 liberadas por orden                 2     SI, exacto
+4 nuevas perdidas por orden           4     SI, exacto
+0 de venta a grupos entre liberadas   0     SI, exacto
+
+NUEVE DE ONCE COINCIDEN AL DIGITO. Las dos que no difieren en exactamente +1, y la
+diferencia esta contenida: 494 - 273 = 221, y 493 - 273 = 220. Es decir, lo unico que
+cambio es que UNA transaccion de membresia mas entro en la poblacion de la bandera desde
+que el autor midio (2026-09-16), y es de reembolso parcial, asi que cae del lado liberado.
+El conteo filtrado por dinero no se movio.
+
+Es deriva de datos sobre una fuente viva en una semana, no un desacuerdo de metodo: si el
+metodo difiriera, fallarian las nueve restantes. No se reporta como defecto.
+
+------------------------------------------------------------------------------------------
+LO QUE ESTOS NUMEROS PRUEBAN
+------------------------------------------------------------------------------------------
+1. El defecto reportado desaparece: 221 + 2 = 223 membresias dejan de exportarse como
+   Closed Lost por una bandera que cuenta articulos en vez de dinero.
+
+2. La correccion de la rama por orden va EN LAS DOS DIRECCIONES, tal como el PR advierte
+   que se describa: 2 liberadas y 4 nuevas perdidas. Un informe que midiera solo lo
+   liberado daria un veredicto falso, y ese era el riesgo principal de esta cobertura.
+   La rama de transaccion tiene 0 nuevas perdidas, tambien como el PR declara, porque ahi
+   las dos compuertas de dolares ya se aplicaban antes del predicado eliminado.
+
+3. El grano no cambia en ninguna de las dos ramas: filas = distintas, antes y despues. El
+   LEFT JOIN nuevo a #RefundedSalesOrders no multiplica, que era el riesgo estructural del
+   cambio.
+
+4. Nada se mueve fuera de las dos poblaciones declaradas: `cambios de otra forma` = 0 en
+   ambas ramas, o sea que ninguna fila entra o sale de Prospecting ni de Pledged.
+
+5. Ninguna fila liberada pertenece a una orden de venta a grupos, que es la unica poblacion
+   donde la bandera de Altru SI mide dinero y donde liberar habria significado perder un
+   reembolso real.

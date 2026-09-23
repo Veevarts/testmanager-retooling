@@ -1,0 +1,115 @@
+TR-196 / TC-178 / IM-1272 — HALLAZGOS
+Fecha: 2026-09-23
+Commit probado: 7236983 ("PR #182", abierto, no borrador, sin mergear ni desplegar)
+Fuente medida: Long Island
+
+VEREDICTO GENERAL: el arreglo cumple lo que el ticket pide. Los hallazgos de abajo no
+hacen fallar ningun criterio; el F1 es el unico que merece respuesta antes de la recarga.
+
+------------------------------------------------------------------------------
+F1 — 32 de las 221 liberadas caen en el punto ciego que este PR deja sin respaldo (MEDIA)
+------------------------------------------------------------------------------
+El propio PR lo anticipa y lo llama "known gap, now load-bearing": al quitar la bandera de
+cantidad, la rama B de `#RefundedMembershipTransactions` queda como unico camino para un
+reembolso cuya linea no apunta al reparto de ingreso de la propia membresia. Y esa rama
+conserva solo `RefundMatchRank = 1`: la transaccion MAS RECIENTE de cada par
+(reembolso, membresia). Un reembolso que abarque varias solo marca la mas nueva.
+
+El PR lo deja escrito pero no lo mide. Aqui se midio, en tres pasos.
+
+  Paso 1 — tamano bruto del ranking (03-rank-gap.sql):
+      particiones (reembolso, membresia) ............ 585
+      con mas de una transaccion candidata .......... 463
+      transacciones fuera del rango 1 ............... 1.290
+      maximo de candidatas en una particion .........    19
+
+  Ese 1.290 es una COTA SUPERIOR, no el hueco. Que una membresia tenga historico no
+  significa que el reembolso lo abarque: para la inmensa mayoria, quedarse con la mas
+  reciente es lo correcto.
+
+  Paso 2 — afinado por importe (04-rank-gap-refined.sql), con el mismo criterio que usa la
+  compuerta de dolares del propio archivo (ABS(reembolso) >= ABS(importe de la linea)):
+      el reembolso NO cubre ni a la mas nueva (parcial) ......... 240
+      el reembolso cubre a la mas nueva Y SOBRA ................. 196
+      transacciones anteriores detras de esas 196 ...............  386
+
+  Las 240 son el caso que este PR libera, y cuadran con las 221 liberadas. Las 196 son
+  donde el ranking podria estar perdiendo algo.
+
+  Paso 3 — el cruce que importa (05-rank-gap-crossed.sql): de las filas que el PR libera,
+  cuantas estan en ese conjunto.
+      filas del export en el conjunto "anterior detras de reembolso que sobra" ... 348
+      DE ELLAS, LIBERADAS DE Closed Lost A Closed Won POR ESTE PR ................  32
+      lo mismo en la rama por orden ...............................................  0
+
+LO QUE ESTO SIGNIFICA, DICHO CON PRECISION:
+
+  32 de las 221 membresias que el PR libera (un 14,5%) son transacciones que NO son la mas
+  reciente de su particion, y cuyo reembolso cubre de sobra a la que si lo es. Antes del
+  PR estaban marcadas como perdidas por la bandera de cantidad. Despues no lo estan, y la
+  rama B no puede alcanzarlas porque el ranking las descarta.
+
+LO QUE ESTO NO SIGNIFICA:
+
+  No prueba que esas 32 esten mal. El excedente de un reembolso puede pertenecer
+  legitimamente a la transaccion mas reciente por razones ajenas al historico. Para saberlo
+  haria falta una regla que diga a que transaccion pertenece cada dolar de un reembolso, y
+  NI EL TICKET NI EL PR LA DAN.
+
+  Tampoco es un defecto introducido: el ranking es anterior a IM-1272 y el PR no lo toca.
+  Lo que cambia es que pierde el respaldo que tenia.
+
+SE REPORTA COMO PREGUNTA AL AUTOR, no como fallo de criterio: ¿revisaste esas 32? El PR
+dice haber comprobado las 220 de tres formas independientes, todas sobre si el reembolso
+era completo; ninguna de las tres mira si el reembolso pertenecia a OTRA transaccion de la
+misma membresia. Es la unica poblacion de esta corrida donde el cambio pudo haber
+introducido algo, y son 32 filas: revisarlas a mano es viable.
+
+------------------------------------------------------------------------------
+F2 — Dos de los once conteos declarados difieren en +1, y la diferencia se contiene (BAJA)
+------------------------------------------------------------------------------
+    Declarado 493 transacciones sobre la bandera -> medido 494
+    Declarado 220 liberadas                      -> medido 221
+    Las otras nueve cifras coinciden AL DIGITO, incluidas las cuatro de la rama por orden.
+
+El conteo filtrado por dinero (273) no se movio, y 494 - 273 = 221 igual que 493 - 273 =
+220. O sea: una transaccion de membresia mas entro en la poblacion desde que el autor
+midio el 16-09-2026, y es de reembolso parcial.
+
+Deriva de datos de una semana sobre una fuente viva. Si el metodo de medicion difiriera,
+no coincidirian las otras nueve. No es defecto; es una nota de caducidad: los conteos de un
+ticket contra una fuente viva envejecen y conviene fecharlos.
+
+------------------------------------------------------------------------------
+F3 — El titulo del ticket sigue sin describir lo que se entrega (BAJA, de proceso)
+------------------------------------------------------------------------------
+IM-1272 se titula "Membership query not taking updated membership type". Ese problema lo
+arreglo IM-1204 y esta en produccion desde el 24-08-2026. Lo que este PR entrega es el
+arreglo del `Closed Lost` por reembolso parcial: otro defecto, encontrado al investigar.
+
+Se deja escrito porque quien lea el veredicto de esta corrida esperando una validacion del
+tipo de membresia concluira mal. La validacion del tipo NO esta aqui y no deberia estarlo.
+
+------------------------------------------------------------------------------
+F4 — La suite de integracion tiene 60 s para arrancar SQL Server, y es ajustado (BAJA)
+------------------------------------------------------------------------------
+El spec de docker usa `Wait.forLogMessage(...)` sin timeout explicito, o sea los 60 s por
+defecto. En la maquina de QA, arrancar ese contenedor tardo 94 s medidos, y la suite dio
+18/18 FAIL por tiempo — sin que nada del producto estuviera mal.
+
+No es defecto del cambio de IM-1272. Pero un `.withStartupTimeout()` mas generoso en el
+propio spec evitaria que un runner cargado produzca un diagnostico falso. Detalle y logs de
+las dos corridas en scenario-0-unit-tests/.
+
+------------------------------------------------------------------------------
+F5 — Lo que esta corrida NO cubre, y conviene que conste (INFORMATIVA)
+------------------------------------------------------------------------------
+  · Solo se midio LONG ISLAND. Tucson sigue sin medir y es el tenant mas afectado por
+    IM-1204 (3,20% frente al 0,42% de Long Island); Everson, Aspen, Kidstream, MOAD e
+    Illinois tampoco. El PR pide medirlos antes de planear una recarga alli.
+  · La recarga del export a la org productiva del cliente queda fuera: QA no escribe ahi.
+    Lo verificado es la consulta, no el resultado en Salesforce.
+  · La divergencia `Closed Lost` + POS `Sold` (las 4 nuevas perdidas mas 116 filas que ya
+    tienen esa forma en main) el propio PR la declara fuera del alcance de IM-1272.
+  · Las dos preguntas al museo — que nivel mostrar tras una bajada, y que hacer con la
+    marca de subida/bajada — siguen sin respuesta y no son de QA resolverlas.
