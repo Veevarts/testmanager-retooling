@@ -1,0 +1,56 @@
+TC-179 escenario 2 — LAS GUARDAS DE AMBIGUEDAD DEL ENLACE POR ITEM DEL CREDITO
+Fuente: Long Island · Commit 7436170 · 2026-09-23
+
+QUE SE VERIFICA
+  El OUTER APPLY nuevo solo acepta el enlace por el item del credito cuando NO HAY NADA
+  QUE ELEGIR. Dos guardas NOT EXISTS lo imponen:
+    G1  el credito lleva exactamente UN item (ningun item hermano)
+    G2  el reembolso lleva exactamente UNA linea Standard sin SOURCELINEITEMID
+  El autor declara sobre G2: "0 refunds carry more than one such line today, so this
+  bounds a shape that does not yet exist rather than dropping known rows".
+
+UNA CORRECCION DE MI PROPIA MEDICION, QUE MERECE CONSTAR
+  La primera pasada conto 3.379 lineas en la poblacion de G2 y parecia contradecir al
+  autor. Estaba MAL ACOTADA: contaba cualquier reembolso con dos lineas sin origen, sin
+  exigir que el credito tuviera un solo item ni que ese item fuera una membresia. La
+  frase del autor esta acotada a "on a single-item credit". Re-medido al alcance
+  correcto (guards2.sql), da 0. La primera cifra queda en guards.json como lo que es:
+  una medicion mia mal encuadrada, no un hallazgo.
+
+EMBUDO MEDIDO (guards2.sql)
+
+  Nivel                                                          Reembolsos
+  -------------------------------------------------------------  ----------
+  A  con al menos una linea Standard sin SOURCELINEITEMID              1.236
+  B  de esos, cuyo credito tiene UN SOLO item                            186
+  C  de esos, cuyo item ES una membresia respaldada por orden             10   <- admitidos
+  D  POBLACION DE G2: los de C con DOS O MAS lineas sin origen             0   <- guarda vacia
+  E  con dos o mas lineas y credito de un item (sin exigir membresia)      0
+  F  POBLACION DE G1: credito multi-item CON item de membresia             1   <- excluido
+  G  maximo de lineas sin origen en un reembolso de C                      1
+
+VEREDICTO POR GUARDA
+
+  G2  La afirmacion del autor se sostiene EXACTAMENTE. La poblacion es 0 a su alcance
+      declarado (nivel D) y sigue siendo 0 incluso ampliando a cualquier credito de un
+      solo item (nivel E). La guarda acota una forma que hoy no existe: no descarta
+      ninguna fila conocida. PASS.
+
+  G1  Excluye 1 reembolso real. Es un credito con varios items que SI contiene un item
+      de membresia respaldada por orden; como la unica linea de reembolso podria
+      pertenecer a cualquiera de los items, la consulta prefiere no emitir. Es la
+      decision correcta y es la misma regla que IM-562 impone, pero conviene decirlo con
+      numero: hay UN reembolso que a sabiendas no se migra. PASS con nota (ver F2).
+
+OTRAS EXCLUSIONES CORRECTAS (guards.sql)
+  176  creditos de un solo item cuyo item NO es una membresia respaldada por orden
+       -> no producen fila, que es lo correcto: no son membresias.
+   65  lineas Discount que conviven con una linea Standard en el mismo reembolso
+       -> siguen tratandose como descuento, no como reembolso. Es la guarda de la rama B.
+   45  lineas Discount sin linea Standard hermana -> candidatas de la rama B.
+       De esas 45, 12 sobreviven al resto de la consulta (reparto de ingreso de
+       membresia, resolucion de oportunidad, dedup). No es contradiccion: 45 son
+       candidatas a nivel de linea, 12 son filas emitidas.
+
+OBJETIVO CUMPLIDO: SI. Las guardas se comportan como se declara y ninguna admite una
+fila ambigua.

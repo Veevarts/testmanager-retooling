@@ -1,0 +1,51 @@
+TC-179 escenario 5 — LA FILA RESCATADA VIAJA CON SU OPORTUNIDAD
+Fuente: Long Island · 2026-09-23
+
+POR QUE ESTE ESCENARIO EXISTE
+  Este arreglo NO viene del ticket: lo encontro la revision de codigo (commit ad288ce).
+  Y no se ve en una corrida completa. Solo aparece cuando la migracion se acota por
+  fechas, que es como se corre una recarga dirigida — exactamente lo que este ticket va
+  a pedir. Por eso tiene escenario propio.
+
+EL PROBLEMA, CON LAS FECHAS MEDIDAS (rescued-record-dates.sql)
+  Orden 8-10041986 (el duplicado reembolsado) ..... 2012-06-06
+  Su reembolso ..................................... 2012-07-09   (consta en scenario-7)
+  Separacion ....................................... 33 dias, y cruzan de mes
+  Orden 8-10041566 (la primera renovacion) ......... 2012-06-03   (3 dias antes: encaja
+                                                                   con "renovo dos veces
+                                                                   en tres dias")
+  La oportunidad se selecciona por la fecha de la ORDEN. La fila rescatada se seleccionaba
+  por la fecha del REEMBOLSO. En una corrida acotada, cada una caia en un mes distinto.
+
+LA PRUEBA: TRES VERSIONES x DOS VENTANAS
+
+  Version                                   junio 2012        julio 2012
+                                            (mes de la orden) (mes del reembolso)
+  ----------------------------------------  ----------------  -------------------
+  base 8b522c37   (sin el arreglo)          no emite la fila  no emite la fila
+  412b0e8         (own_so, ventana vieja)   no emite la fila  LA EMITE  <- huerfana
+  7436170         (own_so + ventana nueva)  LA EMITE          no emite la fila
+
+  Totales de filas de la ventana:
+  base 8b522c37 ........... 227 (junio)   367 (julio)
+  412b0e8 ................. 227 (junio)   368 (julio)   <- +1 en el mes equivocado
+  7436170 ................. 228 (junio)   367 (julio)   <- +1 en el mes correcto
+
+COMO SE LEE ESTO
+  · La base pierde la fila en las dos ventanas: es el defecto original de IM-1275.
+  · El primer intento la rescata, pero la deja en JULIO, donde su oportunidad no esta.
+    Eso es una asignacion de fondo huerfana: dinero sin el registro al que pertenece.
+  · El commit final la mueve a JUNIO, con su oportunidad y su compra POS.
+
+  La fila se mueve de julio a junio entre dos commits del mismo PR, y es UNA fila
+  aislada y medida. Es la demostracion mas limpia de esta corrida, y prueba un cambio de
+  comportamiento que el autor solo habia descrito en prosa.
+
+LAS FILAS QUE NO DEBEN MOVERSE, NO SE MUEVEN
+  Las filas respaldadas por transaccion de membresia en las que un reembolso tambien gana
+  el ranking (IM-1205 conto 10 en Long Island) toman su oportunidad de la otra cadena de
+  compuertas y ya viajaban emparejadas. La excepcion esta deliberadamente condicionada a
+  que own_so sea la UNICA resolucion, no a que el ganador sea un reembolso, asi que no
+  las alcanza. Los totales de julio lo confirman: 367 = 367 entre base y version final.
+
+OBJETIVO CUMPLIDO: SI

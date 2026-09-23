@@ -1,0 +1,250 @@
+schemaVersion: "1.0"
+
+id: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+key: "TC-179"
+title: "Membership fund assignments: Altru's 2011-2012 refund shapes stop being dropped"
+
+description: |
+  Cobertura QA de IM-1275 (Membership payments and Fund Assignments inconsistent; unmigrated
+  refunds/sales inflating Salesforce revenue for 2011-2012 — Long Island Children's Museum,
+  Caso 4), bajo el epic IM-70 (Altru Queries). Sub-tarea de QA: IM-1296. Repositorio en
+  alcance: Veevarts/MigrationToolETL "PR #185", rama
+  CamiloSalgueroMarin/IM-1275-payments-fund-assignments.
+
+  EL LADO DEL PAGO NUNCA ESTUVO MAL. El ticket se reporto como "pagos y fund assignments
+  inconsistentes", pero el autor demuestra que los cargos y los reembolsos del lado del pago
+  siempre fueron correctos. Lo que fallaba eran las ASIGNACIONES DE FONDO y, en doce casos, el
+  monto de la propia oportunidad de membresia. Probar aqui "el pago" seria probar algo que no
+  cambio.
+
+  LA CAUSA ES UNA SOLA Y SE MANIFIESTA EN TRES FORMAS. En 2011 y 2012 Altru registraba los
+  reembolsos sin dejar constancia de que venta estaban revirtiendo, y la extraccion exigia ese
+  enlace. Cuando no lo encontraba, descartaba en silencio. Las tres formas hay que medirlas
+  por separado porque se arreglan con mecanismos distintos y tienen poblaciones distintas:
+
+  - Forma A — el reembolso no nombra su venta: 10 reembolsos / $2.205. El unico rastro es el
+    comprobante del credito, que lista un solo item y ese item es la membresia. Entra un
+    `OUTER APPLY` que resuelve `CREDITITEM` -> `SALESORDERITEMMEMBERSHIP`, y el identificador
+    que produce manda sobre los dos fallbacks de grano de orden que ya existian.
+  - Forma B — el reembolso disfrazado de descuento: 12 reembolsos / $948, y las MISMAS 12
+    membresias salian vendidas en $0. Si la membresia llevaba descuento, Altru escribia el
+    monto reembolsado en una linea marcada `Discount` DENTRO del reembolso. La extraccion la
+    sumaba como descuento de la orden, con lo que la venta se emitia en $0 y el reembolso no se
+    emitia. Dos errores que se tapaban entre si: por eso los totales por ano se veian casi
+    bien.
+  - Forma C — la venta absorbida por su propio reembolso: 1 venta / $170. Cuando lo unico que
+    cuelga de una linea de membresia respaldada por orden es su reembolso, no queda ninguna
+    orden de venta que resolver y la fila de cuotas se caia, mientras el reembolso si se
+    emitia. Es el registro de la orden 8-10041986, y es la razon de que Salesforce muestre una
+    asignacion de $170 reembolsados sin la venta de $170 que le corresponde.
+
+  EL CAMBIO TOCA CINCO CONSULTAS Y UNA DE ELLAS DECLARA NO CAMBIAR NADA. El filtro que separa
+  el descuento de la orden del descuento que en realidad es un reembolso se replica identico en
+  `membership_transactions.sql`, `fund_assignment_memberships.sql` y
+  `sales_order_only_membership2.sql`. En `contact_roles.sql` el autor lo anade "para no
+  desalinear las copias" y declara que ahi no cambia la salida, porque el archivo une el CTE
+  pero nunca lee `DiscountAmount`. Esa afirmacion es verificable y hay que verificarla.
+
+  HAY UN SEXTO CAMBIO QUE NO VIENE DEL TICKET SINO DE LA REVISION DE CODIGO, y es el que mas
+  facil se pasa por alto: la fila que rescata la Forma C se seleccionaba por la fecha del
+  REEMBOLSO mientras que su oportunidad se selecciona por la fecha de la ORDEN. En ese registro
+  son 33 dias y cruzan de mes (orden 06-06-2012, reembolso 09-07-2012). En una corrida
+  acotada por fechas eso significaba emitir la oportunidad sin su asignacion en junio, o una
+  asignacion huerfana en julio. Una corrida completa NO exhibe este defecto: solo se ve con
+  ventana, y por eso necesita escenario propio.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. El "PR #185" esta ABIERTO y sin mergear. El veredicto queda atado al commit que se
+    pruebe; si el PR recibe commits nuevos, caduca.
+  - R2. El ticket NO tiene criterios de aceptacion formales: es un reporte con cinco ejemplos y
+    dos agregados por ano. Toda la cobertura se deriva de esos ejemplos, de los totales
+    declarados y de los tres comentarios del autor. Si el autor esperaba validar algo mas, hay
+    que decirlo antes de ejecutar y no despues del veredicto.
+  - R3. LA ORG DEL CLIENTE NO QUEDA CORREGIDA POR ESTE PR, y el propio autor lo subraya. Las 23
+    asignaciones que faltan y las 12 correcciones de monto solo llegan a Salesforce con una
+    recarga, que es un cambio de datos aparte y necesita su propia aprobacion. Lo que se
+    verifica aqui es la CONSULTA, no el resultado en la org. QA no escribe en la org productiva
+    del cliente.
+  - R4. En la org conviven DOS ORIGENES de asignaciones de fondo. El autor encontro 3.287
+    registros sin ID externo ($527.000) que la migracion nunca genero, de los cuales 215
+    ($38.018) son de 2011 y 207 ($40.170) de 2012 — justo los anos en disputa. Usan el PRECIO
+    DE LISTA en vez del importe pagado, y son los que explican el $185 del Ejemplo 1 frente a
+    los $170 que Altru tiene. Esto NO lo arregla ni lo empeora el PR, pero invalida cualquier
+    lectura simple de "Salesforce muestra X de mas" y crea riesgo de doble conteo si se
+    recarga. Se documenta; no se mide desde QA porque exige leer la org productiva.
+  - R5. Solo LONG ISLAND esta medido. El autor declara que el 22-09-2026 la base de origen no
+    respondia y no pudo re-medir otros clientes. El limite de fechas de Long Island no es
+    garantia para nadie mas: antes de usar este arreglo en otro cliente hay que re-medir alli
+    el patron 2011-2012.
+  - R6. La compuerta de la Forma C es deliberadamente estrecha: solo dispara cuando el ganador
+    del ranking es un reembolso. El autor prueba explicitamente su COSTO — las lineas
+    respaldadas por orden cuyo ganador es un pago siguen sin resolverse y su oportunidad se
+    exporta SIN asignacion de fondo. Es una decision consciente para no re-alojar las ordenes
+    con varias membresias de 2022-2025, no un descuido. Hay que medir cuantas son y dejarlo
+    escrito.
+  - R7. Declarado fuera de alcance por el autor, se reporta y no se exige arreglado: 8
+    membresias de 2022-2025 vendidas en ordenes con varias membresias ($10.070) que no migran y
+    ademas duplican registros; el campo Fund Name vacio en TODO reembolso de membresia, viejo y
+    nuevo; y los reembolsos de admision de 2011-2012, que tienen la misma forma "Discount" en
+    la extraccion de ticketing y no se tocaron.
+  - R8. El ticket suma "12 reembolsos" y el PR emite 22. No es contradiccion: los 10 extra son
+    la otra mitad del patron de membresia con descuento (una pareja en 2011, nueve en 2012),
+    que no aparecian en los totales por ano porque cada uno cancelaba una venta que tambien se
+    migraba en $0. Hay que confirmar esa explicacion con datos, no aceptarla.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "Hay perfil de solo lectura para la fuente de Long Island; es la unica fuente donde el PR declara sus numeros."
+  - "Se puede obtener cada consulta en sus dos versiones, la de la rama base y la del \"PR #185\", para correr la misma entrada contra las dos."
+  - "Se anota el commit exacto que se prueba, porque el PR sigue abierto y el veredicto queda atado a el."
+  - "Se puede ejecutar la consulta con los parametros de ventana de fecha (@dateFilterFrom / @dateFilterTo) y tambien sin ellos, porque un defecto de esta cobertura solo se manifiesta con ventana."
+  - "Todas las consultas son de solo lectura. No se escribe en ninguna fuente ni en ninguna org; la de Long Island es productiva del cliente."
+  - "Se sabe que el lado del pago NO es el objeto de esta cobertura: los cargos y reembolsos de pago no los toca este PR."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The refund that only its credit's single item can identify now migrates"
+    tags:
+      - ac-1
+      - happy-path
+      - long-island
+    given:
+      - "en 2011 y 2012 la linea Standard del reembolso queda sin SOURCELINEITEMID, asi que la membresia que revierte solo es alcanzable por el item del propio comprobante del credito"
+    when:
+      - "se ejecuta la version base de fund_assignments_membership_refunds.sql sobre Long Island y se cuentan las filas de reembolso de membresia"
+      - "se ejecuta la version del PR con la misma entrada y se cuenta lo mismo"
+    then:
+      - "aparecen 10 reembolsos nuevos por $2.205 que la version base no emitia"
+      - "los 10 son de 2011 o 2012 y los 10 estan respaldados por orden, como declara el PR"
+      - "cada uno queda apuntando a la oportunidad que nombra el item del credito, y no a la que habrian elegido los dos fallbacks de grano de orden que ya existian"
+      - "cada uno sale clasificado como Membership_Fund, no con el fondo vacio"
+      - "ninguna fila que la version base ya emitia desaparece ni cambia de oportunidad"
+
+  - title: "AC1 · The ambiguity guards keep the credit-item path from guessing"
+    tags:
+      - ac-1
+      - negative
+      - edge-case
+    given:
+      - "el enlace por item del credito solo es evidencia valida si no hay nada que elegir: un item en el comprobante y una linea sin origen en el reembolso"
+    when:
+      - "se cuentan en la fuente los creditos que tienen mas de un item y cuyo reembolso encajaria por lo demas en el patron"
+      - "se cuentan los reembolsos con mas de una linea Standard sin SOURCELINEITEMID"
+      - "se mira si alguno de esos dos grupos aparece entre las filas que el PR agrega"
+    then:
+      - "ninguno de los dos grupos aporta filas nuevas: la consulta prefiere no emitir antes que adivinar a que item pertenece el reembolso"
+      - "se reporta cuantos casos hay de cada grupo, aunque el segundo sea cero como declara el autor"
+      - "si el segundo grupo es cero se dice explicitamente que la guarda acota una forma que hoy no existe, en vez de presentarla como filas rescatadas"
+      - "un comprobante de un solo item cuyo item NO es una membresia respaldada por orden tampoco produce fila"
+
+  - title: "AC2 · The discount-typed reversal stops hiding the sale and the refund at once"
+    tags:
+      - ac-2
+      - happy-path
+      - regression-evidence
+      - long-island
+    given:
+      - "cuando la membresia llevaba descuento, Altru escribia el monto reembolsado en una linea Discount del propio reembolso, y la extraccion la restaba de la venta"
+    when:
+      - "se comparan las dos versiones sobre las mismas membresias, mirando a la vez la oportunidad, su asignacion de cuotas y su asignacion de reembolso"
+    then:
+      - "12 oportunidades de membresia que salian en $0 pasan a llevar su monto real, y suman $948"
+      - "esas mismas 12 emiten ahora su fila de reembolso, que la version base no emitia"
+      - "el descuento que queda declarado en cada oportunidad es el descuento real de la orden, no el valor completo del pedido"
+      - "para cada una de las 12, el monto de la oportunidad coincide con la suma de sus asignaciones de fondo, que es lo que el PR promete mantener"
+      - "una linea Discount que convive con una linea Standard en el mismo reembolso sigue tratandose como descuento y no produce fila de reembolso"
+
+  - title: "AC3 · The sale whose only child line is its own refund comes back, and the gate stays narrow"
+    tags:
+      - ac-3
+      - happy-path
+      - edge-case
+    given:
+      - "una linea de membresia respaldada por orden cuyo unico hijo es un reembolso no deja ninguna orden de venta que resolver, y la fila de cuotas se caia mientras el reembolso si se emitia"
+    when:
+      - "se comparan las dos versiones sobre las filas de cuotas de membresia"
+      - "se cuentan por separado las filas que aparecen y las que pudieran haber cambiado de orden de venta"
+    then:
+      - "aparece 1 fila de cuotas nueva por $170, la de la orden 8-10041986, con su orden propia como compra POS"
+      - "la asignacion de $170 reembolsados que ya existia queda ahora emparejada con su venta, que es el sintoma del Ejemplo 1"
+      - "el total de filas de cuotas no crece por ningun otro lado: la compuerta solo dispara cuando el ganador del ranking es un reembolso"
+      - "las ordenes con varias membresias de 2022-2025 NO se re-alojan, y la salida de 2014 en adelante queda identica a la de la rama base"
+      - "se mide y se reporta cuantas lineas respaldadas por orden siguen sin resolver por tener un pago como ganador, porque su oportunidad se exporta sin asignacion de fondo y el autor lo declara como el costo de esta compuerta"
+
+  - title: "AC3 · The rescued dues row travels in the same date window as its opportunity"
+    tags:
+      - ac-3
+      - edge-case
+      - regression
+    given:
+      - "la fila que rescata la Forma C se seleccionaba por la fecha del reembolso mientras su oportunidad se selecciona por la fecha de la orden, y en el caso esa orden son 33 dias que cruzan de mes"
+    when:
+      - "se ejecuta la consulta acotada al mes de la orden, junio de 2012, en las dos versiones"
+      - "se ejecuta acotada al mes del reembolso, julio de 2012, en las dos versiones"
+    then:
+      - "en la corrida de junio la version del PR emite juntas la oportunidad, su compra POS y su asignacion de cuotas"
+      - "en la corrida de junio la version base emite la oportunidad sin su asignacion, que es el defecto"
+      - "en la corrida de julio no queda ninguna asignacion huerfana cuya oportunidad no este en la misma corrida"
+      - "las filas respaldadas por transaccion de membresia en las que un reembolso tambien gana el ranking NO cambian de ventana, porque toman su oportunidad de la otra cadena y ya viajaban emparejadas"
+
+  - title: "AC4 · Nothing outside the 2011-2012 refunded population moves"
+    tags:
+      - ac-4
+      - regression
+      - long-island
+    given:
+      - "el filtro del descuento se replica en cuatro archivos y uno de ellos declara no cambiar su salida"
+    when:
+      - "se comparan las dos versiones sobre el conjunto completo de cada consulta tocada, no solo sobre la poblacion afectada"
+    then:
+      - "las filas de reembolso de membresia pasan de 591 a 613: 22 altas, ninguna baja y ninguna modificada"
+      - "las asignaciones de cuotas suman 1 fila nueva y 12 correcciones de monto, sin ninguna baja"
+      - "las oportunidades de membresia registran 12 correcciones de monto y ni un alta ni una baja"
+      - "de 2014 en adelante la salida es identica en las dos versiones, en las tres consultas"
+      - "contact_roles.sql produce exactamente la misma salida que en la rama base, que es lo que el autor declara al anadir ahi el filtro"
+      - "sales_order_only_membership2.sql mantiene su CTE de descuentos identico al de membership_transactions.sql, que es la condicion que su propia prueba de contrato exige"
+
+  - title: "AC5 · The ticket's own records reconcile, and the year totals land where the ticket says"
+    tags:
+      - ac-5
+      - regression-evidence
+      - long-island
+    given:
+      - "el ticket nombra quince registros entre los Ejemplos 4 y 5, mas los de los Ejemplos 1, 2 y 3, y declara dos agregados por ano"
+    when:
+      - "se busca cada registro nombrado por su referencia de orden de Altru en las dos versiones"
+      - "se suman por ano las filas que el PR agrega o corrige"
+    then:
+      - "los 12 reembolsos que el ticket lista como no migrados aparecen ahora, uno por uno, con su importe"
+      - "las 3 ventas que el ticket lista se explican: la de $170 se recupera, y las de $110 y $57 se confirma que ya migraban porque son las recompras del mismo dia"
+      - "los importes recuperados suman -$290 en 2011 y -$1.745 en 2012, que son los subtotales propios del ticket antes del ajuste de $60"
+      - "se deja escrito que el $230 y el $1.805 de la descripcion salen de mover esos $60 del registro fechado distinto en cada sistema, de un ano al otro, y que ese registro existe en los dos sistemas y no es dinero perdido"
+      - "los 10 reembolsos que exceden los 12 del ticket se identifican como la otra mitad del patron con descuento, con su ano, y se confirma que no aparecian en los totales porque cancelaban ventas que se migraban en $0"
+      - "el $185 del Ejemplo 1 se declara NO explicado por la migracion, porque Altru tiene esa orden en $170, y se remite al hallazgo de los registros creados por la aplicacion"
+
+tags:
+  - im-1275
+  - im-70
+  - im-1296
+  - altru
+  - migration
+  - migration-tool-etl
+  - membership
+  - refund
+  - fund-assignment
+  - long-island
+  - query
+
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-23T18:05:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-23T18:05:00Z"
+  version: 1

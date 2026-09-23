@@ -1,0 +1,95 @@
+TR-197 / TC-179 / IM-1275 — HALLAZGOS
+Fecha: 2026-09-23
+Commit probado: 7436170 ("PR #185", abierto, no borrador, sin mergear ni desplegar)
+Fuente medida: Long Island
+
+VEREDICTO GENERAL: el arreglo hace lo que el ticket pide, y sus once cifras declaradas
+se reproducen. Ninguno de los hallazgos de abajo hace fallar un escenario. El F1 es el
+unico que debe resolverse ANTES de cualquier recarga, y no es de este PR.
+
+------------------------------------------------------------------------------
+F1 — La recarga no es segura todavia, y la razon no esta en este PR (ALTA)
+------------------------------------------------------------------------------
+El propio autor lo documento al revisar la org: conviven DOS origenes de asignaciones de
+fondo. Ademas de las migradas (con ID externo, cargadas el 13 y 14 de agosto), hay 3.287
+registros SIN ID externo por $527.000 que la migracion nunca genero, fechados a lo largo
+de toda la historia, incluidos 215 ($38.018) en 2011 y 207 ($40.170) en 2012.
+
+Sobre los propios ejemplos del ticket el patron se repite: la oportunidad de la orden 8-10036876
+tiene +$120 migrado, y ademas +$130 y -$120 creados por la aplicacion. Si se cargan ahora
+los reembolsos corregidos, ese reembolso queda contado DOS VECES.
+
+QA NO PUDO VERIFICARLO y no lo intento: exige leer la org productiva del cliente, que
+esta fuera del alcance de esta corrida. Se recoge aqui porque cambia la lectura del
+ticket entero: parte de la diferencia que ve el museo no viene de la migracion, y
+cualquier comparacion de ingresos por anio en Salesforce hoy incluye esos registros.
+
+LO QUE HAY QUE DECIDIR ANTES DE RECARGAR, y no es decision de QA:
+  · si alguien reembolso esas membresias a mano desde la aplicacion el 4 y el 16 de
+    septiembre, y como se coordina eso con la recarga;
+  · que se hace con los fund assignments que la aplicacion sigue generando.
+
+------------------------------------------------------------------------------
+F2 — Un reembolso real se deja fuera a sabiendas, y conviene que tenga numero (BAJA)
+------------------------------------------------------------------------------
+La guarda de item hermano excluye 1 reembolso: un credito con varios items que SI
+contiene un item de membresia respaldada por orden. Como la unica linea de reembolso
+podria pertenecer a cualquiera de esos items, la consulta prefiere no emitir antes que
+adivinar. Es la decision correcta y es la regla que IM-562 impone.
+
+Se reporta solo para que conste con cifra: hay UNA membresia cuyo reembolso seguira sin
+migrar despues de este PR, y no por error sino por diseno. Si alguien reconcilia la org
+y encuentra un reembolso de mas, es este.
+
+------------------------------------------------------------------------------
+F3 — La forma "Discount" no es solo de 2011-2012 (BAJA)
+------------------------------------------------------------------------------
+El PR la presenta como un rasgo del POS antiguo de Altru, y para MEMBRESIAS es cierto:
+las 12 lineas afectadas son todas de 2011 y 2012. Pero medido sobre toda la base, las
+lineas de descuento que se apoyan en una transaccion de reembolso son 86 y llegan hasta
+2026.
+
+    lineas de membresia ...... 12 ($948)    <- las que el PR arregla, todas 2011-2012
+    lineas de add-on .......... 0
+    ni una cosa ni otra ...... 74 ($40,85)  <- hasta 2026
+
+Las 74 no llegan a ningun join de los archivos tocados, asi que HOY no cambian nada y no
+son un defecto. Importan por dos motivos: el importe es despreciable pero la FORMA sigue
+viva, y el propio autor ya advierte que los reembolsos de admision de 2011-2012 tienen
+esta misma forma en la extraccion de ticketing y no se han tocado. Si eso se aborda
+alguna vez, conviene saber que el patron no se acaba en 2012.
+
+------------------------------------------------------------------------------
+F4 — El campo Fund Name esta vacio en el 100% de los reembolsos de membresia (BAJA)
+------------------------------------------------------------------------------
+Medido: 614 de 614 filas salen con Auctifera__Specific_Fund_Name__c en NULL, viejas y
+nuevas por igual. El autor ya lo declara como tema aparte y es anterior a este PR; aqui
+solo se le pone cifra y se confirma que el cambio ni lo mejora ni lo empeora. Merece su
+propio ticket.
+
+------------------------------------------------------------------------------
+F5 — Una cifra base difiere en +1 por deriva de datos (INFORMATIVA)
+------------------------------------------------------------------------------
+    Declarado 591 filas de reembolso antes -> medido 592
+    Declarado 613 filas despues            -> medido 614
+Las ALTAS son 22 en los dos casos, exactas, y las dieciseis cohortes de anio de la rama
+preexistente coinciden al centimo. Una fila entro en la poblacion entre el 17-09 y el
+23-09 sobre una fuente que se sincroniza en continuo. No es desajuste de metodo: si lo
+fuera, no cuadrarian ni las 22 ni las cohortes. Es una nota de caducidad — los conteos
+contra una fuente viva envejecen y conviene fecharlos.
+
+------------------------------------------------------------------------------
+F6 — Lo que esta corrida NO cubre, y conviene que conste (INFORMATIVA)
+------------------------------------------------------------------------------
+  · Solo se midio LONG ISLAND. El propio autor pide re-medir el patron 2011-2012 en
+    cualquier otro cliente antes de usar el arreglo alli, porque el limite de fechas de
+    Long Island no es garantia para nadie mas. NOTA: el autor no pudo hacerlo el 22-09
+    porque la fuente no respondia; el 23-09 SI responde, asi que ese bloqueo ya no
+    existe y la medicion en otros clientes es viable cuando se pida.
+  · La recarga a la org productiva del cliente queda fuera: QA no escribe ahi. Lo
+    verificado es la consulta, no el resultado en Salesforce.
+  · Los 3.287 registros creados por la aplicacion (F1) no se verificaron: exigen leer la
+    org productiva.
+  · Fuera de alcance por declaracion del autor, no verificado aqui: las 8 membresias de
+    2022-2025 en ordenes con varias membresias ($10.070) que no migran y ademas duplican
+    registros; y los reembolsos de admision de 2011-2012 en la extraccion de ticketing.

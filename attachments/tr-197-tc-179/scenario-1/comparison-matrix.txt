@@ -1,0 +1,56 @@
+TC-179 escenario 1 — EL REEMBOLSO QUE SOLO IDENTIFICA EL ITEM UNICO DE SU CREDITO
+Fuente: Long Island · Commit 7436170 vs base 8b522c37 · 2026-09-23
+
+METODO
+  No se reimplemento la logica. Se tomo fund_assignments_membership_refunds.sql tal cual
+  y se sustituyo SOLO la proyeccion final por un agregado, anadiendo dos columnas que
+  dejan ver POR QUE RAMA entro cada fila. La cadena de CTEs, el OUTER APPLY nuevo, los
+  joins y el WHERE quedan byte a byte (instrument-refunds.py).
+
+  Las tres ramas de admision son mutuamente excluyentes por construccion, y por eso la
+  clasificacion es exacta y no una estimacion:
+    A  Standard con SOURCELINEITEMID NULL, resuelto por el item del credito
+    B  linea Discount (exige que el reembolso NO tenga linea Standard)
+    C  Standard con SOURCELINEITEMID NO NULL  <- lo unico que la version base admitia
+
+  Los comentarios se quitaron antes de ejecutar porque el guard de safesql busca
+  subcadenas y las palabras "create" y "drop" aparecen DENTRO de comentarios del archivo
+  (lineas 12 y 210). Quitar comentarios no cambia la semantica; se verifico que las tres
+  ramas y el OUTER APPLY siguen presentes tras el recorte.
+
+RESULTADO POR RAMA DE ADMISION
+
+  Rama                Filas   Importe    Anios        Respaldo orden  Membership_Fund
+  ------------------  -----   --------   ----------   --------------  ---------------
+  A_credit_item          10   -$2.205    2011, 2012       10 / 10         10 / 10
+  B_discount_typed       12     -$948    2011, 2012       12 / 12         12 / 12
+  C_pre_existing        592   -$98.888   1753..2026      592 / 592       592 / 592
+  ------------------  -----
+  TOTAL POST            614
+
+MATRIZ PRE/POST
+
+  Metrica                              Base      PR      Delta   Declarado   Veredicto
+  -----------------------------------  -------   -----   -----   ---------   ---------
+  Filas de reembolso de membresia          592     614     +22    591 -> 613  PASS (+22 exacto)
+  Rama A: filas / importe                    -   10 / -2205   +10  10 / $2.205 PASS exacto
+  Rama B: filas / importe                    -   12 / -948    +12  12 / $948   PASS exacto
+  Filas eliminadas                           -        0       0       0       PASS
+  Filas que cambian de oportunidad           -        0       0       0       PASS
+  Anios >= 2014 con cualquier cambio         -        0       0       0       PASS
+
+IDENTIDAD DE LA RAMA PREEXISTENTE
+  Se comparo la rama C del PR contra la corrida completa de la version BASE, cohorte por
+  cohorte (16 anios). Coinciden filas, importe, cuenta de oportunidades distintas y
+  cuenta de Membership_Fund en LAS DIECISEIS. Ninguna difiere.
+  -> El PR no toca ni una sola fila de las que ya se emitian. Lo unico que hace es anadir.
+
+SOBRE EL 592 FRENTE AL 591 DECLARADO
+  El autor midio 591 el 17-09-2026; aqui salen 592 el 23-09-2026 sobre una fuente viva
+  que se sincroniza en continuo. La diferencia es de UNA fila en la rama preexistente, y
+  el numero que importa — las 22 altas — sale exacto. Es deriva de datos, no desajuste de
+  metodo: si el metodo difiriera, no coincidirian las 22 ni las dieciseis cohortes.
+
+OBJETIVO CUMPLIDO: SI
+  Pre-fix: los 10 y los 12 no se emitian. Post-fix: se emiten, con su oportunidad
+  correcta, su fondo correcto y su importe. Es exactamente lo que el ticket pedia.

@@ -1,0 +1,47 @@
+TC-179 escenario 6 — NADA SE MUEVE FUERA DE LA POBLACION REEMBOLSADA DE 2011-2012
+Fuente: Long Island · 7436170 vs 8b522c37 · 2026-09-23
+
+Consulta                              Metrica                   Base      PR      Veredicto
+------------------------------------  ------------------------  --------  ------  ---------
+fund_assignments_membership_refunds   filas totales                  592     614   +22, 0 bajas
+                                      filas eliminadas                 -       0   PASS
+                                      filas modificadas                -       0   PASS
+                                      cohortes de anio identicas   16 / 16          PASS
+fund_assignment_memberships           filas totales (cuotas)      97.742  97.743   +1, 0 bajas
+                                      correcciones de monto            -      12   PASS
+                                      cohortes donde amt_old = base 40 / 40        PASS
+membership_transactions               altas o bajas de fila            -       0   PASS (estructural)
+                                      correcciones de monto            -      12   PASS
+sales_order_only_membership2          CTE identico al de MT            -      si   PASS (estructural)
+contact_roles                         salida identica                  -      si   PASS (estructural)
+TODAS                                 cambios en 2014 en adelante      -       0   PASS
+
+DOS PRUEBAS ESTRUCTURALES, QUE SON MAS FUERTES QUE UN MUESTREO
+
+  1. contact_roles.sql NO PUEDE cambiar su salida.
+     El archivo define el CTE DiscountLineItems y lo une en la linea 230, pero NUNCA lee
+     la columna DiscountAmount: no aparece ni una sola vez fuera de la definicion. Ademas
+     el CTE agrupa por SOURCELINEITEMID, asi que la clave es unica y un LEFT JOIN no puede
+     multiplicar filas; el filtro solo puede QUITAR filas del CTE, lo que para un LEFT
+     JOIN sobre clave unica significa que las columnas unidas pasan a NULL — y nadie las
+     lee. La salida es identica por construccion, no por parecido en una muestra.
+     Esto confirma exactamente lo que el autor escribe en su comentario.
+
+  2. membership_transactions.sql no puede ganar ni perder filas por este cambio.
+     DiscountAmount se usa en tres sitios y los tres son aritmeticos (el Amount, el
+     vnfp__Discount_Amount__c y el AddOnTotal). No aparece en ninguna clausula WHERE, y
+     los dos joins del CTE son LEFT sobre clave agrupada. Un cambio en el CTE solo puede
+     mover importes, nunca el conteo de filas.
+
+  3. El CTE es el mismo en los dos archivos que su propia prueba de contrato obliga a
+     mantener sincronizados: membership_transactions.sql y sales_order_only_membership2.sql
+     llevan las tres piezas identicas (LEFT JOIN FINANCIALTRANSACTION xft, el predicado
+     xli.[TYPE]='Discount' y el ISNULL(xft.[TYPE],'') <> 'Refund').
+
+RADIO DE IMPACTO DEL FILTRO, MEDIDO ENTERO (blast.json)
+  86 lineas de descuento en toda la base se apoyan en una transaccion de reembolso.
+  Solo 12 son lineas de membresia; 0 son de add-on; 74 no son ni una cosa ni otra y no
+  llegan a ningun join de los archivos tocados. El conjunto afectado alcanza hasta 2026,
+  no solo 2011-2012 (ver F3), pero su importe fuera de membresias es de $40,85 en total.
+
+OBJETIVO CUMPLIDO: SI

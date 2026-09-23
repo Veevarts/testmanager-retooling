@@ -1,0 +1,52 @@
+TC-179 escenario 4 — LA VENTA CUYA UNICA LINEA HIJA ES SU PROPIO REEMBOLSO
+Fuente: Long Island · 7436170 vs 8b522c37 · 2026-09-23
+
+QUE PASABA
+  Cuando de una linea de membresia respaldada por orden solo cuelga su reembolso, no
+  queda orden de venta que resolver: el reembolso no respalda SALESORDER.REVENUEID ni
+  SALESORDERPAYMENT, y sin MEMBERSHIPTRANSACTION tampoco hay camino por soim. El COALESCE
+  entero salia NULL, la fila de cuotas se caia, y el archivo de reembolsos SI emitia su
+  contrapartida. Quedaba una asignacion de fondo que solo muestra dinero saliendo.
+
+MATRIZ PRE/POST (rama de cuotas completa, sin ventana de fechas)
+
+  Metrica                                   Base       PR         Delta   Declarado  Veredicto
+  ----------------------------------------  ---------  ---------  ------  ---------  ---------
+  Filas totales de la rama de cuotas           97.742     97.743      +1      +1      PASS
+  Filas rescatadas por own_so                       -          1      +1   1 / $170   PASS
+  Importe de la rescatada                           -       $170       -     $170     PASS
+  Anio de la rescatada                              -       2012       -     2012     PASS
+  Filas eliminadas                                  -          0       0       0      PASS
+  Anios >= 2014 con cualquier cambio                -          0       0       0      PASS
+  Cohortes de anio donde amt_old != base            0 de 40        0       0      PASS
+
+  La rescatada lleva su propia orden como compra POS, que es lo que el PR pretende.
+
+LA COMPUERTA ES ESTRECHA A PROPOSITO, Y SE MIDIO SU COSTE (gate-cost.sql)
+  El autor prueba explicitamente en su suite que la compuerta deja oportunidades sin
+  asignacion de fondo ("leaves that opportunity exported with no fund assignment at all
+  - the gate's real cost"). Aqui se mide esa poblacion sobre datos reales, neutralizando
+  la condicion de ancla y clasificando las filas.
+
+    ancla  sin_orden  own_so  ganador_reembolso     Filas    Importe
+    -----  ---------  ------  -----------------   -------   ---------
+      0        0        0             0                 5     $6.900   <- descartadas por el ancla
+      1        0        0             0            46.199  $9.143.430
+      1        0        1             1                37     $6.680   <- own_so disponible pero no hacia falta
+      1        1        0             0            51.506  $4.821.838
+      1        1        1             1                 1       $170   <- LA RESCATADA
+
+  LECTURA: las 5 filas que el ancla descarta tienen orden de venta resoluble y NO son la
+  forma que own_so atiende; se descartan igual en las dos versiones y son anteriores a
+  este PR. No hay NINGUNA fila con orden no resoluble, sin own_so y sin ancla.
+  -> El coste medido de que la compuerta sea estrecha, en Long Island y hoy, es CERO
+     filas. El caso que el autor prueba con fixture existe como forma, pero su poblacion
+     real aqui esta vacia. La compuerta protege contra re-alojar las ordenes con varias
+     membresias de 2022-2025 sin perder nada medible a cambio.
+
+NO SE RE-ALOJA NADA
+  Las ordenes con varias membresias de 2022-2025, que el autor cita como la razon de
+  acotar la compuerta, no cambian: la salida de 2014 en adelante es identica en las dos
+  versiones, cohorte por cohorte.
+
+OBJETIVO CUMPLIDO: SI

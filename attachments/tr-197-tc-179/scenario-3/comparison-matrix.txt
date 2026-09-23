@@ -1,0 +1,62 @@
+TC-179 escenario 3 — LA REVERSION TIPADA COMO DESCUENTO, EN SUS DOS LADOS A LA VEZ
+Fuente: Long Island · 7436170 vs 8b522c37 · 2026-09-23
+
+EL DEFECTO TENIA DOS CARAS Y SE TAPABAN ENTRE SI
+  Si la membresia llevaba descuento, Altru escribia el importe reembolsado en una linea
+  marcada Discount DENTRO del reembolso, apuntando a la linea de la membresia. La
+  extraccion la sumaba como descuento de la orden. Resultado: la VENTA se emitia en $0 y
+  el REEMBOLSO no se emitia. Los dos errores se compensaban, y por eso los totales por
+  anio se veian casi bien.
+
+METODO
+  Se sustituyo solo la lista de columnas de la rama de cuotas y se emiten en LA MISMA
+  FILA el importe nuevo y el viejo. El viejo se recalcula con una subconsulta escalar
+  sobre la misma clave del join (xli.SOURCELINEITEMID = mli.LineItemID) SIN el filtro del
+  PR. La identidad fila a fila es por construccion: no hay que cuadrar dos corridas.
+
+  Validacion del metodo: la suma de amt_old reproduce la corrida BASE completa en LAS 40
+  COHORTES de anio, al centimo. Si la instrumentacion estuviera mal, no cuadraria.
+
+LADO DE LA VENTA (fund_assignment_memberships.sql, rama de cuotas)
+
+  Anio    Filas corregidas   Importe viejo -> nuevo    De $0 a su importe real
+  ------  -----------------  -----------------------   -----------------------
+  2011            3          +$217                              3
+  2012            9          +$731                              9
+  ------  -----------------  -----------------------   -----------------------
+  TOTAL          12          +$948                             12
+  Declarado por el autor: 12 membresias / $948, todas 2011-2012      PASS exacto
+
+LADO DEL REEMBOLSO (fund_assignments_membership_refunds.sql, rama B)
+
+  Anio    Filas nuevas   Importe
+  ------  -------------  --------
+  2011          3        -$217
+  2012          9        -$731
+  ------  -------------  --------
+  TOTAL        12        -$948                                        PASS exacto
+
+LOS DOS LADOS CUADRAN ANIO POR ANIO Y DOLAR POR DOLAR
+  2011: +$217 en la venta y -$217 en el reembolso. 2012: +$731 y -$731.
+  Es el mismo conjunto de doce membresias visto desde los dos archivos, y es la prueba
+  de que el invariante que el PR promete — el monto de la oportunidad sigue igual a la
+  suma de sus asignaciones de fondo — se mantiene en los doce casos.
+
+RADIO DE IMPACTO COMPLETO DEL FILTRO (discount-blast-radius.sql)
+  El CTE del descuento alimenta DOS consumidores, no uno: la linea de membresia y la
+  linea de ADD-ON (#MembershipTransactionAddOnLineItems.AddOnTotal). El autor solo
+  declara cifras del primero, asi que se midio el conjunto entero.
+
+    Lineas de descuento que se apoyan en un reembolso .......... 86   ($988,85)
+      de esas, lineas de MEMBRESIA ............................. 12   ($948)     <- las declaradas
+      de esas, lineas de ADD-ON ................................  0   (ninguna)  <- consumidor no afectado
+      de esas, ni membresia ni add-on .......................... 74   ($40,85)
+    Rango de anios del conjunto afectado ....................... 2011 - 2026
+
+  Las 74 restantes NO llegan a ningun consumidor de los archivos tocados: las cuatro
+  consultas unen el CTE solo por mli.LineItemID (linea de membresia) o addon_line.ID
+  (linea de add-on), y ninguna de las 74 es ninguna de las dos. El radio queda confinado
+  a las 12. Se deja escrito igualmente porque la forma existe hasta 2026 y no solo en
+  2011-2012 (ver F3).
+
+OBJETIVO CUMPLIDO: SI

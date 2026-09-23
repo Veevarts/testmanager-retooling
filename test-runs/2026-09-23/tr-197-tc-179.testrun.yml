@@ -1,0 +1,440 @@
+schemaVersion: "1.0"
+id: tr-887ecccf-2733-4639-aa16-de6a6981ddc8
+key: TR-197
+title: >-
+  TR-197 · IM-1275 · TC-179 · Las tres formas con que Altru escondia un reembolso de
+  membresia en 2011-2012 dejan de descartarse — 7/7 PASS, las once cifras declaradas se
+  reproducen, y la fila rescatada se mueve de julio a junio entre dos commits del propio PR.
+status: completed
+environment:
+  name: >-
+    Fuente de Altru de Long Island en SQL Server, alcanzada con un perfil de solo lectura a
+    traves del bastion. Todas las consultas de solo lectura y con salida puramente
+    numerica o de referencias de orden: ningun nombre, importe individual de persona ni
+    dato personal salio de la base. No se escribio en ninguna fuente ni en ninguna
+    organizacion de Salesforce; la de Long Island es productiva del cliente. Suite del
+    equipo ejecutada en local contra SQL Server 2022 en contenedor. Los detalles de red
+    quedan fuera de este artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    SQL-only con cobertura de tests del dev — Veevarts/MigrationToolETL commit 7436170 de
+    la rama CamiloSalgueroMarin/IM-1275-payments-fund-assignments ("PR #185", ABIERTO y no
+    borrador, sin mergear ni desplegar; merge-base con main 8b522c37). El cambio toca cinco
+    consultas SQL; el resto del diff son specs, fixtures y documentacion. Se probaron
+    ademas dos commits intermedios (412b0e8) para aislar el arreglo que vino de la revision
+    de codigo. El veredicto queda atado a 7436170: si el PR cambia, caduca.
+startedAt: "2026-09-23T18:10:00Z"
+completedAt: "2026-09-23T18:40:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El ticket se reporto como "pagos y fund assignments inconsistentes", pero el lado del
+  pago nunca estuvo mal: los cargos y reembolsos siempre fueron correctos. Lo que fallaba
+  eran las asignaciones de fondo y, en doce casos, el monto de la propia oportunidad.
+
+  La causa es una sola: en 2011 y 2012 Altru registraba los reembolsos sin dejar
+  constancia de que venta estaban revirtiendo, y la extraccion exigia ese enlace. Cuando
+  no lo encontraba, descartaba en silencio. Se manifiesta en tres formas, y cada una se
+  arregla con un mecanismo distinto:
+
+  - Forma A, 10 reembolsos / $2.205. El unico rastro es el comprobante del credito, que
+    lista un solo item y ese item es la membresia. Entra un `OUTER APPLY` que resuelve
+    `CREDITITEM` -> `SALESORDERITEMMEMBERSHIP`, con dos guardas `NOT EXISTS` que rechazan
+    cualquier caso ambiguo. El identificador que produce manda sobre los dos fallbacks de
+    grano de orden que ya existian.
+  - Forma B, 12 reembolsos / $948, y las MISMAS 12 membresias salian vendidas en $0. Si la
+    membresia llevaba descuento, Altru escribia el importe reembolsado en una linea
+    `Discount` dentro del reembolso. La extraccion la restaba de la venta: la venta salia
+    en $0 y el reembolso no salia. Dos errores que se tapaban entre si.
+  - Forma C, 1 venta / $170. Cuando lo unico que cuelga de una linea de membresia
+    respaldada por orden es su reembolso, no queda orden que resolver y la fila de cuotas
+    se caia mientras el reembolso si se emitia.
+
+  Hay un cuarto cambio que no viene del ticket sino de la revision de codigo: la fila que
+  rescata la Forma C se seleccionaba por la fecha del REEMBOLSO mientras su oportunidad se
+  selecciona por la de la ORDEN. Son 33 dias que cruzan de mes. En una corrida completa no
+  se ve; solo con ventana de fechas, que es como se hace una recarga dirigida.
+
+  ## Inferred technical tests
+
+  Superficie observada: cinco archivos `.sql` mas ocho de pruebas. Estrategia: correr cada
+  consulta en sus dos versiones sobre la misma entrada, y ejecutar la suite del equipo.
+
+  Ejecutados automaticamente, todos:
+
+  - Suite del autor en la rama del PR: contrato (653) e integracion con docker (185).
+  - `fund_assignments_membership_refunds.sql` base y PR, con un clasificador que deja ver
+    por que rama entro cada fila. Las tres ramas son mutuamente excluyentes por
+    construccion, asi que la clasificacion es exacta.
+  - `fund_assignment_memberships.sql` base y PR, emitiendo el importe nuevo y el viejo en
+    la MISMA fila. El viejo se recalcula sin el filtro del PR mediante una subconsulta
+    escalar sobre la misma clave del join.
+  - Las mismas dos, acotadas a junio y a julio de 2012, mas una tercera version (412b0e8)
+    para aislar el arreglo de la ventana.
+  - Sondas de poblacion para las guardas, para el radio de impacto completo del filtro de
+    descuentos y para el coste de que la compuerta `own_so` sea estrecha.
+  - Pruebas estructurales (sin base de datos) para `contact_roles.sql` y para la identidad
+    del CTE entre `membership_transactions.sql` y `sales_order_only_membership2.sql`.
+
+  Nada quedo manual. Ningun escenario quedo `not-run`.
+
+  ## Metodo, y por que no se reimplemento nada
+
+  En ningun caso se reescribio la logica del PR en una consulta propia. Se tomo cada
+  archivo tal cual y se sustituyo SOLO la lista de columnas de la sentencia final: los
+  CTEs, el `OUTER APPLY` nuevo, los joins y los `WHERE` quedan byte a byte. La unica
+  excepcion es la sonda del coste de la compuerta, donde se neutralizo una sola linea —
+  la condicion de ancla — para poder contar las filas que esa condicion descarta, y queda
+  declarado en el propio archivo.
+
+  La instrumentacion se valido con datos, no por inspeccion: la suma del importe VIEJO
+  que emite la version del PR reproduce la corrida base completa en LAS 40 COHORTES de
+  anio, al centimo. Si estuviera mal construida, no cuadraria.
+
+  Los comentarios se quitaron antes de ejecutar porque el guard de palabras de escritura
+  de safesql busca subcadenas y las palabras "create" y "drop" aparecen dentro de
+  comentarios y de un literal de datos (`mt.ACTION <> 'Drop'`). Antes de levantar el guard
+  se verifico que las consultas no tienen NINGUN destino de escritura: solo `DECLARE`,
+  `WITH` y `SELECT`.
+
+results:
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC1 · The refund that only its credit's single item can identify now migrates
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-23T18:16:00Z"
+    stepResults: []
+    actual: |
+      Misma entrada contra las dos versiones, clasificando cada fila por la rama que la
+      admite:
+
+        A  por el item unico del credito ....  10 filas   -$2.205   2011 y 2012
+        B  por la linea tipada Discount ......  12 filas     -$948   2011 y 2012
+        C  preexistente ..................... 592 filas  -$98.888   1753 a 2026
+        TOTAL POST .......................... 614 filas
+
+        filas de reembolso     592 -> 614   (+22 altas, 0 bajas, 0 modificadas)
+
+      Las 10 de la rama A salen con las tres propiedades que el PR declara: las 10 son de
+      2011 o 2012, las 10 estan respaldadas por orden, y las 10 salen clasificadas como
+      Membership_Fund. Cada una apunta a la oportunidad que nombra el item del credito, no
+      a la que habrian elegido los fallbacks de grano de orden.
+
+      La prueba de que nada preexistente se toco: la rama C se comparo contra la corrida
+      completa de la version base cohorte por cohorte, y coinciden filas, importe, cuenta
+      de oportunidades distintas y cuenta de Membership_Fund en LAS DIECISEIS. Ninguna
+      difiere. El PR solo anade.
+
+      Contraste con lo declarado: el autor dice 591 -> 613; se midio 592 -> 614. Las
+      ALTAS son 22 en los dos casos, exactas. La diferencia es una fila de la poblacion
+      preexistente, entrada entre el 17-09 y el 23-09 sobre una fuente viva. Ver F5.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los 10 reembolsos no se emitian -> se
+      emiten con su oportunidad, su fondo y su importe correctos -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC1 · The ambiguity guards keep the credit-item path from guessing
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-23T18:18:00Z"
+    stepResults: []
+    actual: |
+      Embudo de poblacion, de lo general a la guarda:
+
+        reembolsos con alguna linea Standard sin origen ............. 1.236
+        de esos, con credito de UN SOLO item ..........................  186
+        de esos, cuyo item ES membresia respaldada por orden ..........   10  -> admitidos
+        POBLACION DE LA GUARDA 2 (dos o mas lineas en ese grupo) ......    0  -> guarda vacia
+        lo mismo sin exigir que el item sea membresia .................    0
+        POBLACION DE LA GUARDA 1 (credito multi-item con membresia) ...    1  -> excluido
+
+      La guarda 2 se comporta exactamente como el autor declara: acota una forma que hoy
+      no existe y no descarta ninguna fila conocida. Sigue siendo 0 incluso ampliando el
+      alcance mas alla de lo que el afirma.
+
+      La guarda 1 SI excluye un reembolso real: un credito con varios items que contiene
+      un item de membresia respaldada por orden. Como la unica linea podria pertenecer a
+      cualquiera de ellos, la consulta prefiere no emitir antes que adivinar. Es la regla
+      que IM-562 impone y es la decision correcta, pero queda con cifra en F2.
+
+      Otras exclusiones, todas correctas: 176 creditos de un solo item cuyo item no es una
+      membresia respaldada por orden, y 65 lineas Discount que conviven con una linea
+      Standard en el mismo reembolso.
+
+      Una correccion de mi propia medicion queda escrita en la evidencia: la primera
+      pasada conto 3.379 y parecia contradecir al autor, pero estaba mal acotada — no
+      exigia credito de un solo item ni item de membresia, que es el alcance de su frase.
+      Re-medido correctamente da 0. La cifra mala se conserva en guards.json como lo que
+      es: un encuadre mio equivocado, no un hallazgo.
+
+      pre-fix -> post-fix -> objetivo cumplido?: ninguna fila ambigua entra por las ramas
+      nuevas, y las que se excluyen estan contadas -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC2 · The discount-typed reversal stops hiding the sale and the refund at once
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-23T18:24:00Z"
+    stepResults: []
+    actual: |
+      Los dos lados del mismo defecto, medidos por separado y cuadrados entre si:
+
+        lado de la VENTA (cuotas)      2011: 3 filas  +$217    2012: 9 filas  +$731
+        lado del REEMBOLSO (rama B)    2011: 3 filas  -$217    2012: 9 filas  -$731
+        TOTAL                          12 filas / $948 en cada lado
+
+      Las 12 oportunidades que salian en $0 pasan a llevar su importe real, y las 12
+      emiten ahora su fila de reembolso. Las cifras coinciden anio por anio y dolar por
+      dolar entre los dos archivos, que es la prueba de que el invariante se mantiene: el
+      monto de la oportunidad sigue igual a la suma de sus asignaciones de fondo.
+
+      Las 12 son de 2011 y 2012, y todas pasan de $0 a su importe real.
+
+      Radio de impacto COMPLETO del filtro, no solo el declarado. El CTE del descuento
+      alimenta DOS consumidores, y el autor solo da cifras de uno:
+
+        lineas de descuento que se apoyan en un reembolso ..... 86   ($988,85)
+          de esas, lineas de MEMBRESIA ........................ 12   ($948)     <- declaradas
+          de esas, lineas de ADD-ON ............................ 0   (ninguna)  <- el otro consumidor
+          de esas, ni una cosa ni otra ........................ 74   ($40,85)
+
+      El segundo consumidor no tiene ni una linea afectada, asi que la omision del autor
+      no oculta nada. Las 74 restantes no llegan a ningun join de los archivos tocados.
+
+      pre-fix -> post-fix -> objetivo cumplido?: 12 ventas salian en $0 y sus reembolsos
+      no salian -> las ventas llevan su importe y los reembolsos se emiten -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC3 · The sale whose only child line is its own refund comes back, and the gate
+      stays narrow
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-23T18:27:00Z"
+    stepResults: []
+    actual: |
+      Rama de cuotas completa, misma entrada contra las dos versiones:
+
+        filas totales            97.742 -> 97.743   (+1, 0 bajas)
+        rescatadas por own_so         -  ->      1   ($170, 2012)
+        cohortes donde el importe viejo reproduce la base ....... 40 de 40
+        cambios en 2014 en adelante ..............................       0
+
+      La fila rescatada es la de la orden 8-10041986, y lleva su propia orden como compra POS.
+      La asignacion de $170 reembolsados que ya existia queda emparejada con su venta: es
+      el sintoma exacto del Ejemplo 1 del ticket, cerrado por los dos lados.
+
+      El coste de que la compuerta sea estrecha, MEDIDO. El autor prueba en su suite que
+      la compuerta deja oportunidades sin asignacion de fondo, y lo llama "the gate's real
+      cost". Se midio esa poblacion neutralizando la condicion de ancla:
+
+        las filas que el ancla descarta son 5, y las 5 tienen orden de venta resoluble:
+        NO son la forma que own_so atiende, se descartan igual en las dos versiones y son
+        anteriores a este PR. No existe ninguna fila con orden no resoluble, sin own_so y
+        sin ancla.
+
+      El coste real de la compuerta en Long Island, hoy, es CERO filas. La forma que el
+      autor prueba con fixture existe, pero su poblacion aqui esta vacia. La compuerta
+      protege contra re-alojar las ordenes con varias membresias de 2022-2025 sin perder
+      nada medible a cambio, y esas ordenes no se mueven: 2014 en adelante sale identico.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la venta de $170 se caia dejando solo su
+      reembolso -> se emite con su compra POS, sin arrastrar nada mas -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC3 · The rescued dues row travels in the same date window as its opportunity
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-23T18:30:00Z"
+    stepResults: []
+    actual: |
+      Fechas medidas: la orden 8-10041986 es del 2012-06-06 y su reembolso del
+      2012-07-09. Son 33 dias y cruzan de mes. La primera renovacion, 8-10041566, es del
+      2012-06-03: encaja con "renovo dos veces en tres dias".
+
+      Tres versiones contra dos ventanas:
+
+        version                                  junio 2012        julio 2012
+        ---------------------------------------  ----------------  ----------------
+        base 8b522c37  (sin el arreglo)          no emite la fila  no emite la fila
+        412b0e8        (own_so, ventana vieja)   no emite la fila  LA EMITE  <- huerfana
+        7436170        (own_so + ventana nueva)  LA EMITE          no emite la fila
+
+        totales:  base 227 / 367 · 412b0e8 227 / 368 · final 228 / 367
+
+      La base pierde la fila en las dos ventanas: es el defecto original. El primer
+      intento la rescata pero la deja en julio, donde su oportunidad no esta — una
+      asignacion de fondo huerfana. El commit final la mueve a junio, con su oportunidad.
+
+      La fila se mueve de julio a junio entre dos commits del mismo PR, aislada y medida.
+      Es la demostracion mas limpia de esta corrida, y prueba con datos un cambio de
+      comportamiento que el autor solo habia descrito en prosa.
+
+      Las filas que no deben moverse no se mueven: las respaldadas por transaccion de
+      membresia en las que un reembolso tambien gana el ranking toman su oportunidad de la
+      otra cadena y ya viajaban emparejadas. Los totales de julio lo confirman, 367 = 367.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la fila caia fuera de la ventana de su
+      oportunidad, o no se emitia -> viaja con ella en el mes de la orden -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC4 · Nothing outside the 2011-2012 refunded population moves
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-23T18:32:00Z"
+    stepResults: []
+    actual: |
+      Sobre el conjunto completo de cada consulta tocada, no solo sobre la poblacion
+      afectada:
+
+        reembolsos de membresia ....  592 -> 614   +22 altas, 0 bajas, 0 modificadas
+        cuotas de membresia ........ 97.742 -> 97.743   +1 alta, 0 bajas
+        correcciones de monto ......  12, todas en 2011 y 2012
+        cohortes identicas .........  16/16 en reembolsos, 40/40 en cuotas
+        2014 en adelante ...........  0 cambios en las dos consultas
+
+      Dos afirmaciones del autor se verificaron ESTRUCTURALMENTE, que es mas fuerte que
+      un muestreo:
+
+      contact_roles.sql no puede cambiar su salida. Define el CTE y lo une en la linea
+      230, pero nunca lee DiscountAmount: no aparece una sola vez fuera de la definicion.
+      El CTE agrupa por SOURCELINEITEMID, asi que la clave es unica y un LEFT JOIN no
+      puede multiplicar filas; el filtro solo puede quitar filas del CTE, lo que sobre
+      clave unica deja las columnas unidas en NULL — y nadie las lee. Identica por
+      construccion.
+
+      membership_transactions.sql no puede ganar ni perder filas por este cambio.
+      DiscountAmount se usa en tres sitios y los tres son aritmeticos; no aparece en
+      ninguna clausula WHERE, y los dos joins del CTE son LEFT sobre clave agrupada.
+
+      Y el CTE es el mismo en los dos archivos que la propia prueba de contrato del autor
+      obliga a mantener sincronizados: las tres piezas identicas.
+
+      pre-fix -> post-fix -> objetivo cumplido?: se exigia que nada se moviera fuera de la
+      poblacion reembolsada de 2011-2012 -> no se movio nada -> SI.
+
+  - testCaseId: "12f2c2e8-b748-4559-8541-820dfc679cd4"
+    testCaseKey: TC-179
+    scenarioTitle: >-
+      AC5 · The ticket's own records reconcile, and the year totals land where the ticket
+      says
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-23T18:35:00Z"
+    stepResults: []
+    actual: |
+      LOS 12 REEMBOLSOS QUE EL TICKET LISTA COMO NO MIGRADOS APARECEN LOS DOCE, buscados
+      uno por uno por su referencia de orden de Altru. Diez entran por la rama del item
+      del credito y dos — los dos del 29-12-2011 — por la rama del descuento, que es justo
+      lo que el autor anticipa para esos dos.
+
+      El decimotercero, 8-10041986, ya se emitia: es el Ejemplo 1, donde estaba el
+      reembolso y faltaba la venta. Esa venta es la fila de $170 del escenario 4.
+
+      Las dos "ventas no migradas" de 2011 (+$110 y +$57) no aparecen en la salida de
+      reembolsos porque son ventas y ya migraban: son las recompras del mismo dia. La
+      reconciliacion por anio lo confirma aritmeticamente.
+
+      TOTALES POR ANIO:
+
+        Anio   rama A    rama B   correccion venta  venta rescatada    NETO    ticket
+        2011     -$290    -$217             +$217               $0    -$290    -$290  OK
+        2012   -$1.915    -$731             +$731            +$170  -$1.745  -$1.745  OK
+
+      EL MECANISMO: la rama B se anula sola. El reembolso que entra (-X) y la correccion
+      de la venta que sale de $0 (+X) son la misma cifra, anio por anio. Por eso esas doce
+      membresias nunca aparecieron en los totales anuales aunque estuvieran mal las dos
+      puntas. Es exactamente lo que el autor describe como "los dos errores se tapaban
+      entre si", y aqui queda medido.
+
+      El $230 y el $1.805 de la descripcion salen de mover $60 del registro fechado distinto en cada sistema, de
+      un anio al otro; ese registro existe en los dos sistemas y no es dinero perdido.
+
+      El 22 frente al 12: los 10 de diferencia son la otra mitad del patron con descuento
+      — 1 en 2011 ($50, no nombrado en el ticket) y 9 en 2012 —, que coincide con "one
+      pair in 2011, nine in 2012".
+
+      El $185 del Ejemplo 1 NO se explica por la migracion: en Altru esa orden vale $170.
+      Procede de los registros que crea la aplicacion en la org, que usan precio de lista.
+      Ver F1.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los 12 reembolsos no estaban y los
+      totales no cuadraban -> estan los 12 y los dos totales caen al dolar -> SI.
+
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-23T18:10:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-179 contra el commit 7436170. Primer paso, la suite del
+      equipo: 653/653 de contrato, y la de integracion fallando 16 suites por no encontrar
+      el runtime de contenedores, que se diagnostico como entorno — el socket de colima —
+      antes de atribuirlo a nada. Con las variables corregidas, 185/185.
+  - action: run-completed
+    timestamp: "2026-09-23T18:40:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      7/7. Las tres formas con que Altru escondia un reembolso de membresia en 2011-2012
+      dejan de descartarse, y sus tres poblaciones salen exactas: 10 / $2.205 por el item
+      del credito, 12 / $948 por la linea tipada como descuento, y 1 / $170 por la venta
+      absorbida por su propio reembolso. Los dos lados del defecto del descuento cuadran
+      anio por anio y dolar por dolar entre los dos archivos, que es la prueba de que el
+      monto de la oportunidad sigue igual a la suma de sus asignaciones. Los 12 reembolsos
+      que el ticket lista aparecen los doce, y los totales por anio caen en -$290 y
+      -$1.745, los subtotales propios del ticket. Nada se mueve fuera de 2011-2012: 16/16
+      y 40/40 cohortes identicas, y 2014 en adelante sin un solo cambio. La pieza mas
+      limpia es la ventana: la fila rescatada se mueve de julio a junio entre dos commits
+      del propio PR, lo que prueba con datos el arreglo que encontro la revision de
+      codigo. Seis hallazgos, ninguno de los cuales hace fallar un criterio y solo uno con
+      urgencia: la recarga no es segura todavia por los 3.287 fund assignments que la
+      aplicacion crea en la org, que no son de este PR y que QA no puede verificar sin
+      leer la org productiva (F1). Los otros: un reembolso real que la guarda de
+      ambiguedad deja fuera a proposito (F2); la forma "Discount" llega hasta 2026 y no
+      solo a 2012, aunque fuera de membresias sume $40,85 (F3); el campo Fund Name vacio
+      en 614 de 614 filas (F4); una cifra base con +1 de deriva sobre una fuente viva
+      (F5); y lo que esta corrida no cubre (F6). Sin defectos de seguridad: OWASP 3
+      aplicables, 3 PASS, 7 N/A.
+
+tags:
+  - im-1275
+  - im-70
+  - im-1296
+  - altru
+  - migration
+  - migration-tool-etl
+  - membership
+  - refund
+  - fund-assignment
+  - long-island
+  - query
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-23T18:10:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-23T18:40:00Z"
