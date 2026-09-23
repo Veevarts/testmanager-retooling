@@ -1,0 +1,193 @@
+schemaVersion: "1.0"
+
+id: "cbc78488-d375-40d5-ad25-c0eacac97069"
+key: "TC-177"
+title: "Altru rental/event/group export: every reservation comes out with a Type"
+
+description: |
+  Cobertura QA de IM-1223 (Rental/Event/Group records missing Type value — Long Island Children's
+  Museum), bajo el epic IM-70 (Altru Queries). Sub-tarea de QA: IM-1292. Repositorio en alcance:
+  Veevarts/MigrationToolETL "PR #184", rama CamiloSalgueroMarin/IM-1223-rental-type-missing.
+
+  El reporte: 7 reservas de Long Island salieron de la consulta con el campo Type vacio, y se
+  cargaron a mano como "Rental Event" para poder completar la subida. Se pidio causa raiz.
+
+  LA CAUSA RAIZ ESTA DECLARADA Y ES LO QUE HAY QUE VERIFICAR, NO REPETIR. El comentario del
+  17-09-2026 dice que en Altru el tipo de grupo vive UNICAMENTE en el itinerario
+  (`ITINERARY.GROUPSALESGROUPTYPECODEID`), que la consulta construia el Type a partir de esa tabla,
+  y que una reserva sin ningun itinerario no producia fila y salia en blanco en vez de caer al
+  valor por defecto. El campo destino (`Auctifera__Type__c`) es un picklist restringido de dos
+  valores pero NO obligatorio, asi que el blanco paso callado en la carga.
+
+  De ahi salen cuatro afirmaciones medibles, y esta cobertura las mide una por una en vez de
+  darlas por buenas:
+
+  - Que despues del arreglo NINGUNA reserva salga con Type vacio.
+  - Que las 7 del reporte clasifiquen como Rental Event, que es lo que el workaround ya puso.
+  - Que las reservas que SI tienen tipo de grupo NO se muevan. Esto es lo mas importante del
+    cambio: el arreglo toca una clasificacion por defecto, y un arreglo asi se rompe por el lado
+    de lo que no deberia haber tocado, no por el lado de lo que arregla.
+  - Que los conteos declarados se sostengan: 35 de 16.731 en Long Island, 3 de 9.652 en Illinois,
+    5 de 1.380 en High Desert.
+
+  Riesgos abiertos que esta cobertura debe vigilar:
+
+  - R1. La historia NO trae criterios de aceptacion formales. Es un reporte de defecto con siete
+    ejemplos. La unica definicion de "correcto" vive en un comentario del 17-09-2026. Los
+    escenarios se derivan de ahi, y eso queda dicho para que nadie lo lea como si fueran AC
+    acordados.
+  - R2. El "PR #184" sigue ABIERTO y en BORRADOR, sin mergear, aunque la historia este en
+    "Is Ready For QA". Se prueba contra la rama del PR; si el PR cambia despues, esta corrida
+    caduca y hay que repetirla.
+  - R3. Los 28 registros de Long Island que el propio comentario dice que ya estan cargados con
+    Type en blanco NO entran en esta cobertura: corregirlos exige escribir en la org productiva
+    del cliente, y QA no escribe ahi. Se reporta el hallazgo y se deja la decision al equipo.
+  - R4. Existe perfil `qa_longisland` y perfil de Illinois, asi que el bloqueo de acceso que freno
+    a TC-139 ya no aplica para esas dos fuentes. NO hay perfil de High Desert: el conteo de 5 de
+    1.380 puede quedar sin verificar, y si asi ocurre se dice, no se rellena.
+  - R5. El comentario no dice que pasa con una reserva que tenga VARIOS itinerarios con tipos de
+    grupo distintos entre si. El arreglo describe el caso de cero evidencia; el de evidencia
+    contradictoria no esta documentado.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Hay perfil de solo lectura para la fuente de Long Island y para la de Illinois; se confirma el alcance de cada uno antes de empezar (ver riesgo R4)."
+  - "Se puede obtener la consulta en sus dos versiones: la de la rama base y la del \"PR #184\", para correr la misma entrada contra las dos."
+  - "Se anota, antes de tocar nada, el conteo total de reservas de cada fuente, porque varios escenarios comparan grano de filas."
+  - "Todas las consultas son de solo lectura. No se escribe en ninguna org ni en ninguna fuente; la org de Long Island es productiva del cliente."
+  - "Se trabaja sobre la rama del PR sabiendo que sigue en borrador, asi que el veredicto queda atado al commit que se pruebe."
+
+format: gherkin
+
+scenarios:
+  - title: "After the fix, no reservation leaves the export without a Type"
+    tags:
+      - ac-1
+      - happy-path
+      - long-island
+    given:
+      - "la consulta de reservas corre sobre la fuente de Long Island"
+    when:
+      - "se ejecuta la version de la rama base y se cuentan las filas con Type vacio"
+      - "se ejecuta la version del PR con la misma entrada y se cuenta lo mismo"
+    then:
+      - "antes del arreglo hay filas con Type vacio y su cantidad queda anotada"
+      - "despues del arreglo la cantidad de filas con Type vacio es cero"
+      - "el conteo total de reservas es el mismo en las dos corridas: el arreglo clasifica, no filtra"
+      - "no aparece ningun valor distinto de los dos que el picklist admite"
+
+  - title: "The seven reported reservations come out as Rental Event"
+    tags:
+      - ac-2
+      - regression-evidence
+      - long-island
+    given:
+      - "el reporte nombra siete reservas por identificador, nombre y numero de factura"
+    when:
+      - "se buscan esas siete en la salida de la version base"
+      - "se buscan las mismas siete en la salida de la version del PR"
+    then:
+      - "en la version base las siete salen con Type vacio, que es el defecto reportado"
+      - "en la version del PR las siete salen como Rental Event"
+      - "el nombre y la factura de cada una coinciden con los del reporte, asi que son las mismas filas"
+      - "coincide con lo que el workaround ya cargo a mano, asi que no hace falta corregir nada de esas siete"
+
+  - title: "Reservations that do have a group type are left exactly where they were"
+    tags:
+      - ac-3
+      - regression
+      - behavioral-diff
+    given:
+      - "la mayoria de las reservas si tiene tipo de grupo en su itinerario"
+    when:
+      - "se compara, fila por fila, la clasificacion que emite la version base contra la del PR"
+      - "se hace el mismo cotejo en la segunda fuente disponible"
+    then:
+      - "ninguna fila que antes decia Group pasa a decir Rental Event ni al reves"
+      - "las unicas filas que cambian son exactamente las que antes salian vacias"
+      - "el reparto entre los dos valores queda igual salvo por las que entran desde el vacio"
+      - "se deja constancia de que lo verificado es identidad fila a fila y no solo que los totales cuadren"
+
+  - title: "The declared counts of affected reservations hold up"
+    tags:
+      - regression-evidence
+      - counts
+    given:
+      - "el comentario de causa raiz declara 35 de 16.731 en Long Island, 3 de 9.652 en Illinois y 5 de 1.380 en High Desert"
+    when:
+      - "se cuentan, en cada fuente alcanzable, las reservas sin ningun itinerario"
+      - "se contrasta cada numero con el declarado"
+    then:
+      - "el conteo de Long Island coincide con el declarado, o la diferencia se explica"
+      - "el total de reservas de cada fuente coincide con el declarado"
+      - "el conteo de Illinois se verifica o se dice que no se pudo"
+      - "si no hay acceso a High Desert se deja explicitamente sin verificar, sin rellenar el numero"
+
+  - title: "The stated root cause survives being checked"
+    tags:
+      - root-cause
+      - edge-case
+    given:
+      - "la explicacion dice que el tipo de grupo solo vive en el itinerario y que esas reservas no tienen ninguno"
+    when:
+      - "se comprueba que las siete no tienen itinerario"
+      - "se busca un tipo de grupo para ellas en los demas caminos que Altru ofrece, incluida la escala de tarifa"
+      - "se revisa el estado y el importe de cada una"
+    then:
+      - "ninguna de las siete tiene itinerario, que es la premisa de la explicacion"
+      - "ninguna tiene tipo de grupo por ningun otro camino: no hay un valor real que se haya perdido"
+      - "las siete son reservas vacias o abandonadas, con importe cero y estado pendiente o cancelado"
+      - "se deja constancia de que Rental Event es un valor por defecto razonable y no la recuperacion de un dato"
+
+  - title: "A reservation with conflicting group types is not described anywhere"
+    tags:
+      - missing-doc
+      - edge-case
+    given:
+      - "el arreglo describe que hacer cuando no hay ninguna evidencia de tipo de grupo"
+    when:
+      - "se buscan reservas con varios itinerarios cuyos tipos de grupo no coincidan entre si"
+      - "se mira que emite la consulta para esas, si existen"
+    then:
+      - "se dice cuantas hay, aunque sean cero"
+      - "si existen, se registra que valor emite la consulta y si ese valor es estable entre corridas"
+      - "se deja constancia de que ni el ticket ni el comentario dicen cual deberia ser el resultado en ese caso"
+      - "se documenta como pregunta abierta para el autor, no como defecto"
+
+  - title: "The export never emits a value the destination field cannot hold"
+    tags:
+      - negative
+      - fail-closed
+    given:
+      - "el campo destino es un picklist restringido con dos valores y no es obligatorio"
+    when:
+      - "se recorren todos los valores distintos que emite la consulta despues del arreglo"
+      - "se comprueba que no haya nulos, cadenas vacias ni espacios en blanco disfrazados"
+    then:
+      - "el conjunto de valores emitidos es exactamente los dos que el picklist admite"
+      - "no hay nulos ni cadenas vacias ni valores con espacios alrededor"
+      - "se deja constancia de que el campo no ser obligatorio es lo que hizo que el defecto pasara callado en la carga"
+      - "el grano de filas no cambia: la consulta no duplica ni pierde reservas al clasificarlas"
+
+tags:
+  - im-1223
+  - im-70
+  - im-1292
+  - altru
+  - migration
+  - migration-tool-etl
+  - rental-event
+  - long-island
+  - query
+
+estimatedDuration: 90
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-22T18:35:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-22T18:35:00Z"
+  version: 1

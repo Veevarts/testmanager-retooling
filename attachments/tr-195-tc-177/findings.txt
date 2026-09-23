@@ -1,0 +1,165 @@
+TR-195 / TC-177 / IM-1223 — HALLAZGOS
+Fecha: 2026-09-22
+Commit probado: daa36c7 (rama CamiloSalgueroMarin/IM-1223-rental-type-missing, "PR #184", borrador)
+Fuentes alcanzadas: Long Island (db_8), Illinois (db_3), High Desert (high_desert_db_2)
+
+VEREDICTO GENERAL: el arreglo cumple lo que el ticket pide, en las tres fuentes. Los
+hallazgos de abajo no cambian ese veredicto; son de documentacion, de datos y de alcance.
+
+------------------------------------------------------------------------------
+F1 — La causa raiz se queda corta cuando se generaliza a las 35 (MEDIA)
+------------------------------------------------------------------------------
+El comentario del 17-09-2026 dice, sobre las 7 reportadas: "I checked every other place
+Altru could record a type for them -- including the rate scale -- and none of the 7 carries
+a group type anywhere" y concluye "Altru simply never recorded one".
+
+Para las 7 eso es EXACTO y queda verificado aqui: ninguna tiene fila en
+RESERVATIONRATESCALE, luego ningun tipo de grupo por esa via.
+
+Pero el mismo comentario extiende la conclusion a las 35 ("All 35 should be Rental Event").
+Medido sobre las 34 que hoy salen en blanco en Long Island:
+
+    con fila de escala de tarifa ........ 5
+    con GROUPSALESGROUPTYPECODEID ....... 3   <-- Altru SI registro un tipo
+    ese tipo contiene "group" ........... 0
+
+O sea que para 3 de esas reservas Altru SI grabo un tipo de grupo; simplemente no esta en
+el itinerario sino en la escala de tarifa, y la consulta -- ni antes ni despues -- mira ese
+camino.
+
+CONSECUENCIA HOY: ninguna. Como ninguno de esos 3 tipos es "group-ish", el valor por
+defecto Rental_Event coincide con lo que habria dado el otro camino. No se pierde ningun
+dato y no hay defecto que corregir.
+
+CONSECUENCIA LATENTE: es un punto ciego. Una reserva sin itinerario cuya escala de tarifa
+apunte a un tipo que SI diga "group" saldria hoy como Rental_Event, y seria incorrecto. No
+existe ese caso en las tres fuentes medidas; existe la posibilidad.
+
+Se reporta como pregunta al autor, no como defecto: ¿deberia la clasificacion considerar
+RESERVATIONRATESCALE -> RATESCALE.GROUPSALESGROUPTYPECODEID como segunda fuente de verdad?
+El ticket no lo pregunta y el arreglo no lo contempla.
+
+------------------------------------------------------------------------------
+F1b — "Empty or abandoned bookings" no describe a todas (BAJA)
+------------------------------------------------------------------------------
+El mismo comentario caracteriza las 7 como "empty or abandoned bookings: no itinerary, no
+order items, $0 amount, and a status of either Pending or Cancelled (4 Cancelled, 3
+Pending)".
+
+Medido sobre las 6 que siguen existiendo (ultimo estado de RESERVATIONSTATUSHISTORY):
+
+    Cancelled (5) .............. 4    deposito cero: 4
+    Pending (0) ................ 1    deposito cero: 1
+    Order balance sent (12) .... 1    deposito cero: 1
+
+Los 4 Cancelled coinciden. Pero una de ellas esta en "Order balance sent", que no es ni
+Pending ni Cancelled: es una reserva a la que se le envio un balance al cliente, o sea que
+estuvo viva. Aunque la septima borrada hubiera sido Pending, la afirmacion "either Pending
+or Cancelled" seguiria sin cumplirse para esa.
+
+NO CAMBIA EL VEREDICTO. Esa reserva tampoco tiene itinerario ni tipo de grupo por ningun
+camino, asi que Rental_Event sigue siendo el unico valor defendible. Lo que se debilita es
+el argumento de "son basura abandonada, da igual que valor les pongamos": para una de
+ellas no es cierto que estuviera abandonada.
+
+Nota de metodo: el importe total del pedido NO vive en RESERVATION (sus unicas columnas de
+dinero son DEPOSITAMOUNT y SECURITYDEPOSITAMOUNT, ambas cero en las 6). La afirmacion de
+"$0 amount" se verifico solo sobre los depositos; el total del pedido de Group Sales no se
+comprobo.
+
+------------------------------------------------------------------------------
+F2 — Uno de los siete ejemplos documentados ya no existe (BAJA)
+------------------------------------------------------------------------------
+De los 7 identificadores del reporte, 6 estan en la fuente y 1 no:
+
+    Ejemplo 7 — 68152E1B-2EC5-44D6-852A-FAC213BDE8CB — "250 Ball Drop Celebration"
+    Invoice 8-15923442 — found_in_source = 0
+
+Los 6 que existen salen Rental_Event despues del arreglo, que es lo que el ticket pedia.
+El septimo NO SE PUEDE VERIFICAR: la fila se borro de Altru entre el reporte (03-09-2026) y
+hoy.
+
+No es un defecto del PR -- el arreglo clasifica toda reserva que exista. Se deja constancia
+porque un ejemplo documentado que desaparece deja de servir como evidencia, y porque
+explica de paso la diferencia de conteo (ver F3).
+
+------------------------------------------------------------------------------
+F3 — Los conteos declarados de Long Island no coinciden, y se sabe por que (BAJA)
+------------------------------------------------------------------------------
+    Fuente        Declarado          Medido hoy        Coincide
+    Long Island   35 de 16.731       34 de 16.906      NO
+    Illinois       3 de  9.652        3 de  9.652      SI, exacto
+    High Desert    5 de  1.380        5 de  1.380      SI, exacto
+
+Dos de tres coinciden al digito, incluido el total de reservas, asi que el metodo de conteo
+del autor era el mismo que el de aqui.
+
+El -1 de blancos lo explica F2: la reserva borrada era uno de los 35. El +175 del total es
+actividad normal en cinco dias de un sistema vivo.
+
+No es defecto. Es una nota de caducidad: los conteos de un ticket contra una fuente viva
+envejecen, y conviene fecharlos.
+
+------------------------------------------------------------------------------
+F4 — El caso de itinerarios contradictorios existe y no esta documentado (MEDIA)
+------------------------------------------------------------------------------
+Riesgo R5 del test case. Ni el ticket ni el comentario dicen que deberia emitir la consulta
+cuando una reserva tiene varios itinerarios con tipos de grupo distintos entre si.
+
+Medido en Long Island:
+
+    reservas con al menos un itinerario ............... 16.872
+    con mas de un itinerario .......................... 1.707
+    con varios tipos de grupo con nombre distintos ....    10
+    con conflicto "group" vs otro tipo con nombre .....     6
+    con conflicto "group" vs itinerario sin tipo ......     4
+    con conflicto otro-tipo vs itinerario sin tipo ....     1
+
+EL CASO EXISTE: 6 reservas tienen itinerarios que se contradicen.
+
+Comportamiento observado: la consulta resuelve por DISYUNCION -- el SUM(...) > 0 hace que
+cualquier itinerario "group-ish" gane, sin importar cuantos digan otra cosa. Es
+determinista y estable entre corridas, y es IDENTICO antes y despues del arreglo: el PR no
+toca esa parte de la logica.
+
+No es regresion ni defecto. Es una regla no escrita que hoy solo vive en el SQL. Se
+documenta como pregunta abierta para el autor: ¿ganar por disyuncion es lo pretendido, o
+deberia prevalecer el itinerario principal / el mas reciente?
+
+------------------------------------------------------------------------------
+F5 — Los 28 registros ya cargados en blanco siguen fuera de alcance (INFORMATIVA)
+------------------------------------------------------------------------------
+Riesgo R3 del test case. El comentario estima 28 registros mas de Long Island ya cargados
+en la org con Type vacio. Corregirlos exige escribir en la org productiva del cliente, y QA
+no escribe ahi. Queda como decision del equipo, no de esta corrida.
+
+Nota: si esa estimacion se rehace hoy, parte de 34 y no de 35 (ver F2/F3).
+
+------------------------------------------------------------------------------
+F6 — Los perfiles de acceso a datos estaban desactualizados (MEDIA, de tooling)
+------------------------------------------------------------------------------
+El perfil de lectura de Long Island no funciona, por dos datos obsoletos a la vez: declara
+una generacion de la base que ya no existe (_db_7 cuando la vigente es _db_8), y apunta a
+un destino de red que dejo de responder.
+
+Ademas resuelve su credencial contra la entrada de llavero de OTRA fuente, no la suya.
+
+Para esta corrida se crearon perfiles nuevos y verificados. Los antiguos habria que
+actualizarlos o retirarlos: hoy, quien los use, concluira que no hay datos cuando lo que
+pasa es que esta preguntando en el sitio equivocado. Ese es el riesgo real del hallazgo —
+un perfil stale produce un falso defecto de producto.
+
+------------------------------------------------------------------------------
+F7 — Hallazgo de infraestructura, tratado fuera de este repositorio (ALTA)
+------------------------------------------------------------------------------
+Durante el trabajo de acceso aparecio un problema de configuracion de infraestructura que
+NO guarda relacion con IM-1223 ni con el codigo del PR: el repositorio del ticket no
+define infraestructura de red, y los recursos implicados los gestiona Terraform desde otro
+repositorio.
+
+El detalle NO se documenta aqui de forma deliberada. Este repositorio es publico, y el
+problema seguia abierto en el momento de escribir esto; publicar su descripcion seria
+publicar como aprovecharlo. Se reporto por canal interno a quien mantiene la
+infraestructura, y la evidencia completa quedo fuera del repositorio.
+
+Si estas auditando esta corrida y necesitas ese detalle, pideselo a Evans Mondragon.

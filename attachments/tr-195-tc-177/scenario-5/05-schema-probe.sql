@@ -1,0 +1,15 @@
+-- TC-177 escenario 5 — sondeo de esquema para verificar la causa raiz por otros caminos.
+-- Solo lectura sobre catalogo del sistema.
+SELECT
+    t.TABLE_NAME,
+    c.COLUMN_NAME,
+    c.DATA_TYPE
+FROM INFORMATION_SCHEMA.TABLES t
+JOIN INFORMATION_SCHEMA.COLUMNS c
+  ON c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA
+WHERE t.TABLE_NAME IN ('RESERVATIONRATESCALE', 'RATESCALE')
+   OR (t.TABLE_NAME = 'RESERVATION'
+       AND (c.COLUMN_NAME LIKE '%STATUS%'
+         OR c.COLUMN_NAME LIKE '%AMOUNT%'
+         OR c.COLUMN_NAME LIKE '%TOTAL%'))
+ORDER BY t.TABLE_NAME, c.COLUMN_NAME;

@@ -1,0 +1,99 @@
+TC-177 / IM-1223 — MATRIZ DE COMPARACION PRE vs POST
+Fecha de ejecucion: 2026-09-22
+Commit probado: daa36c7 "fix(queries): classify every reservation so none exports a blank type IM-1223"
+Rama: CamiloSalgueroMarin/IM-1223-rental-type-missing (PR #184, en borrador)
+Consulta: 01-classification-diff.sql — solo lectura, salida puramente numerica
+
+FIDELIDAD DE LA CONSULTA (verificada, no asumida)
+  El CTE PRE  reproduce literalmente ReservationTypes de daa36c7^ (enraizado en ITINERARY,
+    GROUP BY it.RESERVATIONID), lineas 117-136 de rental_events_groups.sql.
+  El CTE POST reproduce literalmente ReservationTypes de daa36c7  (enraizado en RESERVATION,
+    LEFT JOIN ITINERARY, GROUP BY r.ID), lineas 150-172.
+  Ambos se cotejaron contra el archivo del repo antes de ejecutar. No se reescribio la logica.
+
+RUTA DE ACCESO
+  Tunel SSH a traves del bastion, con perfiles de solo lectura creados y verificados para
+  esta corrida. NO se usaron los perfiles antiguos: su destino de red esta obsoleto (F6).
+  Tres fuentes alcanzadas. Los detalles de red se omiten aqui a proposito: este repositorio
+  es publico.
+
+------------------------------------------------------------------------------------------
+Fuente        | Metrica                  | PRE    | POST   | Delta | AC   | Objetivo? | Veredicto
+------------------------------------------------------------------------------------------
+Long Island   | reservas totales         | 16906  | 16906  |    0  | AC1  | SI        | PASS
+Long Island   | reservas distintas       | 16906  | 16906  |    0  | AC1  | SI        | PASS
+Long Island   | Type en blanco           |    34  |     0  |  -34  | AC1  | SI        | PASS
+Long Island   | Group                    |  4844  |  4844  |    0  | AC3  | SI        | PASS
+Long Island   | Rental_Event             | 12028  | 12062  |  +34  | AC3  | SI        | PASS
+Long Island   | filas con tipo cambiadas |     -  |     0  |    0  | AC3  | SI        | PASS
+Long Island   | blanco -> Rental_Event   |     -  |    34  |  +34  | AC2  | SI        | PASS
+Long Island   | blanco -> Group          |     -  |     0  |    0  | AC2  | SI        | PASS
+Long Island   | valores fuera de picklist|     -  |     0  |    0  | neg  | SI        | PASS
+------------------------------------------------------------------------------------------
+Illinois      | reservas totales         |  9652  |  9652  |    0  | AC1  | SI        | PASS
+Illinois      | reservas distintas       |  9652  |  9652  |    0  | AC1  | SI        | PASS
+Illinois      | Type en blanco           |     3  |     0  |   -3  | AC1  | SI        | PASS
+Illinois      | Group                    |  1711  |  1711  |    0  | AC3  | SI        | PASS
+Illinois      | Rental_Event             |  7938  |  7941  |   +3  | AC3  | SI        | PASS
+Illinois      | filas con tipo cambiadas |     -  |     0  |    0  | AC3  | SI        | PASS
+Illinois      | blanco -> Rental_Event   |     -  |     3  |   +3  | AC2  | SI        | PASS
+Illinois      | valores fuera de picklist|     -  |     0  |    0  | neg  | SI        | PASS
+------------------------------------------------------------------------------------------
+High Desert   | reservas totales         |  1380  |  1380  |    0  | AC1  | SI        | PASS
+High Desert   | reservas distintas       |  1380  |  1380  |    0  | AC1  | SI        | PASS
+High Desert   | Type en blanco           |     5  |     0  |   -5  | AC1  | SI        | PASS
+High Desert   | Group                    |   667  |   667  |    0  | AC3  | SI        | PASS
+High Desert   | Rental_Event             |   708  |   713  |   +5  | AC3  | SI        | PASS
+High Desert   | filas con tipo cambiadas |     -  |     0  |    0  | AC3  | SI        | PASS
+High Desert   | blanco -> Rental_Event   |     -  |     5  |   +5  | AC2  | SI        | PASS
+High Desert   | valores fuera de picklist|     -  |     0  |    0  | neg  | SI        | PASS
+------------------------------------------------------------------------------------------
+
+LO QUE ESTOS NUMEROS PRUEBAN
+
+1. El defecto reportado desaparece en las tres fuentes: 34 + 3 + 5 = 42 reservas que antes
+   salian con Type vacio, ahora salen clasificadas. post_blank = 0 en las tres.
+
+2. El arreglo NO mueve nada que ya estuviera clasificado. Esta es la parte importante y la
+   que mas facil se rompe en un cambio de clasificacion por defecto:
+     - changed_with_evidence = 0 en las tres fuentes. Ninguna reserva que antes tenia un
+       tipo salio con otro distinto.
+     - pre_group == post_group exactamente en las tres (4844, 1711, 667).
+     - El aumento de Rental_Event es identico al numero de blancos que habia. No entra ni
+       sale nada mas.
+   Se verifico identidad fila a fila mediante el LEFT JOIN de los dos CTE sobre el mismo
+   RESERVATIONID, no solo que los totales cuadraran.
+
+3. El grano no cambia: total = distintas en las tres fuentes, antes y despues. La consulta
+   clasifica, no duplica ni pierde reservas.
+
+4. Ningun valor cae fuera del picklist restringido. post_outside_picklist = 0 y
+   post_blank = 0, o sea que el conjunto emitido es exactamente {Group, Rental_Event}.
+
+DISCREPANCIA EN LOS CONTEOS DECLARADOS (escenario 4)
+
+  Fuente        Declarado en el ticket    Medido hoy        Coincide?
+  Long Island   35 de 16.731              34 de 16.906      NO
+  Illinois       3 de  9.652               3 de  9.652      SI, exacto
+  High Desert    5 de  1.380               5 de  1.380      SI, exacto
+
+  Dos de las tres fuentes coinciden al numero exacto, incluido el total de reservas. Eso
+  hace poco probable que el metodo de conteo del autor fuera distinto del de aqui: si lo
+  fuera, fallarian las tres.
+
+  LA CAUSA DEL -1 ESTA VERIFICADA, NO SUPUESTA. Al comprobar las siete reservas del reporte
+  (escenario 2) resulta que UNA DE ELLAS YA NO EXISTE EN LA FUENTE:
+
+    Ejemplo 7 — 68152E1B-2EC5-44D6-852A-FAC213BDE8CB — "250 Ball Drop Celebration"
+    found_in_source = 0
+
+  Esa reserva era uno de los 35 blancos del 17-09-2026. Se borro de Altru entre esa fecha y
+  hoy, y su desaparicion explica por si sola el paso de 35 a 34. No hace falta suponer que
+  alguna gano un itinerario.
+
+  El +175 del total (16.731 -> 16.906) es actividad normal de un sistema vivo en cinco dias:
+  altas nuevas menos esa baja.
+
+  NO SE REPORTA COMO DEFECTO DEL PR. El comportamiento que el ticket pide se cumple en las
+  tres fuentes, y en dos de ellas los numeros declarados coinciden al digito. Lo que si se
+  reporta (F2) es que uno de los siete ejemplos documentados ya no es verificable.

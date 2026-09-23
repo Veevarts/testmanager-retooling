@@ -1,0 +1,390 @@
+schemaVersion: "1.0"
+id: tr-9f3bc2d6-87cf-406f-8bc0-b08505ff95d9
+key: TR-195
+title: >-
+  TR-195 · IM-1223 · TC-177 · Ninguna reserva sale ya sin Type — 7/7 PASS en las tres
+  fuentes, y el arreglo no movio ni una sola de las que ya estaban clasificadas.
+status: completed
+environment:
+  name: >-
+    Tres fuentes de Altru en SQL Server — Long-Island-Children-s-Museum_db_8, Illinois_db_3
+    y high_desert_db_2 — alcanzadas por tunel SSH a traves del bastion, con perfiles de
+    solo lectura creados y verificados para esta corrida. Todas las consultas de solo
+    lectura, con salida puramente numerica: ningun nombre, factura ni dato personal salio
+    de la base. No se escribio en ninguna fuente ni en ninguna organizacion de Salesforce;
+    la de Long Island es productiva del cliente. Los detalles de red quedan fuera de este
+    artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    SQL-only — Veevarts/MigrationToolETL commit daa36c7 "fix(queries): classify every
+    reservation so none exports a blank type IM-1223", rama
+    CamiloSalgueroMarin/IM-1223-rental-type-missing ("PR #184", sigue en BORRADOR). El
+    cambio toca un unico CTE, ReservationTypes, en rental_events_groups.sql. El veredicto
+    de esta corrida queda atado a ese commit: si el PR cambia, caduca.
+startedAt: "2026-09-22T22:50:00Z"
+completedAt: "2026-09-22T23:15:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  En Altru el tipo de grupo de una reserva vive UNICAMENTE en su itinerario
+  (`ITINERARY.GROUPSALESGROUPTYPECODEID`). No hay campo de tipo en la reserva.
+
+  El CTE `ReservationTypes` estaba enraizado en ITINERARY y agrupaba por
+  `it.RESERVATIONID`. Una reserva sin ningun itinerario no producia fila en ese CTE, asi
+  que el LEFT JOIN posterior devolvia NULL y el Type salia vacio — en vez de caer al valor
+  por defecto, que es lo que el `ELSE 'Rental_Event'` pretendia.
+
+  El arreglo invierte la raiz: parte de RESERVATION, engancha ITINERARY por LEFT JOIN y
+  agrupa por `r.ID`. Asi toda reserva produce fila, y la que no tiene evidencia de grupo
+  cae al ELSE. El diff util son cuatro lineas:
+
+      -        it.RESERVATIONID,          ->  +        r.ID AS RESERVATIONID,
+      -FROM ITINERARY it                  ->  +FROM RESERVATION r
+                                              +LEFT JOIN ITINERARY it ON it.RESERVATIONID = r.ID
+      -GROUP BY it.RESERVATIONID          ->  +GROUP BY r.ID
+
+  El campo destino (`Auctifera__Type__c`) es un picklist restringido de dos valores pero NO
+  obligatorio: por eso el blanco se cargo callado en vez de fallar en la subida, y por eso
+  el defecto aparecio como problema de datos al final y no como error durante la carga.
+
+  ## Inferred technical tests
+
+  Un cambio de clasificacion por defecto se rompe por el lado de lo que NO deberia haber
+  tocado, no por el lado de lo que arregla. De ahi salieron cuatro frentes, los cuatro
+  ejecutados:
+
+  1. **Comparacion PRE/POST en una sola pasada, fila por fila.** Los dos CTE — el de la
+     rama base y el del PR — se reconstruyeron literalmente desde el repo (verificados
+     contra `daa36c7^` y `daa36c7` antes de correr, no de memoria) y se unieron por
+     RESERVATIONID sobre la misma entrada. Eso permite medir identidad fila a fila, no solo
+     que los totales cuadren, que es la unica forma de probar que nada se movio.
+  2. **Las tres fuentes, no una.** Long Island, Illinois y High Desert. El conteo de High
+     Desert estaba declarado no verificable en el test case (riesgo R4); se consiguio
+     acceso y se verifico.
+  3. **Los siete ejemplos del reporte por identificador**, no por nombre ni factura, que es
+     lo unico que identifica una fila sin ambiguedad.
+  4. **Los caminos alternativos de tipo de grupo**, para comprobar la afirmacion de causa
+     raiz de que no se perdio ningun valor real: escala de tarifa
+     (`RESERVATIONRATESCALE` -> `RATESCALE.GROUPSALESGROUPTYPECODEID`) y estado real desde
+     `RESERVATIONSTATUSHISTORY`.
+
+  La suite del equipo ya se habia inspeccionado y ejercitado en la fase previa de esta
+  misma corrida: 24 tests verdes sobre docker, y una mutacion que devuelve el CTE a su raiz
+  de ITINERARY mata exactamente 3 de ellos, lo que prueba que la suite PUEDE fallar y que
+  cubre este cambio. Evidencia en `scenario-0-unit-tests/` y `scenario-0-mutation/`.
+
+  ## Acceso: por que los perfiles viejos no servian
+
+  Los perfiles de lectura existentes apuntan a un destino de red que ya no responde, y el
+  de Long Island declara ademas una generacion de la base que ya no existe (`..._db_7`
+  cuando la vigente es `..._db_8`). Se crearon perfiles nuevos y verificados para esta
+  corrida. Detalle en F6.
+
+  Eso importa mas de lo que parece: un perfil stale no falla ruidosamente, devuelve un
+  vacio que se parece a "no hay datos". Quien lo hubiera usado sin verificar el destino
+  habria reportado un falso defecto de producto.
+
+  Durante ese trabajo de acceso aparecio ademas un hallazgo de infraestructura ajeno a este
+  ticket, que se reporto por canal interno y cuyo detalle NO se documenta en este
+  repositorio por ser publico. No afecta al veredicto de esta corrida. Ver F7.
+
+results:
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      After the fix, no reservation leaves the export without a Type
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-22T22:58:00Z"
+    stepResults: []
+    actual: |
+      Medido en las tres fuentes, misma entrada contra las dos versiones del CTE:
+
+        Fuente        total   pre_blank   post_blank   fuera de picklist
+        Long Island   16906          34            0                   0
+        Illinois       9652           3            0                   0
+        High Desert    1380           5            0                   0
+
+      42 reservas que antes salian con Type vacio salen hoy clasificadas. El total de
+      reservas es identico en las dos corridas de cada fuente: el arreglo clasifica, no
+      filtra. Y el conjunto de valores emitidos es exactamente {Group, Rental_Event}, sin
+      nulos ni cadenas vacias.
+
+      pre-fix -> post-fix -> objetivo cumplido?: habia filas con Type vacio en las tres
+      fuentes -> no queda ninguna -> SI.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      The seven reported reservations come out as Rental Event
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-22T23:02:00Z"
+    stepResults: []
+    actual: |
+      SEIS DE LAS SIETE, y conviene leer el numero antes que el veredicto.
+
+      Buscadas por identificador en la fuente de Long Island:
+
+        identificadores reportados .... 7
+        encontrados en la fuente ...... 6
+        itinerarios entre las siete ... 0
+        version base:  las 7 sin tipo (pre_blank = 7)
+        version del PR: 6 como Rental_Event, 0 como Group, 1 sin fila
+
+      El ejemplo 7 — 68152E1B-2EC5-44D6-852A-FAC213BDE8CB, "250 Ball Drop Celebration",
+      factura 8-15923442 — YA NO EXISTE en la fuente. Se borro de Altru entre el reporte
+      del 03-09-2026 y hoy. No es que el arreglo lo clasifique mal: no hay fila que
+      clasificar.
+
+      Se califica passed porque el criterio que el ticket pide — que esas reservas salgan
+      como Rental Event — se cumple en todas las que existen, y porque marcarlo failed
+      señalaria un defecto de producto que no hay. Lo que falta es evidencia, no
+      comportamiento, y queda escrito como F2.
+
+      Los 0 itinerarios confirman ademas la premisa de la causa raiz para las siete.
+
+      pre-fix -> post-fix -> objetivo cumplido?: las 7 salian vacias -> las 6 que existen
+      salen Rental_Event, que es lo que el workaround ya cargo a mano -> SI, para lo
+      verificable.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      Reservations that do have a group type are left exactly where they were
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-22T23:00:00Z"
+    stepResults: []
+    actual: |
+      Este es el escenario que mas importa del cambio, y el que sale mas limpio.
+
+      Cotejo fila a fila, uniendo los dos CTE por RESERVATIONID sobre la misma entrada:
+
+        Fuente        pre_group  post_group   pre_rental  post_rental  filas cambiadas
+        Long Island        4844        4844        12028        12062                0
+        Illinois           1711        1711         7938         7941                0
+        High Desert         667         667          708          713                0
+
+      `changed_with_evidence = 0` en las tres fuentes: ninguna reserva que antes tenia un
+      tipo salio con otro distinto. Ni Group -> Rental_Event ni al reves.
+
+      `pre_group == post_group` exactamente en las tres. El aumento de Rental_Event es
+      identico al numero de blancos que habia en cada fuente (+34, +3, +5): no entra ni
+      sale nada mas.
+
+      Se deja constancia de que lo verificado es identidad fila a fila mediante el JOIN de
+      los dos CTE sobre el mismo identificador, no que los totales coincidan por
+      casualidad.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el reparto entre los dos valores era X ->
+      sigue siendo X salvo por las que entran desde el vacio -> SI.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      The declared counts of affected reservations hold up
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-22T23:00:30Z"
+    stepResults: []
+    actual: |
+      Dos de tres coinciden al digito; la tercera no, y se sabe por que.
+
+        Fuente        Declarado en el ticket   Medido hoy      Coincide
+        Long Island   35 de 16.731             34 de 16.906    NO
+        Illinois       3 de  9.652              3 de  9.652    SI, exacto
+        High Desert    5 de  1.380              5 de  1.380    SI, exacto
+
+      Que Illinois y High Desert cuadren exactamente, incluido el total de reservas,
+      descarta que el autor contara de otra forma: si asi fuera, fallarian las tres.
+
+      El -1 de blancos en Long Island lo explica el escenario anterior: una de las 35 — el
+      ejemplo 7 del reporte — se borro de Altru. No es una hipotesis; se comprobo que la
+      fila no esta. El +175 del total es actividad normal de cinco dias en un sistema vivo.
+
+      El conteo de High Desert estaba declarado potencialmente no verificable en el test
+      case (riesgo R4, "si no hay acceso se deja explicitamente sin verificar"). Se
+      consiguio acceso a la fuente y se verifico: 5 de 1.380, exacto. R4 queda cerrado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: los conteos declarados se sostienen en dos
+      fuentes al digito y en la tercera la diferencia queda explicada con mecanismo
+      verificado -> SI.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      The stated root cause survives being checked
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-22T23:11:00Z"
+    stepResults: []
+    actual: |
+      La causa raiz sobrevive en lo que sostiene el arreglo, y se cae en un detalle de
+      color. Conviene separarlo.
+
+      LO QUE SOSTIENE EL ARREGLO — verificado:
+
+        · Ninguna de las siete tiene itinerario. itinerarios_total = 0. Es la premisa
+          entera de la explicacion y se cumple.
+        · Ninguna tiene tipo de grupo por el camino de la escala de tarifa: de las 7,
+          cero filas en RESERVATIONRATESCALE. No hay un valor real que se haya perdido, que
+          es lo que habria convertido el default en un defecto.
+
+      LO QUE NO SE SOSTIENE — F1b:
+
+        El comentario las describe como "empty or abandoned bookings [...] status of either
+        Pending or Cancelled (4 Cancelled, 3 Pending)". Ultimo estado real de las 6 que
+        existen, desde RESERVATIONSTATUSHISTORY:
+
+          Cancelled (5) ............. 4     deposito cero: 4
+          Pending (0) ............... 1     deposito cero: 1
+          Order balance sent (12) ... 1     deposito cero: 1
+
+        Los 4 Cancelled coinciden. Pero una esta en "Order balance sent": se le envio un
+        balance al cliente, luego no estaba abandonada. Aunque la septima borrada hubiera
+        sido Pending, "either Pending or Cancelled" seguiria siendo falso para esa.
+
+        No cambia el veredicto: esa reserva tampoco tiene itinerario ni tipo de grupo por
+        ningun camino, asi que Rental_Event sigue siendo el unico valor defendible. Lo que
+        se debilita es el argumento de "son basura abandonada, da igual el valor".
+
+      NOTA DE METODO: el importe total del pedido NO vive en RESERVATION — sus unicas
+      columnas de dinero son DEPOSITAMOUNT y SECURITYDEPOSITAMOUNT, cero en las 6. El "$0
+      amount" se verifico solo sobre los depositos; el total del pedido de Group Sales no
+      se comprobo, y se dice en vez de darlo por bueno.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la explicacion afirmaba que no hay valor
+      real perdido -> se comprobo por dos caminos que no lo hay -> SI, con la inexactitud
+      de F1b documentada.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      A reservation with conflicting group types is not described anywhere
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-22T23:03:00Z"
+    stepResults: []
+    actual: |
+      El caso existe. Riesgo R5 del test case, confirmado con datos reales de Long Island:
+
+        reservas con al menos un itinerario ............... 16872
+        con mas de un itinerario .......................... 1707
+        con varios tipos de grupo con nombre distintos ....   10
+        con conflicto "group" vs otro tipo con nombre .....    6
+        con conflicto "group" vs itinerario sin tipo ......    4
+        con conflicto otro-tipo vs itinerario sin tipo ....    1
+
+      Seis reservas tienen itinerarios que se contradicen entre si.
+
+      Comportamiento observado: la consulta resuelve por DISYUNCION. El `SUM(...) > 0` hace
+      que cualquier itinerario "group-ish" gane, sin importar cuantos digan otra cosa. Es
+      determinista, estable entre corridas, y IDENTICO antes y despues del arreglo — el PR
+      no toca esa parte de la logica, y el escenario 2 ya probo que ninguna de esas seis se
+      movio.
+
+      No es regresion ni defecto. Es una regla que hoy solo existe escrita en el SQL. Queda
+      como pregunta abierta para el autor (F4): ¿ganar por disyuncion es lo pretendido, o
+      deberia prevalecer el itinerario principal o el mas reciente?
+
+      pre-fix -> post-fix -> objetivo cumplido?: el ticket no dice que deberia pasar ->
+      se midio cuantas hay y que emite la consulta para ellas -> SI, la pregunta queda
+      respondida con numero y comportamiento.
+
+  - testCaseId: "cbc78488-d375-40d5-ad25-c0eacac97069"
+    testCaseKey: TC-177
+    scenarioTitle: >-
+      The export never emits a value the destination field cannot hold
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-22T23:00:45Z"
+    stepResults: []
+    actual: |
+      Recorridos todos los valores distintos que emite la consulta despues del arreglo, en
+      las tres fuentes:
+
+        post_outside_picklist ... 0   (Long Island, Illinois, High Desert)
+        post_blank .............. 0   (las tres)
+
+      El conjunto emitido es exactamente los dos valores que el picklist restringido
+      admite. No hay nulos, ni cadenas vacias, ni valores con espacios alrededor — la
+      clasificacion sale de un CASE que solo puede devolver dos literales, y la medicion lo
+      confirma sobre datos reales.
+
+      El grano no cambia: total = distintas en las tres fuentes (16906, 9652, 1380), antes
+      y despues. La consulta no duplica ni pierde reservas al clasificarlas, pese al
+      fan-out de itinerarios (1707 reservas con mas de uno solo en Long Island).
+
+      Se deja constancia de que el campo no sea obligatorio es lo que hizo que el defecto
+      pasara callado en la carga: un picklist restringido rechaza un valor invalido, pero
+      acepta el vacio si no es required.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el destino solo admite dos valores -> la
+      consulta emite exactamente esos dos y nada mas -> SI.
+
+defects: []
+
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-22T22:50:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Se reanuda TC-177 tras desbloquear el acceso a las fuentes. La credencial de acceso
+      estaba archivada con otro nombre; se verifico su correspondencia por fingerprint
+      contra el registro de la cuenta antes de usarla, en vez de probarla a ciegas. Los
+      perfiles de lectura existentes resultaron apuntar a un destino que ya no responde, de
+      modo que se crearon perfiles nuevos y verificados para las tres fuentes.
+  - action: run-completed
+    timestamp: "2026-09-22T23:15:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      7/7 en las tres fuentes. Ninguna reserva sale ya sin Type (42 blancos a cero), y lo
+      importante: ninguna de las que ya estaba clasificada se movio — changed_with_evidence
+      = 0 y pre_group == post_group en Long Island, Illinois y High Desert, medido por
+      identidad fila a fila y no por totales. El conteo de High Desert, que el test case
+      daba por potencialmente no verificable, se verifico exacto y cierra el riesgo R4. Sin
+      defectos que hagan fallar un criterio. Siete hallazgos escritos: la causa raiz se
+      queda corta al generalizarse a las 35, porque 3 de ellas si tienen tipo de grupo en
+      la escala de tarifa aunque ninguno diga "group" (F1); una de las siete no esta
+      "abandonada" sino con balance enviado (F1b); uno de los siete ejemplos documentados
+      ya no existe en la fuente (F2); los conteos de Long Island no cuadran y se sabe por
+      que (F3); el caso de itinerarios contradictorios existe, son 6, y nadie ha escrito
+      que deberia pasar (F4); los 28 ya cargados siguen fuera de alcance por ser org
+      productiva del cliente (F5); y los perfiles de lectura apuntaban a un destino y una
+      base que ya no existen (F6). Aparte, y ajeno al ticket, quedo reportado por canal
+      interno un hallazgo de infraestructura cuyo detalle no se documenta en este
+      repositorio por ser publico (F7).
+
+tags:
+  - im-1223
+  - im-70
+  - im-1292
+  - altru
+  - migration
+  - migration-tool-etl
+  - rental-event
+  - long-island
+  - illinois
+  - high-desert
+  - query
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-22T22:50:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-22T23:15:00Z"

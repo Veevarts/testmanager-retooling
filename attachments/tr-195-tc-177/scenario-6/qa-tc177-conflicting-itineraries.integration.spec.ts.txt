@@ -1,0 +1,213 @@
+/**
+ * QA TC-177 / IM-1223 — escenario 6, la pregunta que nadie respondio.
+ *
+ * Ni el ticket ni el comentario de causa raiz dicen que deberia emitir la
+ * consulta cuando UNA reserva tiene VARIOS itinerarios con tipos de grupo
+ * DISTINTOS entre si. El arreglo describe el caso de "cero evidencia"; el de
+ * evidencia contradictoria no esta documentado en ninguna parte.
+ *
+ * Este spec no afirma cual es la respuesta correcta — nadie la ha decidido.
+ * Siembra las tres formas posibles contra un SQL Server real y MIDE que emite
+ * la consulta, para poder llevarle al autor un hecho en vez de una suposicion.
+ *
+ * Archivo escrito por QA, fuera del PR. Se ejecuta, se archiva la salida y se
+ * borra: no se comitea al repositorio del equipo.
+ */
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { config as SqlConfig, ConnectionPool, IResult } from 'mssql';
+import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
+import {
+  createQueryFixtureDatabase,
+  SQL_SERVER_TEST_DB,
+} from './sql-server-query-fixture';
+import { seedRentalEventFixture } from './rental-event-query-fixture';
+
+const shouldRunDocker = process.env.RUN_DOCKER_SQL_QUERY_TESTS === '1';
+const testSaPassword = `Aa1!${randomUUID().replace(/-/g, '')}`;
+
+const CONFLICTING_ID = 'dd111111-1111-1111-1111-111111111111';
+const BOTH_NON_GROUP_ID = 'dd222222-2222-2222-2222-222222222222';
+const BOTH_GROUP_ID = 'dd333333-3333-3333-3333-333333333333';
+
+interface Row {
+  Implementation_External_ID__c: string | null;
+  Auctifera__Type__c: string | null;
+}
+
+async function connectWithRetry(
+  config: SqlConfig,
+  attempts = 20,
+): Promise<ConnectionPool> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await new ConnectionPool(config).connect();
+    } catch (error) {
+      lastError = error;
+      await delay(3000);
+    }
+  }
+  throw lastError;
+}
+
+function loadQuery(): string {
+  return readFileSync(
+    join(__dirname, '..', 'queries', 'rental-event', 'rental_events_groups.sql'),
+    'utf8',
+  );
+}
+
+async function runQuery<T>(pool: ConnectionPool, sql: string): Promise<T[]> {
+  const result: IResult<T> = await pool.request().query<T>(sql);
+  return result.recordset;
+}
+
+(shouldRunDocker ? describe : describe.skip)(
+  'QA TC-177 — reservas con itinerarios de tipos contradictorios (IM-1223)',
+  () => {
+    let container: StartedTestContainer;
+    let pool: ConnectionPool;
+
+    beforeAll(async () => {
+      container = await new GenericContainer(
+        'mcr.microsoft.com/mssql/server:2022-latest',
+      )
+        .withEnvironment({
+          ACCEPT_EULA: 'Y',
+          MSSQL_SA_PASSWORD: testSaPassword,
+          MSSQL_PID: 'Developer',
+        })
+        .withExposedPorts(1433)
+        .withWaitStrategy(
+          Wait.forLogMessage('SQL Server is now ready for client connections'),
+        )
+        .start();
+
+      const adminPool = await connectWithRetry({
+        server: container.getHost(),
+        port: container.getMappedPort(1433),
+        database: 'master',
+        user: 'sa',
+        password: testSaPassword,
+        options: {
+          encrypt: false,
+          trustServerCertificate: true,
+          enableArithAbort: true,
+        },
+        connectionTimeout: 90000,
+        requestTimeout: 120000,
+      });
+      await createQueryFixtureDatabase(adminPool);
+      await adminPool.close();
+
+      pool = await connectWithRetry({
+        server: container.getHost(),
+        port: container.getMappedPort(1433),
+        database: SQL_SERVER_TEST_DB,
+        user: 'sa',
+        password: testSaPassword,
+        options: {
+          encrypt: false,
+          trustServerCertificate: true,
+          enableArithAbort: true,
+        },
+        connectionTimeout: 90000,
+        requestTimeout: 120000,
+      });
+
+      await seedRentalEventFixture(pool);
+
+      // Tres formas, sembradas encima del fixture del equipo. Los tipos de grupo
+      // 'School Group' y 'Birthday Party' ya existen; se anaden dos mas para que
+      // cada reserva tenga DOS itinerarios con tipos DISTINTOS y no nulos.
+      await pool.request().query(`
+        DECLARE @schoolGroup UNIQUEIDENTIFIER =
+          (SELECT TOP 1 ID FROM GROUPSALESGROUPTYPECODE WHERE DESCRIPTION = 'School Group');
+        DECLARE @birthday UNIQUEIDENTIFIER =
+          (SELECT TOP 1 ID FROM GROUPSALESGROUPTYPECODE WHERE DESCRIPTION = 'Birthday Party');
+        DECLARE @youthGroup UNIQUEIDENTIFIER = 'ee111111-1111-1111-1111-111111111111';
+        DECLARE @consulting UNIQUEIDENTIFIER = 'ee222222-2222-2222-2222-222222222222';
+
+        INSERT INTO GROUPSALESGROUPTYPECODE (ID, DESCRIPTION)
+        VALUES (@youthGroup, 'Youth Group'), (@consulting, 'Consulting');
+
+        INSERT INTO RESERVATION (ID, NAME, STARTDATETIME, ENDDATETIME) VALUES
+          ('${CONFLICTING_ID}',     'QA conflicting types',  '2025-04-01T10:00:00', '2025-04-01T12:00:00'),
+          ('${BOTH_NON_GROUP_ID}',  'QA both non-group',     '2025-04-02T10:00:00', '2025-04-02T12:00:00'),
+          ('${BOTH_GROUP_ID}',      'QA both group',         '2025-04-03T10:00:00', '2025-04-03T12:00:00');
+
+        -- A: uno nombra grupo, el otro no. Es el caso sin documentar.
+        INSERT INTO ITINERARY (ID, RESERVATIONID, GROUPSALESGROUPTYPECODEID) VALUES
+          ('ef111111-1111-1111-1111-111111111111', '${CONFLICTING_ID}',    @schoolGroup),
+          ('ef222222-2222-2222-2222-222222222222', '${CONFLICTING_ID}',    @birthday),
+        -- B: los dos con tipo, ninguno nombra grupo.
+          ('ef333333-3333-3333-3333-333333333333', '${BOTH_NON_GROUP_ID}', @birthday),
+          ('ef444444-4444-4444-4444-444444444444', '${BOTH_NON_GROUP_ID}', @consulting),
+        -- C: los dos nombran grupo, con tipos distintos.
+          ('ef555555-5555-5555-5555-555555555555', '${BOTH_GROUP_ID}',     @schoolGroup),
+          ('ef666666-6666-6666-6666-666666666666', '${BOTH_GROUP_ID}',     @youthGroup);
+      `);
+    }, 300000);
+
+    afterAll(async () => {
+      await pool?.close();
+      await container?.stop();
+    });
+
+    const typeOf = (rows: Row[], id: string) =>
+      rows.find(
+        (r) =>
+          (r.Implementation_External_ID__c ?? '').toLowerCase() ===
+          id.toLowerCase(),
+      )?.Auctifera__Type__c;
+
+    it('MIDE que emite la consulta para cada una de las tres formas', async () => {
+      const rows = await runQuery<Row>(pool, loadQuery());
+
+      const observed = {
+        conflictivo_grupo_y_no_grupo: typeOf(rows, CONFLICTING_ID),
+        ambos_sin_grupo: typeOf(rows, BOTH_NON_GROUP_ID),
+        ambos_grupo: typeOf(rows, BOTH_GROUP_ID),
+      };
+      // eslint-disable-next-line no-console
+      console.log('QA-TC177-OBSERVADO ' + JSON.stringify(observed));
+
+      // Lo unico que SI se afirma: ninguna de las tres puede salir en blanco,
+      // porque eso es lo que el ticket arreglo, y las tres tienen itinerario.
+      // toBeNull() por si solo deja pasar undefined, que es "la fila no salio"
+      // y no "la fila salio en blanco". Se distinguen a proposito.
+      for (const [forma, valor] of Object.entries(observed)) {
+        expect([forma, valor]).not.toEqual([forma, undefined]);
+        expect([forma, valor]).not.toEqual([forma, null]);
+      }
+
+      // Y que lo emitido sigue dentro del picklist restringido.
+      for (const v of Object.values(observed)) {
+        expect(['Group', 'Rental_Event']).toContain(v);
+      }
+    }, 120000);
+
+    it('emite UNA sola fila por reserva pese a los dos itinerarios', async () => {
+      const rows = await runQuery<Row>(pool, loadQuery());
+      for (const id of [CONFLICTING_ID, BOTH_NON_GROUP_ID, BOTH_GROUP_ID]) {
+        const matches = rows.filter(
+          (r) =>
+            (r.Implementation_External_ID__c ?? '').toLowerCase() ===
+            id.toLowerCase(),
+        );
+        expect(matches).toHaveLength(1);
+      }
+    }, 120000);
+
+    it('es estable: dos corridas seguidas emiten lo mismo', async () => {
+      const a = await runQuery<Row>(pool, loadQuery());
+      const b = await runQuery<Row>(pool, loadQuery());
+      for (const id of [CONFLICTING_ID, BOTH_NON_GROUP_ID, BOTH_GROUP_ID]) {
+        expect(typeOf(a, id)).toBe(typeOf(b, id));
+      }
+    }, 180000);
+  },
+);

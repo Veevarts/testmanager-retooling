@@ -1,0 +1,59 @@
+TC-177 escenario 6 — que emite la consulta cuando los itinerarios de UNA reserva
+llevan tipos de grupo DISTINTOS entre si.
+
+POR QUE HIZO FALTA MEDIRLO
+  Ni el ticket ni el comentario de causa raiz del 17-09 dicen nada de este caso.
+  El arreglo del PR 184 documenta el caso de CERO evidencia ("sin itinerario ->
+  Rental_Event"). El de evidencia CONTRADICTORIA no esta descrito en ninguna parte,
+  y el fixture del equipo no lo cubre: su unica reserva multi-itinerario tiene uno
+  con tipo de grupo y otro con tipo NULL, que no es lo mismo que dos tipos opuestos.
+
+COMO SE MIDIO
+  Spec propio de QA, fuera del PR, contra SQL Server 2022 real en contenedor.
+  Siembra el fixture del equipo y le anade tres reservas, cada una con DOS
+  itinerarios de tipos distintos y NO nulos:
+
+    A  "School Group"  +  "Birthday Party"     <- contradictorio: uno nombra grupo, el otro no
+    B  "Birthday Party" + "Consulting"         <- ninguno nombra grupo
+    C  "School Group"  +  "Youth Group"        <- los dos nombran grupo, con tipos distintos
+
+  ('Birthday Party' y 'Consulting' no son inventados: son los tipos que el propio
+  comentario del SQL nombra al analizar las 35 reservas sin itinerario.)
+
+LO OBSERVADO
+    conflictivo (grupo + no grupo)  ->  Group
+    ambos sin grupo                 ->  Rental_Event
+    ambos grupo                     ->  Group
+
+  Ademas, y esto si es una garantia que el ticket necesita:
+    · UNA sola fila por reserva pese a los dos itinerarios: no hay fan-out.
+    · Estable: dos corridas seguidas emiten exactamente lo mismo.
+    · Los tres valores caen dentro del picklist restringido.
+
+LECTURA
+  La regla efectiva es una DISYUNCION: basta con que UN itinerario nombre grupo
+  para que toda la reserva salga como Group, sin importar cuantos no lo nombren.
+  Es coherente con el SUM(...) > 0 del CASE y es un default defendible — pero
+  NADIE lo escribio, y es asimetrico: una reserva con nueve itinerarios de
+  cumpleanos y uno escolar sale clasificada como Group.
+
+  ESTO NO ES UN DEFECTO. El comportamiento es consistente, estable y dentro del
+  picklist. Es una decision de producto que el ticket no tomo y que ahora esta
+  medida, para que el autor la confirme o la cambie a sabiendas.
+
+  LO QUE ESTA MEDICION NO DICE: cuantas reservas reales tienen esta forma. Eso
+  necesita las fuentes de Altru, que hoy no son alcanzables (ver access/profile-probe.txt).
+
+DOS ERRORES MIOS EN EL CAMINO, CORREGIDOS ANTES DE CONCLUIR NADA
+  1. Lei la columna como `vnfp__Implementation_External_ID__c`; en esta consulta
+     se llama `Implementation_External_ID__c`, sin prefijo.
+  2. Compare los GUID con ===; SQL Server los devuelve en mayusculas y mis
+     identificadores estaban en minusculas, asi que ninguna fila casaba.
+  Los dos hacian que las filas "no aparecieran", que es indistinguible a simple
+  vista de "la consulta no las emite". Se corrigieron y se volvio a correr; la
+  primera corrida fallida queda como parte del registro, no se oculta.
+  Ademas se endurecio una asercion floja: `not.toBeNull()` dejaba pasar
+  `undefined`, es decir confundia "la fila no salio" con "salio en blanco".
+
+  Spec usado: qa-tc177-conflicting-itineraries.integration.spec.ts.txt (copia).
+  El archivo .ts se BORRO del repositorio del equipo tras archivar esta salida.

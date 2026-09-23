@@ -1,0 +1,50 @@
+TC-177 / IM-1223 — que cubren las suites del PR 184
+Ejecutadas 2026-09-22 sobre la rama del PR (daa36c7).
+
+RESULTADOS
+  Unit / keyword-scan   npx jest query-regression/rental-event-query.spec.ts
+                        51/51 passed, 1 suite
+  Integracion docker    RUN_DOCKER_SQL_QUERY_TESTS=1, SQL Server 2022 real en contenedor
+                        24/24 passed, 1 suite, 61 s
+                        Ver integration-docker-PASS.log
+
+LAS DOS SUITES NO PRUEBAN LO MISMO, Y ESO IMPORTA
+  rental-event-query.spec.ts NO ejecuta SQL: lee el texto de la consulta y le aplica
+  expresiones regulares (que el CTE diga FROM RESERVATION r, que todos los JOIN sean
+  LEFT, que el CASE tenga ELSE incondicional). Es un guardarrail contra la regresion
+  concreta, no una prueba de comportamiento. El propio PR lo dice.
+
+  rental-event-query.integration.spec.ts SI ejecuta la consulta completa contra un
+  SQL Server real con datos sembrados. Ahi es donde el comportamiento se mide.
+
+AFIRMACION DEL TICKET -> QUE TEST LA CUBRE
+  ninguna reserva sale con Type vacio
+      integracion  "classifies every exported reservation, leaving none blank (IM-1223)"
+      unit         "keeps a total classification: no group-type evidence means Rental_Event"
+  una reserva SIN itinerario sale Rental_Event
+      integracion  "types every itinerary-less reservation as Rental_Event (IM-1223)"
+      unit         "roots the type CTE on RESERVATION so every reservation is classified"
+  una reserva CON tipo de grupo sigue saliendo Group  <-- la no-regresion
+      integracion  "still types a group-booking reservation as Group (IM-1223)"
+  un tipo de itinerario que no nombra grupo sale Rental_Event
+      integracion  "types an itinerary whose group type names no group as Rental_Event"
+  solo se emiten los dos valores del picklist
+      integracion  "emits only values the restricted picklist accepts (IM-1223)"
+  el grano sigue siendo una fila por reserva
+      integracion  "emits exactly one row per seeded RESERVATION (IM-773 completeness)"
+      integracion  "keeps one row per reservation despite the itinerary-item fan-out"
+
+  El PR ademas trae tres AUTO-TESTS de sus propios guardarrailes ("guard helpers"),
+  que verifican que las regex detectan el CTE re-enraizado en ITINERARY, el JOIN
+  interno y el ELSE condicional. Es decir: el dev ya se pregunto si su tripwire podia
+  quedar verde y ciego.
+
+HUECOS DE COBERTURA
+  1. Los conteos declarados (35 de 16.731 en Long Island, 3 de 9.652 en Illinois,
+     5 de 1.380 en High Desert) NO los verifica ninguna suite: son datos de origen.
+     Solo se comprueban contra las fuentes reales.
+  2. La afirmacion sobre RESERVATIONRATESCALE (coincide 587 de 587, y solo 3 de las 35
+     llevan escala de tarifa, ninguna de grupo) tampoco: vive en un comentario del SQL.
+  3. Una reserva con VARIOS itinerarios de tipos CONTRADICTORIOS no tiene fixture. El
+     CASE la resolveria como Group si cualquiera nombra grupo, pero ni el ticket ni el
+     comentario dicen que deberia pasar.
