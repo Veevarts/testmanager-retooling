@@ -3,7 +3,7 @@ id: tr-e5f7c431-5207-46e5-aa5e-537df687d45d
 key: TR-198
 title: >-
   TR-198 · IM-1281 · TC-180 · Ninguna donacion estaba excluida: la consulta publicaba la
-  transaccion en vez de la Oportunidad — 8/9 PASS, los 125 identificadores inexistentes
+  transaccion en vez de la Oportunidad — 9/9 PASS, los 125 identificadores inexistentes
   pasan a cero, y la reescritura de rendimiento resulta ser la diferencia entre no terminar
   y 8,8 segundos.
 status: completed
@@ -25,7 +25,7 @@ environment:
     y 382172b previo a la reescritura de rendimiento) para separar lo que aporta cada uno.
     El veredicto queda atado a c1a9d82: si el PR cambia, caduca.
 startedAt: "2026-09-23T19:40:00Z"
-completedAt: "2026-09-23T20:05:00Z"
+completedAt: "2026-09-23T20:47:00Z"
 executedBy: codex
 
 notes: |
@@ -61,9 +61,12 @@ notes: |
     mas una mutacion deliberada para comprobar que el spec detecta divergencias. EJECUTADA.
   - Cronometro de las cuatro versiones sobre la fuente viva. EJECUTADA.
   - Conteo de la poblacion de padres huerfanos que el autor deja abierta. EJECUTADA.
-  - Identidad de filas entre 382172b y c1a9d82 sobre datos reales. NO EJECUTABLE: la version
-    previa no devuelve dentro del limite de 120 s del runner de solo lectura, y ese limite no
-    se toca porque es un control de seguridad.
+  - Identidad de filas entre 382172b y c1a9d82 sobre datos reales. EJECUTADA en segunda
+    vuelta: la version previa no devuelve dentro del limite de 120 s del runner, y ese limite
+    no se toca. En su lugar se materializo una sola vez el preludio de inclusion — identico
+    byte a byte en los dos commits — y se sustituyo el cuerpo de esa CTE por una lectura de
+    la tabla temporal en LOS DOS shapes por igual, con un control que prueba que la
+    sustitucion no cambia el resultado del head.
 
   ## Metodo de instrumentacion
 
@@ -386,11 +389,11 @@ results:
     scenarioTitle: >-
       AC7 · The rewritten query returns on real data, and returns the same rows
     scenarioIndex: 7
-    status: blocked
-    executedAt: "2026-09-23T20:03:00Z"
+    status: passed
+    executedAt: "2026-09-23T20:46:00Z"
     stepResults: []
     actual: |
-      Cronometro sobre la fuente viva:
+      PARTE 1 — TIEMPO, sobre las consultas sin modificar:
 
         Commit     Que es                                   Tiempo           Filas
         8b522c37   base, antes del PR                       2,7 s              192
@@ -398,38 +401,54 @@ results:
         382172b    tras la review, gate evaluado dos veces  >120 s  TIMEOUT      -
         c1a9d82    head, gate evaluado una sola vez         8,8 s              191
 
-      El limite de 120 s es el requestTimeout fijo del runner de solo lectura. NO se
-      modifico: es un control de seguridad y subirlo para que salga un numero no es una
-      medicion, es un atajo.
+      El limite de 120 s es el requestTimeout fijo del runner de solo lectura y NO se
+      modifico. Aparte de ser un control, Long Island es fuente productiva del cliente:
+      dejar diez minutos una consulta que lee 2,37 M de lineas tiene un coste real.
+      La reescritura de rendimiento no es cosmetica: es la diferencia entre no terminar
+      dentro del limite y devolver en 8,8 s.
 
-      LO QUE SI QUEDA ESTABLECIDO. La reescritura de rendimiento no es cosmetica: es la
-      diferencia entre una consulta que no termina dentro del limite y una que devuelve en
-      8,8 s. Sin ella este archivo no es ejecutable en condiciones normales sobre esta
-      fuente. Los ~46 s que cita el autor corresponden a 33bb15d; hoy esa forma supera los
-      120 s. No declaro falsa su cifra — se midio en otro momento y sobre una instancia en
-      otro estado — pero hoy no se sostiene.
+      PARTE 2 — IDENTIDAD DE FILAS, desbloqueada sin tocar el runner.
 
-      LO QUE NO SE PUDO COMPROBAR. La identidad de filas entre 382172b y c1a9d82 sobre datos
-      reales, porque la version previa no devuelve dentro del limite. Queda comprobada solo
-      en la suite en contenedor, que pasa.
+      El problema no era el tiempo sino como medir la identidad si una de las dos formas no
+      devuelve. La salida no fue ampliar el limite, sino quitar de en medio lo que lo
+      consumia. El preludio de inclusion es BYTE-IDENTICO en los dos commits (4.923 chars
+      normalizados); lo que cambia es cuantas veces se alcanza: 382172b lo usa dos veces, una
+      de ellas dentro de MatchingGiftClaims, que seis ramas referencian y que por tanto se
+      reevalua por referencia; c1a9d82 lo usa una vez.
 
-      POR QUE NO ES UN FALLO DEL PR. La identidad contra la forma previa era un medio para
-      creer que la reescritura no cambio el resultado. Ese fin se alcanzo por una via mas
-      fuerte: la salida del head quedo reconciliada contra la verdad de campo claim a claim
-      (escenario 4) y cada uno de sus 191 identificadores verificado contra la salida real de
-      los tres exports (escenario 1). No hace falta creer que c1a9d82 == 382172b: se demostro
-      que c1a9d82 es correcto.
+      Se materializo el preludio UNA sola vez en #emitted y se sustituyo, en LOS DOS shapes
+      por igual, el cuerpo de la CTE OpportunityExternalIds por una lectura de esa tabla.
+      Cada shape conserva intactos sus propios puntos de aplicacion del gate, que es lo que
+      los distingue. La sustitucion identica en ambos lados no puede sesgar la comparacion.
 
-      Se marca BLOQUEADO y no PASS porque uno de sus pasos no se pudo ejecutar. Fingir un
-      PASS aqui seria justo el tipo de evidencia que no sirve.
+      EL CONTROL es lo que hace valida la medicion — sin el, una coincidencia no probaria
+      nada:
 
-      pre-fix -> post-fix -> objetivo cumplido?: parcialmente. Devuelve sobre datos reales,
-      si, y en 8,8 s. Devuelve las mismas filas que la forma previa: no comprobado en vivo.
+        Comparacion                                              Pares   Veredicto
+        B) c1a9d82 factorizado vs c1a9d82 original  (CONTROL)     191    IDENTICOS
+        A) 382172b factorizado vs c1a9d82 factorizado             191    IDENTICOS
+
+      Cero pares solo en un lado, en las dos comparaciones. La reescritura es fila-identica
+      tambien sobre datos reales, no solo en contenedor.
+
+      HALLAZGO ADICIONAL. Con el gate materializado una vez, el shape previo 382172b devuelve
+      en 8 s, el mismo tiempo que el head. Es la prueba directa de que TODO el coste estaba en
+      la reevaluacion repetida del gate y en nada mas. El autor lo dedujo leyendo el plan;
+      aqui queda medido.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la forma previa no devolvia dentro del limite
+      y su identidad de filas solo estaba probada en contenedor -> el head devuelve en 8,8 s y
+      las dos formas producen exactamente los mismos 191 pares sobre la fuente real, con
+      control de neutralidad -> SI.
     attachments:
       - name: performance-and-row-identity.txt
         path: attachments/tr-198-tc-180/scenario-8/performance-and-row-identity.txt
         mimeType: text/plain
-        size: 2600
+        size: 4200
+      - name: factor_gate.py
+        path: attachments/tr-198-tc-180/sql/factor_gate.py
+        mimeType: text/x-python
+        size: 3400
 
   - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
     testCaseKey: TC-180
@@ -472,12 +491,12 @@ results:
 
 summary:
   total: 9
-  passed: 8
+  passed: 9
   failed: 0
-  blocked: 1
+  blocked: 0
   skipped: 0
   notRun: 0
-  passRate: 89
+  passRate: 100
 
 history:
   - action: run-started
@@ -489,14 +508,32 @@ history:
       Arranca la ejecucion de TC-180 contra el commit c1a9d82. El primer perfil de lectura de
       Long Island no levanta el tunel; el directo si, y devuelve 195 claims activos a la
       primera, que es ya la primera cifra del autor confirmada.
+  - action: scenario-unblocked
+    timestamp: "2026-09-23T20:46:00Z"
+    user: codex
+    from: blocked
+    to: passed
+    reason: >-
+      El escenario 8 quedo bloqueado en la primera vuelta porque la forma previa a la
+      reescritura de rendimiento no devuelve dentro del limite fijo de 120 s del runner de
+      solo lectura, y ese limite no se toca: aparte de ser un control, Long Island es fuente
+      productiva del cliente y dejar diez minutos una consulta que lee 2,37 M de lineas tiene
+      un coste real. La salida no fue ampliar el limite sino quitar de en medio lo que lo
+      consumia. El preludio de inclusion es byte-identico en los dos commits, asi que se
+      materializo UNA sola vez en una tabla temporal y se sustituyo el cuerpo de esa CTE por
+      una lectura de la tabla en LOS DOS shapes por igual, dejando intactos los puntos de
+      aplicacion del gate que son lo que los distingue. Con el control que prueba que la
+      sustitucion no altera el resultado del head, las dos formas dan exactamente los mismos
+      191 pares. De paso quedo medido lo que el autor solo habia deducido del plan: con el
+      gate materializado una vez, la forma previa tarda 8 s, o sea que todo su coste estaba
+      en la reevaluacion repetida y en nada mas.
   - action: run-completed
-    timestamp: "2026-09-23T20:05:00Z"
+    timestamp: "2026-09-23T20:47:00Z"
     user: codex
     from: in-progress
     to: completed
     reason: >-
-      8 de 9 escenarios cumplen el objetivo del ticket y uno queda BLOQUEADO por una
-      limitacion del runner, no por un defecto. El resultado central es limpio y exacto: los
+      9 de 9 escenarios cumplen el objetivo del ticket. El resultado central es limpio y exacto: los
       125 identificadores que la version base publicaba sin que existiera el registro
       correspondiente pasan a CERO, y las cifras del autor se reproducen una por una — 115
       membresias, 10 ordenes POS, 3 pledges, 191 filas, 125 donantes que cambian, 66 que no
@@ -506,7 +543,9 @@ history:
       $0, tres deduplicacion preexistente que tampoco estaba en la base). El riesgo de padres
       huerfanos que el propio autor pedia contar es 0 aqui. Tres observaciones sin defecto: la
       reescritura de rendimiento resulta ser obligatoria y no opcional, porque las dos formas
-      previas no devuelven en 120 s mientras el head tarda 8,8 s (O1); la correccion que
+      previas no devuelven en 120 s mientras el head tarda 8,8 s, y una vez materializado el
+      gate una sola vez la forma previa baja a 8 s, lo que localiza todo el coste en la
+      reevaluacion repetida (O1); la correccion que
       encontro la review toca 5 membresias reales pero no cambia ni una fila en esta fuente,
       asi que su valor esta en las fixtures, no aqui (O2); y el archivo depende ahora del
       orden de carga de membresias, dependencia que la consulta no puede defender sola (O3).
@@ -529,4 +568,4 @@ metadata:
   createdBy: codex
   createdAt: "2026-09-23T19:40:00Z"
   updatedBy: codex
-  updatedAt: "2026-09-23T20:05:00Z"
+  updatedAt: "2026-09-23T20:47:00Z"

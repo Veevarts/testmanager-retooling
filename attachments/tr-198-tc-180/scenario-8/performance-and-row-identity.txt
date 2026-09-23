@@ -1,4 +1,4 @@
-TC-180 escenario 8 — LA CONSULTA REESCRITA DEVUELVE SOBRE DATOS REALES  [BLOQUEADO PARCIAL]
+TC-180 escenario 8 — LA CONSULTA REESCRITA DEVUELVE SOBRE DATOS REALES, Y DEVUELVE LAS MISMAS FILAS
 Fuente: Long Island (qa_li_direct) · 2026-09-23
 
 LO QUE EL AUTOR DECLARA
@@ -8,41 +8,73 @@ LO QUE EL AUTOR DECLARA
   Y sobre la forma anterior: ~46 s, mientras que la variante con EXISTS correlacionado no
   devolvia a los 10 minutos.
 
-MEDICION SOBRE LA FUENTE VIVA
+PARTE 1 — TIEMPO, SOBRE LAS CONSULTAS SIN MODIFICAR
 
-  Commit     Que es                                  Tiempo         Filas
-  ---------  --------------------------------------  -------------  -----
-  8b522c37   base (antes del PR)                     2,7 s            192
-  33bb15d    primer commit del PR, previo a review    >120 s  TIMEOUT   -
-  382172b    tras la review, gate evaluado dos veces  >120 s  TIMEOUT   -
-  c1a9d82    head, gate evaluado una sola vez          8,8 s          191
+  Commit     Que es                                   Tiempo            Filas
+  ---------  ---------------------------------------  ----------------  -----
+  8b522c37   base, antes del PR                       2,7 s               192
+  33bb15d    primer commit del PR, previo a review    >120 s  TIMEOUT       -
+  382172b    tras la review, gate evaluado dos veces  >120 s  TIMEOUT       -
+  c1a9d82    head, gate evaluado una sola vez         8,8 s               191
 
-  El limite de 120 s es el requestTimeout fijo de safesql. NO se modifico: es un control de
-  seguridad del runner y subirlo para que un numero salga no es una medicion, es un atajo.
+  El limite de 120 s es el requestTimeout fijo del runner de solo lectura. NO se modifico.
+  Subirlo para que salga un numero no es una medicion, y ademas Long Island es fuente
+  PRODUCTIVA del cliente: dejar corriendo diez minutos una consulta que lee 2,37 M de lineas
+  tiene un coste real que no me corresponde imponer.
 
-LECTURA
-  1. La reescritura de rendimiento NO es cosmetica. Es la diferencia entre una consulta que
-     no termina dentro del limite del runner de solo lectura y una que devuelve en 8,8 s.
-     Sin ella, este archivo no es ejecutable en condiciones normales sobre esta fuente.
-  2. Los ~46 s que el autor cita corresponden a 33bb15d. Sobre los datos de hoy esa forma
-     supera los 120 s. No se declara falsa su cifra: se midio en otro momento y sobre una
-     instancia en otro estado. Lo que si queda establecido es que HOY no se sostiene, y que
-     por tanto la reescritura era necesaria, no opcional.
-  3. La identidad de filas entre 382172b y c1a9d82 NO SE PUDO COMPROBAR sobre datos reales,
-     porque la version previa no devuelve dentro del limite. Queda comprobada unicamente en
-     la suite en contenedor, que pasa.
+  Conclusion de esta parte: la reescritura de rendimiento NO es cosmetica. Es la diferencia
+  entre una consulta que no termina dentro del limite y una que devuelve en 8,8 s.
 
-POR QUE EL ESCENARIO NO ES UN FALLO
-  La identidad contra la forma previa era un medio, no el fin: sirve para creer que la
-  reescritura no cambio el resultado. Ese fin se alcanzo por una via mas fuerte y directa:
-  la salida del head quedo reconciliada contra la verdad de campo, claim a claim (escenario
-  4), y cada uno de sus 191 identificadores verificado contra la salida real de los tres
-  exports (escenario 1). No hace falta creer que c1a9d82 == 382172b: se demostro que
-  c1a9d82 es correcto.
+PARTE 2 — IDENTIDAD DE FILAS, DESBLOQUEADA SIN TOCAR EL RUNNER
 
-  Aun asi el escenario se marca BLOQUEADO y no PASS, porque uno de sus pasos no se pudo
-  ejecutar. Fingir un PASS aqui seria exactamente el tipo de evidencia que no sirve.
+  El problema no era el tiempo en si, era COMO medir la identidad si una de las dos formas no
+  devuelve. La salida no fue ampliar el limite sino quitar de en medio lo que lo consumia.
 
-PENDIENTE
-  Si se quiere cerrar la comparacion A/B tal cual esta escrita, hay que correrla con un
-  runner cuyo timeout admita >120 s. No es un defecto del PR.
+  POR QUE SE PUEDE HACER
+    El preludio de inclusion (desde `;WITH` hasta el cierre de OpportunityExternalIds) es
+    BYTE-IDENTICO en los dos commits: 4.923 caracteres normalizados, los mismos. Lo que
+    cambia entre ellos no es el gate, es CUANTAS VECES se alcanza:
+
+      382172b   2 usos: un INNER JOIN dentro de MatchingGiftClaims -- que seis ramas de
+                candidato referencian, y una CTE se reevalua por referencia -- mas el
+                LEFT JOIN de GatedCandidates.
+      c1a9d82   1 uso: solo el LEFT JOIN de GatedCandidates.
+
+  QUE SE HIZO (sql/factor_gate.py)
+    Materializar el preludio UNA SOLA VEZ en #emitted, y sustituir en LOS DOS shapes por
+    igual el CUERPO de la CTE OpportunityExternalIds por una lectura de esa tabla. Nada mas
+    cambia: cada shape conserva intactos sus propios puntos de aplicacion del gate, que es
+    justamente lo que los distingue. Las CTE que solo alimentaban el gate quedan sin
+    referenciar y el optimizador las elimina.
+
+    La sustitucion es identica en ambos lados, asi que no puede sesgar la comparacion.
+
+  EL CONTROL, QUE ES LO QUE HACE VALIDA LA MEDICION
+    Antes de comparar los dos shapes hay que probar que factorizar no cambia el resultado.
+    Si no, una coincidencia no significaria nada.
+
+      c1a9d82 SIN factorizar  ->  191 pares
+      c1a9d82 factorizado     ->  191 pares       IDENTICOS, par a par
+
+    La instrumentacion es neutra. Solo entonces vale la comparacion real.
+
+  RESULTADO
+
+    Comparacion                                              Pares   Veredicto
+    -------------------------------------------------------  -----   ---------
+    B) c1a9d82 factorizado  vs  c1a9d82 original  (CONTROL)    191    IDENTICOS
+    A) 382172b factorizado  vs  c1a9d82 factorizado            191    IDENTICOS
+
+    Cero pares solo en un lado, en las dos comparaciones. La reescritura de rendimiento es
+    fila-identica tambien SOBRE DATOS REALES, no solo en contenedor.
+
+  HALLAZGO ADICIONAL QUE CONFIRMA EL DIAGNOSTICO DEL AUTOR
+    Con el gate materializado una vez, el shape previo 382172b devuelve en 8 s — el mismo
+    tiempo que el head. Es la prueba directa de que TODO el coste estaba en la reevaluacion
+    repetida del gate y en nada mas. El autor lo dedujo leyendo el plan; aqui queda medido.
+
+VEREDICTO: PASS
+  pre-fix -> post-fix -> objetivo cumplido?: la forma previa no devolvia dentro del limite y
+  su identidad de filas solo estaba probada en contenedor -> el head devuelve en 8,8 s y las
+  dos formas producen exactamente los mismos 191 pares sobre la fuente real, con control de
+  neutralidad -> SI.
