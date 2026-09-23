@@ -1,0 +1,532 @@
+schemaVersion: "1.0"
+id: tr-e5f7c431-5207-46e5-aa5e-537df687d45d
+key: TR-198
+title: >-
+  TR-198 · IM-1281 · TC-180 · Ninguna donacion estaba excluida: la consulta publicaba la
+  transaccion en vez de la Oportunidad — 8/9 PASS, los 125 identificadores inexistentes
+  pasan a cero, y la reescritura de rendimiento resulta ser la diferencia entre no terminar
+  y 8,8 segundos.
+status: completed
+environment:
+  name: >-
+    Fuente de Altru de Long Island en SQL Server, alcanzada con un perfil de solo lectura a
+    traves del bastion. Todas las consultas de solo lectura y con salida numerica o de
+    identificadores internos de Altru: ningun nombre de socio o donante, ningun importe
+    individual de persona y ningun dato personal salio de la base. No se escribio en ninguna
+    fuente ni en ninguna organizacion de Salesforce; la de Long Island es productiva del
+    cliente. Suite del equipo ejecutada en local contra SQL Server 2022 en contenedor. Los
+    detalles de red quedan fuera de este artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    SQL-only con cobertura de tests del dev — Veevarts/MigrationToolETL commit c1a9d82 de la
+    rama CamiloSalgueroMarin/IM-1281-excluded-donations-matching-gift ("PR #186", ABIERTO y
+    no borrador, sin mergear ni desplegar; merge-base con main 8b522c37). El cambio toca una
+    consulta SQL; el resto del diff son specs, fixtures, el comentario de un pipeline y
+    documentacion. Se probaron ademas dos commits intermedios (33bb15d previo a la revision
+    y 382172b previo a la reescritura de rendimiento) para separar lo que aporta cada uno.
+    El veredicto queda atado a c1a9d82: si el PR cambia, caduca.
+startedAt: "2026-09-23T19:40:00Z"
+completedAt: "2026-09-23T20:05:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  EL TITULO DEL TICKET DESCRIBE UN SINTOMA, NO EL DEFECTO. Se reporto como "128 donaciones
+  excluidas de la migracion". Ninguna lo estaba: las 128 se migraron. Lo que fallaba era el
+  identificador que la consulta de actualizacion de matching gift publicaba para cada una.
+
+  `REVENUEMATCHINGGIFT.MGSOURCEREVENUEID` nombra la TRANSACCION DE INGRESO contra la que
+  Altru emparejo el regalo, no la Oportunidad que la migracion construye a partir de ella.
+  Para la mayoria de donantes son dos registros distintos, asi que el VLOOKUP contra el
+  reporte de exito de donaciones no podia encontrarlos nunca. La consecuencia real no es
+  cosmetica: un upsert sobre un identificador externo que no existe CREA el registro, de modo
+  que la carga habria generado Oportunidades "stub" sin monto, contacto ni etapa.
+
+  El arreglo resuelve cada donante contra la Oportunidad que otro export emite de verdad, por
+  orden de fidelidad: su propia transaccion (rank 1), su cuota de recurring gift (2), su
+  pledge (3), la transaccion de ingreso de su orden POS (4) y su transaccion de membresia
+  (5). El rank 0 no es un candidato sino el propio claim, que viaja por el mismo gate para
+  responder en una sola pasada si la Oportunidad del claim existe. Todo candidato que la
+  migracion no emite se DESCARTA en vez de exportarse.
+
+  ## Inferred technical tests
+
+  - Cruce de conjuntos entre lo que la consulta emite y lo que emiten de verdad los tres
+    exports de Oportunidad. Es la prueba decisiva y la unica que responde a la pregunta del
+    ticket. EJECUTADA.
+  - Censo de los 195 claims activos clasificados por forma de donante con los predicados de
+    cada rank, para reconciliar 195 contra 191. EJECUTADA.
+  - Comparacion cohorte a cohorte del par claim-donante entre base y PR. EJECUTADA.
+  - Comparacion normalizada del preludio del gate entre los tres archivos que lo comparten,
+    mas una mutacion deliberada para comprobar que el spec detecta divergencias. EJECUTADA.
+  - Cronometro de las cuatro versiones sobre la fuente viva. EJECUTADA.
+  - Conteo de la poblacion de padres huerfanos que el autor deja abierta. EJECUTADA.
+  - Identidad de filas entre 382172b y c1a9d82 sobre datos reales. NO EJECUTABLE: la version
+    previa no devuelve dentro del limite de 120 s del runner de solo lectura, y ese limite no
+    se toca porque es un control de seguridad.
+
+  ## Metodo de instrumentacion
+
+  No se reimplemento ninguna logica. De cada export se tomo la consulta TAL CUAL y se
+  sustituyo UNICAMENTE la lista de columnas de la proyeccion final por el identificador
+  externo que esa consulta emite. Cadena de CTEs, temp tables, joins, WHERE y hints quedan
+  byte a byte. El script esta comiteado en `attachments/tr-198-tc-180/sql/instrument.py` para
+  que cualquiera pueda repetir la medicion y discutirla.
+
+  ## Sobre el repositorio del dev
+
+  Se hizo checkout local de los commits del PR para leer y ejecutar sus tests, y una mutacion
+  temporal de una linea para probar que el spec puede fallar. El archivo se restauro y se
+  verifico byte a byte contra c1a9d82. Cero commits, cero pushes, cero modificaciones
+  persistentes en Veevarts/MigrationToolETL.
+
+results:
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC1 · The 128 reported ids stop naming a record no load ever created
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-23T19:52:00Z"
+    stepResults: []
+    actual: |
+      Conjunto de Oportunidades que la migracion emite de verdad sobre esta fuente:
+
+        donation_transaction.sql ....... 14.730 identificadores
+        donation_pledges.sql ...........    795
+        membership_transactions.sql .... 97.775
+        union .......................... 113.300
+
+      Cruce de lo que la consulta publica contra ese conjunto:
+
+        Metrica                                               Base     PR    Declarado
+        Filas emitidas                                         192    191        191
+        Identificadores que NINGUN export crea                 125      0        125
+        Claims perdidos respecto a la base                       -      1          1
+        Claims nuevos respecto a la base                         -      0          0
+
+      Reparto del donante por el export que lo emite:
+
+        donaciones .....  64 ->  73
+        pledges ........   3 ->   3
+        membresias .....   0 -> 115
+        NINGUNO (stub) . 125 ->   0
+
+      El 125 sale exacto. El 128 del reporte = 125 + 3: los otros 3 son donantes de pledge
+      que si se migraron, pero aparecen en el reporte de exito de PLEDGES y no en el de
+      donaciones. En ambas versiones son 3 y estan correctos, antes y despues.
+
+      pre-fix -> post-fix -> objetivo cumplido?: 125 identificadores publicados no
+      correspondian a ningun registro y habrian creado Oportunidades stub al cargar -> los
+      191 identificadores publicados existen los 191 -> SI.
+    attachments:
+      - name: comparison-matrix.txt
+        path: attachments/tr-198-tc-180/scenario-1/comparison-matrix.txt
+        mimeType: text/plain
+        size: 2600
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC1 · The ticket's three examples resolve to their membership Opportunity
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-23T19:53:00Z"
+    stepResults: []
+    actual: |
+      Los tres ejemplos del ticket son identificadores de DONANTE tal como el archivo los
+      publicaba. Seguidos uno por uno:
+
+        Ejemplo  Reportado     En base  En PR  Forma       Fecha        Sustituido por
+        1        00F3AF39...   si       NO     membership  2000-01-23   B78C9759...
+        2        031D666D...   si       NO     membership  2005-10-07   323B8423...
+        3        033618BB...   si       NO     membership  2005-05-31   8E65473A...
+
+      Los tres son pagos de membresia: existe una MEMBERSHIPTRANSACTION anclada a la linea
+      Standard del donante. Las fechas caen dentro del rango 1998-2007 que declara el autor.
+
+      Lo decisivo: los tres identificadores sustitutos aparecen en la salida REAL de
+      membership_transactions.sql, no en la reconstruccion que la propia consulta hace de sus
+      reglas. Los tres originales no aparecen en ninguno de los tres exports.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el archivo nombraba la transaccion pagadora,
+      que no existe como Oportunidad, y por eso el VLOOKUP daba #N/A -> nombra la
+      MEMBERSHIPTRANSACTION.ID, que si existe -> SI.
+    attachments:
+      - name: ticket-examples.txt
+        path: attachments/tr-198-tc-180/scenario-2/ticket-examples.txt
+        mimeType: text/plain
+        size: 1700
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC2 · The $0 claim leaves the file instead of pointing at a record that does not exist
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-23T19:54:00Z"
+    stepResults: []
+    actual: |
+      Ejemplo 4 del ticket: donante 6F6D1336... (Salesforce 006Vw00000XNcCtIAL), claim
+      1D0CA101...
+
+        El claim esta activo?                                     si
+        Su importe neto (Standard menos Reversal) es cero?        si
+        donation_transaction.sql emite Oportunidad del CLAIM?     NO  (gate Amount <> 0)
+        donation_transaction.sql emite Oportunidad del DONANTE?   si
+        La version base emitia la fila?                           si
+        La version del PR emite la fila?                          NO
+        Alguna otra fila del PR para ese donante?                 NO
+
+      Que el DONANTE si exista es justo lo que hacia posible el enlace colgante: el upsert
+      encontraba la Oportunidad real y le escribia npsp__Matching_Gift__c apuntando a un
+      claim que ninguna carga crea. Eso es la columna "Matching Gift no reconocida" que
+      describe el cliente.
+
+      El descarte se produce por el rank 0 y no como efecto colateral: el claim viaja por el
+      mismo gate y, al no sobrevivir, ninguno de sus candidatos de donante se emite.
+
+      De los 195 claims activos EXACTAMENTE UNO tiene esta forma.
+
+      pre-fix -> post-fix -> objetivo cumplido?: se emitia un enlace a un registro
+      inexistente -> no se emite ninguna fila para ese claim -> SI.
+    attachments:
+      - name: zero-amount-claim.txt
+        path: attachments/tr-198-tc-180/scenario-3/zero-amount-claim.txt
+        mimeType: text/plain
+        size: 1800
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC3 · The 195 claims reconcile to 191 rows, including the four the author does not
+      explain
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-23T19:56:00Z"
+    stepResults: []
+    actual: |
+      Desglose por forma de donante, clasificando cada claim con los mismos predicados que la
+      consulta usa en cada rank:
+
+        membership payment ....... 115   declarado 115
+        POS order payment .........  10   declarado  10
+        pledge payment ............   2   declarado   2
+        pledge root ...............   1   (el autor lo cuenta dentro de los 67)
+        standalone donation .......  67   declarado  67
+        total .................... 195   declarado 195
+
+      Las cinco formas coinciden.
+
+      R2 — LA DISCREPANCIA 2 CONTRA 3 PLEDGES NO ERA UNA CONTRADICCION. Las dos cifras del
+      autor son correctas y hablan de cosas distintas: 2 pledge payment (el donante paga un
+      pledge, rank 3) + 1 pledge root (el donante ES el pledge, rank 1) = 3 donantes que
+      aparecen en el reporte de pledges. La salida del PR lo confirma: exactamente 3 de sus
+      191 filas nombran un identificador que emite donation_pledges.sql.
+
+      R3 — LOS 4 CLAIMS AUSENTES, UNO POR UNO:
+
+        1D0CA101   su propia Oportunidad no existe (claim de $0, rank 0)   lo quita el PR
+        F99FC7CD   colision: el donante 5162C6AF ya lo reclama E4957533    ya faltaba en base
+        EDE14C3C   colision: el donante 2BC42D40 ya lo reclama 9284865D    ya faltaba en base
+        B3768D1B   colision: el donante 2A27FAD9 ya lo reclama 40B441DC    ya faltaba en base
+
+      Las tres colisiones son deduplicacion PREEXISTENTE: npsp__Matching_Gift__c es un lookup
+      de un solo valor, asi que cuando dos claims resuelven al mismo donante gana el de fecha
+      mas antigua. El ganador es el MISMO en base y en PR en los tres casos.
+
+        195 - 3 (dedup preexistente) - 1 (claim de $0) = 191.   Sin residuo.
+
+      191 filas, 191 identificadores distintos. Ningun duplicado.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el autor dejaba 4 bajas sin explicar, y una
+      baja no explicada es como esta consulta pierde un enlace en silencio -> las cuatro
+      quedan nombradas con su causa y la aritmetica cierra -> SI.
+    attachments:
+      - name: claims-reconciliation.txt
+        path: attachments/tr-198-tc-180/scenario-4/claims-reconciliation.txt
+        mimeType: text/plain
+        size: 3000
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC4 · The links that were already correct do not move
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-23T19:57:00Z"
+    stepResults: []
+    actual: |
+      Par (claim -> donante) de los 191 claims presentes en AMBAS versiones:
+
+        Forma de donante        Donante IGUAL   Donante CAMBIA
+        standalone donation                63                0
+        pledge payment                      2                0
+        pledge root                         1                0
+        POS order payment                   0               10
+        membership payment                  0              115
+        total                              66              125
+
+      125 = 115 + 10, la cifra exacta que declara el autor. 66 + 125 = 191.
+
+      Ninguna de las tres formas que ya eran correctas se movio: cero cambios, cero
+      desapariciones, cero altas. Los 63 standalone salen de 67 menos el claim de $0 menos
+      las 3 colisiones preexistentes. Cuadra sin residuo.
+
+      El desempate se conserva: en los tres donantes reclamados por dos claims el ganador es
+      identico en las dos versiones.
+
+      pre-fix -> post-fix -> objetivo cumplido?: 66 enlaces correctos antes -> los mismos 66,
+      identicos -> SI. El cambio solo anade y solo corrige.
+    attachments:
+      - name: unchanged-cohort.txt
+        path: attachments/tr-198-tc-180/scenario-5/unchanged-cohort.txt
+        mimeType: text/plain
+        size: 1700
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC5 · No membership row names an Opportunity the membership export does not emit
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-23T19:59:00Z"
+    stepResults: []
+    actual: |
+      El rank 5 es el unico que no se verifica contra OpportunityExternalIds: el export de
+      membresias tiene su propia clave, asi que la consulta RECONSTRUYE sus reglas. Si esa
+      reconstruccion se separa, vuelve el stub que todo el cambio existe para evitar. Leer el
+      codigo no lo demuestra; hay que cruzar contra la salida real.
+
+        Filas que el PR emite por rank 5 ........................... 115
+        De esas, cuantas nombran un id que el export SI emite ....... 115
+        Stubs ........................................................ 0
+        Declarado por el autor ..................................... 115
+
+      Cruzado contra los 97.775 identificadores que membership_transactions.sql emite de
+      verdad sobre esta fuente.
+
+      ALCANCE REAL DE LA CORRECCION DE LA REVIEW (commit 382172b), medido:
+
+        Membresias alcanzables desde un claim activo .................... 115
+        ...cuyo ancla NO es la transaccion del donante .................... 5
+        ...con alguna ancla en orden de venta sin terminar ................ 0
+        ...con alguna ancla que resuelve cuota de recurring gift .......... 0
+
+      Lectura honesta: la correccion TIENE poblacion real aqui — cinco membresias se juzgan
+      por un ancla distinta de la del donante — pero ninguna se descalifica por las dos
+      reglas que podrian descartarla. En Long Island la correccion no cambia ni una fila del
+      resultado: es un seguro, no un arreglo visible. El caso que si la ejerce lo cubren las
+      fixtures MG6/MG7 de la suite en contenedor, que pasan.
+
+      Las 115 sobreviven el gate integro: cero enlaces perdidos por la regla mas gruesa.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la version base no emitia ninguna fila de
+      membresia y publicaba 115 transacciones pagadoras inexistentes -> 115 filas que nombran
+      una Oportunidad que el export crea, 0 stubs -> SI.
+    attachments:
+      - name: membership-rank5-verification.txt
+        path: attachments/tr-198-tc-180/scenario-6/membership-rank5-verification.txt
+        mimeType: text/plain
+        size: 2600
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC6 · The copied inclusion gate has not drifted from the donation export
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-23T20:01:00Z"
+    stepResults: []
+    actual: |
+      Preludio completo (desde `;WITH` hasta el cierre de OpportunityExternalIds), quitando
+      comentarios ANTES de localizar el marcador y normalizando espacios:
+
+        donation_update_matching_gift.sql ....... 4.923 chars
+        npsp_account_soft_credit.sql ............ 4.923 chars
+        resultado ............................... IDENTICOS, caracter a caracter
+
+      Cubre MembershipLineItems, RecurringInstallments, SupersededLines, LineSplit,
+      EligibleLines, TransactionAgg y las tres CTE de identificadores emitidos. No solo la
+      clausula WHERE.
+
+      PRUEBA DE QUE LA SUITE PUEDE FALLAR. No basta con que este verde. Se introdujo un
+      predicado divergente en la copia del gate:
+
+        -  AND ft.TYPECODE NOT IN (1, 2, 20)
+        +  AND ft.TYPECODE NOT IN (1, 2, 20, 99)
+
+      Resultado: 2 tests de 14 FALLAN, incluido "keeps its Opportunity inclusion gate
+      identical to donation_transaction.sql". El archivo se restauro y se verifico byte a
+      byte contra c1a9d82: identico.
+
+      Suites en la rama del PR:
+        npm run test:queries ......... 651 passed / 828 total (177 skipped = contenedor)
+        npm run test:queries:docker .. 175 passed / 175 total, 16 suites, 724,6 s
+        total ........................ 826 tests, 0 fallos
+
+      El autor declaro 648 + 822; la diferencia son los tests que el mismo anadio en c1a9d82,
+      posterior a su comentario. No es discrepancia.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el gate podria divergir en silencio y hacer
+      esta consulta mas permisiva que la carga -> copia identica, spec que lo fija y prueba
+      de que el spec detecta la divergencia -> SI.
+    attachments:
+      - name: gate-copy-comparison.txt
+        path: attachments/tr-198-tc-180/scenario-7/gate-copy-comparison.txt
+        mimeType: text/plain
+        size: 2400
+      - name: coverage-matrix.txt
+        path: attachments/tr-198-tc-180/scenario-0-unit-tests/coverage-matrix.txt
+        mimeType: text/plain
+        size: 2500
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC7 · The rewritten query returns on real data, and returns the same rows
+    scenarioIndex: 7
+    status: blocked
+    executedAt: "2026-09-23T20:03:00Z"
+    stepResults: []
+    actual: |
+      Cronometro sobre la fuente viva:
+
+        Commit     Que es                                   Tiempo           Filas
+        8b522c37   base, antes del PR                       2,7 s              192
+        33bb15d    primer commit del PR, previo a review    >120 s  TIMEOUT      -
+        382172b    tras la review, gate evaluado dos veces  >120 s  TIMEOUT      -
+        c1a9d82    head, gate evaluado una sola vez         8,8 s              191
+
+      El limite de 120 s es el requestTimeout fijo del runner de solo lectura. NO se
+      modifico: es un control de seguridad y subirlo para que salga un numero no es una
+      medicion, es un atajo.
+
+      LO QUE SI QUEDA ESTABLECIDO. La reescritura de rendimiento no es cosmetica: es la
+      diferencia entre una consulta que no termina dentro del limite y una que devuelve en
+      8,8 s. Sin ella este archivo no es ejecutable en condiciones normales sobre esta
+      fuente. Los ~46 s que cita el autor corresponden a 33bb15d; hoy esa forma supera los
+      120 s. No declaro falsa su cifra — se midio en otro momento y sobre una instancia en
+      otro estado — pero hoy no se sostiene.
+
+      LO QUE NO SE PUDO COMPROBAR. La identidad de filas entre 382172b y c1a9d82 sobre datos
+      reales, porque la version previa no devuelve dentro del limite. Queda comprobada solo
+      en la suite en contenedor, que pasa.
+
+      POR QUE NO ES UN FALLO DEL PR. La identidad contra la forma previa era un medio para
+      creer que la reescritura no cambio el resultado. Ese fin se alcanzo por una via mas
+      fuerte: la salida del head quedo reconciliada contra la verdad de campo claim a claim
+      (escenario 4) y cada uno de sus 191 identificadores verificado contra la salida real de
+      los tres exports (escenario 1). No hace falta creer que c1a9d82 == 382172b: se demostro
+      que c1a9d82 es correcto.
+
+      Se marca BLOQUEADO y no PASS porque uno de sus pasos no se pudo ejecutar. Fingir un
+      PASS aqui seria justo el tipo de evidencia que no sirve.
+
+      pre-fix -> post-fix -> objetivo cumplido?: parcialmente. Devuelve sobre datos reales,
+      si, y en 8,8 s. Devuelve las mismas filas que la forma previa: no comprobado en vivo.
+    attachments:
+      - name: performance-and-row-identity.txt
+        path: attachments/tr-198-tc-180/scenario-8/performance-and-row-identity.txt
+        mimeType: text/plain
+        size: 2600
+
+  - testCaseId: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+    testCaseKey: TC-180
+    scenarioTitle: >-
+      AC8 · The payment queries that quote the old gate are checked for orphan parents
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-23T20:04:00Z"
+    stepResults: []
+    actual: |
+      El autor deja escrito en docs/altru-model-context.md que opportunity_payments.sql y
+      fund_assignment_payments.sql dicen igualar "el filtro ISACTIVE = 1 de
+      donation_update_matching_gift.sql", cosa que ya no es todo el gate, y pide contar los
+      claims activos que netan a cero con cuota pendiente positiva antes de confiar en esos
+      comentarios. Nadie lo habia contado.
+
+        Claims activos ............................................... 195
+        ...cuya transaccion neta a cero ................................ 1
+        ...que ademas conservan cuota pendiente > 0  (RIESGO) ........... 0
+        Importe pendiente total de los que netan a cero ............. 0,00
+
+      La poblacion del riesgo es CERO en Long Island. El unico claim que neta a cero es el de
+      $0 del Ejemplo 4, y su importe de cuota tambien es 0, de modo que el brazo de impagados
+      no lo emite: queda protegido por su propio gate, tal como el autor supuso.
+
+      No se levanta defecto. El riesgo es INERTE en esta fuente.
+
+      Queda abierto y no es de este PR: (1) los comentarios de esas dos consultas siguen
+      describiendo el gate como era, y eso ya no es cierto aunque hoy no cause dano; (2) la
+      medicion vale para Long Island, y otros tenants pueden tener claims revertidos con
+      cuota viva.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el riesgo estaba declarado pero sin medir ->
+      cuantificado en 0, con el metodo escrito para poder repetirlo en otro tenant -> SI.
+    attachments:
+      - name: orphan-parent-population.txt
+        path: attachments/tr-198-tc-180/scenario-9/orphan-parent-population.txt
+        mimeType: text/plain
+        size: 2200
+
+summary:
+  total: 9
+  passed: 8
+  failed: 0
+  blocked: 1
+  skipped: 0
+  notRun: 0
+  passRate: 89
+
+history:
+  - action: run-started
+    timestamp: "2026-09-23T19:40:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-180 contra el commit c1a9d82. El primer perfil de lectura de
+      Long Island no levanta el tunel; el directo si, y devuelve 195 claims activos a la
+      primera, que es ya la primera cifra del autor confirmada.
+  - action: run-completed
+    timestamp: "2026-09-23T20:05:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      8 de 9 escenarios cumplen el objetivo del ticket y uno queda BLOQUEADO por una
+      limitacion del runner, no por un defecto. El resultado central es limpio y exacto: los
+      125 identificadores que la version base publicaba sin que existiera el registro
+      correspondiente pasan a CERO, y las cifras del autor se reproducen una por una — 115
+      membresias, 10 ordenes POS, 3 pledges, 191 filas, 125 donantes que cambian, 66 que no
+      se mueven. Los dos huecos que el ticket dejaba abiertos quedan cerrados con datos: la
+      discrepancia 2-contra-3 pledges no era contradiccion (2 pagos de pledge mas 1 raiz de
+      pledge) y los 4 claims que no llegan al archivo tienen causa nombrada (uno el claim de
+      $0, tres deduplicacion preexistente que tampoco estaba en la base). El riesgo de padres
+      huerfanos que el propio autor pedia contar es 0 aqui. Tres observaciones sin defecto: la
+      reescritura de rendimiento resulta ser obligatoria y no opcional, porque las dos formas
+      previas no devuelven en 120 s mientras el head tarda 8,8 s (O1); la correccion que
+      encontro la review toca 5 membresias reales pero no cambia ni una fila en esta fuente,
+      asi que su valor esta en las fixtures, no aqui (O2); y el archivo depende ahora del
+      orden de carga de membresias, dependencia que la consulta no puede defender sola (O3).
+      Sin defectos de seguridad: OWASP 3 aplicables, 3 PASS, 7 N/A.
+
+tags:
+  - im-1281
+  - im-70
+  - im-1298
+  - altru
+  - migration
+  - migration-tool-etl
+  - matching-gift
+  - donation
+  - membership
+  - long-island
+  - query
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-23T19:40:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-23T20:05:00Z"

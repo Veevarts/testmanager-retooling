@@ -1,0 +1,300 @@
+schemaVersion: "1.0"
+
+id: "8958ec93-8e4c-401c-9fe1-7309b7bff12c"
+key: "TC-180"
+title: "Matching gift: every donor link names an Opportunity some export actually emits"
+
+description: |
+  Cobertura QA de IM-1281 (128 donations excluded from migration + 1 unrecognized Matching
+  Gift — Long Island Children's Museum), bajo el epic IM-70 (Altru Queries). Sub-tarea de QA:
+  IM-1298. Repositorio en alcance: Veevarts/MigrationToolETL "PR #186", rama
+  CamiloSalgueroMarin/IM-1281-excluded-donations-matching-gift, head c1a9d82.
+
+  NINGUNA DONACION ESTABA EXCLUIDA. El ticket se reporto como "128 donaciones que no llegaron
+  a la migracion", pero la investigacion del autor demuestra que las 128 si se migraron. El
+  defecto esta en la consulta de actualizacion de matching gift: publicaba como
+  Implementation_External_ID__c la TRANSACCION DE INGRESO contra la que se emparejo el regalo
+  (REVENUEMATCHINGGIFT.MGSOURCEREVENUEID) en vez del identificador externo de la Oportunidad
+  que la migracion construye a partir de esa transaccion. Para la mayoria de donantes son dos
+  registros distintos, asi que el VLOOKUP contra el reporte de donaciones no podia encontrarlos
+  nunca. Probar aqui "si las donaciones se migraron" seria probar algo que no fallaba.
+
+  EL DESGLOSE QUE HAY QUE REPRODUCIR. El autor midio los 195 claims activos de Long Island
+  contra las reglas de inclusion de la propia consulta de donaciones:
+
+  - 67 donacion suelta o raiz de pledge — ya estaban correctos.
+  - 115 pago de membresia — la Oportunidad vive en la carga de membresias, con clave
+    MEMBERSHIPTRANSACTION.ID, nunca en la transaccion que paga.
+  - 10 pago de orden POS — la Oportunidad es la transaccion de ingreso de la ORDEN
+    (SALESORDER.REVENUEID), a un salto del pago.
+  - 2 pago de pledge — la Oportunidad es el pledge.
+  - 1 claim de matching gift por $0.00 — no existe en ningun lado.
+
+  115 + 10 = 125 donantes cuya Oportunidad vive bajo otro identificador, mas 3 donantes de
+  pledge que si se migraron pero salen en el reporte de pledges y no en el de donaciones: eso
+  es el 128 reportado. Resultado declarado tras el arreglo: 191 filas, cada donante nombrando
+  una Oportunidad que la migracion crea, sin duplicados.
+
+  LA FORMA DEL ARREGLO. La consulta resuelve ahora cada donante contra la Oportunidad que
+  otro export emite de verdad, por orden de fidelidad: su propia transaccion (rank 1), su
+  cuota de recurring gift (2), su pledge (3), la transaccion de ingreso de su orden POS (4) y
+  por ultimo su transaccion de membresia (5). El rank 0 no es un candidato: es el propio
+  claim, que viaja por el mismo gate para responder en una sola pasada si la Oportunidad del
+  claim existe. Un candidato que la migracion no emite se DESCARTA en vez de exportarse,
+  porque un upsert sobre un identificador externo inexistente crearia una Oportunidad "stub"
+  sin monto, contacto ni etapa en Salesforce. Ese es el riesgo que da sentido a toda la
+  cobertura.
+
+  EL RANK 5 ES EL UNICO SIN RED. Los ranks 1 a 4 se verifican contra OpportunityExternalIds,
+  el conjunto de identificadores que donation_transaction.sql y donation_pledges.sql emiten.
+  El rank 5 no: el export de membresias tiene su propia clave, asi que la consulta RECONSTRUYE
+  sus reglas (accion distinta de Drop, ninguna orden de venta sin terminar en ningun ancla,
+  ninguna cuota de recurring gift). Si esa reconstruccion se separa de membership_transactions.sql,
+  vuelve exactamente el stub que el cambio existe para evitar. Por eso hay un escenario dedicado
+  a medirlo y no a leerlo.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. El ticket no trae criterios de aceptacion. Los AC1..AC8 de este caso estan derivados
+    del objetivo del reporte y de las cifras que el autor declara en su comentario del 17-09.
+    Cada escenario nombra la cifra concreta que lo hace pasar o fallar.
+  - R2. Aritmetica inconsistente en el propio comentario: la tabla declara 2 pagos de pledge,
+    pero el desglose del 128 usa 3 donantes de pledge (115 + 10 + 3). Uno de los dos numeros
+    esta mal, o el tercero es una raiz de pledge contada dentro de los 67. Hay que resolverlo
+    con datos antes de dar por buena la reconciliacion.
+  - R3. 195 claims activos entran y 191 filas salen. El autor solo explica una baja, el claim
+    de $0. Faltan tres por justificar, y una baja no explicada es exactamente la forma que
+    tiene esta consulta de perder un enlace en silencio.
+  - R4. El autor declara que la reescritura de rendimiento (commit 4c3bd16) se probo
+    fila-identica contra la forma anterior en un SQL Server en contenedor, pero que NUNCA se
+    cronometro sobre datos reales porque la base del tenant dejo de responder. La forma previa
+    a la review tardaba ~46s y la variante con EXISTS correlacionado no devolvia a los 10
+    minutos. Queda por medir sobre la fuente viva.
+  - R5. La consulta es de tabla completa y sin ventana de fecha, pero los gates de inclusion
+    que copia tampoco la tienen. "Se queda solo con candidatos que un export emite" significa
+    "que emitiria para la misma fuente", y eso solo coincide si las Oportunidades donantes se
+    cargaron sin ventana. Una corrida con ventana nombraria Oportunidades fuera de la ventana
+    que cargo.
+  - R6. Dependencia de orden de carga NUEVA: el archivo debe cargarse despues de donaciones,
+    pledges Y MEMBRESIAS, porque 115 de sus filas apuntan ahora a Oportunidades de membresia.
+    El comentario del pipeline se actualizo; queda comprobar que el runbook o el orquestador
+    que decide el orden tambien lo refleje, porque la consulta no puede defenderse sola.
+  - R7. Radio de impacto que el propio autor deja abierto en docs/altru-model-context.md:
+    opportunity_payments.sql y fund_assignment_payments.sql dicen igualar "el filtro ISACTIVE = 1
+    de donation_update_matching_gift.sql", cosa que ya no es todo el gate. Un claim activo
+    totalmente revertido pierde su Oportunidad por Amount <> 0 pero conserva el importe de
+    cuota positivo, con lo que esas dos consultas emitirian un npe01__OppPayment__c y un Charge
+    colgados de una Oportunidad que ninguna carga crea. El autor pide contarlo antes de confiar
+    en esos comentarios; nadie lo ha contado.
+  - R8. El gate de inclusion esta COPIADO byte a byte desde npsp_account_soft_credit.sql, que a
+    su vez es el de donation_transaction.sql. Un predicado anadido en uno y no en el otro hace
+    esta consulta mas permisiva que la carga de Oportunidades y reintroduce el enlace colgante.
+    El dev lo fija con un spec; hay que comprobar que el spec compara lo que dice comparar.
+  - R9. La regla de membresia es deliberadamente mas gruesa de lo necesario: una membresia
+    cuyas anclas resuelven CUALQUIER cuota de recurring gift no ofrece candidato y el enlace se
+    descarta. En Long Island eso es inerte (0 cuotas), pero Everson y Tucson si tienen
+    membresias de recurring gift y ahi se perderian enlaces. Fuera del alcance medible de esta
+    corrida, pero debe quedar escrito.
+  - R10. Long Island es fuente PRODUCTIVA del cliente. Toda la cobertura es de solo lectura; no
+    se escribe en ninguna fuente ni en ninguna org, y no se carga nada en Salesforce. La
+    verificacion del stub se hace comparando identificadores entre consultas, no cargando.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "Hay perfil de solo lectura para la fuente de Long Island; es la unica fuente donde el PR declara sus numeros."
+  - "Se puede obtener donation_update_matching_gift.sql en sus dos versiones, la de la rama base y la del \"PR #186\", para correr la misma entrada contra las dos."
+  - "Se pueden obtener ademas los commits intermedios 382172b (previo a la reescritura de rendimiento) y c1a9d82 (head), porque la identidad de filas entre esas dos formas es una afirmacion del autor sin medir sobre datos reales."
+  - "Se pueden ejecutar tambien donation_transaction.sql, donation_pledges.sql y membership_transactions.sql sobre la misma fuente, porque el veredicto de cada fila depende de si esos exports emiten el identificador que la consulta nombra."
+  - "Se anota el commit exacto que se prueba, porque el PR sigue abierto y el veredicto queda atado a el."
+  - "Hay runtime de contenedores disponible para la suite de regresion de consultas del repositorio."
+  - "Todas las consultas son de solo lectura. No se escribe en ninguna fuente ni en ninguna org; la de Long Island es productiva del cliente."
+  - "Se sabe que las 128 donaciones NO son el objeto de esta cobertura: se migraron. Lo que se prueba es el identificador que la consulta de matching gift publica para cada una."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The 128 reported ids stop naming a record no load ever created"
+    tags:
+      - ac-1
+      - happy-path
+      - regression-evidence
+      - long-island
+    given:
+      - "los 128 Implementation External ID reportados salian del archivo de matching gift y ninguno aparecia en el reporte de exito de donaciones"
+      - "el archivo fuente del reporte (Donation_Update_Matching_Gift.csv) no esta adjunto al ticket, asi que la poblacion se reconstruye desde la fuente con las reglas que el autor declara"
+    when:
+      - "se ejecuta la version base de donation_update_matching_gift.sql sobre Long Island y se guarda el conjunto de Implementation_External_ID__c emitidos"
+      - "se ejecuta la version del \"PR #186\" con la misma entrada y se guarda el mismo conjunto"
+      - "se cruza cada identificador emitido contra los que emiten donation_transaction.sql, donation_pledges.sql y membership_transactions.sql"
+    then:
+      - "en la version base hay 125 identificadores emitidos que ningun export produce, y esos son los que generarian una Oportunidad stub al hacer upsert"
+      - "en la version del PR ese conteo es 0: todo identificador emitido existe en alguno de los tres exports"
+      - "los tres ejemplos del ticket dejan de aparecer como donante y en su lugar aparece la Oportunidad de membresia correspondiente"
+      - "la diferencia entre ambos conjuntos se explica fila a fila por cambio de identificador, no por perdida de claims"
+
+  - title: "AC1 · The ticket's three examples resolve to their membership Opportunity"
+    tags:
+      - ac-1
+      - regression-evidence
+      - long-island
+    given:
+      - "los ejemplos 00F3AF39-B26D-4114-AB1F-5E886EFE3BD6, 031D666D-4BAF-4610-BBFD-8423C8278E4C y 033618BB-A5AC-482A-9311-01E3224D3355 son, segun el autor, pagos de membresia de 1998 a 2007"
+    when:
+      - "se sigue cada uno de los tres desde REVENUEMATCHINGGIFT hasta la MEMBERSHIPTRANSACTION que el ancla resuelve"
+      - "se comprueba que membership_transactions.sql emite esa transaccion de membresia como Oportunidad"
+      - "se localiza la fila que la version del PR emite para el claim de cada uno"
+    then:
+      - "los tres son efectivamente pagos de membresia y su fecha cae en el rango que el autor declara"
+      - "la fila del PR nombra la MEMBERSHIPTRANSACTION.ID, no la transaccion que pagaba"
+      - "ese identificador aparece en la salida de membership_transactions.sql, de modo que el upsert encuentra la Oportunidad en vez de crearla"
+      - "la version base nombraba para los tres la transaccion pagadora, que no aparece en ningun export"
+
+  - title: "AC2 · The $0 claim leaves the file instead of pointing at a record that does not exist"
+    tags:
+      - ac-2
+      - negative
+      - regression-evidence
+    given:
+      - "la donacion 6F6D1336-8F94-4AE4-AC23-5149FA681A97 apunta al claim 1D0CA101-E0A7-4CB5-A2A8-CD81A88ACDF1, que en Altru esta activo pero vale $0.00 y no tiene pagos"
+    when:
+      - "se comprueba en la fuente que ese claim esta activo, que su importe neto es cero y que no tiene pagos asociados"
+      - "se comprueba si donation_transaction.sql emite una Oportunidad para ese claim"
+      - "se busca la fila de ese donante y la de ese claim en la salida base y en la del PR"
+    then:
+      - "donation_transaction.sql no emite Oportunidad para el claim, porque su gate Amount <> 0 lo descarta"
+      - "la version base si emitia la fila, dejando npsp__Matching_Gift__c apuntando a una Oportunidad inexistente"
+      - "la version del PR no emite ninguna fila para ese claim, ni siquiera para su donante, que si es una Oportunidad emitida"
+      - "el descarte se produce por el rank 0 y no por accidente: ningun candidato de ese claim sobrevive"
+
+  - title: "AC3 · The 195 claims reconcile to 191 rows, including the four the author does not explain"
+    tags:
+      - ac-3
+      - happy-path
+      - edge-case
+      - missing-doc
+    given:
+      - "el autor declara 195 claims activos repartidos en 67 / 115 / 10 / 2 / 1 y un resultado de 191 filas sin duplicados"
+      - "la tabla del comentario declara 2 pagos de pledge pero el desglose del 128 usa 3 donantes de pledge, asi que uno de los dos numeros hay que resolverlo con datos"
+    when:
+      - "se cuentan los claims activos de Long Island y se clasifica cada uno por la forma de su donante, usando los mismos predicados que la consulta aplica en cada rank"
+      - "se cuentan las filas que emite la version del PR y se verifica que no hay dos filas con el mismo Implementation_External_ID__c"
+      - "se listan los claims activos que NO llegan a la salida y se determina, uno por uno, por que rank o por que gate se cayeron"
+    then:
+      - "el total de claims activos y el desglose por forma de donante coinciden con las cifras declaradas, o la diferencia queda cuantificada y explicada"
+      - "la salida trae 191 filas y ningun Implementation_External_ID__c repetido"
+      - "los 4 claims que no llegan a la salida quedan nombrados: uno es el claim de $0 y los otros tres tienen una causa identificada, no una suposicion"
+      - "la discrepancia 2-contra-3 pagos de pledge queda resuelta indicando cual de las dos cifras es la correcta y donde se contaba el tercero"
+
+  - title: "AC4 · The links that were already correct do not move"
+    tags:
+      - ac-4
+      - regression
+      - long-island
+    given:
+      - "67 claims tenian donante de donacion suelta o raiz de pledge y, segun el autor, ya estaban correctos antes del cambio"
+    when:
+      - "se comparan cohorte a cohorte las filas de esa poblacion entre la version base y la del PR"
+      - "se comprueba que el desempate por fecha de claim y por identificador sigue siendo el mismo cuando varios claims resuelven al mismo donante"
+    then:
+      - "las filas de esa cohorte coinciden en identificador de donante y de claim entre las dos versiones, una a una"
+      - "ninguna de esas filas desaparece, cambia de donante ni cambia de claim"
+      - "cuando dos claims compiten por el mismo donante sigue ganando el de fecha mas antigua, con el identificador como desempate, igual que antes"
+      - "la reescritura no introduce filas nuevas en esa cohorte"
+
+  - title: "AC5 · No membership row names an Opportunity the membership export does not emit"
+    tags:
+      - ac-5
+      - edge-case
+      - negative
+    given:
+      - "el rank 5 es el unico que no se verifica contra el conjunto de identificadores emitidos, porque reconstruye las reglas de membership_transactions.sql en vez de consultarlas"
+      - "el autor advierte que esa consulta resuelve su ancla de rank 1 por su cuenta y que juzgar el gate sobre la transaccion del donante puede discrepar de ella"
+    when:
+      - "se toman todas las filas que la version del PR emite por rank 5 y se cruza cada MEMBERSHIPTRANSACTION.ID contra la salida real de membership_transactions.sql"
+      - "se buscan en la fuente membresias alcanzables desde un claim cuya ancla NO es la transaccion del donante, para ejercer justo el caso que la review corrigio"
+      - "se comprueba que ninguna membresia con accion Drop, con orden de venta sin terminar en cualquiera de sus anclas o con cuota de recurring gift ofrece candidato"
+    then:
+      - "toda transaccion de membresia emitida por rank 5 aparece tambien en la salida de membership_transactions.sql: cero stubs"
+      - "las membresias descartadas lo son por una de las tres reglas declaradas, y se puede nombrar cual en cada caso"
+      - "si existe alguna membresia alcanzable cuyo ancla difiere del donante, el veredicto se decide por el ancla y no por el donante"
+      - "el numero de enlaces de membresia emitidos se contrasta con los 115 que el autor declara, y cualquier diferencia queda cuantificada"
+
+  - title: "AC6 · The copied inclusion gate has not drifted from the donation export"
+    tags:
+      - ac-6
+      - regression
+      - security
+    given:
+      - "las CTE desde ;WITH hasta OpportunityExternalIds son copia literal del preludio de npsp_account_soft_credit.sql, que a su vez es el gate de donation_transaction.sql"
+    when:
+      - "se comparan las tres copias del gate entre si, ignorando comentarios y espacios, tal como hace el spec del repositorio"
+      - "se revisa que el spec compare el preludio COMPLETO y no solo la clausula WHERE de EligibleLines, porque el conjunto emitido depende tambien de RecurringInstallments y del Amount <> 0"
+      - "se ejecutan en la rama del PR la suite unitaria y la suite de regresion de consultas en contenedor que el autor declara verdes"
+    then:
+      - "las copias del gate coinciden predicado a predicado; no hay ninguno anadido ni retirado en una sola de ellas"
+      - "el spec que fija la copia abarca todo el preludio, de modo que un cambio en RecurringInstallments o en el filtro de importe tambien lo rompe"
+      - "las suites pasan en la rama del PR con los conteos que el autor declara, y cualquier diferencia queda anotada"
+      - "se comprueba que la suite PUEDE fallar: reintroducir un predicado divergente en una de las copias rompe el spec"
+
+  - title: "AC7 · The rewritten query returns on real data, and returns the same rows"
+    tags:
+      - ac-7
+      - edge-case
+      - missing-doc
+      - performance
+    given:
+      - "la reescritura de rendimiento (4c3bd16) evalua el gate una sola vez en vez de dos, y el autor declara que se probo fila-identica en contenedor pero nunca se cronometro sobre datos reales"
+      - "la forma previa a la review tardaba unos 46 segundos y la variante con EXISTS correlacionado no devolvia a los 10 minutos"
+    when:
+      - "se ejecuta sobre Long Island la version del commit 382172b, anterior a la reescritura, y se cronometra"
+      - "se ejecuta la version del head c1a9d82 con la misma entrada y se cronometra"
+      - "se comparan las dos salidas fila a fila, no solo en conteo"
+    then:
+      - "las dos versiones devuelven exactamente el mismo conjunto de pares donante-claim, con lo que la reescritura queda probada fila-identica tambien sobre datos reales"
+      - "la version del head devuelve en un tiempo acotado y se deja escrito cual fue, porque hasta ahora ese numero no existia"
+      - "el tiempo medido se compara con los ~46s de la forma previa y se dice si mejora, empata o empeora"
+      - "si alguna de las dos no devuelve, se reporta como bloqueo con el tiempo de espera, no como resultado"
+
+  - title: "AC8 · The payment queries that quote the old gate are checked for orphan parents"
+    tags:
+      - ac-8
+      - edge-case
+      - missing-doc
+      - regression
+    given:
+      - "opportunity_payments.sql y fund_assignment_payments.sql dicen igualar el filtro ISACTIVE = 1 de esta consulta, que ya no es todo el gate"
+      - "el autor pide contar los claims activos cuya transaccion neta a cero con importe de cuota pendiente mayor que cero antes de confiar en esos comentarios"
+    when:
+      - "se cuenta en Long Island esa poblacion exacta: claim activo, importe neto de la transaccion igual a cero, importe de cuota menos pagado menos condonado mayor que cero"
+      - "si la poblacion no es vacia, se comprueba si esas dos consultas emiten filas para esos claims"
+      - "se verifica si el identificador padre de esas filas existe en la salida de donation_transaction.sql"
+    then:
+      - "la poblacion queda cuantificada con un numero, no con una suposicion"
+      - "si es cero, se deja escrito que el riesgo es inerte en esta fuente y que queda abierto para las demas"
+      - "si no es cero, cada fila huerfana queda identificada y se levanta como defecto contra las consultas de pago, no contra este PR"
+      - "el comentario de esas dos consultas queda senalado como desactualizado en cualquiera de los dos casos"
+
+tags:
+  - im-1281
+  - im-70
+  - im-1298
+  - altru
+  - migration
+  - migration-tool-etl
+  - matching-gift
+  - donation
+  - membership
+  - long-island
+  - query
+
+estimatedDuration: 180
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-23T20:10:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-23T20:10:00Z"
+  version: 1

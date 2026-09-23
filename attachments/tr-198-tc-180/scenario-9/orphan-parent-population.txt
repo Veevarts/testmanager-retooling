@@ -1,0 +1,40 @@
+TC-180 escenario 9 — LAS CONSULTAS DE PAGO QUE CITAN EL GATE VIEJO: POBLACION DEL RIESGO
+Fuente: Long Island · 2026-09-23
+
+EL RIESGO, EN PALABRAS DEL PROPIO AUTOR (docs/altru-model-context.md)
+  opportunity_payments.sql y fund_assignment_payments.sql dicen igualar "the ISACTIVE = 1
+  filter used by donation_update_matching_gift.sql", cosa que tras este PR ya no es todo el
+  gate: la consulta exige ademas que la Oportunidad del propio claim sobreviva a
+  donation_transaction.sql. Un claim activo TOTALMENTE REVERTIDO pierde su Oportunidad por
+  Amount <> 0 pero conserva el importe de cuota positivo, con lo que el brazo de impagados
+  emitiria un npe01__OppPayment__c y pledge_payments_unpaid_charges.sql un Charge, ambos
+  colgados de una Oportunidad que ninguna carga crea.
+  El autor pide: "Count active claims whose transaction nets to zero with a remaining
+  installment amount > 0 before trusting those two comments." Nadie lo habia contado.
+
+MEDICION (sql/orphan_risk.nc.sql)
+
+  Metrica                                                                      Resultado
+  ---------------------------------------------------------------------------  ---------
+  Claims activos                                                                     195
+  ...cuya transaccion neta a cero                                                      1
+  ...que ademas conservan cuota pendiente > 0  (POBLACION DEL RIESGO)                  0
+  Importe pendiente total de los que netan a cero                                   0,00
+
+VEREDICTO
+  La poblacion del riesgo es CERO en Long Island. El unico claim que neta a cero es el de
+  $0 del Ejemplo 4, y su importe de cuota tambien es 0, de modo que el brazo de impagados no
+  lo emite: queda protegido por su propio gate InstallmentAmount - paid - writtenOff > 0,
+  tal como el autor supuso.
+
+  No se levanta defecto. El riesgo es INERTE en esta fuente.
+
+LO QUE SIGUE ABIERTO Y NO ES DE ESTE PR
+  1. Los comentarios de opportunity_payments.sql (linea 60) y fund_assignment_payments.sql
+     (linea 17) siguen describiendo el gate como "el filtro ISACTIVE = 1 de
+     donation_update_matching_gift.sql". Eso ya no es cierto. El comentario esta
+     desactualizado en los dos archivos, aunque hoy no cause dano.
+  2. La medicion vale para Long Island. Otros tenants pueden tener claims revertidos con
+     cuota viva; ahi la poblacion podria no ser cero.
+
+  Ambos puntos se reportan como observacion contra esas dos consultas, no contra IM-1281.

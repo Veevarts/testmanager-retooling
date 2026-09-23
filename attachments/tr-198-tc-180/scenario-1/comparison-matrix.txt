@@ -1,0 +1,53 @@
+TC-180 escenario 1 — LOS 128 IDENTIFICADORES REPORTADOS DEJAN DE NOMBRAR UN REGISTRO INEXISTENTE
+Fuente: Long Island (qa_li_direct) · base 8b522c37 vs head c1a9d82 · 2026-09-23
+
+METODO
+  No se reimplemento ninguna logica. De cada export se tomo la consulta TAL CUAL y se
+  sustituyo UNICAMENTE la lista de columnas de la proyeccion final por el identificador
+  externo que esa consulta emite (sql/instrument.py). Cadena de CTEs, temp tables, joins,
+  WHERE y hints quedan byte a byte. Asi el conjunto "identificadores que la migracion crea"
+  es el que crea la migracion, no una reconstruccion mia.
+
+  Los comentarios se quitaron antes de ejecutar porque el guard de safesql busca subcadenas
+  y las palabras "create"/"drop" aparecen DENTRO de comentarios. Se verifico despues que
+  todo CREATE/DROP restante apunta a objetos temporales (#) y que los 'Drop' sueltos son el
+  literal de dato ISNULL(mt.ACTION,'') <> 'Drop'.
+
+CONJUNTO DE OPORTUNIDADES QUE LA MIGRACION EMITE
+  donation_transaction.sql          14.730 identificadores
+  donation_pledges.sql                 795
+  membership_transactions.sql       97.775
+  ---------------------------------------
+  union                            113.300
+
+MATRIZ PRE/POST
+
+  Metrica                                          Base     PR     Delta  Declarado  Veredicto
+  -----------------------------------------------  -----   -----   -----  ---------  ---------
+  Filas emitidas                                     192     191      -1      191     PASS
+  Identificadores de donante que NINGUN export crea   125       0    -125      125     PASS exacto
+  Claims perdidos respecto a la base                    -       1      +1        1     PASS
+  Claims nuevos respecto a la base                      -       0       0        0     PASS
+
+REPARTO DEL DONANTE POR EXPORT QUE LO EMITE
+
+  Export                  Base      PR
+  ----------------------  ----     ----
+  donaciones                64       73
+  pledges                    3        3
+  membresias                 0      115
+  NINGUNO (stub)           125        0
+  ----------------------  ----     ----
+  total                    192      191
+
+LECTURA
+  Las 128 donaciones del reporte nunca estuvieron excluidas. En la version base 125 de los
+  identificadores publicados no correspondian a ninguna Oportunidad que la migracion cree,
+  y por eso el VLOOKUP contra el reporte de exito de donaciones fallaba. Tras el cambio ese
+  numero es CERO: los 191 identificadores emitidos existen los 191.
+
+  El 128 del reporte = 125 + 3. Los otros 3 son donantes de pledge que si se migraron, pero
+  salen en el reporte de pledges y no en el de donaciones. En ambas versiones son 3 y estan
+  correctos, antes y despues.
+
+OBJETIVO CUMPLIDO: SI
