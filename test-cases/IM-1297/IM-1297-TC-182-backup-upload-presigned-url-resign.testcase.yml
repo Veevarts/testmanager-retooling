@@ -1,0 +1,239 @@
+schemaVersion: "1.0"
+
+id: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+key: "TC-182"
+title: "Backup upload: the certificate stops arriving on an expired presigned URL"
+
+description: |
+  Cobertura QA de IM-1297 (Backup upload fails on the certificate when the .bak upload takes
+  longer than 1 hour — presigned URL expired). Sub-tarea de QA: IM-1301. El ticket es de tipo
+  Error y NO cuelga de ningun epic. Repositorios en alcance, los dos:
+
+  - Veevarts/MigrationAppBackend "PR #393", rama fix/backup-cert-presign-IM-1297, head 17550ac2.
+  - Veevarts/MigrationAppFrontend "PR #205", rama fix/backup-cert-presign-IM-1297, head eeb3dad9.
+
+  AMBOS PR ESTAN MERGEADOS A main, con tres segundos de diferencia el 23-09-2026 a las 20:52
+  UTC. Esto NO es una review previa al merge: es verificacion de lo que ya se entrego, y eso
+  cambia dos cosas. Primera, el veredicto no decide si se mergea sino si lo entregado funciona.
+  Segunda, y mas importante, hay que comprobar DONDE esta desplegado cada lado, porque el
+  diseno del arreglo depende de que los dos convivan.
+
+  EL DEFECTO. Al crear un respaldo, `upload-link` firma de una vez las URLs PUT de los tres
+  archivos: el `.bak`, el certificado y la clave. Esas URLs caducan a la hora en produccion
+  (`S3_PRESIGN_EXPIRATION` = 3600). El `.bak` sube por multipart y cada parte se firma bajo
+  demanda, asi que a el no le afecta; pero el frontend subia en orden BACKUP -> CERTIFICATE ->
+  KEY, de modo que el certificado se enviaba DESPUES de la subida larga, con una URL firmada
+  horas antes. S3 respondia `403 AccessDenied — Request has expired`, el respaldo quedaba en
+  `uploadStatus=FAILED` y nunca aprovisionaba. En el incidente de produccion del 23-09 el
+  `.bak` de 20 GB llego completo y el certificado de 752 bytes se intento 3h34m despues.
+
+  Y NO HABIA SALIDA DENTRO DE LA APP. Resume ve el `.bak` como completo y marca DONE con solo
+  ese archivo, asi que aprovisiona sin certificado ni clave. Restart no pasa enlace de
+  certificado. El respaldo del incidente se recupero A MANO: subiendo cert y clave al prefijo
+  de S3, poniendo el registro en PENDING/DONE y despachando la creacion de infraestructura.
+
+  EL ARREGLO, EN DOS PIEZAS QUE SE APOYAN LA UNA EN LA OTRA:
+
+  - Frontend: el certificado y la clave se suben PRIMERO, mientras sus URLs estan frescas.
+  - Backend: nuevo `POST /clients/:clientId/backups/:backupId/upload-url` que vuelve a firmar
+    una URL de PUT unico para un archivo del propio respaldo, igual que `multipart/sign-part`
+    firma cada parte. El frontend lo llama justo antes de cada PUT unico.
+
+  Las guardas del endpoint son deliberadas y cada una tiene su motivo escrito en el codigo:
+  400 si el respaldo no existe o si la clave no es de sus `files`; 409 si el upload ya esta
+  DONE o el respaldo esta en DELETING / DELETED / DELETE_FAILED; y NUNCA 404, porque el
+  frontend lee 404 como "esta ruta todavia no esta desplegada" y cae al enlace de creacion.
+
+  ESA ULTIMA DECISION ES EL PUNTO MAS DELICADO DE TODO EL CAMBIO. El fallback ante 404 existe
+  para que un frontend nuevo no se rompa contra un backend viejo. Pero significa que, si el
+  backend no esta desplegado donde el frontend cree, el sistema vuelve EN SILENCIO al
+  comportamiento defectuoso: usa la URL de creacion y el defecto original reaparece sin que
+  nadie vea un error. Por eso esta cobertura dedica un escenario entero al estado de
+  despliegue, que no es ningun AC del ticket.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. AC1 es el unico criterio que reproduce el defecto de punta a punta, y exige una subida
+    mas larga que `S3_PRESIGN_EXPIRATION`. O un archivo enorme sobre una conexion lenta, o
+    bajar temporalmente esa variable en el entorno de pruebas — un cambio de configuracion que
+    el propio autor dice que hay que acordar antes con quien sea dueno del entorno. QA no lo
+    cambia por su cuenta.
+  - R2. El fallback silencioso ante 404. Si el backend no esta desplegado, el frontend no
+    falla: usa la URL de creacion. El arreglo pareceria correcto y el defecto seguiria vivo
+    para cualquier subida larga. Hay que comprobar que la ruta responde en el entorno donde se
+    prueba, y no darlo por hecho porque el PR este mergeado.
+  - R3. AC6 esta DIFERIDO por decision del autor y no entra en este ticket: Resume no recupera
+    un certificado o una clave que falten. La razon declarada es que Resume y Start Over estan
+    deshabilitados en el frontend y que un multipart completado borra el registro del que
+    Resume depende. NO se le crea escenario, porque probar algo que se decidio no hacer solo
+    produce un fallo sin informacion. Queda escrito aqui para que nadie lo de por cerrado: un
+    respaldo que caiga en ese estado se sigue recuperando a mano.
+  - R4. Si el certificado o la clave tardan mucho y el `.bak` es pequeno, el `.bak` va por PUT
+    unico y hereda el problema al reves. El AC3 lo cubre porque exige URL fresca para TODO PUT
+    unico, incluido un `.bak` de 100 MB o menos. Hay que probar ese caso y no solo el grande.
+  - R5. La evidencia del ticket viene de PRODUCCION, de un respaldo real de un cliente. QA NO
+    prueba en produccion ni escribe en ella: la cobertura se ejecuta en el entorno de pruebas.
+    El respaldo del incidente ya se recupero a mano y no se vuelve a tocar.
+  - R6. Prioridad. El ticket esta en Medium, pero el modo de fallo es perder una subida de
+    20 GB tras tres horas y media y necesitar cirugia manual en S3 para recuperarla. Este caso
+    se marca `high` por esa razon, y queda dicho para que la diferencia no parezca un descuido.
+  - R7. El cambio toca dos repositorios que se despliegan por separado. El orden de despliegue
+    importa: backend primero. Al reves, el frontend nuevo cae al fallback y no se nota.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "Hay un entorno de pruebas de la Migration App con backend y frontend accesibles, y se sabe que commit corre cada uno."
+  - "Se puede crear un respaldo de prueba con sus tres archivos: un .bak, un certificado y una clave."
+  - "Se puede observar el trafico de red del navegador durante la subida, para ver el orden de las llamadas y que URL usa cada PUT."
+  - "Se pueden ejecutar las suites de los dos repositorios en la rama mergeada."
+  - "Se puede consultar el valor de S3_PRESIGN_EXPIRATION del entorno de pruebas SIN modificarlo; cambiarlo exige acuerdo previo con quien sea dueno del entorno."
+  - "NO se prueba en produccion ni se escribe en ella. El respaldo del incidente del 23-09 ya se recupero a mano y no se vuelve a tocar."
+  - "Se sabe que AC6 esta diferido a proposito y que no se le crea escenario."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · A backup whose .bak takes longer than the URL lifetime no longer fails on the cert"
+    tags:
+      - ac-1
+      - happy-path
+      - regression-evidence
+    given:
+      - "es el unico criterio que reproduce el defecto de punta a punta, y exige que la subida del .bak dure mas que S3_PRESIGN_EXPIRATION"
+    when:
+      - "se consulta el valor de S3_PRESIGN_EXPIRATION del entorno de pruebas, sin cambiarlo"
+      - "se busca la forma de que la subida exceda ese tiempo: o un archivo suficientemente grande, o acordar con el dueno del entorno una bajada temporal de la variable"
+      - "si ninguna de las dos es posible, se deja el escenario sin ejecutar y se argumenta por estructura por que el defecto ya no puede darse para el certificado y la clave"
+    then:
+      - "el certificado y la clave quedan en el prefijo de S3 del respaldo, el respaldo llega a uploadStatus DONE y aprovisiona"
+      - "no aparece ningun uploadFailure con etapa single_put ni respuesta 403 de S3"
+      - "si no se pudo forzar la duracion, queda escrito con que valor de la variable se trabajo y que hace falta para cerrarlo de verdad"
+      - "el argumento estructural, si se usa, se declara como tal y no como una ejecucion: el certificado y la clave ahora se envian en los primeros segundos, asi que su URL no puede haber caducado"
+
+  - title: "AC2 · The certificate and the key are uploaded before the .bak"
+    tags:
+      - ac-2
+      - happy-path
+    given:
+      - "el orden anterior era BACKUP, CERTIFICATE, KEY, y por eso los archivos pequenos se enviaban al final, con URLs firmadas horas antes"
+    when:
+      - "se crea un respaldo con los tres archivos y se observa el trafico de red del navegador desde el inicio de la subida"
+      - "se anota el orden real de los PUT a S3 y el instante de cada uno"
+    then:
+      - "el PUT del certificado y el de la clave ocurren ANTES de que empiece la subida del .bak"
+      - "entre la creacion del respaldo y esos dos PUT pasan segundos, no horas"
+      - "el respaldo llega a uploadStatus DONE con los tres archivos presentes en el prefijo de S3"
+      - "queda captura del panel de red que muestra el orden, porque es la evidencia directa del criterio"
+
+  - title: "AC3 · Every single PUT asks for a fresh URL immediately before sending"
+    tags:
+      - ac-3
+      - happy-path
+      - edge-case
+    given:
+      - "el criterio exige URL fresca para TODO archivo que suba por PUT unico: certificado, clave, y tambien un .bak de 100 MB o menos"
+    when:
+      - "se sube un respaldo con .bak grande y se comprueba la secuencia de llamadas de cada archivo pequeno"
+      - "se sube ademas un respaldo con .bak PEQUENO, para ejercer el caso en que el propio .bak va por PUT unico"
+      - "se compara la URL que devuelve cada llamada de refirmado con la que realmente usa el PUT siguiente"
+    then:
+      - "por cada PUT unico hay una llamada previa a la ruta de refirmado para la clave de ese archivo, inmediatamente antes"
+      - "el PUT usa la URL de esa respuesta y no la que se firmo al crear el respaldo"
+      - "con el .bak pequeno tambien se refirma: el caso inverso, un .bak por PUT unico despues de un certificado lento, queda cubierto"
+      - "el .bak grande sigue subiendo por multipart con firma por parte, sin pasar por la ruta de PUT unico"
+
+  - title: "AC4 · The re-sign endpoint signs only this backup's files, and refuses when it must"
+    tags:
+      - ac-4
+      - negative
+      - security
+    given:
+      - "la ruta de refirmado acepta una clave de archivo y devuelve una URL de escritura, asi que sus guardas son lo que impide firmar sobre un objeto ajeno"
+    when:
+      - "se pide refirmar una clave que pertenece a OTRO respaldo"
+      - "se pide refirmar para un respaldo que no existe"
+      - "se pide refirmar para un respaldo cuyo uploadStatus ya es DONE"
+      - "se pide refirmar para un respaldo en DELETING, DELETED o DELETE_FAILED"
+      - "se pide refirmar para un respaldo en FAILED, que es un caso que SI debe permitirse"
+    then:
+      - "la clave ajena y el respaldo inexistente responden 400"
+      - "el upload ya completado y el respaldo en borrado responden 409"
+      - "en ningun caso responde 404, porque el frontend interpreta 404 como ruta no desplegada y caeria al enlace de creacion"
+      - "el respaldo en FAILED si obtiene su URL, que es lo que permite completar los archivos que faltan"
+      - "queda comprobado que ninguna de las guardas se puede sortear cambiando solo la clave del cuerpo de la peticion"
+
+  - title: "AC5 · The frontend never bypasses a refusal, but survives a missing route"
+    tags:
+      - ac-5
+      - negative
+      - edge-case
+    given:
+      - "el frontend distingue entre una negativa del backend y una ausencia del backend, y esa distincion es la que decide si sube o no"
+    when:
+      - "se provoca que la llamada de refirmado responda 400 y se observa que hace el frontend"
+      - "se provoca que responda 409 y se observa lo mismo"
+      - "se provoca que responda 404, que responda 5xx y que no responda en absoluto"
+    then:
+      - "ante 400 o 409 la subida falla con uploadFailure de etapa single_sign, con el codigo HTTP registrado, y NO se envia ningun PUT de ese archivo"
+      - "ante 404, 5xx o ausencia de respuesta, el archivo se sube con la URL del enlace de creacion y la subida continua"
+      - "el fallback solo es seguro porque el certificado y la clave van primero: se deja escrito que depende del orden del AC2 y no es independiente de el"
+      - "queda registrada la clave de S3 del archivo afectado en el diagnostico, para poder localizarlo despues"
+
+  - title: "Despliegue · The re-sign route is actually live where the frontend calls it"
+    tags:
+      - deployment
+      - edge-case
+      - missing-doc
+    given:
+      - "no es ningun criterio del ticket, pero es la condicion sin la cual todo lo demas es decorativo: si el backend no esta desplegado, el frontend cae al fallback de 404 y el defecto vuelve EN SILENCIO"
+    when:
+      - "se comprueba que commit corre el backend del entorno de pruebas y si incluye el merge del \"PR #393\""
+      - "se comprueba lo mismo para el frontend y el \"PR #205\""
+      - "se llama a la ruta de refirmado en ese entorno y se observa si responde o da 404"
+      - "se revisa en que entornos esta desplegado cada lado, incluido produccion, y en que orden se desplegaron"
+    then:
+      - "la ruta responde en el entorno donde se ejecuta esta cobertura, de modo que los escenarios AC3 y AC5 prueban el camino real y no el fallback"
+      - "queda escrito, entorno por entorno, si el backend esta desplegado antes que el frontend o al reves"
+      - "si en algun entorno el frontend va por delante del backend, se reporta como riesgo concreto: ahi el defecto original sigue vivo y no se manifiesta como error"
+      - "se deja indicado que el orden de despliegue correcto es backend primero, y por que"
+
+  - title: "Regresion · The multipart path and the creation-time links keep working"
+    tags:
+      - regression
+      - happy-path
+    given:
+      - "el cambio anade una ruta y reordena la subida, pero no debe alterar la creacion del respaldo ni la subida por multipart, que es la que mueve el volumen"
+    when:
+      - "se crea un respaldo y se comprueba que la llamada de creacion sigue devolviendo los enlaces de los tres archivos"
+      - "se sube un .bak grande y se sigue la secuencia de inicio de multipart, firma por parte y completado"
+      - "se ejecutan las suites de los dos repositorios en la rama mergeada"
+      - "se revisa si algun otro consumidor de la creacion de enlaces se ve afectado por el campo nuevo del esquema de respaldo"
+    then:
+      - "la creacion del respaldo sigue devolviendo los tres enlaces como antes, sin cambio de contrato"
+      - "la subida por multipart no pasa por la ruta de refirmado y termina igual que antes del cambio"
+      - "las suites de backend y frontend pasan en la rama mergeada, y los conteos quedan anotados"
+      - "no aparece ningun consumidor roto por el campo nuevo, o se nombra el que lo esta"
+
+tags:
+  - im-1297
+  - im-1301
+  - migration-app
+  - migration-app-backend
+  - migration-app-frontend
+  - backups
+  - s3
+  - presigned-url
+  - upload
+  - deployment
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-24T14:05:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-24T14:05:00Z"
+  version: 1

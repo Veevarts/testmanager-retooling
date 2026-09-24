@@ -1,0 +1,52 @@
+ESCENARIO 1 · AC1 — un .bak que tarda mas que la vida de la URL ya no tumba al certificado
+==========================================================================================
+
+Por que no se ejecuta en el entorno y si con una reproduccion
+------------------------------------------------------------
+El AC pide una subida mas larga que S3_PRESIGN_EXPIRATION. Esa variable se
+resuelve desde SSM (/<env>/migration-app-backend/s3-presign-expiration): no hay
+credenciales de AWS en esta maquina (`sts get-caller-identity` -> InvalidClientTokenId),
+asi que NO se pudo leer el valor de dev, y bajarla exige acuerdo con el dueno del
+entorno, que QA no toma por su cuenta. El unico dato firme del codigo es el
+respaldo por defecto: 900 s si la variable falta o no es valida.
+
+En vez de dejarlo en un argumento estructural, se modela lo unico del reloj que
+importa: una URL prefirmada CADUCA, y S3 contesta 403 a quien la use tarde. Cada
+URL lleva su instante de firma; el S3 falso rechaza la firmada hace mas de una
+hora; la subida del .bak por multipart avanza el reloj por encima de ese limite,
+como las 3h34m del incidente. El MISMO fichero corre contra las dos versiones.
+
+Fuente/Prueba              Metrica                 Antes (d17f406)          Despues (257c71c)    AC   Objetivo?  Veredicto
+-------------------------  ----------------------  -----------------------  -------------------  ---  ---------  ---------
+repro · .bak largo         resultado de la subida  FALLA                    COMPLETA             AC1  SI         PASS
+repro · .bak largo         etapa del fallo         single_put               (ninguna)            AC1  SI         PASS
+repro · .bak largo         archivo que cae         CERTIFICATE              (ninguno)            AC1  SI         PASS
+repro · .bak largo         respuesta de S3         403 AccessDenied         200                  AC1  SI         PASS
+repro · .bak largo         mensaje de S3           "Request has expired"    (ninguno)            AC1  SI         PASS
+repro · .bak largo         duracion simulada       15000 s (4h10m)          15000 s              AC1  SI         PASS
+                                                   > 3600 s de caducidad
+repro · inverso            .bak pequeno tras un    PASA, pero por el orden  PASA porque la ruta  R4   SI         PASS
+  (.bak pequeno por PUT    certificado lento       VIEJO: el .bak iba       de refirmado le da
+   unico detras del cert)                          PRIMERO y no llegaba     una URL fresca
+                                                   a caducar nada
+
+Lo que dice la comparacion
+--------------------------
+El 403 AccessDenied / "Request has expired" sobre el CERTIFICADO en etapa
+single_put es, palabra por palabra, el sintoma que el ticket describe en
+produccion. La version anterior lo produce; la nueva no. El objetivo del AC1
+queda cumplido por EJECUCION, no por argumento.
+
+El caso inverso merece leerse con cuidado, porque pasa en las dos y no significa
+lo mismo: en la version vieja pasa por accidente — el .bak iba primero, antes de
+que nada pudiera caducar. En la nueva, el .bak va DESPUES de un certificado
+lento, y solo sobrevive porque se le refirma la URL. El orden nuevo crea ese
+caso y el refirmado lo resuelve; son las dos mitades del arreglo, y hacen falta
+las dos.
+
+Limite de lo que se afirma
+--------------------------
+Esto prueba el comportamiento del modulo de subida frente a una URL caducada.
+NO prueba el valor real de S3_PRESIGN_EXPIRATION en dev ni una subida real de
+20 GB. Para cerrarlo contra el entorno hace falta leer la variable y forzar la
+duracion, y eso sigue pendiente de quien sea dueno del entorno.

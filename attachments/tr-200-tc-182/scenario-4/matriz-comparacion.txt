@@ -1,0 +1,56 @@
+ESCENARIO 4 · AC4 — el endpoint firma solo los archivos del propio respaldo, y rechaza cuando debe
+===================================================================================================
+
+Caso                                  Respuesta esperada  Medido              Prueba                      Veredicto
+------------------------------------  ------------------  ------------------  --------------------------  ---------
+clave de OTRO respaldo                400                 BadRequestException autor + QA                  PASS
+clave de OTRO cliente                 400                 BadRequestException autor + QA                  PASS
+clave con travesia ../..              400                 BadRequestException autor                       PASS
+archivo que el respaldo no declaro    400                 BadRequestException autor                       PASS
+respaldo que no existe                400 y NUNCA 404      BadRequestException autor + mutacion M5        PASS
+upload ya DONE                        409                 ConflictException   autor + mutacion M7         PASS
+respaldo en DELETING                  409                 ConflictException   autor + mutacion M8         PASS
+respaldo en DELETED                   409                 ConflictException   autor + mutacion M8         PASS
+respaldo en DELETE_FAILED             409                 ConflictException   autor + mutacion M8         PASS
+respaldo en FAILED                    SI firma            firma               autor                       PASS
+
+"En ningun caso responde 404": confirmado en el codigo y fijado por la mutacion
+M5 — cambiar el BadRequestException por NotFoundException pone la suite roja.
+El motivo esta escrito en el propio fuente: el frontend lee 404 como "ruta no
+desplegada" y caeria al enlace de creacion, es decir, subiria un objeto
+huerfano sobre un respaldo ya borrado.
+
+"El respaldo en FAILED si obtiene su URL": es lo que permite completar los
+archivos que faltan sin tocar S3 a mano. Importa por el AC6 diferido — Resume
+no recupera cert ni clave, pero al menos la ruta no cierra la puerta.
+
+SE PUEDE SORTEAR LA GUARDA CAMBIANDO SOLO LA CLAVE DEL CUERPO?
+---------------------------------------------------------------
+El autor probo cuatro claves ajenas obvias. La guarda compara por IGUALDAD
+EXACTA contra las rutas declaradas del respaldo, asi que la pregunta real es si
+alguna capa de mas abajo normaliza la clave y reabre lo que la igualdad cerro.
+QA probo 13 formas de escribir "otra cosa", con control positivo:
+
+  mayusculas en el nombre           RECHAZADA    (S3 distingue mayusculas: es otro objeto)
+  mayusculas en el prefijo          RECHAZADA
+  barra doble  //                   RECHAZADA    (para S3 es otra clave)
+  segmento punto  /./               RECHAZADA
+  travesia codificada  %2e%2e%2f    RECHAZADA
+  espacio al final                  RECHAZADA
+  espacio al principio              RECHAZADA
+  sufijo pegado  .evil              RECHAZADA
+  cadena de consulta  ?x=1          RECHAZADA
+  byte nulo  \0.evil                RECHAZADA
+  barra inicial absoluta            RECHAZADA
+  prefijo del bucket delante        RECHAZADA
+  clave vacia                       RECHAZADA
+  ---
+  CONTROL POSITIVO: la clave legitima SI firma, 1 llamada al presigner.
+
+15/15. En ninguno de los 13 rechazos se llamo al presigner: la guarda corta
+antes de acunar nada. -> guardas-adversarias.txt
+
+NOTA DE POSTURA, ajena a este PR: el controlador no acota clientId a las
+reclamaciones de quien llama, y solo connection-password exige grupo. La ruta
+nueva adopta la postura de sus 12 hermanas — incluida DELETE :backupId, que ya
+existia y permite mas dano que sobrescribir. Se deja escrito; no se le imputa.

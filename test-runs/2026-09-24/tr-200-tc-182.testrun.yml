@@ -1,0 +1,411 @@
+schemaVersion: "1.0"
+id: tr-6c1e2a74-91d0-4f3b-9c55-2b0d7ae43f18
+key: TR-200
+title: >-
+  TR-200 · IM-1297 · TC-182 · El arreglo hace lo que dice y las dos suites lo sujetan — 7/7
+  PASS, el defecto queda reproducido antes y despues, y aparece lo que nadie habia mirado:
+  el arreglo no esta en produccion, donde el defecto sigue vivo.
+status: completed
+environment:
+  name: >-
+    Entorno de pruebas (dev) de la Migration App, con los dos lados desplegados desde `main`.
+    Contra el se hizo UNA sola comprobacion en vivo: una sonda SIN TOKEN para ver si la ruta
+    nueva existe — 401 la ruta existe, 404 no — con control negativo. No se escribio nada, no
+    se creo ningun respaldo y no se uso ninguna credencial. PRODUCCION NO SE TOCO: si el
+    arreglo esta alli lo responde git, comparando `stable` con `main`, sin una sola peticion.
+    Las dos suites y las mutaciones corrieron sobre clones en un directorio temporal, nunca
+    sobre los repositorios del dev. El detalle de red y los identificadores del incidente de
+    produccion quedan fuera de este artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    Mixto (backend/servicio + frontend), y post-merge: los dos PR ya estan en `main`.
+    Veevarts/MigrationAppBackend "PR #393", merge 37afb12d, rama
+    fix/backup-cert-presign-IM-1297, +383 lineas — una ruta NUEVA, un use case, un DTO.
+    Veevarts/MigrationAppFrontend "PR #205", merge 257c71c, misma rama, +449/-15 — reordena la
+    subida y anade el refirmado. Base de comparacion d17f406 en el frontend. El veredicto queda
+    atado a esos dos commits.
+startedAt: "2026-09-24T14:25:00Z"
+completedAt: "2026-09-24T15:45:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  EL DEFECTO. `upload-link` firma de una vez las URLs PUT de los tres archivos cuando se crea
+  el respaldo. Caducan a la hora en produccion. El `.bak` sube por multipart y cada parte se
+  firma bajo demanda, asi que a el no le afecta; pero el frontend subia en orden BACKUP ->
+  CERTIFICATE -> KEY, de modo que el certificado se enviaba DESPUES de la subida larga con
+  una URL firmada horas antes. S3 respondia 403 AccessDenied "Request has expired", el
+  respaldo quedaba en uploadStatus FAILED y nunca aprovisionaba. En el incidente del 23-09 el
+  `.bak` de 20 GB llego completo y el certificado de 752 bytes se intento 3h34m despues, y el
+  respaldo se recupero A MANO.
+
+  EL ARREGLO, DOS PIEZAS QUE SE SOSTIENEN LA UNA A LA OTRA. El frontend sube el certificado y
+  la clave PRIMERO, mientras sus URLs estan frescas. Y el backend expone
+  `POST /clients/:clientId/backups/:backupId/upload-url`, que vuelve a firmar una URL de PUT
+  unico para un archivo del propio respaldo, igual que `multipart/sign-part` firma cada
+  parte; el frontend la llama justo antes de cada PUT unico. Ninguna de las dos basta sola:
+  el orden protege al certificado, el refirmado protege a un `.bak` pequeno que ahora va
+  ultimo.
+
+  LA DECISION MAS DELICADA NO ES NINGUN CRITERIO. El endpoint NUNCA responde 404, porque el
+  frontend lee 404 como "esta ruta todavia no esta desplegada" y cae al enlace de creacion.
+  Ese fallback existe para que un frontend nuevo no se rompa contra un backend viejo, y esta
+  bien pensado — pero significa que si el backend no esta donde el frontend cree, el sistema
+  vuelve EN SILENCIO al comportamiento defectuoso. Por eso esta cobertura dedica un escenario
+  entero al estado de despliegue. Y ha valido la pena: es donde esta el hallazgo.
+
+  ## Inferred technical tests
+
+  - Reproducir el defecto, que es lo unico que el autor no probo. Modelar la caducidad con un
+    reloj virtual y correr el MISMO fichero contra las dos versiones. EJECUTADO.
+  - Probar que las suites PUEDEN fallar. Nueve mutaciones, una por cada regla que dicen
+    guardar. EJECUTADO: 9 de 9 se ponen rojas.
+  - Comprobar que la ruta esta viva donde el frontend la llama, y en que entornos. Sonda sin
+    token con control negativo, mas git para produccion. EJECUTADO.
+  - Leer el bundle DESPLEGADO, no el repositorio. EJECUTADO.
+  - Atacar la guarda de clave con las formas que el autor no probo. EJECUTADO: 15/15.
+  - Las dos suites completas, y separar los fallos previos de los introducidos. EJECUTADO.
+  - Barrido de seguridad y OWASP Top 10 completo. EJECUTADO.
+  - Lo NO ejecutable aqui: forzar una subida mas larga que S3_PRESIGN_EXPIRATION en el
+    entorno. Sin credenciales de AWS no se puede leer la variable, y bajarla exige acuerdo
+    con el dueno del entorno. Queda en "Pendiente de tu parte".
+
+  ## Hallazgos
+
+  F1 · EL ARREGLO NO ESTA EN PRODUCCION, Y ALLI EL DEFECTO SIGUE VIVO. Los dos repositorios
+  despliegan prod desde `stable` y dev desde `main`. Los dos `stable` se movieron por ultima
+  vez el 2026-08-18 y van 13 commits por detras. El incidente ocurrio en produccion el
+  2026-09-23 y el arreglo se mergeo a `main` ese mismo dia. Cualquier respaldo de produccion
+  cuyo `.bak` tarde mas que S3_PRESIGN_EXPIRATION volvera a fallar en el certificado y
+  volvera a necesitar cirugia manual en S3. No es un defecto del PR: el codigo es correcto,
+  simplemente no esta donde hace falta. Es lo mas accionable de esta corrida.
+
+  F2 · EN DEV EL FRONTEND SE DESPLEGO 7m50s ANTES QUE EL BACKEND. Frontend terminado a las
+  20:54:43Z, backend a las 21:02:33Z. En esa ventana toda subida por PUT unico recibia 404,
+  caia al enlace de creacion y se comportaba como antes del arreglo, sin error ni traza. El
+  riesgo de orden de despliegue no es hipotetico: ya ocurrio una vez. La promocion a
+  produccion debe ir BACKEND PRIMERO, esperando a que termine antes de promocionar el
+  frontend.
+
+  F3 · AC6 SIGUE DIFERIDO Y NO SE LE CREO ESCENARIO, a proposito: probar algo que se decidio
+  no hacer solo produce un fallo sin informacion. Queda dicho para que nadie lo de por
+  cerrado — un respaldo al que le falte el certificado o la clave se sigue recuperando A
+  MANO, porque Resume lo ve completo con solo el `.bak` y aprovisiona sin ellos.
+
+  F4 · OBSERVACION DE POSTURA, PREVIA A ESTE PR Y FUERA DE SU ALCANCE. El controlador de
+  respaldos no acota clientId a las reclamaciones de quien llama, y solo
+  connection-password exige grupo. Cualquier usuario autenticado del pool puede operar sobre
+  el clientId que escriba, incluido DELETE :backupId, que ya existia y permite mas dano que
+  sobrescribir. La ruta nueva adopta exactamente esa postura; no la ensancha. Se deja escrito
+  porque se vio, no porque sea de este cambio.
+
+  ## Lo que el autor dejo bien atado
+
+  Las guardas del endpoint estan probadas una a una y cada una lleva su motivo escrito encima
+  en el codigo, de modo que quien las cambie sabra que esta rompiendo algo deliberado. La
+  prueba "rejects a backup that does not exist with 400, never 404" es el mejor ejemplo. Y el
+  endpoint nuevo es MAS estricto que la hermana que imita: `multipart/sign-part` no tiene ni
+  la guarda de upload DONE ni la de borrado.
+
+results:
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      AC1 · A backup whose .bak takes longer than the URL lifetime no longer fails on the cert
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-24T15:38:00Z"
+    stepResults: []
+    actual: |
+      NO SE PUDO FORZAR LA DURACION EN EL ENTORNO, ASI QUE SE REPRODUJO EL DEFECTO.
+
+      La variable S3_PRESIGN_EXPIRATION se resuelve desde SSM
+      (/<env>/migration-app-backend/s3-presign-expiration). No hay credenciales de AWS en esta
+      maquina — `sts get-caller-identity` devuelve InvalidClientTokenId — asi que NO se pudo
+      leer el valor de dev, y bajarla exige acuerdo con el dueno del entorno, que QA no toma
+      por su cuenta. El unico dato firme del codigo es el respaldo por defecto: 900 s si la
+      variable falta o no es valida.
+
+      En vez de dejarlo en un argumento estructural, se modelo lo unico del reloj que importa:
+      una URL prefirmada CADUCA, y S3 contesta 403 a quien la use tarde. Cada URL lleva su
+      instante de firma; el S3 falso rechaza la firmada hace mas de una hora; la subida del
+      .bak por multipart avanza el reloj hasta 15000 s simulados, como las 3h34m del incidente.
+      El MISMO fichero corre contra las dos versiones — que es lo que le da sentido.
+
+        Metrica                    Antes (d17f406)           Despues (257c71c)
+        resultado de la subida     FALLA                     COMPLETA
+        etapa del fallo            single_put                (ninguna)
+        archivo que cae            CERTIFICATE               (ninguno)
+        respuesta de S3            403 AccessDenied          200
+        mensaje de S3              "Request has expired"     (ninguno)
+        duracion simulada          15000 s (> 3600)          15000 s
+
+      El 403 AccessDenied / "Request has expired" sobre el CERTIFICADO en etapa single_put es,
+      palabra por palabra, el sintoma que el ticket describe en produccion. La version anterior
+      lo produce; la nueva no.
+
+      EL CASO INVERSO, que pasa en las dos y no significa lo mismo. Un .bak PEQUENO por PUT
+      unico detras de un certificado lento: en la version vieja pasa por accidente, porque el
+      .bak iba PRIMERO y nada habia caducado todavia. En la nueva el .bak va DESPUES del
+      certificado lento y solo sobrevive porque se le refirma la URL. El orden nuevo crea ese
+      caso y el refirmado lo resuelve: son las dos mitades del arreglo y hacen falta las dos.
+      Es el R4 del caso de prueba.
+
+      LIMITE DE LO QUE SE AFIRMA. Esto prueba el comportamiento del modulo de subida frente a
+      una URL caducada. NO observa el prefijo de S3, ni uploadStatus DONE, ni el
+      aprovisionamiento, ni una subida real de 20 GB. Para cerrarlo contra el entorno hace
+      falta leer S3_PRESIGN_EXPIRATION y forzar la duracion, y eso sigue pendiente de quien sea
+      dueno del entorno. Queda en "Pendiente de tu parte".
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      AC2 · The certificate and the key are uploaded before the .bak
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-24T15:33:00Z"
+    stepResults: []
+    actual: |
+      Comprobado en dos sitios, porque el repositorio no es lo que corre.
+
+      EN EL FUENTE MERGEADO. uploadBackupFiles pasa de BACKUP, CERTIFICATE, KEY a CERTIFICATE,
+      KEY, BACKUP.
+
+      EN EL BUNDLE QUE DEV SIRVE DE VERDAD. Se siguio el grafo desde index.html hasta el chunk
+      de la subida, /assets/useBackups-CCWRPsgj.js, y ahi esta:
+
+        e.CERTIFICATE&&await G("CERTIFICATE",t.CERTIFICATE,e.CERTIFICATE,"certificate",a),
+        e.KEY&&await G("KEY",t.KEY,e.KEY,"key",a),
+        await G("BACKUP",t.BACKUP,e.BACKUP,"backup",a)
+
+      certificate, key, backup. El orden nuevo esta en el artefacto que el navegador descarga,
+      no solo en la rama.
+
+      Y LA SUITE LO DETECTA SI SE REVIERTE. Mutacion M1 (devolver el .bak al principio) y M1b
+      (quitarlo del final): las dos ponen la suite ROJA. La prueba del autor "uploads the
+      certificate and key before a multipart backup" no es decorativa.
+
+      La captura del panel de red no se tomo: no hay navegador en esta corrida, y mostraria
+      exactamente el orden que esas tres lineas ya fijan en el codigo descargado. Se deja como
+      pendiente cosmetico, no como hueco de verificacion.
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      AC3 · Every single PUT asks for a fresh URL immediately before sending
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-24T15:30:00Z"
+    stepResults: []
+    actual: |
+      Tres PUT unicos, tres llamadas de refirmado, y las tres URLs que se usan son las
+      devueltas por esas llamadas, no las de creacion. La prueba del autor "signs each single
+      PUT right before it, never using the creation-time URL" lo fija fetch a fetch.
+
+      EL .BAK PEQUENO TAMBIEN SE REFIRMA, que es lo que cierra el R4. En esa misma prueba el
+      .bak mide 4 bytes contra un umbral de 8, asi que va por PUT unico — y recibe su URL
+      fresca igual que el certificado y la clave. El criterio pedia explicitamente cubrir un
+      .bak de 100 MB o menos y queda cubierto.
+
+      EL .BAK GRANDE NO PASA POR AHI. Con 12 bytes y trozos de 4 va por multipart, con firma
+      por parte, sin tocar la ruta de PUT unico. Era asi antes del cambio y sigue igual: por
+      eso el .bak nunca fue el problema.
+
+      Mutacion M2 (no refirmar nunca, usar siempre la URL de creacion): la suite se pone ROJA,
+      caen 6 pruebas.
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      AC4 · The re-sign endpoint signs only this backup's files, and refuses when it must
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-24T15:41:00Z"
+    stepResults: []
+    actual: |
+      Las diez situaciones del criterio responden lo que deben: 400 para clave ajena, clave de
+      otro cliente, travesia, archivo no declarado y respaldo inexistente; 409 para upload ya
+      DONE y para DELETING / DELETED / DELETE_FAILED; y el respaldo en FAILED SI obtiene su
+      URL, que es lo que permite completar los archivos que faltan sin tocar S3 a mano.
+
+      "EN NINGUN CASO 404" esta fijado por la mutacion M5: cambiar el BadRequestException por
+      NotFoundException pone la suite roja. El motivo esta escrito en el propio fuente — el
+      frontend lee 404 como "ruta no desplegada" y subiria un objeto huerfano sobre un respaldo
+      ya borrado.
+
+      SE PUEDE SORTEAR LA GUARDA CAMBIANDO SOLO LA CLAVE? El autor probo cuatro claves ajenas
+      obvias. La guarda compara por IGUALDAD EXACTA, asi que la pregunta real es si alguna capa
+      de mas abajo normaliza la clave y reabre lo que la igualdad cerro. QA probo 13 formas de
+      escribir "otra cosa" — mayusculas en el nombre y en el prefijo, barra doble, segmento
+      punto, travesia codificada %2e%2e%2f, espacio al principio y al final, sufijo pegado,
+      cadena de consulta, byte nulo, barra inicial absoluta, prefijo del bucket delante y clave
+      vacia — con CONTROL POSITIVO para que el rechazo signifique algo.
+
+      15/15. Las 13 rechazadas, la legitima firmada. En ninguno de los 13 rechazos se llamo al
+      presigner: la guarda corta antes de acunar nada.
+
+      Las mutaciones M6, M7 y M8 (quitar la guarda de clave ajena, la de DONE y la de borrado)
+      ponen la suite roja las tres. Las dos ultimas son guardas que la hermana multipart NO
+      tiene: el endpoint nuevo es mas estricto que el que imita.
+
+      NOTA DE POSTURA, ajena a este PR: el controlador no acota clientId a las reclamaciones de
+      quien llama y solo connection-password exige grupo, asi que cualquier usuario autenticado
+      del pool puede operar sobre el clientId que escriba. La ruta nueva adopta la postura de
+      sus 12 hermanas, incluida DELETE :backupId, que ya existia y permite mas dano que
+      sobrescribir. No la ensancha. Queda escrito, no se le imputa.
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      AC5 · The frontend never bypasses a refusal, but survives a missing route
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-24T15:31:00Z"
+    stepResults: []
+    actual: |
+      La regla cabe en una linea y separa exactamente lo que hay que separar:
+
+        isRefusal = error instanceof SignBackupUploadUrlError
+                    && status >= 400 && status < 500 && status !== 404
+
+      400 clave ajena, 400 respaldo inexistente, 409 upload DONE y 409 respaldo en borrado:
+      PARA, con uploadFailure de etapa single_sign, el codigo HTTP registrado y CERO PUT de ese
+      archivo. 404, 5xx y sin respuesta: SIGUE con el enlace de creacion. Y si no hay enlace de
+      creacion al que caer, falla como single_sign con httpStatus 404 en vez de callarse.
+
+      LAS DOS MUTACIONES QUE IMPORTAN. M3 — aplicar el fallback a todo error — hace caer las
+      cuatro pruebas de "never bypasses". M4 — contar el 404 como negativa — hace caer "falls
+      back when the route is missing". Las dos mitades de la regla estan sujetas.
+
+      SE REGISTRA LA CLAVE DE S3? Si, y es una mejora medible, no una promesa. En la
+      reproduccion del escenario 1 sobre la version ANTERIOR el diagnostico sale con
+      s3Key: undefined — no habia forma de localizar el objeto que fallo. Despues llegan s3Key,
+      httpStatus, s3ErrorCode, s3ErrorMessage, s3RequestId y la etapa single_sign.
+
+      LA DEPENDENCIA QUE EL PROPIO CRITERIO PIDE DEJAR ESCRITA: el fallback ante 404 solo es
+      seguro porque el certificado y la clave van PRIMERO. Si el orden se revirtiera, el enlace
+      de creacion al que se cae estaria caducado y el fallback devolveria el defecto original.
+      AC5 no es independiente de AC2: descansa sobre el. La mutacion M1 lo hace visible —
+      al devolver el orden viejo caen tambien pruebas de esta seccion, no solo las de AC2.
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      Despliegue · The re-sign route is actually live where the frontend calls it
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-24T15:36:00Z"
+    stepResults: []
+    actual: |
+      EN DEV LA RUTA RESPONDE. Sonda sin token, el mismo metodo que usa el propio
+      scripts/probe-api-routes.mjs del frontend: 401 significa que la ruta existe y el guard
+      corrio, 404 que el router no la emparejo.
+
+        401  POST  .../backups/{id}/upload-url               LA RUTA NUEVA
+        401  POST  .../backups/{id}/multipart/sign-part      control: hermana existente
+        401  POST  .../backups/upload-link                   control: ruta de creacion
+        404  POST  .../backups/{id}/upload-url-inventada     CONTROL NEGATIVO
+
+      El control negativo es lo que hace que el 401 signifique algo. Y el bundle que dev sirve
+      lleva "/upload-url", SignBackupUploadUrlError y single_sign. Asi que los escenarios AC3 y
+      AC5 probaron el camino real y no el fallback.
+
+      EL ORDEN, MEDIDO: EN DEV EL FRONTEND LLEGO PRIMERO.
+
+        frontend  inicio 20:52:47Z   fin 20:54:43Z
+        backend   inicio 20:52:44Z   fin 21:02:33Z
+
+      El frontend nuevo estuvo sirviendose 7 minutos y 50 segundos ANTES de que existiera la
+      ruta que llama. En esa ventana toda subida por PUT unico en dev recibia 404, caia al
+      enlace de creacion y se comportaba como antes del arreglo — sin error y sin traza. No es
+      una hipotesis sobre el orden de despliegue: es el orden que ocurrio. La ventana fue corta
+      y en dev, asi que probablemente no la sufrio nadie. Importa porque es la MISMA mecanica
+      que gobernara la promocion a produccion.
+
+      EN PRODUCCION EL ARREGLO NO ESTA. Los dos repositorios despliegan prod desde la rama
+      `stable` y dev desde `main`, y los dos `stable` se movieron por ultima vez el 2026-08-18:
+
+        MigrationAppBackend   stable 94097156   main 37afb12d   main +13 commits
+        MigrationAppFrontend  stable 818d1d9    main 1dd79ee    main +13 commits
+
+      `git merge-base --is-ancestor` da NO en los dos. El incidente que origino el ticket
+      ocurrio en produccion el 2026-09-23 y el arreglo se mergeo a `main` ese mismo dia, pero
+      produccion no lo tiene: cualquier respaldo de produccion cuyo .bak tarde mas que
+      S3_PRESIGN_EXPIRATION volvera a fallar en el certificado y volvera a necesitar la
+      recuperacion manual en S3. Se reporta como F1. No es un defecto del PR — el codigo es
+      correcto, simplemente no esta donde hace falta.
+
+      Produccion no se sondeo: la pregunta la responde git sin una sola peticion.
+
+      ORDEN CORRECTO PARA LA PROMOCION: backend a `stable` primero, esperar a que termine
+      (tardo ~10 min contra ~2 del frontend), comprobar la ruta con la misma sonda sin token, y
+      despues el frontend. Al reves se repite la ventana de dev, pero en produccion.
+  - testCaseId: "1ad2e5cf-a812-4867-86ed-379ede5d6036"
+    testCaseKey: TC-182
+    scenarioTitle: >-
+      Regresion · The multipart path and the creation-time links keep working
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-24T15:29:00Z"
+    stepResults: []
+    actual: |
+      LAS DOS SUITES, EN LA RAMA MERGEADA.
+
+        backend    323 suites PASS · 4836 pruebas · 0 fallos · 13 suites y 155 pruebas omitidas
+        frontend   185 ficheros PASS · 2623 pruebas · 2 FALLOS · 9 omitidas
+
+      LOS DOS FALLOS NO SON DE ESTE CAMBIO, y no se afirma de oido: se reejecuto
+      src/lib/staleChunkReload.test.ts en d17f406 — main justo antes del merge — y fallan
+      igual, 2 de 21. El ultimo commit que toco esos ficheros es f9eff9e, del 2026-08-06, y
+      ninguno de los dos PR los menciona. Regresiones introducidas: NINGUNA.
+
+      LO QUE NO SE TOCO, comprobado en el diff y no supuesto: generate-backup-upload-links
+      intacto, asi que la creacion sigue devolviendo los tres enlaces sin cambio de contrato;
+      cero ficheros de multipart en los dos diffs y las 6 pruebas de multipart verdes; y la
+      hermana sign-upload-part no heredo las guardas nuevas — 0 referencias a UploadStatus.DONE
+      y a DELETION_STATUSES. Las guardas viven solo donde se decidieron.
+
+      EL CAMPO NUEVO NO ROMPE A NADIE. BackupUploadFailureStage gana "single_sign", pero el
+      union solo se usa dentro de backupUploads.ts y el unico consumidor externo del
+      diagnostico, useBackups.ts, lo pasa entero sin ramificar por etapa. El esquema de
+      respaldo solo anade exports. tsc limpio en los dos repositorios.
+
+      contract:check pasa ("Backend contract is current"), pero su generador solo mira
+      src/csm/playbooks/... y no cubre backups. Pasa y no dice nada de este PR. Se anota por lo
+      que es, para que nadie lo cuente como evidencia.
+
+summary:
+  total: 7
+  passed: 7
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+
+history:
+  - action: run-started
+    timestamp: "2026-09-24T14:25:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-182 contra los dos PR ya mergeados a `main`. Al ser verificacion
+      post-merge, la primera pregunta deja de ser "se mergea?" y pasa a ser "esta donde hace
+      falta?" — y esa resulto ser la pregunta util.
+  - action: run-completed
+    timestamp: "2026-09-24T15:45:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      7/7 PASS. El defecto queda reproducido sobre la version anterior con el sintoma exacto del
+      ticket — 403 AccessDenied "Request has expired" sobre el certificado en etapa single_put —
+      y no se reproduce sobre la nueva. Las nueve mutaciones se ponen rojas, asi que el verde de
+      las suites significa algo. La ruta esta viva en dev y el bundle desplegado lleva el
+      arreglo. Sin defectos y sin bloqueantes de seguridad. Lo que queda no es codigo: el arreglo
+      NO esta en produccion, donde el defecto sigue vivo, y la promocion tiene que ir backend
+      primero porque en dev el frontend llego 7m50s antes y abrio exactamente la ventana que el
+      fallback de 404 hace invisible.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-24T14:25:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-24T15:45:00Z"
+  version: 1

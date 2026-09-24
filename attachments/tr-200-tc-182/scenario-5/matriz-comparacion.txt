@@ -1,0 +1,37 @@
+ESCENARIO 5 · AC5 — el frontend nunca sortea una negativa, pero sobrevive a la ausencia de la ruta
+==================================================================================================
+
+La regla vive en resolveSingleUploadUrl y se lee en una linea:
+
+  isRefusal = error instanceof SignBackupUploadUrlError
+              && status >= 400 && status < 500 && status !== 404
+  if (creationUrl && !isRefusal) return creationUrl;   // ausencia -> se sigue
+  throw ...                                            // negativa  -> se para
+
+Respuesta del backend   Lo que hace el frontend          Prueba que lo fija                    Veredicto
+----------------------  -------------------------------  ------------------------------------  ---------
+400 clave ajena         PARA. single_sign, sin PUT       "never bypasses a 400 refusal"        PASS
+400 respaldo inexistente PARA. single_sign, sin PUT      "never bypasses a 400 refusal"        PASS
+409 upload ya DONE      PARA. single_sign, sin PUT       "never bypasses a 409 refusal"        PASS
+409 respaldo en borrado PARA. single_sign, sin PUT       "never bypasses a 409 refusal"        PASS
+404 ruta no desplegada  SIGUE con el enlace de creacion  "falls back ... route is missing"     PASS
+503 backend caido       SIGUE con el enlace de creacion  "falls back ... backend failed"       PASS
+sin respuesta           SIGUE con el enlace de creacion  "falls back ... got no answer"        PASS
+404 y sin enlace de     PARA. single_sign con httpStatus "reports a re-sign failure with no    PASS
+creacion                404                              creation-time URL"
+
+Mutaciones — la suite se pone ROJA en las dos:
+  M3 · el fallback se aplica a TODO error  -> caen las 4 pruebas de "never bypasses"
+  M4 · el 404 cuenta como negativa         -> cae "falls back when the route is missing (404)"
+
+Se registra la clave de S3 del archivo afectado? SI, y es una mejora medible.
+En la reproduccion sobre la version anterior el diagnostico sale con
+s3Key: undefined — no habia forma de localizar el objeto. Despues llegan s3Key,
+httpStatus, s3ErrorCode, s3ErrorMessage, s3RequestId y la etapa single_sign.
+
+LA DEPENDENCIA QUE EL PROPIO CRITERIO PIDE DEJAR ESCRITA: el fallback ante 404
+solo es seguro porque el certificado y la clave van PRIMERO (AC2). Si el orden
+se revirtiera, el enlace de creacion al que se cae estaria caducado y el
+fallback devolveria exactamente el defecto original. AC5 no es independiente de
+AC2: descansa sobre el. La mutacion M1 lo hace visible — al devolver el orden
+viejo caen tambien pruebas de esta seccion, no solo las de AC2.

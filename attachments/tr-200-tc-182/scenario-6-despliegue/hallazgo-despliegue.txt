@@ -1,0 +1,97 @@
+ESCENARIO 6 · DESPLIEGUE — la ruta de refirmado esta viva donde el frontend la llama?
+======================================================================================
+
+No es ningun criterio del ticket. Es la condicion sin la cual todo lo demas es
+decorativo: el frontend lee 404 como "esta ruta no esta desplegada" y cae al
+enlace de creacion. Si el backend no esta donde el frontend cree, el sistema
+vuelve al comportamiento defectuoso SIN UN SOLO ERROR.
+
+1 · QUE RAMA VA A QUE ENTORNO
+-----------------------------
+Los dos repositorios usan la misma regla, escrita en sus workflows de despliegue:
+
+    rama `main`    ->  dev
+    rama `stable`  ->  prod
+
+  backend  .github/workflows/deploy.yml        : ref_name == "stable" -> prod, si no dev
+  frontend .github/workflows/cdn-app-deploy.yml: ref == refs/heads/stable -> prod, si no dev
+
+La promocion a produccion es un PR de `main` a `stable`, uno por repositorio,
+y los dos repositorios se promocionan POR SEPARADO.
+
+2 · DEV — los dos lados estan, y la ruta responde
+--------------------------------------------------
+  backend  "PR #393"  merge 37afb12d  2026-09-23T20:52:40Z  deploy success
+  frontend "PR #205"  merge 257c71c   2026-09-23T20:52:43Z  deploy success
+
+Sonda sin token contra <api-de-pruebas>
+(401 = la ruta existe y el guard corrio · 404 = el router no la emparejo):
+
+  401  POST  /clients/{id}/backups/{id}/upload-url             LA RUTA NUEVA
+  401  POST  /clients/{id}/backups/{id}/multipart/sign-part    control: hermana existente
+  401  POST  /clients/{id}/backups/upload-link                 control: ruta de creacion
+  404  POST  /clients/{id}/backups/{id}/upload-url-inventada   CONTROL NEGATIVO
+
+El control negativo es lo que hace que el 401 signifique algo. Sin el, un 401
+podria venir de un guard global que responde antes de enrutar.
+
+Y el bundle que dev SIRVE de verdad — no el repositorio — lleva el arreglo:
+  /assets/useBackups-CCWRPsgj.js  contiene "/upload-url", SignBackupUploadUrlError
+  y single_sign, y el orden minificado es certificate -> key -> backup.
+
+  => en dev los escenarios AC3 y AC5 prueban el camino real, no el fallback.
+
+3 · EL ORDEN, MEDIDO: EN DEV EL FRONTEND LLEGO PRIMERO
+-------------------------------------------------------
+  frontend  inicio 20:52:47Z   fin 20:54:43Z
+  backend   inicio 20:52:44Z   fin 21:02:33Z
+
+El frontend nuevo estuvo sirviendose 7 minutos y 50 segundos ANTES de que
+existiera la ruta que llama. En esa ventana toda subida por PUT unico en dev
+recibia 404, caia al enlace de creacion y se comportaba como antes del arreglo
+— sin error, sin traza, sin nada que mirar.
+
+No es una hipotesis sobre el orden de despliegue: es el orden que ocurrio. La
+ventana fue corta y en dev, asi que probablemente no la sufrio nadie. Importa
+porque es la MISMA mecanica que gobernara la promocion a produccion, y alli la
+ventana la decide quien mergee primero.
+
+4 · PRODUCCION — EL ARREGLO NO ESTA ALLI  ***
+----------------------------------------------
+                       tip de stable    tip de main   main por delante
+  MigrationAppBackend  94097156         37afb12d      13 commits
+  MigrationAppFrontend 818d1d9          1dd79ee       13 commits
+
+  `git merge-base --is-ancestor 37afb12d origin/stable`  ->  NO
+  `git merge-base --is-ancestor 257c71c  origin/stable`  ->  NO
+
+Las dos ramas `stable` se movieron por ultima vez el 2026-08-18. El ultimo
+despliegue a produccion del backend fue el 2026-08-18T23:56Z.
+
+  => el defecto de IM-1297 SIGUE VIVO EN PRODUCCION. El incidente que origino
+     el ticket ocurrio en produccion el 2026-09-23; el arreglo se mergeo a
+     `main` ese mismo dia y llego a dev, pero produccion no lo tiene.
+     Cualquier respaldo de produccion cuyo .bak tarde mas que
+     S3_PRESIGN_EXPIRATION volvera a fallar en el certificado, y volvera a
+     necesitar la recuperacion manual en S3.
+
+Produccion no se sondeo: la pregunta la responde git sin una sola peticion, y
+no hay ninguna razon para tocarla.
+
+5 · EL ORDEN CORRECTO, Y POR QUE
+---------------------------------
+  1) BACKEND primero — se promociona "PR #393" a `stable` y se espera a que el
+     despliegue termine (el del backend tardo ~10 min; el del frontend ~2).
+  2) Comprobar que la ruta responde en prod con la misma sonda sin token: 401
+     en /upload-url y 404 en una ruta inventada.
+  3) FRONTEND despues.
+
+Al reves, el frontend nuevo cae al fallback de 404 y el defecto sigue vivo
+mientras dure la ventana, sin manifestarse como error. Es exactamente lo que
+paso en dev durante 7m50s.
+
+VEREDICTO DEL ESCENARIO: PASS — la ruta responde donde se ejecuta esta
+cobertura, el estado quedo escrito entorno por entorno, y el riesgo de orden
+quedo reportado con la medida que lo demuestra.
+LO DE PRODUCCION ES UN HALLAZGO DE ESTADO DE RELEASE (F1), no un defecto del PR:
+el codigo es correcto, simplemente no esta donde hace falta.

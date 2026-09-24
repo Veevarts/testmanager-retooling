@@ -1,0 +1,111 @@
+OWASP Top 10 (2021) · IM-1297 — "PR #393" (backend) + "PR #205" (frontend)
+Ejecutado 2026-09-24 · TR-200 / TC-182
+=============================================================================
+
+Lo que el cambio anade es un endpoint que ACUNA UNA CREDENCIAL DE ESCRITURA:
+una URL prefirmada de PUT contra el bucket de respaldos. Por eso A01, A02 y
+A03 no son tramite aqui — son el centro del cambio.
+
+-----------------------------------------------------------------------------
+A01 · Broken Access Control                          APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: 1) sonda sin token contra dev, para ver si el guard corre en la ruta
+        nueva; 2) 15 pruebas adversarias sobre la guarda de pertenencia de la
+        clave, con control positivo.
+Hallado:
+  · La ruta hereda @UseGuards(CognitoAuthGuard, CognitoGroupsGuard) del
+    controlador. La sonda sin token devuelve 401 y una ruta inventada devuelve
+    404 — el guard corre, y el 401 significa algo.
+    -> scenario-6-despliegue/sonda-rutas-dev.txt
+  · La guarda de clave compara por igualdad exacta contra las rutas declaradas
+    del respaldo. Rechaza las 13 variantes probadas (mayusculas, barra doble,
+    segmento punto, travesia codificada, espacios al borde, sufijo, cadena de
+    consulta, byte nulo, barra inicial, prefijo de bucket, clave vacia) y la
+    clave legitima si firma.
+    -> scenario-4/guardas-adversarias.txt
+OBSERVACION, previa a este PR y fuera de su alcance: el controlador no exige
+grupo salvo en connection-password, y no acota clientId a las reclamaciones de
+quien llama. Cualquier usuario autenticado del pool puede operar sobre el
+clientId que escriba — incluido DELETE :backupId, que ya existia y es peor que
+sobrescribir. El PR adopta exactamente la postura de sus 12 rutas hermanas; no
+la ensancha. Se deja escrito, no se imputa a este cambio.
+
+-----------------------------------------------------------------------------
+A02 · Cryptographic Failures                         APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: revisar donde termina la URL firmada, que es una credencial portadora.
+Hallado: no se registra en el log (los campos son event, clientId, backupId,
+key, uploadStatus), no se persiste, y viaja solo por la respuesta autenticada.
+Caduca por S3_PRESIGN_EXPIRATION. -> regresion-seguridad.txt [6]
+
+-----------------------------------------------------------------------------
+A03 · Injection                                      APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: la clave del cuerpo va a una ruta de objeto de S3. Lista blanca por
+igualdad exacta, no saneado. Probadas 13 formas de escribir "otra cosa" que
+alguna capa pudiera normalizar de vuelta. Ninguna pasa.
+-> scenario-4/guardas-adversarias.txt
+
+-----------------------------------------------------------------------------
+A04 · Insecure Design                                APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: revisar la decision de no responder nunca 404 y el fallback del cliente.
+Hallado: es deliberada y esta razonada en el codigo. El cliente cae al enlace de
+creacion SOLO ante 404 / 5xx / sin respuesta; toda negativa 4xx (400, 409) se
+respeta. Verificado por prueba y por mutacion: si el fallback se aplicara a todo
+error (M3) o el 404 contara como negativa (M4), la suite se pone roja.
+RIESGO RESIDUAL, reportado como hallazgo de despliegue y no como defecto: el
+fallback hace que un backend sin la ruta no produzca error visible.
+
+-----------------------------------------------------------------------------
+A05 · Security Misconfiguration                      APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: el PR no anade variables ni permisos; se comprueba el estado desplegado.
+Hallado: la ruta responde en dev. No hay configuracion nueva que endurecer.
+La ausencia del arreglo en produccion se reporta aparte (F1): es estado de
+promocion, no una configuracion mal puesta.
+
+-----------------------------------------------------------------------------
+A06 · Vulnerable and Outdated Components             APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: diff de package.json y del lockfile en los dos repositorios.
+Hallado: ninguno de los cuatro ficheros cambia. Superficie de dependencias
+identica a la de antes del cambio.
+
+-----------------------------------------------------------------------------
+A07 · Identification and Authentication Failures     APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: la sonda sin token contra la ruta viva en dev.
+Hallado: 401 "Missing Bearer token" — el guard de Cognito corre ANTES del
+manejador. No hay camino a la firma sin token valido.
+
+-----------------------------------------------------------------------------
+A08 · Software and Data Integrity Failures           APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: revisar que impide que un PUT tardio pise un archivo ya en uso.
+Hallado: dos guardas nuevas que la hermana multipart NO tiene — 409 si el
+upload ya esta DONE (el aprovisionamiento ya lee esos objetos) y 409 si el
+respaldo esta en DELETING / DELETED / DELETE_FAILED (el prefijo ya se borro).
+Quitar cualquiera de las dos pone la suite roja (M7, M8).
+-> scenario-0-unit-tests/mutaciones.txt
+
+-----------------------------------------------------------------------------
+A09 · Security Logging and Monitoring Failures       APLICA        PASS
+-----------------------------------------------------------------------------
+Metodo: comparar el diagnostico de un fallo antes y despues.
+Hallado: MEJORA medible. En la reproduccion sobre la version anterior el fallo
+del certificado sale con s3Key: undefined — no se podia localizar el objeto.
+Despues se registran s3Key, httpStatus, s3ErrorCode, s3ErrorMessage,
+s3RequestId y la etapa nueva single_sign.
+-> scenario-1/repro-antes.txt vs scenario-1/repro-despues.txt
+
+-----------------------------------------------------------------------------
+A10 · Server-Side Request Forgery                    N/A
+-----------------------------------------------------------------------------
+Justificacion: el endpoint no acepta ninguna URL, host ni destino de quien
+llama. Recibe una clave de objeto que se valida contra una lista blanca, y la
+unica salida es hacia S3 por el SDK, con el bucket tomado del entorno.
+
+=============================================================================
+RESUMEN: 9 aplican · 9 PASS · 0 FAIL · 1 N/A · 0 bloqueantes
+Ningun apartado queda en TBD. Ningun defecto de seguridad que levantar.
