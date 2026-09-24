@@ -1,44 +1,84 @@
-TC-181 escenario 8 — LOS TRES NOMBRES DE CABECERA SIGUEN SIN VERIFICAR  [BLOQUEADO POR ACCESO]
-Fuente: repositorio y orgs disponibles · 2026-09-23
+TC-181 escenario 8 — LOS TRES NOMBRES DE CABECERA, REVISADOS CONTRA ORGS REALES
+Fuente: sandboxes de formacion (solo lectura) · 2026-09-24
 
-EL RIESGO
-  El autor lo deja escrito como pregunta abierta al equipo de implementacion:
+POR QUE SE VOLVIO A ABRIR
+  En la primera vuelta el escenario quedo bloqueado por no haber org de Long Island. Con
+  autorizacion para mirar en otra org, se reviso en sandboxes de FORMACION. No se consulto
+  ninguna org productiva.
 
-    "The solicit-code target object is not in AuctiferaDX, NFPFundraising or the local
-     target-context artifact, and no Long Island org is authenticated here, so the three
-     header names could not be verified against the org."
+  Orgs consultadas, todas sandbox `--trainings`, todas en lectura:
+    hammerucla--trainings, ilholocaustmuseum--trainings, maloof-foundation--trainings
 
-  El modo de fallo es SILENCIOSO y esta documentado en el propio repositorio (AGENTS.md,
-  IM-1212): una cabecera que nombre un campo que no existe se descarta al cargar, sin error.
-  Es decir: si uno de los tres nombres esta mal, el arreglo se veria perfectamente correcto
-  en el CSV y no escribiria nada en Salesforce. El ticket se cerraria y el problema seguiria.
+LO QUE QUEDA VERIFICADO
 
-QUE SE COMPROBO AQUI
+  1. EL OBJETO DESTINO NO VIENE EN EL PAQUETE GESTIONADO. Confirmado en las TRES orgs:
+     ningun objeto de codigos de solicitud, ni con ese nombre ni con variantes. La afirmacion
+     del autor era correcta.
 
-  Comprobacion                                                       Resultado
-  -----------------------------------------------------------------  ---------
-  El objeto aparece en algun artefacto de contexto de destino?        NO
-  Hay una org de Long Island autenticada en esta maquina?             NO
-  La convencion de cabecera coincide con la de los exports hermanos?  SI
+  2. LOS TRES NOMBRES DE CABECERA SON LOS REALES. El export hermano en el que el autor se
+     apoyo, emails__c.sql, carga sobre un objeto a medida `Emails__c` que SI existe en
+     ilholocaustmuseum--trainings, una org donde la migracion se ejecuto de verdad:
 
-  Sobre la convencion: emails__c.sql y attributes.sql emiten la cabecera
-  `Implementation_External_ID__c` SIN namespace, igual que este archivo. Es la unica
-  evidencia a favor disponible, y es indirecta: confirma el estilo, no los nombres.
+       Campo                            Tipo        Referencia
+       -------------------------------  ----------  ----------
+       Contact__c                       reference   Contact
+       Household_Organization__c        reference   Account
+       Implementation_External_ID__c    string      -
 
-  Hay otras orgs autenticadas en la maquina (varios sandboxes de formacion de otros clientes
-  y una productiva). NO se consultaron: ninguna es Long Island, la autorizacion vigente para
-  tocar orgs esta acotada a las de prueba de otro proyecto, y una org productiva no se toca.
-  Preguntar antes es mas barato que explicar despues por que QA entro en una org ajena.
+     Los tres nombres coinciden EXACTAMENTE con los que emite el PR, y los dos lookups
+     apuntan a Contact y a Account, que es justo el enrutado que la consulta implementa.
+     La convencion deja de ser una analogia leida en otro archivo .sql y pasa a estar
+     verificada contra un objeto real.
 
-POR QUE ESTE ESCENARIO NO ES UN FALLO DEL PR
-  El autor no oculto el hueco: lo dejo escrito en el PR Y pidio confirmacion en el ticket.
-  Hizo lo correcto con la informacion que tenia. El escenario queda BLOQUEADO por falta de
-  acceso, no por un defecto.
+LO QUE APARECIO Y NADIE HABIA MIRADO — Y PESA MAS QUE LO ANTERIOR
 
-PENDIENTE, Y ES ACCIONABLE
-  El equipo de implementacion debe confirmar, antes de cargar:
-    1. Los tres nombres de campo contra el objeto real de codigos de solicitud en la org de
-       Long Island.
-    2. Que la tanda 1 se cargo efectivamente con claves SC_n.
-  Con una org de Long Island autenticada, o autorizacion para describir el objeto en un
-  sandbox que tenga el mismo paquete, QA puede cerrar el punto 1 en una sola consulta.
+  En esos objetos a medida, el campo del que depende TODA la propuesta NO esta configurado
+  como External Id:
+
+       Objeto                     externalId   unique   idLookup
+       -------------------------  ----------   ------   --------
+       Emails__c                    False       False     False
+       Constituencies_codes__c      False       False     False
+
+  Y no es que esa org no use External Ids. Los objetos del PAQUETE si los tienen, y ademas
+  con NAMESPACE:
+
+       Contact      Auctifera__Implementation_External_ID__c   externalId=True  idLookup=True
+       Account      Auctifera__Implementation_External_ID__c   externalId=True  idLookup=True
+       Opportunity  vnfp__Implementation_External_ID__c        externalId=True  idLookup=True
+
+  Es decir: hay dos patrones distintos. Los objetos del paquete llevan el campo namespaced y
+  marcado como External Id; los objetos a medida de cada implementacion llevan el campo
+  bare y SIN marcar. Ninguno de los cuatro objetos a medida de esa org
+  (Emails__c, Constituencies_codes__c, Phones__c, Notes_Custom__c) tiene un solo campo
+  marcado como External Id.
+
+  POR QUE IMPORTA. Salesforce solo admite upsert sobre un campo marcado como External Id. Si
+  el objeto de codigos de solicitud de Long Island sigue el patron de sus hermanos a medida
+  — y todo indica que si, porque es el mismo tipo de objeto creado por el mismo equipo — el
+  upsert por `Implementation_External_ID__c` NO ES POSIBLE tal cual. Y el argumento de
+  idempotencia del PR, que es su razon de ser, se apoya exactamente en ese upsert.
+
+ALCANCE DE ESTA AFIRMACION, PARA NO PASARSE
+  Lo medido: dos objetos a medida en UNA org de formacion de OTRO cliente.
+  Lo NO medido: la configuracion del objeto de codigos de solicitud en la org de Long Island,
+  que no existe en ninguna org accesible aqui y que es el unico sitio donde la pregunta se
+  responde de verdad.
+
+  Esto NO contradice al autor: el no afirmo nada sobre el flag de External Id, simplemente no
+  se lo planteo. Y no es un defecto del PR: el SQL emite el nombre correcto. Es un requisito
+  de la ORG que hay que satisfacer antes de cargar, y que hasta ahora no estaba en la lista
+  de nadie.
+
+VEREDICTO: BLOQUEADO
+  La pregunta original — los tres nombres contra el objeto de Long Island — sigue sin poder
+  responderse, porque ese objeto no existe en ninguna org accesible. Lo que cambia es que
+  ahora hay evidencia fuerte a favor de los nombres y una pregunta nueva, mas importante, que
+  el equipo debe resolver primero.
+
+PENDIENTE, EN ORDEN DE IMPORTANCIA
+  1. Confirmar que `Implementation_External_ID__c` del objeto de codigos de solicitud de Long
+     Island esta marcado como External Id. Si no lo esta, hay que marcarlo antes de cargar o
+     el upsert no funciona y la idempotencia que el PR persigue no se obtiene.
+  2. Confirmar los tres nombres de campo contra ese mismo objeto.
+  3. Confirmar que la tanda 1 se cargo efectivamente con claves SC_n.

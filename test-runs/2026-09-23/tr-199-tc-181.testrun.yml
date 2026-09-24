@@ -12,8 +12,10 @@ environment:
     traves del bastion. Todas las mediciones son agregados o columnas de identificador:
     ninguna fila de datos salio a la evidencia, y ningun nombre de socio o donante se
     publico. No se escribio en ninguna fuente ni en ninguna organizacion de Salesforce; la
-    de Long Island es productiva del cliente. Habia otras orgs autenticadas en la maquina y
-    NO se consultaron. Suite del equipo ejecutada en local; la de contenedor se intento dos
+    de Long Island es productiva del cliente. En segunda vuelta, y con autorizacion expresa,
+    se consultaron en SOLO LECTURA tres sandboxes de formacion de otros clientes
+    (hammerucla, ilholocaustmuseum, maloof-foundation) para resolver el escenario bloqueado;
+    ninguna org productiva se toco. Suite del equipo ejecutada en local; la de contenedor se intento dos
     veces y fallo por arranque del contenedor, no por asercion. Los detalles de red quedan
     fuera de este artefacto a proposito: este repositorio es publico.
   buildVersion: >-
@@ -23,7 +25,7 @@ environment:
     una sola consulta; el resto del diff son un spec de regresion y documentacion. El
     veredicto queda atado a ebaaef8: si el PR cambia, caduca.
 startedAt: "2026-09-23T21:20:00Z"
-completedAt: "2026-09-23T22:05:00Z"
+completedAt: "2026-09-24T09:25:00Z"
 executedBy: codex
 
 notes: |
@@ -64,8 +66,11 @@ notes: |
   - Los dos ejemplos del ticket, fila a fila. EJECUTADA.
   - No-unicidad del par antiguo y determinacion del emparejamiento con fechas. EJECUTADA.
   - Cota del re-key desde la fuente. EJECUTADA (el subconjunto exacto es del lado de la org).
-  - Verificacion de los tres nombres de cabecera contra la org. NO EJECUTABLE: no hay org de
-    Long Island autenticada, y las demas orgs de la maquina no se tocan.
+  - Verificacion de los tres nombres de cabecera contra la org. EJECUTADA EN PARTE, en
+    segunda vuelta y con autorizacion: tres sandboxes de formacion en solo lectura confirman
+    que el objeto no viene en el paquete y que los tres nombres existen tal cual en el objeto
+    a medida del export hermano. La org de Long Island sigue sin ser accesible, y es la unica
+    donde la pregunta se cierra.
 
   ## Metodo de instrumentacion
 
@@ -368,35 +373,60 @@ results:
       silent-failure risk
     scenarioIndex: 7
     status: blocked
-    executedAt: "2026-09-23T22:00:00Z"
+    executedAt: "2026-09-24T09:20:00Z"
     stepResults: []
     actual: |
-      El autor lo deja escrito como pregunta abierta al equipo de implementacion, y el modo de
-      fallo es SILENCIOSO: segun AGENTS.md (IM-1212), una cabecera que nombre un campo que no
-      existe se descarta al cargar, sin error. Si uno de los tres nombres esta mal, el CSV se
-      veria perfecto y no escribiria nada en Salesforce. El ticket se cerraria y el problema
-      seguiria.
+      Segunda vuelta, con autorizacion para mirar en otra org. Se consultaron TRES sandboxes
+      de formacion en solo lectura — hammerucla, ilholocaustmuseum y maloof-foundation. No se
+      toco ninguna org productiva.
 
-        Comprobacion                                                       Resultado
-        El objeto aparece en algun artefacto de contexto de destino?        NO
-        Hay una org de Long Island autenticada en esta maquina?             NO
-        La convencion de cabecera coincide con la de los exports hermanos?  SI
+      QUEDA VERIFICADO:
 
-      emails__c.sql y attributes.sql emiten Implementation_External_ID__c sin namespace, igual
-      que este archivo. Es la unica evidencia a favor y es indirecta: confirma el estilo, no
-      los nombres.
+      1. El objeto destino NO viene en el paquete gestionado. Confirmado en las tres orgs: no
+         existe ningun objeto de codigos de solicitud. La afirmacion del autor era correcta.
 
-      Hay otras orgs autenticadas en la maquina — sandboxes de formacion de otros clientes y
-      una productiva — y NO se consultaron: ninguna es Long Island, la autorizacion vigente
-      para tocar orgs esta acotada a otro proyecto, y una org productiva no se toca. Preguntar
-      antes es mas barato que explicar despues por que QA entro en una org ajena.
+      2. Los tres nombres de cabecera son los REALES. El export hermano en el que el autor se
+         apoyo carga sobre un objeto a medida Emails__c que SI existe en la org de formacion
+         de Illinois, donde la migracion se ejecuto de verdad:
 
-      NO ES UN FALLO DEL PR. El autor no oculto el hueco: lo dejo escrito en el PR y pidio
-      confirmacion en el ticket. Hizo lo correcto con la informacion que tenia. El escenario
-      queda BLOQUEADO por falta de acceso.
+           Contact__c                     reference -> Contact
+           Household_Organization__c      reference -> Account
+           Implementation_External_ID__c  string
 
-      pre-fix -> post-fix -> objetivo cumplido?: no evaluable. La convencion es coherente con
-      los exports hermanos, pero los nombres no se pueden confirmar sin la org.
+         Coinciden exactamente con lo que emite el PR, y los dos lookups apuntan a Contact y
+         a Account, que es el enrutado que la consulta implementa. La convencion deja de ser
+         una analogia leida en otro .sql y pasa a estar verificada contra un objeto real.
+
+      LO QUE APARECIO Y NADIE HABIA MIRADO, Y PESA MAS:
+
+      En esos objetos a medida el campo del que depende toda la propuesta NO esta configurado
+      como External Id:
+
+           Emails__c                  externalId=False  unique=False  idLookup=False
+           Constituencies_codes__c    externalId=False  unique=False  idLookup=False
+
+      Y no es que esa org no use External Ids. Los objetos del PAQUETE si los tienen, ademas
+      namespaced: Contact y Account llevan Auctifera__Implementation_External_ID__c y
+      Opportunity vnfp__Implementation_External_ID__c, los tres con externalId=True e
+      idLookup=True. Hay dos patrones: objeto de paquete -> campo namespaced y marcado;
+      objeto a medida de la implementacion -> campo bare y SIN marcar. Ninguno de los cuatro
+      objetos a medida de esa org tiene un solo campo marcado como External Id.
+
+      POR QUE IMPORTA: Salesforce solo admite upsert sobre un campo marcado como External Id.
+      Si el objeto de Long Island sigue el patron de sus hermanos a medida, el upsert por
+      Implementation_External_ID__c no es posible tal cual, y el argumento de idempotencia del
+      PR — que es su razon de ser — se apoya exactamente en ese upsert.
+
+      ALCANCE, PARA NO PASARSE: medido en dos objetos a medida de UNA org de formacion de OTRO
+      cliente. NO medido en la org de Long Island, que es donde la pregunta se responde de
+      verdad y cuyo objeto no existe en ninguna org accesible. Esto no contradice al autor: el
+      no afirmo nada sobre el flag, simplemente no se lo planteo. Y no es un defecto del PR:
+      el SQL emite el nombre correcto. Es un requisito de la ORG, previo a la carga, que hasta
+      ahora no estaba en la lista de nadie.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no evaluable para Long Island. La evidencia a
+      favor de los nombres es ahora fuerte y directa, pero aparece una pregunta nueva y mas
+      importante que el equipo debe resolver antes: si el campo admite upsert.
     attachments:
       - name: header-names-unverified.txt
         path: attachments/tr-199-tc-181/scenario-8/header-names-unverified.txt
@@ -422,8 +452,27 @@ history:
       Arranca la ejecucion de TC-181 contra el commit ebaaef8. El PR no venia enlazado en el
       ticket; se localizo por nombre de rama. La primera medicion ya devuelve la cifra que el
       autor declaraba no haber podido comprobar: 959 filas y 959 identificadores distintos.
+  - action: scenario-reopened
+    timestamp: "2026-09-24T09:20:00Z"
+    user: codex
+    from: blocked
+    to: blocked
+    reason: >-
+      Se reabrio el escenario 8 con autorizacion para mirar en otra org. Tres sandboxes de
+      formacion, solo lectura, ninguna productiva. Dos cosas quedan verificadas: el objeto
+      destino no viene en el paquete gestionado, tal como el autor decia, y los tres nombres
+      de cabecera existen EXACTAMENTE asi en Emails__c, el objeto a medida del export hermano,
+      con Contact__c apuntando a Contact y Household_Organization__c a Account. La convencion
+      deja de ser una analogia y pasa a estar verificada. Pero aparecio algo que nadie habia
+      mirado y que pesa mas: en los objetos a medida ese campo NO esta marcado como External
+      Id, mientras que en los objetos del paquete si lo esta y ademas va namespaced. Salesforce
+      solo admite upsert sobre un campo marcado, asi que si el objeto de Long Island sigue el
+      patron de sus hermanos, el upsert en el que se apoya toda la idempotencia del PR no es
+      posible tal cual. No contradice al autor — el no afirmo nada sobre el flag — ni es un
+      defecto del PR: es un requisito de la org, previo a la carga. El escenario sigue
+      BLOQUEADO porque la org de Long Island es la unica que cierra la pregunta.
   - action: run-completed
-    timestamp: "2026-09-23T22:05:00Z"
+    timestamp: "2026-09-24T09:25:00Z"
     user: codex
     from: in-progress
     to: completed
@@ -440,8 +489,9 @@ history:
       lo entregado es el equivalente correcto (O1); el re-key de la tanda ya cargada afecta
       hasta 959 registros y necesita un UPDATE por Id, nunca un upsert, que insertaria
       duplicados (O2); y los tres nombres de cabecera siguen sin verificar contra la org, con
-      un modo de fallo silencioso que haria parecer correcto un arreglo que no escribe nada
-      (O3). La suite unitaria pasa 655/830 incluido el spec nuevo; la de contenedor fallo por
+      un modo de fallo silencioso que haria parecer correcto un arreglo que no escribe nada, y a
+      lo que se anade, tras mirar en otras orgs, que en los objetos a medida ese campo no esta
+      marcado como External Id y sin esa marca el upsert no es posible (O3). La suite unitaria pasa 655/830 incluido el spec nuevo; la de contenedor fallo por
       arranque de contenedor en dos intentos, no por asercion, y no cubre este archivo. Sin
       defectos de seguridad: OWASP 3 aplicables, 3 PASS, 7 N/A.
 
@@ -462,4 +512,4 @@ metadata:
   createdBy: codex
   createdAt: "2026-09-23T21:20:00Z"
   updatedBy: codex
-  updatedAt: "2026-09-23T22:05:00Z"
+  updatedAt: "2026-09-24T09:25:00Z"
