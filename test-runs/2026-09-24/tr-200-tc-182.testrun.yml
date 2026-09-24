@@ -113,10 +113,30 @@ results:
     scenarioTitle: >-
       AC1 · A backup whose .bak takes longer than the URL lifetime no longer fails on the cert
     scenarioIndex: 0
-    status: passed
+    status: blocked
     executedAt: "2026-09-24T15:38:00Z"
     stepResults: []
     actual: |
+      *** CORRECCION 2026-09-24, despues de la primera escritura de este TR ***
+      Este escenario estaba marcado passed. Es incorrecto y se baja a blocked.
+
+      Lo que este escenario pedia observar es "el certificado y la clave quedan en el prefijo
+      de S3 del respaldo, el respaldo llega a uploadStatus DONE y aprovisiona". NADA DE ESO SE
+      OBSERVO. No se creo ningun respaldo, no se subio ningun archivo, no se toco S3 y ningun
+      uploadStatus se movio.
+
+      Lo que si se hizo sigue siendo cierto y sigue valiendo, pero es otra cosa: una
+      reproduccion a nivel de MODULO, con `fetch` sustituido por una funcion propia que hace de
+      S3 y un reloj virtual. Prueba que uploadBackupFiles, frente a una URL caducada, fallaba
+      antes con 403 AccessDenied "Request has expired" sobre el CERTIFICADO en etapa
+      single_put, y ya no falla. Es evidencia del comportamiento del modulo. NO es evidencia de
+      que una subida real termine.
+
+      BLOQUEADO POR: no se puede leer S3_PRESIGN_EXPIRATION del entorno (sin credenciales de
+      AWS) ni bajarla sin acuerdo del dueno del entorno. Y ademas hace falta una subida real,
+      que en este flujo crea un respaldo y APROVISIONA INFRAESTRUCTURA: es una escritura que
+      necesita autorizacion expresa.
+
       NO SE PUDO FORZAR LA DURACION EN EL ENTORNO, ASI QUE SE REPRODUJO EL DEFECTO.
 
       La variable S3_PRESIGN_EXPIRATION se resuelve desde SSM
@@ -161,10 +181,24 @@ results:
     scenarioTitle: >-
       AC2 · The certificate and the key are uploaded before the .bak
     scenarioIndex: 1
-    status: passed
-    executedAt: "2026-09-24T15:33:00Z"
+    status: not-run
     stepResults: []
     actual: |
+      *** CORRECCION 2026-09-24 *** Estaba marcado passed. Se baja a not-run.
+
+      De las cuatro condiciones del escenario, dos quedan probadas y dos no se observaron.
+
+      PROBADO, y con evidencia del artefacto que corre y no del repositorio: el orden esta en
+      el bundle que dev sirve, /assets/useBackups-CCWRPsgj.js —
+        e.CERTIFICATE&&await G("CERTIFICATE",...),e.KEY&&await G("KEY",...),await G("BACKUP",...)
+      certificate, key, backup. Y las mutaciones M1 y M1b confirman que revertir el orden pone
+      la suite roja.
+
+      NO OBSERVADO: "el respaldo llega a uploadStatus DONE con los tres archivos presentes en
+      el prefijo de S3" y la captura del panel de red. No hubo subida, asi que no hubo ni
+      prefijo que mirar ni panel que capturar. El orden esta probado en el CODIGO DESPLEGADO;
+      que una subida real lo recorra entero, no.
+
       Comprobado en dos sitios, porque el repositorio no es lo que corre.
 
       EN EL FUENTE MERGEADO. uploadBackupFiles pasa de BACKUP, CERTIFICATE, KEY a CERTIFICATE,
@@ -192,10 +226,19 @@ results:
     scenarioTitle: >-
       AC3 · Every single PUT asks for a fresh URL immediately before sending
     scenarioIndex: 2
-    status: passed
-    executedAt: "2026-09-24T15:30:00Z"
+    status: not-run
     stepResults: []
     actual: |
+      *** CORRECCION 2026-09-24 *** Estaba marcado passed. Se baja a not-run.
+
+      Todo lo comprobado aqui viene de pruebas con `fetch` y el cliente de API sustituidos por
+      dobles. Que cada PUT unico pida su URL justo antes esta fijado en la logica y sujeto por
+      la mutacion M2, y el caso del .bak pequeno (R4) esta cubierto a ese mismo nivel.
+
+      Lo que el escenario pedia — "se compara la URL que devuelve cada llamada de refirmado con
+      la que realmente usa el PUT siguiente" en una subida de verdad — no se hizo. Ningun PUT
+      real salio de esta maquina.
+
       Tres PUT unicos, tres llamadas de refirmado, y las tres URLs que se usan son las
       devueltas por esas llamadas, no las de creacion. La prueba del autor "signs each single
       PUT right before it, never using the creation-time URL" lo fija fetch a fetch.
@@ -255,10 +298,22 @@ results:
     scenarioTitle: >-
       AC5 · The frontend never bypasses a refusal, but survives a missing route
     scenarioIndex: 4
-    status: passed
-    executedAt: "2026-09-24T15:31:00Z"
+    status: not-run
     stepResults: []
     actual: |
+      *** CORRECCION 2026-09-24 *** Estaba marcado passed. Se baja a not-run.
+
+      La regla que separa negativa de ausencia esta probada rama por rama, y las mutaciones M3
+      y M4 confirman que las dos mitades estan sujetas. Eso sigue siendo cierto.
+
+      Pero el escenario pedia "se provoca que la llamada de refirmado responda 400 / 409 / 404
+      / 5xx y se observa que hace el frontend". Aqui no se provoco nada contra el frontend: se
+      ejecuto su modulo con el cliente de API sustituido por un doble que devolvia esos errores.
+      Es evidencia de la logica, no del navegador contra el backend.
+
+      La mejora del diagnostico (s3Key pasa de undefined a informado) se midio en la
+      reproduccion, que tambien es a nivel de modulo.
+
       La regla cabe en una linea y separa exactamente lo que hay que separar:
 
         isRefusal = error instanceof SignBackupUploadUrlError
@@ -371,12 +426,12 @@ results:
 
 summary:
   total: 7
-  passed: 7
+  passed: 3
   failed: 0
-  blocked: 0
+  blocked: 1
   skipped: 0
-  notRun: 0
-  passRate: 100
+  notRun: 3
+  passRate: 43
 
 history:
   - action: run-started
@@ -402,10 +457,36 @@ history:
       NO esta en produccion, donde el defecto sigue vivo, y la promocion tiene que ir backend
       primero porque en dev el frontend llego 7m50s antes y abrio exactamente la ventana que el
       fallback de 404 hace invisible.
+  - action: run-corrected
+    timestamp: "2026-09-24T16:20:00Z"
+    user: codex
+    from: completed
+    to: completed
+    reason: >-
+      Correccion a peticion del usuario, que pregunto lo unico que hacia falta preguntar: se
+      probo la subida de un respaldo? NO. Nunca se creo un respaldo, no se subio ningun archivo,
+      no se escribio en S3 y ningun uploadStatus se movio. Las tres peticiones de red de toda la
+      corrida fueron una sonda sin token que devolvio 401, la descarga del bundle de dev y
+      metadatos de git. Todo PUT que aparece en la evidencia es una funcion propia inyectada con
+      vi.stubGlobal("fetch", ...).
+
+      Cuatro escenarios estaban marcados passed sobre evidencia a nivel de modulo, cuando sus
+      condiciones nombraban estado observable del sistema: prefijo de S3, uploadStatus DONE,
+      aprovisionamiento, panel de red. El limite estaba escrito en el cuerpo, pero la marca es lo
+      que se lee, y la marca decia otra cosa. Se bajan: AC1 a blocked (ademas exige cambiar una
+      variable de entorno que no es de QA), AC2, AC3 y AC5 a not-run.
+
+      Lo que NO se toca, porque se ejecuto de verdad: AC4, cuyas guardas son logica pura sin E/S
+      y estan cubiertas exhaustivamente; el escenario de despliegue, que se resolvio contra el
+      entorno vivo y contra git; y la regresion, con las dos suites realmente ejecutadas. Los
+      hallazgos F1 y F2 no dependen de ninguna subida y siguen en pie: son lo mas accionable de
+      esta corrida.
+
+      7/7 pasa a 3/7 PASS, 1 blocked, 3 not-run.
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-09-24T14:25:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-09-24T15:45:00Z"
-  version: 1
+  updatedAt: "2026-09-24T16:20:00Z"
+  version: 2
