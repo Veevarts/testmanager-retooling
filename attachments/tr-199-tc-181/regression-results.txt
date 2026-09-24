@@ -1,0 +1,58 @@
+TC-181 / TR-199 — MATRIZ DE REGRESION TECNICA Y DE SEGURIDAD
+PR #183 · base 8b522c37 -> head ebaaef8 · Long Island · 2026-09-23
+
+REGRESION TECNICA
+
+  Item                                                     Tipo  Riesgo   Metodo                                     Veredicto
+  -------------------------------------------------------  ----  -------  -----------------------------------------  ---------
+  1 Unicidad del identificador externo nuevo               Tec   Critico  959 filas vs 959 ids distintos              PASS  0 colisiones
+  2 Estabilidad de la clave entre corridas                 Tec   Critico  CHECKSUM_AGG x2                             PASS  huellas identicas
+  3 Conteo de filas base vs PR                             Tec   Alto     agregado sobre ambas versiones              PASS  959 = 959
+  4 Grano de una fila por CONSTITUENTSOLICITCODE           Tec   Alto     estructural: INNER JOIN por clave primaria  PASS
+  5 Columnas preexistentes sin cambio                      Tec   Alto     diff del texto + huella de fila             PASS  solo 3 columnas nuevas
+  6 Exclusividad mutua de los dos lookups                  Tec   Medio    conteo de filas con ambas informadas        PASS  0
+  7 Cifras de enrutado declaradas (888 / 71 / 51)          Tec   Medio    agregado sobre la fuente                    PASS  exactas
+  8 Poblacion de la ausencia de gate                       Tec   Medio    filas sin ninguna bandera                   PASS  0 (inerte)
+  9 No-unicidad del par antiguo (3 pares / 6 filas)        Tec   Medio    agrupacion con HAVING                       PASS  exactas
+ 10 Emparejamiento con fechas queda determinado            Tec   Alto     agrupacion con las dos fechas               PASS  0 ambiguas
+ 11 Reaparicion de clave posicional                        Tec   Alto     busqueda de ROW_NUMBER / 'SC_'              PASS  ausente
+ 12 Consumidores del archivo en el repositorio             Tec   Alto     grep en src                                 PASS  ninguno
+ 13 Suite unitaria del repositorio                         Tec   Alto     npm run test:queries                        PASS  655/830
+ 14 Suite en contenedor (radio de impacto)                 Tec   Medio    npm run test:queries:docker                 ENTORNO (ver nota)
+ 15 Alcance del re-key de la tanda cargada                 Tec   Critico  cota desde la fuente + receta comprobada    PASS  959 cota superior
+ 16 Nombres de cabecera contra la org                      Tec   Critico  artefactos de destino + orgs disponibles    BLOQUEADO sin org
+
+REGRESION DE SEGURIDAD
+
+  Item                                          Tipo  Riesgo   Metodo                                  Veredicto
+  --------------------------------------------  ----  -------  --------------------------------------  ---------
+  S1 Secretos o credenciales en el diff         Sec   Critico  grep password/key/secret/token/BEGIN     PASS  0
+  S2 Concatenacion dinamica de SQL              Sec   Critico  grep de interpolacion en los .ts          PASS  0
+  S3 Dependencias nuevas o actualizadas         Sec   Alto     package.json / lock en el diff            PASS  ninguna
+  S4 Datos personales en el codigo o fixtures   Sec   Alto     revision del spec nuevo                   PASS  sin nombres
+  S5 Acceso a datos mas permisivo               Sec   Alto     el cambio solo proyecta columnas          PASS
+
+NOTA SOBRE EL ITEM 14 — ES ENTORNO, NO EL PR
+  La suite en contenedor fallo por agotar la espera de arranque de SQL Server:
+  "Log message 'SQL Server is now ready for client connections' not received after 60000ms",
+  repetida en cada suite. No es un fallo de asercion: el contenedor no llega a estar listo
+  dentro de los 60 s que la estrategia de espera concede.
+
+  Diagnostico, para no atribuirlo al PR:
+    - El runtime esta sano: 4 CPU, 5,8 GB, y al momento del fallo solo ~220 MB en uso.
+    - Se libero espacio (9,5 GB de contenedores parados y cache) y se reintento sin nada en
+      paralelo. Persiste: es lentitud de arranque por contencion de CPU, no falta de memoria.
+    - Esta MISMA suite paso 175/175 en 724 s hace una hora, en TR-198, sobre la misma base.
+    - Lo decisivo: el archivo que este PR cambia NO TIENE spec de integracion. Cero
+      coincidencias de "solicit" en la salida de esa suite. No cubre este cambio.
+
+  Por eso el item queda como ENTORNO y no como fallo. La cobertura real de este PR es la
+  suite unitaria — 655/830, incluido el spec nuevo — que pasa limpia, y las mediciones
+  directas sobre la fuente.
+
+NOTA SOBRE EL ITEM 16
+  Ver scenario-8/header-names-unverified.txt. No hay org de Long Island autenticada y las
+  demas orgs de la maquina no se consultaron: ninguna es la del cliente, la autorizacion
+  vigente para tocar orgs esta acotada a otro proyecto, y una de ellas es productiva.
+
+DEFECTOS LEVANTADOS: ninguno.

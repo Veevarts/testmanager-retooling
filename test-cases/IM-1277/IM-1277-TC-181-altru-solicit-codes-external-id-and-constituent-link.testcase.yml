@@ -1,0 +1,263 @@
+schemaVersion: "1.0"
+
+id: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+key: "TC-181"
+title: "Solicit codes: the export gets a source key and a constituent link it never had"
+
+description: |
+  Cobertura QA de IM-1277 (Solicit Codes query missing fields present in previous query —
+  Long Island Children's Museum), bajo el epic IM-70 (Altru Queries). Sub-tarea de QA:
+  IM-1299. Repositorio en alcance: Veevarts/MigrationToolETL "PR #183", rama
+  CamiloSalgueroMarin/IM-1277-solicit-codes-fields, head ebaaef8.
+
+  LA PREMISA DEL TICKET ES FALSA, Y ESO CAMBIA LO QUE HAY QUE PROBAR. El ticket pide
+  "corregir la consulta para que vuelva a incluir" tres columnas. Ninguna version de ninguna
+  consulta las produjo jamas: el equipo de implementacion las anadia A MANO al archivo
+  despues de cada extraccion. Probar "que vuelvan" seria probar una restauracion que no
+  existe. Lo que el PR hace es distinto y hay que juzgarlo por lo que es: fabricar desde la
+  fuente el equivalente correcto de esas tres columnas.
+
+  DOS DE ELLAS NO PUEDEN SALIR DE UNA CONSULTA DE ALTRU. Los valores que el ticket muestra
+  como esperados son identificadores de registro de Salesforce (prefijo de contacto para uno,
+  prefijo de cuenta para el otro), y Salesforce los acuna al cargar. Ninguna consulta puede
+  devolverlos. El PR entrega en su lugar el identificador externo del constituyente, que es
+  el mismo con el que contact.sql, account_households.sql y account_organizations.sql cargan
+  esos registros, de modo que Salesforce resuelve el lookup solo. Es la unica forma de
+  satisfacer la necesidad; no es la forma que el ticket pide literalmente.
+
+  EL DEFECTO QUE SI IMPORTA NO ES EL QUE SE REPORTO. Sin clave de idempotencia, el equipo
+  inventaba una por posicion de fila (SC_1, SC_2, ...). La consulta no tiene ORDER BY ni
+  ventana de fecha, asi que una segunda tanda renumera filas ya cargadas y el upsert
+  sobrescribe el par constituyente/codigo equivocado. Numerar solo las filas nuevas desde
+  SC_1 pisa la tanda 1 entera. El PR sustituye esa clave posicional por
+  CONSTITUENTSOLICITCODE.ID, la clave primaria del par en la fuente.
+
+  EL CAMBIO, EN CONCRETO. Tres columnas proyectadas, todas derivadas de la fuente:
+
+  - `Implementation_External_ID__c` = `csc.ID`. Cabecera sin namespace, como en
+    emails__c.sql, constituency.sql y attributes.sql, porque el objeto destino de codigos de
+    solicitud no viene en el paquete gestionado y una cabecera que nombre un campo
+    inexistente se descarta EN SILENCIO al cargar.
+  - `Contact__c` = `c.ID` cuando el constituyente es individuo
+    (`ISORGANIZATION = 0 AND ISGROUP = 0 AND ISCONSTITUENT = 1`).
+  - `Household_Organization__c` = `c.ID` cuando es organizacion o grupo
+    (`ISORGANIZATION = 1 OR ISGROUP = 1`).
+
+  A diferencia de emails__c.sql NO se anade gate en el WHERE: un codigo sobre un
+  constituyente que no es ni lo uno ni lo otro se sigue exportando, con las dos columnas de
+  vinculo vacias, en vez de caerse de la migracion. Es una decision deliberada y hay que
+  medir a cuantas filas afecta, porque el autor la califica de "rara" sin dar cifra.
+
+  LO QUE HACE VALIOSA ESTA CORRIDA. El autor declara en el PR que **safesql no esta
+  instalado en su maquina, asi que no corrio ninguna comprobacion contra la fuente viva**.
+  Todas sus cifras — 959 filas, 888 contactos, 71 organizaciones sobre 51 entidades, 3 pares
+  repetidos en 6 filas — y su afirmacion central de que csc.ID es unico descansan en el DDL,
+  no en los datos. QA si tiene acceso de lectura. Esa verificacion es el nucleo de este caso.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. La premisa del ticket es falsa: las tres columnas nunca existieron en ninguna
+    consulta. La persona que reporto debe aceptar que lo entregado es el equivalente
+    correcto, no la restauracion que pidio.
+  - R2. Los identificadores 003.../001... del ticket son acunados por Salesforce al cargar y
+    NO pueden salir de una consulta de Altru. La peticion literal es insatisfacible.
+  - R3. Ninguna cifra del PR esta verificada contra la fuente. El autor no tenia runner de
+    consultas. Si csc.ID no fuera unico, la clave de idempotencia seria peor que la
+    posicional, porque colisionaria en silencio.
+  - R4. Los tres nombres de cabecera NO estan verificados contra la org. El objeto destino no
+    aparece en ninguno de los artefactos de paquete y no hay org de Long Island autenticada.
+    Si un nombre esta mal, la columna se descarta en silencio al cargar: el arreglo se veria
+    correcto y no haria nada.
+  - R5. Operativo, y es el de mayor consecuencia: la tanda 1 ya se cargo con las claves SC_n.
+    Al cambiar la clave, esos registros hay que re-keyear o borrar y recargar ANTES de la
+    segunda tanda. Un re-key no se puede hacer con upsert sobre el nuevo identificador
+    externo — eso inserta duplicados —; necesita update por Id de registro. QA no puede
+    ejecutarlo; solo cuantificar el alcance y dejarlo escrito.
+  - R6. En el archivo antiguo las etiquetas de las columnas 2 y 3 estan intercambiadas, que
+    es por lo que los ejemplos del ticket parecen inconsistentes. Las expectativas declaradas
+    en el ticket estan, en parte, mal etiquetadas.
+  - R7. La consulta sigue sin ORDER BY y sin ventana de fecha. Ya no hace falta para la clave,
+    porque es de la fuente, pero conviene decir que el determinismo del ORDEN de las filas no
+    se arregla en este PR.
+  - R8. Long Island es fuente PRODUCTIVA del cliente. Toda la cobertura es de solo lectura; no
+    se escribe en ninguna fuente ni en ninguna org, y no se carga nada en Salesforce.
+  - R9. Los nombres de las dos personas que el ticket usa como ejemplo NO se publican en este
+    repositorio, que es publico. La trazabilidad usa los identificadores de constituyente.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "Hay perfil de solo lectura para la fuente de Long Island; es la unica fuente sobre la que el PR declara cifras."
+  - "Se puede obtener contact_and_solicit_codes.sql en sus dos versiones, la de la rama base y la del \"PR #183\", para correr la misma entrada contra las dos."
+  - "Se anota el commit exacto que se prueba, porque el PR sigue abierto y el veredicto queda atado a el."
+  - "Se puede consultar el DDL de la fuente para confirmar que CONSTITUENTSOLICITCODE.ID es clave primaria, y ademas comprobarlo con datos y no solo con el esquema."
+  - "Todas las consultas son de solo lectura. No se escribe en ninguna fuente ni en ninguna org; la de Long Island es productiva del cliente."
+  - "Los nombres de persona del ticket no se escriben en ningun artefacto de este repositorio; se usan los identificadores de constituyente."
+  - "Se sabe que verificar los nombres de cabecera contra la org NO es posible sin una org de Long Island autenticada, y que sin eso ese escenario queda abierto."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The external id comes from the source, is unique, and the positional SC_n cannot come back"
+    tags:
+      - ac-1
+      - happy-path
+      - long-island
+    given:
+      - "el autor declara que CONSTITUENTSOLICITCODE.ID es la clave primaria del par constituyente/codigo, pero no pudo comprobarlo con datos porque no tenia runner de consultas"
+    when:
+      - "se ejecuta la version del PR sobre Long Island y se cuentan filas emitidas frente a valores distintos de Implementation_External_ID__c"
+      - "se comprueba en el esquema de la fuente que csc.ID es efectivamente la clave primaria de la tabla"
+      - "se busca en el texto de la consulta cualquier rastro de numeracion posicional: ROW_NUMBER, el literal 'SC_' o una concatenacion equivalente"
+      - "se ejecuta la consulta dos veces y se comparan los identificadores emitidos entre las dos corridas"
+    then:
+      - "el numero de identificadores distintos es igual al numero de filas emitidas: cero colisiones"
+      - "la unicidad queda demostrada con datos y no solo con el DDL, que es lo que el autor no pudo hacer"
+      - "no aparece ninguna numeracion posicional en la consulta, y el spec del repositorio lo fija"
+      - "las dos corridas devuelven exactamente los mismos identificadores para las mismas filas: la clave es estable"
+
+  - title: "AC2 · The constituent link routes individuals and organizations to different columns"
+    tags:
+      - ac-2
+      - happy-path
+      - long-island
+    given:
+      - "el autor declara 888 filas con contacto y 71 con organizacion, estas ultimas procedentes de 51 entidades distintas, y ninguna de esas cifras esta verificada contra la fuente"
+    when:
+      - "se ejecuta la version del PR y se cuentan las filas con Contact__c informado y con Household_Organization__c informado"
+      - "se comprueba que ninguna fila trae las dos columnas informadas a la vez"
+      - "se cuenta cuantas entidades distintas hay detras de las filas de organizacion"
+      - "se compara el enrutado con el que aplica emails__c.sql para los mismos dos lookups"
+    then:
+      - "las cifras de contacto y de organizacion se contrastan con las 888 y 71 declaradas, y cualquier diferencia queda cuantificada y explicada"
+      - "las dos columnas son mutuamente excluyentes en todas las filas: ninguna las trae ambas"
+      - "el numero de entidades distintas detras de las filas de organizacion se contrasta con las 51 declaradas"
+      - "el valor emitido es el identificador de constituyente de la fuente, que es el mismo con el que se cargan contactos y cuentas, y no un identificador de Salesforce"
+
+  - title: "AC2 · The deliberate absence of the flag gate is measured, not assumed"
+    tags:
+      - ac-2
+      - edge-case
+      - missing-doc
+    given:
+      - "a diferencia de emails__c.sql, esta consulta no anade gate en el WHERE sobre las banderas del constituyente, y el autor califica ese caso de raro sin dar ninguna cifra"
+    when:
+      - "se cuentan las filas cuyo constituyente no es ni individuo ni organizacion ni grupo, es decir las que salen con las dos columnas de vinculo vacias"
+      - "se comprueba que esas filas si se emiten y no se caen de la salida"
+      - "se compara ese conteo con las filas que emails__c.sql descartaria para los mismos constituyentes"
+    then:
+      - "la poblacion queda cuantificada con un numero, no con la palabra rara"
+      - "esas filas se emiten con las dos columnas de vinculo vacias, que es la decision declarada"
+      - "si el numero no es cero, queda escrito cuantos codigos de solicitud llegarian a Salesforce sin constituyente asociado, para que el equipo decida si eso es aceptable"
+      - "se deja constancia de la diferencia de criterio con emails__c.sql, que si los descartaria"
+
+  - title: "AC3 · The grain does not change and everything already emitted stays byte-identical"
+    tags:
+      - ac-3
+      - regression
+      - long-island
+    given:
+      - "el cambio solo proyecta tres columnas nuevas y no toca joins, WHERE ni agrupaciones, asi que ninguna fila deberia aparecer ni desaparecer"
+    when:
+      - "se ejecutan la version base y la del PR sobre la misma fuente y se comparan los conteos de filas"
+      - "se comprueba que el grano sigue siendo una fila por registro de CONSTITUENTSOLICITCODE"
+      - "se comparan columna a columna los valores de las columnas que ya existian antes del cambio"
+    then:
+      - "las dos versiones devuelven el mismo numero de filas, y ese numero se contrasta con las 959 que declara el autor"
+      - "el grano se verifica estructuralmente: las dos uniones resuelven un solo padre por clave primaria, asi que no pueden multiplicar filas"
+      - "todas las columnas preexistentes conservan sus valores fila a fila entre las dos versiones"
+      - "las tres columnas nuevas son lo unico que difiere entre ambas salidas"
+
+  - title: "AC4 · The two ticket examples, and why the Salesforce ids can never come from the query"
+    tags:
+      - ac-4
+      - regression-evidence
+      - long-island
+    given:
+      - "el ticket muestra dos constituyentes con el mismo codigo de solicitud y declara para cada uno un identificador externo SC_n, un identificador de contacto de Salesforce y un campo de organizacion vacio"
+    when:
+      - "se localizan en la salida del PR las filas de los dos identificadores de constituyente que el ticket nombra"
+      - "se comprueba que valor trae cada una de las tres columnas nuevas para esas dos filas"
+      - "se contrasta lo emitido con lo que el ticket declaraba esperar"
+    then:
+      - "las dos filas existen en la salida y traen Implementation_External_ID__c con el identificador del par en la fuente, no con SC_1 ni SC_2"
+      - "las dos traen Contact__c informado con el identificador de constituyente y Household_Organization__c vacio, que es el enrutado correcto para un individuo"
+      - "queda escrito que los identificadores 003... del ticket son acunados por Salesforce al cargar y no pueden salir de ninguna consulta de Altru, de modo que la expectativa literal del ticket es insatisfacible"
+      - "queda escrito que en el archivo antiguo las etiquetas de las columnas 2 y 3 estan intercambiadas, que es lo que hace que los ejemplos parezcan inconsistentes"
+      - "los nombres de las dos personas no se publican: la trazabilidad usa los identificadores de constituyente"
+
+  - title: "AC5 · The old pairing key is not unique, which is why matching needs the dates"
+    tags:
+      - ac-5
+      - edge-case
+      - long-island
+    given:
+      - "el autor declara que en Long Island tres pares de constituyente y codigo se repiten en seis filas porque un codigo se cerro y se volvio a anadir, y que por eso emparejar contra el archivo antiguo exige incluir las fechas"
+    when:
+      - "se cuentan los pares de constituyente y codigo que aparecen en mas de una fila, y cuantas filas suman"
+      - "se comprueba si anadir fecha de inicio y fecha de fin hace unico el emparejamiento"
+      - "se comprueba que el nuevo identificador externo si distingue esas filas repetidas"
+    then:
+      - "el numero de pares repetidos y de filas afectadas se contrasta con los 3 y 6 declarados"
+      - "queda demostrado que el par de identificadores por si solo no sirve para emparejar con el archivo antiguo"
+      - "anadiendo las dos fechas el emparejamiento queda determinado, o se dice con datos que tampoco basta"
+      - "el nuevo identificador externo distingue esas filas sin necesidad de fechas, que es justamente lo que aporta"
+
+  - title: "AC6 · The re-keying risk of the already loaded batch is quantified"
+    tags:
+      - ac-6
+      - edge-case
+      - missing-doc
+    given:
+      - "la tanda 1 ya se cargo en Salesforce con claves SC_n, y este cambio hace que la clave de las mismas filas pase a ser el identificador de la fuente"
+    when:
+      - "se cuenta cuantas filas de la salida corresponden a registros que ya estarian cargados con la clave antigua"
+      - "se documenta por que un re-key no se puede hacer con upsert sobre el nuevo identificador externo"
+      - "se comprueba si existe alguna forma de emparejar de manera fiable la fila antigua con la nueva usando solo datos de la fuente"
+    then:
+      - "el alcance del re-key queda cuantificado con un numero de registros, no descrito como un riesgo generico"
+      - "queda escrito que un upsert sobre la clave nueva insertaria duplicados en vez de re-keyear, y que hace falta un update por identificador de registro"
+      - "el emparejamiento entre archivo antiguo y extraccion nueva queda descrito con las columnas exactas que lo determinan"
+      - "el escenario NO ejecuta ninguna escritura ni recarga: QA solo cuantifica y describe, porque la org es productiva del cliente"
+
+  - title: "AC7 · The three header names remain unverified against the org, and that is a silent-failure risk"
+    tags:
+      - ac-7
+      - edge-case
+      - missing-doc
+      - blocked-by-access
+    given:
+      - "el objeto destino de codigos de solicitud no aparece en los artefactos de paquete disponibles, no hay org de Long Island autenticada, y una cabecera que nombre un campo inexistente se descarta en silencio al cargar"
+    when:
+      - "se comprueba si el objeto y los tres campos existen en algun artefacto de contexto de destino disponible"
+      - "se comprueba si hay alguna org donde poder describir el objeto"
+      - "se contrasta la convencion de cabecera usada con la de los exports hermanos que el autor cita"
+    then:
+      - "si no hay forma de verificarlo, el escenario queda explicitamente sin ejecutar y se pide al equipo de implementacion que confirme los tres nombres antes de cargar"
+      - "queda escrito que el modo de fallo es silencioso: si un nombre esta mal, la columna se descarta al cargar y el arreglo pareceria correcto sin hacer nada"
+      - "la convencion de cabecera sin namespace se contrasta con la de los exports hermanos, que es la unica evidencia disponible a favor"
+      - "se deja indicado que confirmar que la tanda 1 se cargo realmente con SC_n tambien depende del equipo de implementacion"
+
+tags:
+  - im-1277
+  - im-70
+  - im-1299
+  - altru
+  - migration
+  - migration-tool-etl
+  - solicit-codes
+  - contact
+  - external-id
+  - long-island
+  - query
+
+estimatedDuration: 120
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-23T21:10:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-23T21:10:00Z"
+  version: 1

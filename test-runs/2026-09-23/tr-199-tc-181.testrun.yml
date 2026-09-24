@@ -1,0 +1,465 @@
+schemaVersion: "1.0"
+id: tr-bbb34995-9d89-47e4-aa8b-fba539a55a62
+key: TR-199
+title: >-
+  TR-199 · IM-1277 · TC-181 · Las tres columnas nunca existieron, y la que de verdad hacia
+  falta es una clave que no se invente por posicion — 7/8 PASS, las seis cifras del autor
+  salen exactas y su afirmacion central queda por fin comprobada con datos.
+status: completed
+environment:
+  name: >-
+    Fuente de Altru de Long Island en SQL Server, alcanzada con un perfil de solo lectura a
+    traves del bastion. Todas las mediciones son agregados o columnas de identificador:
+    ninguna fila de datos salio a la evidencia, y ningun nombre de socio o donante se
+    publico. No se escribio en ninguna fuente ni en ninguna organizacion de Salesforce; la
+    de Long Island es productiva del cliente. Habia otras orgs autenticadas en la maquina y
+    NO se consultaron. Suite del equipo ejecutada en local; la de contenedor se intento dos
+    veces y fallo por arranque del contenedor, no por asercion. Los detalles de red quedan
+    fuera de este artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    SQL-only con un spec nuevo del dev — Veevarts/MigrationToolETL commit ebaaef8 de la rama
+    CamiloSalgueroMarin/IM-1277-solicit-codes-fields ("PR #183", ABIERTO y no borrador, sin
+    mergear ni desplegar; merge-base con main 8b522c37). El cambio proyecta tres columnas en
+    una sola consulta; el resto del diff son un spec de regresion y documentacion. El
+    veredicto queda atado a ebaaef8: si el PR cambia, caduca.
+startedAt: "2026-09-23T21:20:00Z"
+completedAt: "2026-09-23T22:05:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  LA PREMISA DEL TICKET ES FALSA, Y ESO CAMBIA LO QUE HAY QUE PROBAR. El ticket pide
+  "corregir la consulta para que vuelva a incluir" tres columnas. Ninguna version de ninguna
+  consulta las produjo jamas: el equipo de implementacion las anadia A MANO al archivo
+  despues de cada extraccion. Probar "que vuelvan" seria probar una restauracion que no
+  existe.
+
+  DOS DE ELLAS SON INSATISFACIBLES TAL COMO SE PIDEN. Los valores que el ticket muestra como
+  esperados son identificadores de registro de Salesforce, y Salesforce los acuna en el
+  momento de la carga. Ninguna consulta sobre Altru puede devolverlos, ni antes ni ahora. El
+  archivo antiguo los tenia porque alguien los pegaba a mano consultando los registros ya
+  cargados. El PR emite en su lugar el identificador externo del constituyente — el mismo con
+  el que contact.sql, account_households.sql y account_organizations.sql cargan esos
+  registros — de modo que Salesforce resuelve el lookup por si mismo. Es la unica forma de
+  satisfacer la necesidad; no es la forma que el ticket pide literalmente.
+
+  EL DEFECTO QUE SI IMPORTA NO ES EL QUE SE REPORTO. Sin clave de idempotencia, el equipo
+  inventaba una por posicion de fila (SC_1, SC_2...). La consulta no tiene ORDER BY ni ventana
+  de fecha, asi que una segunda tanda renumera filas ya cargadas y el upsert sobrescribe el
+  par constituyente/codigo equivocado. Numerar solo las filas nuevas desde SC_1 pisa la tanda
+  1 entera. El PR sustituye esa clave por CONSTITUENTSOLICITCODE.ID, la clave primaria del
+  par en la fuente.
+
+  El cambio son tres columnas proyectadas y nada mas: ni joins, ni WHERE, ni agrupaciones.
+
+  ## Inferred technical tests
+
+  - Unicidad de la clave nueva sobre la fuente viva. Es la afirmacion de la que depende TODO
+    el cambio y la que el autor declara no haber podido comprobar. EJECUTADA.
+  - Estabilidad de la clave entre dos corridas, por huella CHECKSUM_AGG. EJECUTADA.
+  - Conteo base vs PR y prueba estructural del grano. EJECUTADA.
+  - Cifras de enrutado del vinculo y exclusividad mutua de los dos lookups. EJECUTADA.
+  - Poblacion real de la ausencia deliberada de gate. EJECUTADA.
+  - Los dos ejemplos del ticket, fila a fila. EJECUTADA.
+  - No-unicidad del par antiguo y determinacion del emparejamiento con fechas. EJECUTADA.
+  - Cota del re-key desde la fuente. EJECUTADA (el subconjunto exacto es del lado de la org).
+  - Verificacion de los tres nombres de cabecera contra la org. NO EJECUTABLE: no hay org de
+    Long Island autenticada, y las demas orgs de la maquina no se tocan.
+
+  ## Metodo de instrumentacion
+
+  No se reimplemento ninguna logica. La consulta del PR entra TAL CUAL como CTE y solo se le
+  anade una agregacion encima. Los scripts estan comiteados en
+  `attachments/tr-199-tc-181/sql/` para que cualquiera pueda repetir la medicion.
+
+  ## Lo que aporta esta corrida
+
+  El autor escribe en el PR: "safesql is not installed on this machine, so no live-source
+  check was run. Uniqueness rests on CONSTITUENTSOLICITCODE.ID being the table's primary
+  key." Ninguna de sus seis cifras estaba verificada contra la fuente. Las seis salen
+  exactas, y la unicidad — de la que depende el cambio entero — queda demostrada con datos.
+
+  ## Sobre el repositorio del dev
+
+  Se hizo checkout local de la rama del PR para leer y ejecutar sus tests. Cero commits, cero
+  pushes, cero modificaciones en Veevarts/MigrationToolETL.
+
+results:
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC1 · The external id comes from the source, is unique, and the positional SC_n cannot
+      come back
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-23T21:35:00Z"
+    stepResults: []
+    actual: |
+      Es el nucleo de la corrida: el autor declara que csc.ID es clave primaria pero escribe
+      en el propio PR que no pudo comprobarlo, porque no tenia runner de consultas.
+
+      Y no es cosmetico. El comentario de constituency.sql lo dice sin rodeos: "A duplicate
+      Implementation_External_ID__c fails the Salesforce upsert batch OUTRIGHT." Si csc.ID no
+      fuera unico, la carga no se corrompe en silencio: revienta el lote entero.
+
+        Metrica                                           Medido   Declarado
+        Filas emitidas                                       959         959
+        Valores distintos de Implementation_External_ID__c   959           -
+        Colisiones                                             0           -
+
+      959 filas, 959 identificadores distintos. Cero colisiones.
+
+      ESTABILIDAD. Una clave que cambie entre extracciones solo mueve el problema de sitio.
+      Huella CHECKSUM_AGG sobre los identificadores y sobre la fila completa, dos corridas:
+
+        corrida 1   959 filas   ids 426381838   filas -1588041124
+        corrida 2   959 filas   ids 426381838   filas -1588041124
+
+      Identicas.
+
+      LA CLAVE POSICIONAL NO PUEDE VOLVER. No hay ROW_NUMBER, ni el literal 'SC_', ni
+      concatenacion equivalente en el texto de la consulta. El spec nuevo lo fija ademas como
+      invariante.
+
+      pre-fix -> post-fix -> objetivo cumplido?: la clave la inventaba el equipo por posicion,
+      sin ORDER BY ni ventana, de modo que una segunda tanda renumeraba filas ya cargadas y el
+      upsert sobrescribia el par equivocado -> la clave es la primaria del par en la fuente,
+      unica en las 959 filas e identica entre corridas -> SI.
+    attachments:
+      - name: external-id-uniqueness.txt
+        path: attachments/tr-199-tc-181/scenario-1/external-id-uniqueness.txt
+        mimeType: text/plain
+        size: 2400
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC2 · The constituent link routes individuals and organizations to different columns
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-23T21:38:00Z"
+    stepResults: []
+    actual: |
+      Metrica                                         Medido   Declarado   Veredicto
+      Filas con Contact__c informado                     888         888   exacto
+      Filas con Household_Organization__c informado       71          71   exacto
+      Filas con LAS DOS informadas                         0           -   PASS
+      Entidades distintas detras de las de organizacion    51          51   exacto
+      888 + 71                                           959 = total de filas
+
+      Las tres cifras que el autor declaro sin poder verificarlas salen exactas.
+
+      Las dos ramas CASE son complementarias por construccion — una exige ISORGANIZATION = 0
+      AND ISGROUP = 0 AND ISCONSTITUENT = 1, la otra ISORGANIZATION = 1 OR ISGROUP = 1 — y la
+      medicion lo confirma con 0 filas que traigan ambas.
+
+      QUE VALOR SE EMITE: CONSTITUENT.ID, el identificador de la fuente, no uno de Salesforce.
+      Es el mismo con el que contact.sql, account_households.sql y account_organizations.sql
+      cargan esos registros, asi que Salesforce resuelve el lookup al cargar.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no habia ninguna columna de vinculo y el
+      equipo pegaba los ids a mano en cada corrida -> el vinculo sale de la fuente, enrutado y
+      mutuamente excluyente, con las cifras declaradas exactas -> SI.
+    attachments:
+      - name: constituent-link-routing.txt
+        path: attachments/tr-199-tc-181/scenario-2/constituent-link-routing.txt
+        mimeType: text/plain
+        size: 1900
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC2 · The deliberate absence of the flag gate is measured, not assumed
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-23T21:40:00Z"
+    stepResults: []
+    actual: |
+      El encabezado del archivo declara que, a diferencia de emails__c.sql, aqui no se pone
+      gate sobre las banderas del constituyente, y que el caso es "rare". "Rare" no es una
+      cifra: si esa poblacion fuera grande estariamos cargando codigos de solicitud sin
+      constituyente asociado.
+
+        Filas cuyo constituyente no es ni individuo ni organizacion ni grupo        0
+        Es decir, filas que saldrian con las dos columnas de vinculo vacias         0
+
+      CERO en Long Island. Las 959 filas se reparten integramente entre 888 contactos y 71
+      organizaciones, sin residuo. La decision de no poner gate es prudente y hoy inerte: no
+      cambia ni una fila, y la diferencia de criterio con emails__c.sql no se manifiesta.
+
+      Queda abierto para otros tenants: alli si podria haber constituyentes sin ninguna de las
+      tres banderas, y entonces este archivo los exportaria con los vinculos vacios mientras
+      emails__c.sql los descartaria. No medido fuera de Long Island.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el riesgo estaba descrito con una palabra ->
+      cuantificado en 0 -> SI.
+    attachments:
+      - name: no-gate-population.txt
+        path: attachments/tr-199-tc-181/scenario-3/no-gate-population.txt
+        mimeType: text/plain
+        size: 1600
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC3 · The grain does not change and everything already emitted stays byte-identical
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-23T21:43:00Z"
+    stepResults: []
+    actual: |
+      PRUEBA ESTRUCTURAL, mas fuerte que un muestreo. El diff del archivo, ignorando
+      comentarios, es exactamente la insercion de tres columnas en la lista de proyeccion: ni
+      una linea de FROM, JOIN, WHERE o GROUP BY cambia. Y las dos uniones resuelven un solo
+      padre por clave primaria, asi que no pueden multiplicar filas. El grano esta garantizado
+      por construccion.
+
+        Version              Filas
+        base 8b522c37          959
+        PR   ebaaef8           959     delta 0
+        Declarado              959     exacto
+
+      Las columnas preexistentes se leen de las mismas filas de las mismas tablas por las
+      mismas uniones: no pueden cambiar. Verificado ademas con huella CHECKSUM_AGG sobre la
+      terna (id externo, constituyente, codigo), identica entre corridas.
+
+      RADIO DE IMPACTO. Quien referencia este archivo en el repositorio: solo el catalogo
+      generado y el spec nuevo del PR. NINGUN pipeline lo consume y ninguna otra consulta lee
+      su salida. Radio cero, tal como el autor declara.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el cambio solo debia proyectar columnas -> 959
+      filas antes y despues, cero altas, cero bajas, cero consumidores afectados -> SI.
+    attachments:
+      - name: grain-and-invariance.txt
+        path: attachments/tr-199-tc-181/scenario-4/grain-and-invariance.txt
+        mimeType: text/plain
+        size: 2100
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC4 · The two ticket examples, and why the Salesforce ids can never come from the query
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-23T21:47:00Z"
+    stepResults: []
+    actual: |
+      Los nombres de las dos personas que el ticket usa como ejemplo NO se publican: este
+      repositorio es publico y la trazabilidad usa los identificadores de constituyente.
+
+      Cada uno de los dos constituyentes tiene DOS codigos de solicitud; el ticket solo
+      mostraba uno, el que llama "Do Not Invite", que aparece en 96 filas del extracto.
+
+        Ejemplo    Id externo emitido       Contacto  Org  Contacto = id     Codigo
+                                            informado      del constituyente del ticket
+        Ejemplo-1  2DD94FE2-...-864A312BFABD   si      no       si              si
+        Ejemplo-1  FEF49F78-...-7631B0BD4638   si      no       si              no
+        Ejemplo-2  12EC2414-...-B6658571F2EA   si      no       si              si
+        Ejemplo-2  B901B30F-...-FF84F34B89A5   si      no       si              no
+
+      Punto por punto contra lo que el ticket declaraba esperar:
+        - El identificador externo ya no es SC_1 ni SC_2: es el del par en la fuente.
+        - Household/Organization sale VACIO en los cuatro casos. Coincide con lo esperado.
+        - "Constituent - HH/Org ID" sale con el identificador del CONSTITUYENTE, no con el id
+          de contacto de Salesforce que el ticket muestra. Y ahi esta lo que hay que aceptar
+          explicitamente: los identificadores de registro de Salesforce los acuna Salesforce
+          al cargar. Ninguna consulta sobre Altru puede devolverlos. El archivo antiguo los
+          tenia porque alguien los pegaba a mano despues de cada extraccion.
+        - En el archivo antiguo las etiquetas de las columnas 2 y 3 estan INTERCAMBIADAS, que
+          es lo que hace que los ejemplos parezcan inconsistentes al compararlos.
+
+      pre-fix -> post-fix -> objetivo cumplido?: las tres columnas no se emitian y el VLOOKUP
+      fallaba -> se emiten, con el vinculo que Salesforce sabe resolver -> SI, con la salvedad
+      de que es el equivalente correcto y no la restauracion literal que el ticket pedia.
+    attachments:
+      - name: ticket-examples.txt
+        path: attachments/tr-199-tc-181/scenario-5/ticket-examples.txt
+        mimeType: text/plain
+        size: 2800
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC5 · The old pairing key is not unique, which is why matching needs the dates
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-23T21:50:00Z"
+    stepResults: []
+    actual: |
+      Para re-keyear lo ya cargado hay que emparejar cada fila del archivo antiguo con la
+      nueva. Si el emparejamiento es ambiguo, el re-key escribe la clave en la fila equivocada.
+
+        Metrica                                                    Medido   Declarado
+        Pares (constituyente, codigo) en mas de una fila                3           3
+        Filas involucradas                                              6           6
+        Pares aun ambiguos anadiendo fecha de inicio y de fin            0           -
+        Pares distintos en total                                      956           -
+
+      959 filas - 956 pares distintos = 3 filas sobrantes = los 3 pares duplicados. Las dos
+      cifras del autor salen exactas.
+
+      Veredicto en tres puntos:
+        1. El par por si solo NO sirve: 6 filas quedarian ambiguas.
+        2. Con fecha de inicio y fin el emparejamiento queda DETERMINADO: 0 ambiguas. La
+           receta del autor es correcta y ahora esta comprobada con datos.
+        3. El identificador externo nuevo distingue esas 6 filas por si solo, sin fechas.
+
+      La clave de emparejamiento para el re-key es (ConstituentID, SolicitCodeID, StartDate,
+      EndDate).
+
+      pre-fix -> post-fix -> objetivo cumplido?: el autor afirmaba la no-unicidad sin medirla
+      -> confirmada exacta, y ademas comprobado que las fechas la resuelven -> SI.
+    attachments:
+      - name: pairing-key-not-unique.txt
+        path: attachments/tr-199-tc-181/scenario-6/pairing-key-not-unique.txt
+        mimeType: text/plain
+        size: 1800
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC6 · The re-keying risk of the already loaded batch is quantified
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-23T21:55:00Z"
+    stepResults: []
+    actual: |
+      Es la consecuencia de mayor alcance del PR y no esta en el codigo, esta en la operacion.
+      Si nadie la ejecuta, la segunda tanda crea registros duplicados junto a los de la
+      primera, porque la clave con la que se buscan ya no es la misma.
+
+        Filas del extracto que cambian de clave                              959
+        Filas que el emparejamiento por (constituyente, codigo) dejaria ambiguas 6
+        Filas ambiguas anadiendo las dos fechas                                 0
+
+      Las 959 cambian de clave: TODAS. No hay subconjunto que conserve la antigua, porque la
+      antigua era posicional y la nueva es de la fuente.
+
+      LO QUE NO SE PUEDE CUANTIFICAR DESDE LA FUENTE, Y HAY QUE DECIRLO: cuantos de esos 959
+      estan YA cargados es un hecho del lado de la ORG. El ticket habla de una "segunda
+      tanda", asi que la tanda 1 cubrio un subconjunto que solo se cuenta consultando la org
+      de Long Island, que no esta autenticada aqui y es productiva del cliente. 959 es la
+      COTA SUPERIOR; el numero exacto lo tiene el equipo de implementacion.
+
+      RECETA COMPROBADA:
+        1. Emparejar por (ConstituentID, SolicitCodeID, StartDate, EndDate) — sin las fechas
+           quedan 6 filas ambiguas, con ellas 0.
+        2. Escribir la clave nueva con UPDATE POR ID DE REGISTRO. NO con upsert sobre el nuevo
+           identificador externo: el upsert no encuentra nada con esa clave todavia, asi que
+           INSERTA, y el resultado son duplicados en vez de un re-key.
+        3. Alternativa: borrar lo de la tanda 1 y recargar.
+
+      QA no ejecuta ninguna: son escrituras sobre una org productiva del cliente.
+
+      pre-fix -> post-fix -> objetivo cumplido?: el riesgo estaba descrito en prosa -> 959
+      filas cambian de clave, el emparejamiento tiene columnas exactas comprobadas y el
+      mecanismo del fallo queda escrito -> SI.
+    attachments:
+      - name: rekey-scope.txt
+        path: attachments/tr-199-tc-181/scenario-7/rekey-scope.txt
+        mimeType: text/plain
+        size: 2300
+
+  - testCaseId: "0655ad58-771f-4f2c-b2b9-90c24fb181ce"
+    testCaseKey: TC-181
+    scenarioTitle: >-
+      AC7 · The three header names remain unverified against the org, and that is a
+      silent-failure risk
+    scenarioIndex: 7
+    status: blocked
+    executedAt: "2026-09-23T22:00:00Z"
+    stepResults: []
+    actual: |
+      El autor lo deja escrito como pregunta abierta al equipo de implementacion, y el modo de
+      fallo es SILENCIOSO: segun AGENTS.md (IM-1212), una cabecera que nombre un campo que no
+      existe se descarta al cargar, sin error. Si uno de los tres nombres esta mal, el CSV se
+      veria perfecto y no escribiria nada en Salesforce. El ticket se cerraria y el problema
+      seguiria.
+
+        Comprobacion                                                       Resultado
+        El objeto aparece en algun artefacto de contexto de destino?        NO
+        Hay una org de Long Island autenticada en esta maquina?             NO
+        La convencion de cabecera coincide con la de los exports hermanos?  SI
+
+      emails__c.sql y attributes.sql emiten Implementation_External_ID__c sin namespace, igual
+      que este archivo. Es la unica evidencia a favor y es indirecta: confirma el estilo, no
+      los nombres.
+
+      Hay otras orgs autenticadas en la maquina — sandboxes de formacion de otros clientes y
+      una productiva — y NO se consultaron: ninguna es Long Island, la autorizacion vigente
+      para tocar orgs esta acotada a otro proyecto, y una org productiva no se toca. Preguntar
+      antes es mas barato que explicar despues por que QA entro en una org ajena.
+
+      NO ES UN FALLO DEL PR. El autor no oculto el hueco: lo dejo escrito en el PR y pidio
+      confirmacion en el ticket. Hizo lo correcto con la informacion que tenia. El escenario
+      queda BLOQUEADO por falta de acceso.
+
+      pre-fix -> post-fix -> objetivo cumplido?: no evaluable. La convencion es coherente con
+      los exports hermanos, pero los nombres no se pueden confirmar sin la org.
+    attachments:
+      - name: header-names-unverified.txt
+        path: attachments/tr-199-tc-181/scenario-8/header-names-unverified.txt
+        mimeType: text/plain
+        size: 2400
+
+summary:
+  total: 8
+  passed: 7
+  failed: 0
+  blocked: 1
+  skipped: 0
+  notRun: 0
+  passRate: 88
+
+history:
+  - action: run-started
+    timestamp: "2026-09-23T21:20:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca la ejecucion de TC-181 contra el commit ebaaef8. El PR no venia enlazado en el
+      ticket; se localizo por nombre de rama. La primera medicion ya devuelve la cifra que el
+      autor declaraba no haber podido comprobar: 959 filas y 959 identificadores distintos.
+  - action: run-completed
+    timestamp: "2026-09-23T22:05:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      7 de 8 escenarios cumplen el objetivo y uno queda BLOQUEADO por falta de acceso a la
+      org, no por un defecto. El valor de la corrida esta en que el autor declara en su propio
+      PR que no tenia runner de consultas y que ninguna de sus cifras estaba verificada contra
+      la fuente: las SEIS salen exactas — 959 filas, 888 contactos, 71 organizaciones, 51
+      entidades, 3 pares repetidos, 6 filas — y su afirmacion central, que csc.ID es unico,
+      queda demostrada con datos y no solo con el DDL. Eso importa porque una clave externa
+      duplicada no corrompe en silencio: hace fallar el lote de upsert entero. Tres
+      observaciones sin defecto: la premisa del ticket es falsa y dos de las tres columnas son
+      insatisfacibles tal como se piden, asi que quien reporto debe aceptar explicitamente que
+      lo entregado es el equivalente correcto (O1); el re-key de la tanda ya cargada afecta
+      hasta 959 registros y necesita un UPDATE por Id, nunca un upsert, que insertaria
+      duplicados (O2); y los tres nombres de cabecera siguen sin verificar contra la org, con
+      un modo de fallo silencioso que haria parecer correcto un arreglo que no escribe nada
+      (O3). La suite unitaria pasa 655/830 incluido el spec nuevo; la de contenedor fallo por
+      arranque de contenedor en dos intentos, no por asercion, y no cubre este archivo. Sin
+      defectos de seguridad: OWASP 3 aplicables, 3 PASS, 7 N/A.
+
+tags:
+  - im-1277
+  - im-70
+  - im-1299
+  - altru
+  - migration
+  - migration-tool-etl
+  - solicit-codes
+  - contact
+  - external-id
+  - long-island
+  - query
+
+metadata:
+  createdBy: codex
+  createdAt: "2026-09-23T21:20:00Z"
+  updatedBy: codex
+  updatedAt: "2026-09-23T22:05:00Z"

@@ -1,0 +1,48 @@
+TC-181 escenario 7 — EL RIESGO DE RE-KEY DE LA TANDA YA CARGADA
+Fuente: Long Island · 2026-09-23
+
+EL RIESGO, EN PALABRAS DEL AUTOR
+  "Batch 1 was loaded with the SC_n keys, so the key changes. The already-loaded records must
+   be re-keyed or deleted and reloaded before the second batch goes in -- and a re-key cannot
+   be done by upserting on the new external id (that inserts duplicates); it needs an update
+   by record Id."
+
+  Es la consecuencia de mayor alcance de todo el PR, y no esta en el codigo: esta en la
+  operacion. Si nadie la ejecuta, la segunda tanda crea registros duplicados junto a los de
+  la primera, porque la clave con la que se buscan ya no es la misma.
+
+LO QUE SE PUEDE CUANTIFICAR DESDE LA FUENTE
+
+  Metrica                                                            Resultado
+  -----------------------------------------------------------------  ---------
+  Filas del extracto que cambian de clave                                  959
+  Filas que el emparejamiento por (constituyente, codigo) dejaria ambiguas    6
+  Filas ambiguas anadiendo fecha de inicio y fecha de fin                    0
+
+  Las 959 filas del extracto cambian de clave: TODAS. No hay subconjunto que conserve la
+  clave antigua, porque la antigua era posicional y la nueva es de la fuente.
+
+LO QUE NO SE PUEDE CUANTIFICAR DESDE LA FUENTE, Y HAY QUE DECIRLO
+  Cuantos de esos 959 registros estan YA cargados en Salesforce es un hecho del lado de la
+  ORG, no de la fuente. El ticket habla de una "segunda tanda", asi que la tanda 1 cubrio un
+  subconjunto que solo se puede contar consultando la org de Long Island, que no esta
+  autenticada aqui y que ademas es productiva del cliente.
+
+  959 es, por tanto, la COTA SUPERIOR del re-key. El numero exacto lo tiene el equipo de
+  implementacion.
+
+LA RECETA DEL RE-KEY, COMPROBADA
+  1. Emparejar archivo antiguo con extraccion nueva por
+     (ConstituentID, SolicitCodeID, StartDate, EndDate).
+     Comprobado con datos: sin las fechas quedan 6 filas ambiguas; con ellas, 0.
+  2. Escribir la clave nueva con un UPDATE POR ID DE REGISTRO.
+     NO con upsert sobre el nuevo identificador externo: el upsert no encuentra ningun
+     registro con esa clave todavia, asi que INSERTA, y el resultado son duplicados en vez de
+     un re-key.
+  3. Alternativa: borrar lo cargado por la tanda 1 y recargar con la clave nueva.
+
+  QA no ejecuta ninguna de las dos. Son escrituras sobre una org productiva del cliente.
+
+OBJETIVO CUMPLIDO: SI — el riesgo deja de ser generico: 959 filas cambian de clave, el
+emparejamiento tiene columnas exactas y comprobadas, y el mecanismo del fallo (upsert que
+inserta en vez de actualizar) queda escrito. Lo unico que falta es del lado de la org.

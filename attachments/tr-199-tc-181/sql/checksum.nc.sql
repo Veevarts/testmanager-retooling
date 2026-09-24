@@ -1,0 +1,10 @@
+WITH q AS (
+SELECT csc.ID AS ExtId, c.ID AS ConstituentID, sc.ID AS SolicitCodeID
+FROM CONSTITUENTSOLICITCODE csc
+        JOIN CONSTITUENT c ON c.ID = csc.CONSTITUENTID
+        JOIN SOLICITCODE sc ON sc.ID = csc.SOLICITCODEID
+)
+SELECT COUNT(*) AS Filas,
+       CHECKSUM_AGG(CHECKSUM(CAST(ExtId AS VARCHAR(36)))) AS HuellaIdsExternos,
+       CHECKSUM_AGG(CHECKSUM(CAST(ExtId AS VARCHAR(36)) + '|' + CAST(ConstituentID AS VARCHAR(36)) + '|' + CAST(SolicitCodeID AS VARCHAR(36)))) AS HuellaFilas
+FROM q;

@@ -1,0 +1,47 @@
+TC-181 escenario 1 — EL IDENTIFICADOR EXTERNO VIENE DE LA FUENTE, ES UNICO Y ES ESTABLE
+Fuente: Long Island (qa_li_direct) · base 8b522c37 vs head ebaaef8 · 2026-09-23
+
+POR QUE ESTE ESCENARIO ES EL NUCLEO DE LA CORRIDA
+  El autor escribe en el PR: "safesql is not installed on this machine, so no live-source
+  check was run. Uniqueness rests on CONSTITUENTSOLICITCODE.ID being the table's primary
+  key". Toda la propuesta depende de esa unicidad y nadie la habia comprobado con datos.
+
+  Y no es una comprobacion cosmetica. El comentario de constituency.sql lo dice sin rodeos:
+  "A duplicate Implementation_External_ID__c fails the Salesforce upsert batch OUTRIGHT."
+  Si csc.ID no fuera unico, la carga no se corrompe en silencio: revienta el lote entero.
+
+METODO
+  La consulta del PR entra TAL CUAL como CTE y solo se le anade una agregacion encima
+  (sql/agg_pr.nc.sql). Ni una linea de su texto se reescribe.
+
+MEDICION
+
+  Metrica                                          Medido    Declarado   Veredicto
+  -----------------------------------------------  -------   ---------   ---------
+  Filas emitidas                                       959         959   PASS exacto
+  Valores distintos de Implementation_External_ID__c   959           -   PASS
+  Colisiones (filas - distintos)                         0           -   PASS
+
+  959 filas y 959 identificadores distintos: CERO colisiones. La unicidad queda demostrada
+  con datos sobre la fuente viva, que es exactamente lo que el autor no pudo hacer.
+
+ESTABILIDAD ENTRE CORRIDAS
+  La clave tambien tiene que ser la misma en cada extraccion, o el problema de idempotencia
+  solo cambia de forma. Se ejecuto dos veces una huella CHECKSUM_AGG sobre los
+  identificadores emitidos y sobre la fila completa (sql/checksum.nc.sql):
+
+    corrida 1   filas 959   huella ids 426381838   huella filas -1588041124
+    corrida 2   filas 959   huella ids 426381838   huella filas -1588041124
+
+  Identicas. La clave no depende del orden ni del momento de la corrida.
+
+LA CLAVE POSICIONAL NO PUEDE VOLVER
+  Se busco en el texto de la consulta cualquier rastro de numeracion por posicion:
+  ROW_NUMBER, el literal 'SC_' o una concatenacion equivalente. No aparece ninguno.
+  El spec contact-solicit-code-query.spec.ts lo fija ademas como invariante.
+
+OBJETIVO CUMPLIDO: SI
+  pre-fix: la clave la inventaba el equipo por posicion de fila, sin ORDER BY ni ventana, de
+  modo que una segunda tanda renumeraba filas ya cargadas y el upsert sobrescribia el par
+  equivocado. post-fix: la clave es la primaria del par en la fuente, unica en las 959 filas
+  e identica entre corridas.
