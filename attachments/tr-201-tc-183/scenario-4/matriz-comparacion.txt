@@ -1,0 +1,48 @@
+ESCENARIO 4 · los vitalicios reales de High Desert · BLOQUEADO por el limite de 120 s
+=====================================================================================
+
+LA CONSULTA NO CABE. El propio SQL lo documenta (IM-1161): en High Desert la
+sentencia final tarda ~445 s en una maquina de 2 vCPU y 3 GB. safesql corta a los
+120 s, y ese limite NO se toca.
+
+QA intento reducirla sin perder ningun cambio, y lo valido antes de usarlo:
+
+  1. Restringir la rama 1 a membresias sin expiracion. Es la poblacion COMPLETA donde
+     la fecha fin puede cambiar, porque p1 = 0 (ningun termino sin fecha cae sobre una
+     membresia con expiracion). La sentencia final no tiene funciones de ventana; el
+     unico TOP esta en un OUTER APPLY correlacionado, que se resuelve fila a fila.
+     CONTROL en Illinois: la restringida reproduce IDENTICOS los cinco agregados de
+     cambio de la corrida completa, en 25 s en lugar de 54.
+     -> illinois-control-de-la-restriccion.json
+  2. En High Desert, la restringida: 123 s -> Timeout.
+  3. El preludio de tablas temporales, solo: 123 s -> Timeout.
+
+Si el preludio ya no cabe, ninguna restriccion de la sentencia final sirve. Se paro
+ahi: tres consultas de dos minutos contra esa maquina bastan.
+
+LO QUE SI QUEDA MEDIDO, a nivel de predicado sobre las tablas de Altru:
+
+  Placeholder vitalicio (expiracion = dia de alta, membresia Active sin expiracion)
+    Life Member             182
+    Volunteer Life Member    43
+    Guardian                  1
+                          -----
+                            226   = lo que declara el autor
+  El Guardian es el que explica su "225 of the 226": no es un nivel Life, asi que el
+  TERMTIMELENGTH de 100 anos no lo cubre. La cifra cuadra exacta.
+
+  p1, camino nuevo de por vida (termino sin fecha sobre membresia con expiracion)   0
+  => NINGUNA fila de una membresia Active puede cambiar de fecha fin. Para una
+     Active, el predicado viejo y el nuevo solo difieren en p1.
+  => Las 226 estan en membresias Active sin expiracion: el brazo 2 les da +100 con
+     el PR, igual que la base. No pasan a terminar el dia que empezaron.
+
+  Canceladas que el arreglo corrige (cota superior)                  6   (autor: 1 en la salida)
+  Life Member con fecha real (no placeholder), Active sin expiracion 3   (+100 antes y despues)
+  Estados con membresia sin expiracion: solo Active 237 y Cancelled 13
+
+Esto responde la pregunta del escenario por construccion, no por observacion de la
+salida. El escenario pide ejecutar la consulta y mirar la salida, y eso no se hizo.
+
+VEREDICTO: BLOQUEADO. Para cerrarlo hace falta ejecutar la consulta en High Desert
+con una herramienta sin el tope de 120 s, o en una maquina mas grande.

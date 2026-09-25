@@ -1,0 +1,176 @@
+schemaVersion: "1.0"
+
+id: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+key: "TC-183"
+title: "Membership end date: a dropped membership's past terms stop exporting as lifetime"
+
+description: |
+  Cobertura QA de IM-1300 (Incorrect Membership End Dates Migrated to Salesforce - Breaking
+  Current Members Validation). Sub-tarea de QA: IM-1305. Epic: IM-70 Altru Queries. Cliente
+  del ejemplo: Long Island. Prioridad Critica, severidad 1 - Business Stopping.
+
+  Repositorio en alcance: Veevarts/MigrationToolETL "PR #188", rama
+  CamiloSalgueroMarin/IM-1300-membership-end-dates, head e401c7c9, ABIERTO, sin revisiones.
+  Toca una sola consulta, opportunity-membership/membership_transactions.sql, un spec de
+  regresion y documentacion.
+
+  EL DEFECTO. La consulta daba fecha fin "de por vida" (inicio + 100 anos) a toda transaccion
+  cuya MEMBRESIA no tuviera fecha de expiracion. Pero ese campo es el estado ACTUAL de la
+  membresia, y Altru lo vacia cuando una membresia se da de baja (Drop / Cancelled), mientras
+  cada termino anterior conserva su fecha real. Resultado: cada termino historico de una
+  membresia dada de baja salia con fecha fin cien anos despues y contaba como socio vigente.
+  Ejemplo del ticket, rev-10049355: Altru termina el 2010-11-03; la migracion exporto
+  2109-11-03.
+
+  EL ARREGLO, UN SOLO PREDICADO EN LA RAMA 1:
+
+    antes    WHEN m.EXPIRATIONDATE IS NULL
+    despues  WHEN mt.EXPIRATIONDATE IS NULL
+               OR (m.STATUSCODE = 0 AND m.EXPIRATIONDATE IS NULL)
+
+  Es de por vida si el TERMINO no tiene fecha propia, o si la membresia esta Activa y sin
+  expiracion. El segundo brazo existe por High Desert, cuyos socios "Life Member" guardan una
+  fecha de expiracion igual al dia de alta: sin el, terminarian el dia que empezaron.
+
+  LA RAMA 2 (membresias respaldadas por orden de venta) no cambia: calcula la fecha fin con
+  COALESCE(obm.EXPIRATIONDATE, inicio + 100), leyendo la expiracion del propio item, asi que
+  por construccion no deberia tener el defecto. Hay que medirlo, no suponerlo.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. El comentario de Jira dice "A Cancelled membership never qualifies". El SQL no dice
+    eso: el primer brazo no mira el estado, asi que un termino cancelado SIN fecha propia
+    sigue recibiendo +100. El propio autor lo reconoce para un registro de Long Island en un
+    comentario posterior. Hay que contarlos y dejar escrito que la frase es inexacta.
+  - R2. Cambio de comportamiento silencioso: una transaccion SIN fecha propia sobre una
+    membresia que SI tiene expiracion antes salia con fecha fin vacia y ahora sale como de por
+    vida. El comentario del SQL afirma que no hay ninguna fuera de las Drop en Long Island,
+    Illinois ni High Desert. Es una afirmacion por tenant que hay que medir en todos los
+    perfiles de fuente disponibles, no solo en tres.
+  - R3. El autor se corrigio a si mismo dos veces en el ticket (la correccion manual en
+    Salesforce, y "no hay socios de por vida" que solo vale para Long Island). Las cifras
+    finales son las que se verifican.
+  - R4. El estado del Salesforce de Long Island (203 registros aun mal, 202 corregibles, 5
+    fechas puestas a mano que hay que conservar, rollups de membresia) es la ORG PRODUCTIVA
+    DEL CLIENTE. QA no la lee ni la escribe. Queda fuera de esta cobertura y dicho en riesgos:
+    una recarga completa sobrescribiria las fechas puestas a mano y volveria vigentes a socios
+    dados de baja.
+  - R5. Altru tiene sus propias rarezas que el arreglo NO debe tocar: 6 terminos cuya fecha fin
+    en Altru ya esta decadas en el futuro (la mayor 2099-08-25) y rev-10015151 con fecha fin en
+    1904. El arreglo pasa el dato de Altru tal cual; son del cliente, no de la migracion.
+  - R6. El PR esta abierto y sin revision. El veredicto queda atado al commit e401c7c9.
+
+type: integration
+priority: critical
+status: active
+
+preconditions:
+  - "Hay acceso de solo lectura a la fuente de Altru de Long Island y de High Desert; y, para la regresion, a las demas fuentes con perfil disponible."
+  - "Se puede ejecutar la consulta de la base del PR y la del PR con la misma entrada y comparar agregados, sin sacar filas de datos a la evidencia."
+  - "El ejemplo del ticket se referencia por su identificador de ingreso, rev-10049355. El nombre de la socia NO aparece en ningun artefacto: este repositorio es publico."
+  - "NO se lee ni se escribe el Salesforce de Long Island: es la org productiva del cliente."
+
+format: gherkin
+
+scenarios:
+  - title: "Ticket example · rev-10049355 exports Altru's real end date instead of 100 years out"
+    tags:
+      - ac-1
+      - regression-evidence
+      - long-island
+    given:
+      - "en Altru el termino del 2009-11-03 de rev-10049355 termina el 2010-11-03 y la membresia se dio de baja el 2010-01-05"
+    when:
+      - "se ejecuta la consulta de la base del PR y la del PR sobre la fuente de Long Island"
+      - "se lee la fecha fin que cada una emite para esa transaccion"
+    then:
+      - "la base emite 2109-11-03, que reproduce el defecto del ticket"
+      - "el PR emite 2010-11-03, la fecha fin que Altru guarda para ese termino"
+      - "la fecha de inicio y el resto de columnas de esa fila no cambian"
+
+  - title: "Long Island population · every far-future end date of a dropped membership is corrected, and nothing else moves"
+    tags:
+      - ac-1
+      - happy-path
+      - long-island
+    given:
+      - "el autor afirma 35,170 fechas fin entre 2093 y 2109 en la base, y que 35,169 pasan a la fecha real de Altru"
+    when:
+      - "se cuentan en la base y en el PR las filas con fecha fin a mas de 90 anos de su inicio"
+      - "se reparten las corregidas por duracion del termino (un ano, dos anos, otras)"
+      - "se cuentan las filas totales de las dos versiones y se compara una huella de todas las filas que NO tenian fecha lejana"
+    then:
+      - "la base tiene las fechas lejanas que el autor declara y el PR deja solo las que tienen motivo de por vida"
+      - "cada fila corregida toma exactamente la expiracion de su propia transaccion"
+      - "el reparto por duracion coincide con el declarado: 30,706 de un ano y 869 de dos"
+      - "el numero de filas no cambia, y las filas que no tenian fecha lejana son identicas byte a byte"
+
+  - title: "What still looks lifetime after the fix, and whose data it is"
+    tags:
+      - edge-case
+      - missing-doc
+      - long-island
+    given:
+      - "el comentario de Jira dice que una membresia cancelada nunca califica como de por vida, pero el primer brazo del predicado no mira el estado"
+    when:
+      - "se cuentan las filas que el PR sigue emitiendo con inicio + 100, separadas por el brazo del predicado que las produce y por estado de la membresia"
+      - "se cuentan las filas cuya fecha fin lejana viene de Altru y no de la migracion"
+    then:
+      - "queda contado cuantos terminos CANCELADOS sin fecha propia siguen recibiendo +100; el autor declara uno en Long Island"
+      - "si hay alguno, queda escrito que la frase del ticket es inexacta y que ese registro es uno de los que en Salesforce se corrigio a mano"
+      - "los terminos cuya fecha lejana ya esta en Altru (el autor declara 6, la mayor 2099-08-25) salen con la fecha de Altru, sin tocar"
+      - "rev-10015151 sale con la fecha que Altru tiene, aunque sea de 1904: el arreglo no inventa ni corrige datos del cliente"
+
+  - title: "High Desert · genuine lifetime members stay current"
+    tags:
+      - regression
+      - edge-case
+      - high-desert
+    given:
+      - "High Desert tiene socios de por vida reales cuyos terminos guardan una expiracion igual al dia de alta, sobre membresias Activas sin expiracion"
+    when:
+      - "se ejecuta la consulta de la base del PR y la del PR sobre la fuente de High Desert"
+      - "se cuentan las transacciones de por vida, las Canceladas con termino de 100 anos, y las que cambian de fecha fin entre las dos versiones"
+    then:
+      - "las transacciones Life Member y Volunteer Life Member siguen saliendo con inicio + 100 en el PR; el autor declara 226"
+      - "ninguna de ellas sale con fecha fin igual a su fecha de inicio"
+      - "las transacciones Canceladas con termino de 100 anos toman su propia expiracion; el autor declara 16"
+      - "el unico cambio entre base y PR es el registro cancelado que el autor declara corregido"
+
+  - title: "Regression · no tenant gains a new lifetime path, and the untouched branch stays clean"
+    tags:
+      - regression
+      - negative
+    given:
+      - "el predicado nuevo convierte en de por vida a una transaccion sin fecha propia sobre una membresia que SI tiene expiracion, que antes salia con fecha fin vacia"
+    when:
+      - "se cuenta esa poblacion, fuera de las transacciones Drop, en todas las fuentes con perfil disponible"
+      - "se cuentan las fechas fin lejanas que emite la rama 2, antes y despues"
+      - "se ejecutan el spec de regresion del PR y la suite del repositorio, y se comprueba que el spec puede ponerse rojo si se devuelve el predicado viejo"
+      - "se buscan otros consumidores del archivo de la consulta"
+    then:
+      - "la poblacion que gana una fecha de por vida nueva es cero en cada tenant medido; si no, se nombra el tenant y el numero"
+      - "la rama 2 no emite fechas lejanas antes ni despues"
+      - "el spec y la suite pasan en el PR, y el spec falla con el predicado viejo"
+      - "ningun otro consumidor cambia de salida"
+
+tags:
+  - im-1300
+  - im-70
+  - im-1305
+  - altru
+  - migration
+  - memberships
+  - membership-end-date
+  - long-island
+  - high-desert
+  - sql
+
+estimatedDuration: 150
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T16:00:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T16:00:00Z"
+  version: 1

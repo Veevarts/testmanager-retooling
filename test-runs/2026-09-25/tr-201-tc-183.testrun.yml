@@ -1,0 +1,297 @@
+schemaVersion: "1.0"
+id: tr-3f9b0c7e-5a21-4d8e-b6c4-7e1d2a9f0c53
+key: TR-201
+title: >-
+  TR-201 · IM-1300 · TC-183 · 1/5 PASS, 4 bloqueados — el arreglo es correcto y completo
+  donde se pudo medir, pero la fuente de Long Island no responde hoy y High Desert no cabe
+  en 120 s.
+status: completed
+environment:
+  name: >-
+    Fuentes de Altru en SQL Server, alcanzadas con perfiles de solo lectura a traves del
+    bastion. Todas las mediciones son agregados: ninguna fila de datos ni ningun nombre
+    sale a la evidencia. Toda escritura de las consultas de QA va a tablas temporales.
+    Alcanzables hoy: High Desert, Illinois y Vizcaya. Sin respuesta: Long Island (la fuente
+    del ticket), Tucson, Kidstream, MOAD y Aspen. No se leyo ni escribio ninguna org de
+    Salesforce; la de Long Island es productiva del cliente. Los detalles de red quedan
+    fuera de este artefacto a proposito: este repositorio es publico.
+  buildVersion: >-
+    SQL-only con un spec de texto — Veevarts/MigrationToolETL "PR #188", rama
+    CamiloSalgueroMarin/IM-1300-membership-end-dates, head e401c7c9, ABIERTO y sin
+    revisiones. Base d8bafa10, que es main. Un unico predicado CASE en la rama 1 de
+    membership_transactions.sql; el resto son comentarios, el spec y documentacion. El
+    veredicto queda atado a e401c7c9.
+startedAt: "2026-09-25T15:40:00Z"
+completedAt: "2026-09-25T17:10:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  La consulta daba fecha fin "de por vida" (inicio + 100 anos) cuando la MEMBRESIA no
+  tenia expiracion. Pero MEMBERSHIP.EXPIRATIONDATE es el estado ACTUAL, y Altru lo vacia
+  cuando la membresia se da de baja, mientras cada termino anterior conserva su fecha
+  real. Cada termino historico de una membresia cancelada salia con fecha fin cien anos
+  despues y contaba como socio vigente.
+
+  El PR cambia la condicion a: el TERMINO no tiene fecha propia, o la membresia esta
+  Active y sin expiracion. El segundo brazo protege a los vitalicios de High Desert, cuyos
+  terminos guardan una expiracion igual al dia de alta. La rama 2 ya leia la expiracion
+  del propio item y no cambia.
+
+  ## Inferred technical tests
+
+  - Base vs PR sobre la misma fuente, sin filtro de fecha, con una version instrumentada
+    que emite la fecha vieja y la nueva en la misma fila, y dos controles sin tocar que
+    prueban que la instrumentacion no altera la salida. EJECUTADO en Illinois; Long
+    Island caido; High Desert no cabe en 120 s.
+  - El predicado medido sobre las tablas de Altru en cada fuente alcanzable. EJECUTADO en
+    tres clientes.
+  - Buscar otros productores de la fecha fin en todo el repositorio. EJECUTADO.
+  - El spec del PR, y comprobar que puede fallar. EJECUTADO: 5 de 5 mutaciones en rojo.
+  - La suite, separando fallos previos de introducidos. EJECUTADO.
+
+  ## Hallazgos
+
+  F1 · LA FUENTE DE LONG ISLAND NO RESPONDE, y es la del ticket. Los escenarios 1, 2 y 3
+  quedan bloqueados. Hace falta encender su maquina de respaldo en la Migration App o el
+  host y puerto vigentes.
+
+  F2 · "A Cancelled membership never qualifies", del comentario de Jira, no es lo que hace
+  el SQL. Un termino cancelado sin fecha propia sigue en +100. En la salida de Illinois
+  son 6; en tablas base, High Desert hasta 7 y Vizcaya 2 Pending. No es un defecto del
+  codigo, cuyos comentarios lo dicen bien. Es que los equipos de esos clientes deben saber
+  que su Current Members seguira contando a esos socios.
+
+  F3 · En Illinois el impacto real es 27 filas, no las 57 transacciones que cita la
+  documentacion: 57 es la cifra de las tablas base, y 30 no llegan a la exportacion.
+
+  F4 · Vizcaya tiene membresias Pending sin expiracion, un tercer estado que la
+  documentacion no contempla. Sin efecto en este cambio.
+
+  F5 · El arreglo esta completo: ninguna otra exportacion emite la fecha fin.
+
+  F6 · Solo 3 de los 13 perfiles de fuente responden hoy.
+
+  ## Veredicto QA: APROBADO CON ALCANCE
+
+  Se certifica el CODIGO. El cambio es un unico predicado que se evalua fila a fila; lo
+  que varia entre clientes es solo que filas caen en cada brazo, y eso esta medido con
+  datos reales: Illinois tiene el mismo defecto y en su salida cambian 27 filas, las 27 en
+  la direccion correcta y nada mas se mueve; ningun cliente alcanzable gana fechas de por
+  vida nuevas; ninguna otra exportacion emite la fecha fin; y el spec puede fallar.
+
+  No se certifican las cifras de Long Island (35,170 / 35,169 / 30,706 / 869 y los
+  residuos). Son del autor y QA no las verifico, porque la fuente estaba apagada. Solo
+  importan para la correccion de datos en Salesforce, que es del operador y queda fuera de
+  QA.
+
+  RIESGO RESIDUAL, el unico que se nombra: el camino nuevo de por vida (un termino sin fecha
+  propia sobre una membresia que si tiene expiracion) no se midio en Long Island. Es la
+  unica forma en que el arreglo podria perjudicarle, metiendo fechas lejanas donde antes
+  no las habia. El autor lo reporta en 0; QA lo midio en 0 en High Desert, Illinois y
+  Vizcaya.
+
+  Los escenarios 1 a 4 NO se pasan a verde con evidencia de otro cliente: siguen
+  bloqueados por su motivo. Si la maquina de Long Island vuelve a encenderse, se cierran
+  1 a 3 como segunda version de este TR, idealmente antes de que el operador toque
+  Salesforce.
+  ## Fuera de alcance
+
+  El Salesforce de Long Island — los 203 registros aun mal, los 202 corregibles, las 5
+  fechas puestas a mano y los rollups — es la org productiva del cliente, y QA no la lee
+  ni la escribe. La recomendacion del autor es la correcta: actualizar solo los 202 y
+  recalcular los rollups. Una recarga completa sobrescribiria las fechas puestas a mano y
+  volveria vigentes a socios dados de baja.
+
+results:
+  - testCaseId: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+    testCaseKey: TC-183
+    scenarioTitle: >-
+      Ticket example · rev-10049355 exports Altru's real end date instead of 100 years out
+    scenarioIndex: 0
+    status: blocked
+    executedAt: "2026-09-25T16:00:00Z"
+    stepResults: []
+    actual: |
+      BLOQUEADO: rev-10049355 es de Long Island, y la fuente de Long Island no responde hoy.
+      Los dos perfiles fallan igual — "Failed to connect to localhost:<puerto-del-tunel> in 20000ms" —:
+      el tunel SSH levanta, y lo que agota el tiempo es el servidor de base de datos detras
+      del bastion. El 23-09 ese mismo perfil funcionaba. Buscar la IP nueva requiere
+      consultar AWS, y el entorno lo bloqueo; QA no lo rodeo.
+
+      UNA TRAMPA QUE QUEDA ESCRITA. rev-10049355 existe TAMBIEN en Illinois y es otra
+      transaccion (inicio 2014-05-09, membresia Expired, no cambia con el PR). Los
+      identificadores de ingreso de Altru se repiten entre clientes: buscar el ejemplo en
+      otra fuente da un falso positivo que parece coherente.
+
+      La consulta instrumentada ya esta preparada: devuelve para rev-10049355 la fecha fin
+      de la base y la del PR en la misma fila. Falta solo la fuente.
+  - testCaseId: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+    testCaseKey: TC-183
+    scenarioTitle: >-
+      Long Island population · every far-future end date of a dropped membership is corrected, and nothing else moves
+    scenarioIndex: 1
+    status: blocked
+    executedAt: "2026-09-25T16:04:00Z"
+    stepResults: []
+    actual: |
+      BLOQUEADO en Long Island, por la misma fuente caida. Las cifras del autor — 35,170
+      lejanas, 35,169 corregidas, 30,706 de un ano, 869 de dos — siguen SIN verificar.
+
+      LO QUE SI QUEDO MEDIDO es el mismo mecanismo, a nivel de SALIDA DE LA CONSULTA, en
+      Illinois, que tiene el mismo defecto a menor escala. No sustituye al veredicto de Long
+      Island: prueba que el arreglo hace lo que dice sobre datos reales.
+
+      Tres ejecuciones sobre la misma fuente y sin filtro de fecha: la base sin tocar, el PR
+      sin tocar, y el PR instrumentado con la fecha fin VIEJA calculada en la misma fila. La
+      instrumentada reproduce a los dos controles, asi que la comparacion vale:
+
+        filas                          45,112 = 45,112 = 45,112
+        huella de la fecha fin vieja   -1253200989 (igual a la base)
+        huella de la fecha fin nueva   -1253296746 (igual al PR)
+        huella de las otras 33 cols    -975688194 en las tres
+
+      Fechas lejanas: 241 en la base y 214 con el PR. Cambian 27 filas, LAS 27 en la
+      direccion correcta: de lejana a real. Ninguna pasa de real a lejana y ninguna se
+      vacia. Las 27 toman su propia expiracion, son Canceladas y Closed Won; 20 son de un
+      ano, 2 de dos y 5 de otra duracion. La rama 2 (13 filas) no se mueve.
+
+      Un matiz: el autor documenta "57 transactions affected" en Illinois. Es la cifra de
+      las tablas base, y QA la reproduce. Pero a la salida llegan 27; las otras 30 no pasan
+      los demas filtros de la exportacion. El impacto real en Salesforce es 27.
+  - testCaseId: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+    testCaseKey: TC-183
+    scenarioTitle: >-
+      What still looks lifetime after the fix, and whose data it is
+    scenarioIndex: 2
+    status: blocked
+    executedAt: "2026-09-25T16:05:00Z"
+    stepResults: []
+    actual: |
+      BLOQUEADO en sus cifras de Long Island. Pero LA PARTE QUE NO DEPENDE DEL CLIENTE
+      QUEDA PROBADA: la frase del ticket es inexacta.
+
+      El comentario de Jira dice "A Cancelled membership never qualifies". El SQL no dice
+      eso: el primer brazo (mt.EXPIRATIONDATE IS NULL) no mira el estado, asi que un termino
+      CANCELADO sin fecha propia sigue recibiendo +100 y sigue contando como socio vigente.
+      El comentario del SQL y la documentacion del PR lo describen bien; es la prosa del
+      ticket la que no.
+
+      En la SALIDA de Illinois, de las 214 filas que siguen lejanas con el PR, 208 son
+      vitalicias Activas reales y 6 son CANCELADAS. En tablas base, High Desert tiene hasta
+      7 y Vizcaya 2 Pending. Salen igual antes y despues, asi que no son regresion; son
+      socios dados de baja que el informe de Current Members seguira contando. El autor
+      documenta los 6 de Illinois en el PR, pero no en el ticket.
+
+      Fechas lejanas que vienen del propio Altru: High Desert tiene 33 Canceladas con
+      expiracion 2100-12-31 en Altru, exactamente las que declara el autor; pasan tal cual.
+
+      Queda sin medir lo que es de Long Island: el termino cancelado sin fecha, las 6 fechas
+      lejanas propias de Altru (maxima 2099-08-25) y rev-10015151 con fecha en 1904.
+  - testCaseId: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+    testCaseKey: TC-183
+    scenarioTitle: >-
+      High Desert · genuine lifetime members stay current
+    scenarioIndex: 3
+    status: blocked
+    executedAt: "2026-09-25T16:09:00Z"
+    stepResults: []
+    actual: |
+      BLOQUEADO por el limite de 120 s de safesql, que no se toca. El propio SQL documenta
+      que en High Desert la sentencia final tarda ~445 s en una maquina de 2 vCPU y 3 GB.
+
+      QA intento reducirla sin perder ningun cambio, y valido la reduccion antes de usarla.
+      Restringir la rama 1 a membresias sin expiracion es la poblacion COMPLETA donde la
+      fecha fin puede cambiar, porque ningun termino sin fecha cae sobre una membresia con
+      expiracion; la sentencia final no tiene funciones de ventana y su unico TOP esta en un
+      OUTER APPLY correlacionado. En Illinois la restringida reproduce IDENTICOS los cinco
+      agregados de cambio de la corrida completa, en 25 s en lugar de 54. En High Desert
+      dio Timeout a los 123 s; y el preludio de tablas temporales, solo, tambien. Si el
+      preludio ya no cabe, ninguna restriccion sirve. Se paro ahi.
+
+      LO QUE SI QUEDA MEDIDO, sobre las tablas de Altru. Placeholders vitalicios en
+      membresias Active sin expiracion: Life Member 182, Volunteer Life Member 43, Guardian
+      1 — 226, exactamente lo que declara el autor. El Guardian es el que explica su "225 of
+      the 226": no es un nivel Life, asi que el termino de 100 anos no lo cubre. Y el camino
+      nuevo de por vida da 0, lo que implica que NINGUNA fila Active puede cambiar de fecha:
+      para una Active, el predicado viejo y el nuevo solo difieren ahi. Las 226 siguen en +100.
+
+      Eso responde la pregunta por construccion, no por observacion de la salida, y el
+      escenario pide mirar la salida. Por eso no va en verde.
+  - testCaseId: "b550fbba-fd8b-442f-9f14-12d730a9a804"
+    testCaseKey: TC-183
+    scenarioTitle: >-
+      Regression · no tenant gains a new lifetime path, and the untouched branch stays clean
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-25T16:14:00Z"
+    stepResults: []
+    actual: |
+      EL CAMINO NUEVO DE POR VIDA ES CERO en los tres clientes alcanzables hoy: High Desert
+      (215,484 transacciones), Illinois (51,862) y Vizcaya (22,342). Vizcaya no lo habia
+      medido el autor. En la salida de Illinois tambien es cero. Long Island, Tucson,
+      Kidstream, MOAD y Aspen no responden hoy.
+
+      Un tercer estado que la documentacion no contemplaba: el autor afirma que solo Active
+      y Cancelled dejan la membresia sin expiracion. En Vizcaya hay 2 Pending. Sus terminos
+      no tienen fecha propia, asi que salen con +100 antes y despues: no es regresion. Los
+      codigos se leyeron de la columna STATUS del propio Altru — 0 Active, 1 Cancelled, 2
+      Pending, 3 Grace, 4 Lapsed, 5 Expired — no se supusieron.
+
+      LA RAMA 2 no cambia de texto, y en Illinois tampoco de datos: 13 filas, 0 cambios, 0
+      fechas lejanas antes y despues.
+
+      EL ARREGLO ESTA COMPLETO. En todo el directorio de consultas, la fecha fin de
+      membresia solo sale de membership_transactions.sql. Las otras 9 consultas que la
+      mencionan lo hacen en comentarios o no emiten fecha. No queda otra exportacion que
+      siga escribiendo 2109 en Salesforce.
+
+      EL SPEC DEL PR pasa 60/60. Es de texto — lee el SQL y aplica expresiones regulares — y
+      QA comprobo que puede fallar: el predicado viejo, quitar cualquiera de los dos brazos,
+      aceptar cualquier estado, y reintroducir el defecto en la rama 2. Las cinco
+      mutaciones lo ponen rojo.
+
+      LA SUITE: 819 pasan y 10 fallan. Las 10 son de donation-transaction-recurring.spec.ts
+      por "Could not find a working container runtime strategy" y fallan igual, 10 de 10, en
+      la base d8bafa10. El PR no toca nada de donaciones. Regresiones introducidas: 0.
+
+summary:
+  total: 5
+  passed: 1
+  failed: 0
+  blocked: 4
+  skipped: 0
+  notRun: 0
+  passRate: 20
+
+history:
+  - action: run-started
+    timestamp: "2026-09-25T15:40:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca TC-183 contra e401c7c9. La fuente de Long Island no responde, asi que se mide
+      lo que no depende de ella y se deja el resto bloqueado con la entrega precisa, en vez
+      de marcarlo con evidencia de otro cliente.
+
+  - action: run-completed
+    timestamp: "2026-09-25T17:10:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      Cierre con veredicto APROBADO CON ALCANCE, decidido con el usuario. La fuente de Long
+      Island sigue sin responder: lo mas probable es que el barrido de ciclo de vida de la
+      Migration App apagara su maquina de respaldo en el turno nocturno, despues de que el
+      autor la usara el 24-09. En dev no existe ningun workspace de Long Island; vive en la
+      Migration App de produccion, que QA no toca. Se certifica el codigo con los datos
+      equivalentes medidos; las marcas de los escenarios no cambian.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T16:20:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T17:10:00Z"
+  version: 1
