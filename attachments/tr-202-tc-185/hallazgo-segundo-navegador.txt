@@ -1,0 +1,75 @@
+HALLAZGO · el encuestado que no esta en SU primer navegador no puede enviar la encuesta
+=====================================================================================
+IM-1302 · TC-185 / TR-202 · survey-tool merge c29b3aed (PR #89)
+
+QUE PASA
+--------
+El borrador se identifica por (encuesta, organizacion, encuestado) y se protege con un token
+que vive en el localStorage del navegador donde empezo. Si ese mismo encuestado abre la encuesta
+en CUALQUIER OTRO navegador — otra maquina, una ventana privada, o el mismo navegador con los
+datos del sitio borrados — ese navegador no tiene el token, y:
+
+  1. su primer autosave responde 404 DRAFT_NOT_FOUND (hay un borrador activo con otro token);
+  2. el cliente trata ese 404 como terminal y muestra
+       "This survey changed while you were answering. A fresh attempt has been started."
+     y VACIA el formulario — la encuesta no cambio;
+  3. cada nuevo intento se vacia igual;
+  4. Submit queda deshabilitado; y aunque se enviara sin token, el servidor responde
+     409 "An active survey draft requires its token".
+
+El bloqueo dura hasta que el borrador del primer navegador se envie o caduque: 90 DIAS.
+
+EVIDENCIA — navegador real, cliente, servidor y DynamoDB reales (local)
+--------------------------------------------------------------------------
+  navegador 1 contesta 6                         borrador creado, token en SU localStorage
+  navegador 2 abre                                formulario vacio, Submit deshabilitado
+  navegador 2 contesta 10, espera el autosave     POST /api/survey-drafts -> 404 DRAFT_NOT_FOUND
+                                                  aviso "This survey changed while you were answering"
+                                                  formulario VACIADO                -> ui/10-segundo-navegador-contesta.png
+  navegador 2 contesta 10 + texto otra vez        -> 404 DRAFT_NOT_FOUND, VACIADO otra vez
+                                                                                    -> ui/11-segundo-navegador-reintenta.png
+  boton Submit                                    deshabilitado                     -> ui/12-segundo-navegador-envia.png
+  -> ui/ui-pasos.jsonl y ui/ui-red.jsonl
+
+Y por API, con el motor real de DynamoDB (api/api-scenarios.json, SEGUNDO_NAVEGADOR):
+  B autosave con su token          404 DRAFT_NOT_FOUND
+  B restore                         404 DRAFT_NOT_FOUND
+  B envia sin token                 409 "An active survey draft requires its token"
+  B envia con su token              409 DRAFT_INACTIVE
+  respuestas creadas                0          caducidad del borrador bloqueante: +90 dias
+
+CAUSA, en el codigo
+-------------------
+  server/src/routes/surveyDrafts.ts   existe un borrador activo y el hash del token no coincide
+                                      -> 404 DRAFT_NOT_FOUND (el mismo codigo que "no existe")
+  client/src/pages/SurveyRespondPage.tsx:580-603
+                                      isTerminalDraftSaveError(DRAFT_NOT_FOUND) -> aviso de
+                                      "survey changed" y reinicio del intento
+  server/src/routes/responses.ts      envio sin token -> createResponseWithoutActiveDraft,
+                                      transaccion condicionada a que NO haya borrador activo -> 409
+
+El cliente no puede distinguir "no hay borrador" de "hay uno y no es tuyo", porque el servidor
+responde lo mismo en los dos casos. Y reutiliza el aviso del cambio de definicion para ambos.
+
+POR QUE IMPORTA
+---------------
+- Pierde respuestas, que es justo lo que la historia quiere evitar ("reduces lost responses
+  caused by interruptions"). Antes de este cambio, ese encuestado podia enviar siempre.
+- Incumple el AC6 tal como esta escrito: un cliente sin token "continues to work as it does
+  today". Con un borrador activo del mismo encuestado, ya no.
+- El mensaje es falso: le dice que la encuesta cambio.
+- Y es explotable (OWASP A04): la creacion de borradores es publica y la identidad del
+  encuestado no se verifica (queda para IM-1178). Quien conozca encuesta, organizacion y
+  identificador de un encuestado puede crear un borrador a su nombre y bloquearle el envio
+  90 dias.
+
+Fuera de alcance, y sigue fuera: RESTAURAR en otro dispositivo (IM-1178). Lo que falla aqui no
+es restaurar, es poder CONTESTAR Y ENVIAR.
+
+DIRECCIONES POSIBLES (decision de producto y del dev, no de QA)
+----------------------------------------------------------------
+- Distinguir en el servidor "borrador de otro token" de "no existe", y en el cliente dejar al
+  encuestado seguir sin autosave y enviar, en vez de vaciarle el formulario.
+- Permitir que un envio sin token SUPERSEDA el borrador activo (el estado "superseded" ya
+  existe), en lugar de rechazarlo.
+- En cualquier caso, no mostrar "la encuesta cambio" cuando no cambio.

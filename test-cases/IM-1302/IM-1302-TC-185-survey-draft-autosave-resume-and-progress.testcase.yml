@@ -1,0 +1,275 @@
+schemaVersion: "1.0"
+
+id: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+key: "TC-185"
+title: "Survey drafts: autosave, same-browser resume, atomic submit and admin Progress"
+
+description: |
+  Cobertura QA de IM-1302 (Persist and resume incomplete survey responses). Sub-tarea de QA:
+  IM-1306. Epic: IM-970 NPS Survey Tool delivery. Prioridad High; el propio ticket lo marca
+  como riesgo alto porque toca escrituras publicas, privacidad del encuestado, el ciclo de vida
+  del iframe y la finalizacion atomica de la respuesta.
+
+  Repositorio en alcance: Veevarts/survey-tool "PR #89", rama
+  story/persist-resume-survey-progress-IM-1302, head 36eac93e, MERGEADO A develop el
+  2026-09-25 (37 ficheros, +5,050 / -218), con los checks en verde y SIN revision humana. El
+  autor declara que AuctiferaDX y NFPFundraising no cambian.
+
+  QUE HACE. El primer cambio significativo de respuestas crea un borrador y devuelve un token
+  opaco de 256 bits, que el navegador guarda en localStorage; en DynamoDB solo se guarda su
+  hash. Los cambios siguientes reusan el token con un saveSequence creciente: reintentar la
+  misma secuencia es idempotente y una secuencia vieja devuelve 409. Al reabrir, el cliente
+  restaura por token, con un resumeRequestId estable para no contar dos veces el mismo resume.
+  Al enviar, el servidor comprueba token, caducidad, estado y hash de la definicion, y en una
+  sola transaccion crea la respuesta y marca el borrador como enviado, borrando sus respuestas.
+  El admin ve los borradores activos en una pestana Progress nueva, alimentada por un indice
+  GSI2 que proyecta solo metadatos.
+
+  Rutas nuevas: POST /api/survey-drafts y POST /api/survey-drafts/restore (publicas, por token);
+  GET /api/admin/survey-drafts y GET /api/admin/survey-drafts/:surveyId/:clientOrgId/:respondentId
+  (admin, bajo la sesion de Cognito).
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. CONTRADICCION ENTRE EL AC Y EL CODIGO. El AC dice que un cliente antiguo que envia sin
+    token "continues to work as it does today". El README y un test del PR ("rejects tokenless
+    response creation while an active draft exists") dicen que, si existe un borrador activo
+    para la misma encuesta, organizacion y encuestado, el envio sin token se RECHAZA. Solo se
+    cumple el AC cuando no hay borrador. Un encuestado que empiece en el cliente nuevo y envie
+    desde un widget heredado desplegado pierde el envio. Hay que medirlo y decidir si es
+    aceptable.
+  - R2. Tres entornos: develop -> dev, staging -> staging, main -> produccion. El PR esta en
+    develop, es decir en DEV, y aun no en staging ni en produccion. Ademas el PR cambia a la vez la
+    infraestructura (indice GSI2) y la app, y los dos workflows arrancan juntos: el orden no esta
+    garantizado y el propio README exige promocionar la infraestructura antes en staging y
+    produccion.
+  - R3. El token vive en localStorage del origen de la encuesta: cualquier XSS en ese origen lo
+    expone y permite leer y editar respuestas parciales. El endurecimiento de identidad y el
+    resume entre dispositivos quedan fuera, acoplados a IM-1178.
+  - R4. El indice GSI2 proyecta respondentName. El AC pide no proyectar "unnecessary sensitive
+    fields"; el nombre lo usa la lista de Progress, asi que es discutible pero es un dato
+    personal en el indice. Queda dicho.
+  - R5. La identidad del borrador usa salesforceOrgId normalizado o, si falta, clientOrgId. Un
+    embebido que cambie de uno a otro pierde el resume; el README lo declara no soportado.
+  - R6. El cierre con keepalive (AC2) depende del navegador y no es determinista. El autor dice
+    que no hace falta cambio de paquete en Salesforce; se verifica en el iframe real.
+  - R7. Caducidad: 90 dias para borradores incompletos y 30 para los marcadores de enviados. La
+    caducidad logica es inmediata; el borrado fisico por TTL de DynamoDB es asincrono.
+  - R8. El epic IM-970 esta Cerrado mientras esta historia sigue abierta.
+  - R9. Fuera de alcance, y no se prueba: resume entre dispositivos, backfill historico,
+    sincronizar borradores a Salesforce y cambios a la elegibilidad de General NPS.
+
+type: integration
+priority: high
+status: active
+
+preconditions:
+  - "El entorno dev de Survey Tool (rama develop) corre el merge c29b3aed del PR, comprobado antes de empezar. Staging y produccion aun no lo tienen."
+  - "Hay una sesion de administrador de Cognito para el Dashboard de staging."
+  - "Hay al menos una encuesta NPS y una CSAT activas de prueba, con el prefijo QA TC-185 en el nombre."
+  - "Para el escenario funcional: una org de pruebas de Salesforce de las asignadas a Survey Tool con el iframe instalado. No se toca ninguna otra org logueada ni ninguna productiva."
+  - "Los datos de prueba no se borran al terminar: son evidencia. Se desactivan si hace falta y se inventarian."
+
+format: gherkin
+
+scenarios:
+  - title: "AC1 · The first meaningful answer creates one draft, and later changes update that same draft"
+    tags:
+      - ac-1
+      - happy-path
+    given:
+      - "un encuestado elegible, con identificador de encuestado y de organizacion, abre una encuesta activa sin borrador previo"
+    when:
+      - "responde la primera pregunta y espera a que pase el debounce"
+      - "cambia esa respuesta y responde otra, varias veces"
+      - "se reintenta un guardado con el mismo token, la misma secuencia y el mismo contenido, y otro con una secuencia antigua"
+    then:
+      - "existe exactamente un borrador en curso para ese encuestado, organizacion y encuesta, con las respuestas y los metadatos del ciclo de vida"
+      - "cada cambio actualiza ese mismo borrador; no aparece un segundo"
+      - "el reintento identico es idempotente y el de secuencia antigua devuelve 409"
+      - "no se crea ninguna respuesta"
+
+  - title: "AC2 · Closing the iframe mid-save sends one last keepalive save and creates no response"
+    tags:
+      - ac-2
+      - edge-case
+    given:
+      - "hay un guardado en vuelo y el encuestado acaba de cambiar una respuesta"
+    when:
+      - "se cierra o descarga el iframe antes de que termine el debounce"
+    then:
+      - "el panel de red muestra un POST a /api/survey-drafts con keepalive y el estado local mas reciente"
+      - "al reabrir, el borrador tiene ese ultimo cambio"
+      - "no se crea ninguna respuesta completa"
+      - "si el navegador no entrega la peticion keepalive, queda escrito como limite del navegador y no como defecto"
+
+  - title: "AC3 · Reopening in the same browser restores answers and step, and counts the resume once"
+    tags:
+      - ac-3
+      - happy-path
+    given:
+      - "un encuestado tiene un borrador compatible y su token en el mismo navegador"
+    when:
+      - "vuelve a abrir la misma encuesta"
+      - "la peticion de restore se reintenta con el mismo resumeRequestId"
+    then:
+      - "se restauran sus respuestas y el paso en que estaba"
+      - "resumeCount aumenta en uno y lastResumedAt se actualiza"
+      - "el reintento del mismo restore no vuelve a sumar"
+
+  - title: "AC4 · A changed survey definition asks for a fresh attempt instead of mapping answers to the wrong questions"
+    tags:
+      - ac-4
+      - negative
+    given:
+      - "un encuestado tiene un borrador y el admin cambia la definicion de la encuesta de forma incompatible"
+    when:
+      - "el encuestado reabre la encuesta"
+      - "y, en otro borrador, intenta enviar despues del cambio"
+    then:
+      - "el restore devuelve 409 DRAFT_DEFINITION_CHANGED y no carga ninguna respuesta en una pregunta distinta"
+      - "el encuestado ve un mensaje claro de que debe empezar de nuevo, y el navegador descarta el token"
+      - "el envio con el token de un borrador de la definicion anterior devuelve 409"
+
+  - title: "AC5 · Submitting creates one response, finalizes the draft, and late autosaves cannot revive it"
+    tags:
+      - ac-5
+      - happy-path
+      - regression
+    given:
+      - "un encuestado tiene un borrador en curso"
+    when:
+      - "envia la encuesta con su token"
+      - "llega despues un autosave rezagado con el mismo token"
+      - "se reintenta el mismo envio"
+    then:
+      - "se crea una sola respuesta normal"
+      - "el borrador queda como enviado y sin copia de las respuestas"
+      - "el autosave rezagado no lo devuelve a en curso"
+      - "el reintento devuelve la respuesta original, sin duplicar"
+      - "el borrador desaparece de Progress"
+
+  - title: "AC6 · A legacy client without a token still submits — and what happens when a draft is active"
+    tags:
+      - ac-6
+      - regression
+      - edge-case
+      - missing-doc
+    given:
+      - "el AC exige que un cliente antiguo que envia sin token siga funcionando como hoy"
+    when:
+      - "un cliente sin token envia una respuesta valida para un encuestado SIN borrador activo"
+      - "un cliente sin token envia para un encuestado que SI tiene un borrador activo de esa encuesta y organizacion"
+    then:
+      - "sin borrador activo, el envio funciona exactamente como antes del cambio"
+      - "con borrador activo, queda registrado el codigo y el mensaje con que el servidor lo rechaza"
+      - "queda escrito si ese rechazo contradice el AC, para que producto decida si es aceptable"
+
+  - title: "AC7 · An admin sees incomplete drafts in Progress, and nobody else can"
+    tags:
+      - ac-7
+      - happy-path
+      - security
+    given:
+      - "hay borradores en curso de varios encuestados"
+    when:
+      - "un admin autenticado abre el Dashboard y selecciona Progress"
+      - "se llama a las rutas de admin de borradores sin sesion"
+    then:
+      - "la lista muestra encuestado, organizacion, encuesta, estado, respuestas contestadas, paso actual, inicio, ultimo guardado y numero de resumes"
+      - "solo aparecen borradores activos, y respetan el filtro de fechas y organizacion del Dashboard"
+      - "sin sesion, las rutas de admin responden 401 contra el servidor real, no 400 del harness de pruebas"
+
+  - title: "AC8 · Draft detail shows answered and unanswered questions, and drafts never leak into responses or metrics"
+    tags:
+      - ac-8
+      - regression
+    given:
+      - "hay un borrador en curso con algunas preguntas contestadas"
+    when:
+      - "el admin abre el detalle del borrador"
+      - "se revisan la pestana Responses, el CSV estandar, NPS y CSAT de Summary y la sincronizacion a Salesforce"
+    then:
+      - "el detalle distingue las preguntas contestadas de las no contestadas"
+      - "el borrador no aparece en Responses ni en el CSV estandar"
+      - "Responded, NPS y CSAT no cambian mientras exista solo el borrador, y cambian una vez tras el envio"
+      - "no se envia nada del borrador a Salesforce"
+
+  - title: "AC9 · A caller without the draft token can neither read nor change the draft"
+    tags:
+      - ac-9
+      - negative
+      - security
+    given:
+      - "existe un borrador en curso de otro encuestado"
+    when:
+      - "un llamador publico intenta restaurarlo sin token, con un token inventado y con el token de otro borrador"
+      - "intenta guardar sobre el con un token que no es el suyo"
+    then:
+      - "el restore responde 404 DRAFT_NOT_FOUND y no devuelve ninguna respuesta ni dato del borrador"
+      - "el guardado ajeno no modifica el borrador"
+      - "en la tabla se guarda el hash del token, nunca el token en claro"
+
+  - title: "AC10 · The admin listing index carries metadata only"
+    tags:
+      - ac-10
+      - security
+    given:
+      - "el indice GSI2 alimenta la lista de Progress"
+    when:
+      - "se revisa su proyeccion en la definicion de infraestructura y en su test de CDK"
+    then:
+      - "la proyeccion es INCLUDE y no contiene respuestas, hash del token ni material del token"
+      - "queda anotado que proyecta respondentName, y por que la lista lo necesita"
+      - "el test de CDK falla si se anade un campo de respuestas a la proyeccion"
+
+  - title: "Edge · Preview mode, missing identity and expired drafts create or restore nothing"
+    tags:
+      - edge-case
+      - negative
+    given:
+      - "el README declara que el modo preview y los contextos sin identificador de encuestado y de organizacion no crean borradores, y que un borrador caduca a los 90 dias"
+    when:
+      - "se responde una encuesta en modo preview"
+      - "se responde sin identificador de encuestado o sin identificador de organizacion"
+      - "se intenta restaurar un borrador caducado"
+    then:
+      - "en preview y sin identidad no se crea ningun borrador ni se guarda token"
+      - "el borrador caducado no se restaura (404) y no aparece en Progress aunque la fila aun exista"
+
+  - title: "Functional · Answer, close, reopen, continue and submit inside the Salesforce iframe"
+    tags:
+      - functional
+      - happy-path
+      - regression-evidence
+    given:
+      - "una org de pruebas de Survey Tool con el iframe, y una encuesta QA TC-185 activa"
+    when:
+      - "un usuario de prueba contesta parte de la encuesta dentro del iframe y lo cierra"
+      - "lo vuelve a abrir, comprueba lo restaurado, contesta el resto y envia"
+      - "entre medias, el admin revisa Progress y Summary"
+    then:
+      - "cada paso queda capturado: 01 contesta parte, 02 cierra, 03 el borrador en Progress, 04 reabre y ve lo restaurado, 05 continua, 06 envia, 07 Summary"
+      - "antes del envio el borrador esta en Progress y no cuenta en Responded, NPS ni CSAT"
+      - "despues del envio hay una respuesta, el borrador sale de Progress y las metricas cambian una sola vez"
+
+tags:
+  - im-1302
+  - im-970
+  - im-1306
+  - survey-tool
+  - nps
+  - survey-drafts
+  - autosave
+  - resume
+  - dynamodb
+  - security
+
+estimatedDuration: 240
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T19:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T21:05:00Z"
+  version: 1

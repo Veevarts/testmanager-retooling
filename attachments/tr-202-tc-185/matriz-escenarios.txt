@@ -1,0 +1,43 @@
+MATRIZ · TC-185 / TR-202 · IM-1302
+==================================
+Donde se midio: servidor REAL (src/index.ts del merge c29b3aed) + DynamoDB REAL (DynamoDB Local,
+tablas identicas al stack sintetizado) + cliente REAL (Vite) + navegador REAL (Chromium). En local.
+Encuestados sinteticos qa-tc185-*. No es un doble de la API: HTTP -> rutas -> store -> motor de
+DynamoDB con sus condiciones y transacciones.
+
+ #  Escenario                               Veredicto  Evidencia principal
+ 1  AC1 un borrador, actualizado en su sitio PASS       api AC1: 201 -> 200 -> reintento 200 -> seq vieja 409; 1 borrador, 0 respuestas
+                                                        ui 02/03: 201 y 200 desde el navegador
+ 2  AC2 cierre con keepalive                 PASS       ui recorrido: cambio y cierre DENTRO del debounce; al reabrir el valor esta
+                                                        en el servidor (solo pudo llegar por el guardado al cerrar). La captura de red
+                                                        de Playwright NO registro la peticion al cerrarse la pagina; el flag keepalive
+                                                        lo asevera el test del autor. En pagina directa, no en el iframe (ver 12)
+ 3  AC3 restore y resume contado una vez     PASS       api AC3: restaura respuestas y paso; mismo resumeRequestId no suma; final 2
+                                                        ui 04: 9, texto y 7 restaurados. OJO: la suite del autor no protege el
+                                                        "una vez" (mutacion M4 en verde); solo lo prueba esta ejecucion
+ 4  AC4 definicion cambiada                  PASS       api AC4: 409 DRAFT_DEFINITION_CHANGED, sin cargar respuestas; envio con token
+                                                        viejo 409. ui 13: "This survey changed since your previous visit..."
+                                                        NOTA: basta cambiar el TEXTO de una pregunta (una errata) para invalidar
+                                                        todos los borradores en curso
+ 5  AC5 envio atomico, rezagado, reintento   PASS       api AC5: 201; rezagado 409 DRAFT_INACTIVE; reintento 200 misma respuesta;
+                                                        borrador "submitted" sin respuestas. ui 07/08: token borrado, sale de Progress
+ 6  AC6 cliente sin token                    FAIL       sin borrador activo: 201 (como hoy). CON borrador activo: 409 "An active
+                                                        survey draft requires its token" -> incumple el AC tal como esta escrito.
+                                                        Y el caso real que lo hace grave: SEGUNDO NAVEGADOR (hallazgo-segundo-navegador.txt)
+ 7  AC7 Progress solo para admin             PASS       api: 401 sin sesion en lista y detalle; ui 05: columnas encuestado,
+                                                        organizacion, encuesta, progreso, paso, resumes, ultimo guardado; solo activos.
+                                                        Dev desplegado: 401. OJO: el test que lo protege NO corre en el CI
+                                                        (hallazgo-tests-que-no-corren.txt, mutacion M1)
+ 8  AC8 detalle y exclusiones                PASS       ui 06: "Answered 9 / Answered qa parcial / Unanswered". Responses y CSV con
+                                                        control positivo: estan r3 y r4 (enviados), no los borradores. Metricas:
+                                                        con solo borrador total 0; tras enviar total 1, NPS 100. Salesforce: la
+                                                        sincronizacion solo se llama tras insertar una respuesta; surveyDrafts.ts
+                                                        no la importa (evidencia de codigo, no observada)
+ 9  AC9 sin token ni se lee ni se cambia     PASS       api AC9: sin token 400, token inventado 404 sin datos, guardado ajeno 404,
+                                                        borrador intacto; la tabla guarda el hash, nunca el token en claro
+10  AC10 indice solo metadatos               PASS       DescribeTable: GSI2 INCLUDE; consulta al indice: sin respuestas ni token.
+                                                        Proyecta respondentName (lo usa la lista). Mutacion M6: el test de CDK la detecta
+11  Borde: preview, identidad, caducado      PASS       ui 14: preview sin peticiones de borrador ni token. api: sin organizacion 400,
+                                                        sin encuestado 400, caducado 404 y fuera de Progress
+12  Funcional en el iframe de Salesforce     NOT-RUN    el cambio solo esta en dev; hace falta una org de pruebas de Survey Tool cuyo
+                                                        iframe apunte a dev (o la promocion a staging). Ver "Pendiente de tu parte"

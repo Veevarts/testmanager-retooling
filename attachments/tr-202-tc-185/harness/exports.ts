@@ -1,0 +1,14 @@
+import { createSessionCookie } from "../src/lib/auth.js";
+const cookie = createSessionCookie({ sub: "qa-tc185-admin" }).split(";")[0];
+const get = async (p: string) => { const r = await fetch("http://localhost:4599" + p, { headers: { cookie } }); return { status: r.status, text: await r.text() }; };
+const csv = await get("/api/admin/responses/export.csv");
+const lines = csv.text.split(/\r?\n/).filter(Boolean);
+console.log("CSV status", csv.status, "· filas de datos", lines.length - 1);
+console.log("CSV cabecera:", lines[0]?.slice(0, 400));
+for (const l of lines.slice(1)) console.log("CSV fila:", l.slice(0, 200));
+const q = "?from=2026-01-01&to=2026-12-31";
+const csv2 = await get("/api/admin/responses/export.csv" + q);
+const l2 = csv2.text.split(/\r?\n/).filter(Boolean);
+console.log("\nCSV con rango de fechas", csv2.status, "· filas", l2.length - 1, "· r3:", csv2.text.includes("qa-tc185-r3"), "· r4:", csv2.text.includes("qa-tc185-r4"), "· r1 (borrador):", csv2.text.includes("qa-tc185-r1"), "· r5/r6 (borradores):", csv2.text.includes("qa-tc185-r5") || csv2.text.includes("qa-tc185-r6"));
+const sum = await get("/api/admin/analytics/summary" + q);
+console.log("\nSummary", sum.status, sum.text.slice(0, 500));

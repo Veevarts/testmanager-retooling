@@ -1,0 +1,31 @@
+HALLAZGO · dos ficheros de test del PR no se ejecutan nunca, ni en local ni en el CI
+===================================================================================
+
+Los scripts de test son `tsx --test src/**/*.test.ts` (server y client). npm los ejecuta con
+`sh`, que no tiene globstar: `**` equivale a `*` y solo encuentra ficheros a UN nivel bajo src/.
+
+  server: 13 ficheros de test, se ejecutan 12   -> NO: src/app.test.ts
+  client: 16 ficheros de test, se ejecutan 15   -> NO: src/components/dashboard/ProgressDashboard.test.ts
+
+Los dos ficheros son NUEVOS en este PR (app.test.ts no existia en la base f284064d).
+
+  - app.test.ts tiene el UNICO test que comprueba con el cableado real de la app que las rutas
+    de Progress exigen sesion de admin: "requires an admin session for survey progress list
+    and detail routes".
+  - ProgressDashboard.test.ts tiene 2 tests de accesibilidad de Progress.
+
+Ejecutados a mano, pasan: 1/1 y 2/2 (server-app-a-mano.log, client-ProgressDashboard-a-mano.log).
+En el CI del propio PR (corrida 36169260086) ninguno de los dos aparece: 0 apariciones.
+El "176/176" y el "81/81" del autor son ciertos, pero no los incluyen.
+
+PRUEBA DE QUE IMPORTA — mutacion M1 (mutaciones.txt): montar las rutas de admin de borradores
+ANTES de la guarda de autenticacion. npm test: VERDE, 176/176. app.test.ts a mano: ROJO.
+Es decir: si manana alguien deja Progress sin autenticacion — que expone respuestas parciales,
+nombres, emails y telefonos de los encuestados — el CI pasa en verde.
+
+Hoy la proteccion SI funciona: 401 sin sesion en local y en el entorno dev desplegado.
+El hueco es de regresion, no de exposicion actual.
+
+ARREGLO: que el glob lo expanda el runner y no sh. Node 20.19 (el del CI) no expande globs en
+--test, asi que hace falta pasar la lista (p. ej. con `find src -name '*.test.ts'`) o un runner
+que expanda. Comprobar despues que el recuento sube a 177 y 83.

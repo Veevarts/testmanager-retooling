@@ -1,0 +1,312 @@
+schemaVersion: "1.0"
+id: tr-8d27c4b1-6e0f-4a93-b5d2-3f71c9a0e4b8
+key: TR-202
+title: >-
+  TR-202 · IM-1302 · TC-185 · 10/12 PASS, 1 FAIL — el mecanismo funciona, pero un encuestado que
+  abre la encuesta en otro navegador pierde lo que escribe y no puede enviarla durante 90 dias.
+status: completed
+environment:
+  name: >-
+    Ejecucion LOCAL completa del merge c29b3aed: servidor real, cliente real (Vite), navegador
+    real (Chromium) y DynamoDB real (DynamoDB Local con las tablas del stack sintetizado).
+    Encuestados sinteticos qa-tc185-*. En el entorno dev solo se hicieron sondas sin efectos (un
+    cuerpo vacio y una lectura sin sesion). No se toco ninguna org de Salesforce.
+  buildVersion: >-
+    Mixto — API Express + cliente React + infraestructura CDK. Veevarts/survey-tool "PR #89",
+    rama story/persist-resume-survey-progress-IM-1302, head 36eac93e, MERGEADO a develop como
+    c29b3aed el 2026-09-25 (37 ficheros, +5,050/-218), sin revision humana. develop despliega en
+    dev; staging y produccion aun no lo tienen.
+startedAt: "2026-09-25T20:05:00Z"
+completedAt: "2026-09-25T21:10:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  El primer cambio significativo crea un borrador protegido por un token de 256 bits que el
+  navegador genera y guarda en localStorage; en la tabla solo va su hash. Los cambios siguientes
+  reusan el token con una secuencia creciente. Al reabrir, se restaura por token. Al enviar, una
+  transaccion crea la respuesta y marca el borrador como enviado. El admin ve los borradores
+  activos en Progress, alimentado por un indice GSI2 que proyecta solo metadatos.
+
+  ## Inferred technical tests
+
+  - Suites server, client e infra como las corre el CI. EJECUTADO; y comprobado que no corren
+    todos los ficheros.
+  - Seis mutaciones sobre las reglas clave. EJECUTADO: 4 detectadas, 2 no.
+  - Todos los AC contra el servidor y DynamoDB reales, en local. EJECUTADO.
+  - Los AC de pantalla en navegador real contra el cliente real. EJECUTADO, incluido un segundo
+    navegador para el mismo encuestado.
+  - Estado del despliegue en dev, con sondas sin efectos y los tiempos de los workflows.
+    EJECUTADO.
+  - El recorrido dentro del iframe de Salesforce. NO EJECUTADO: el cambio solo esta en dev.
+
+  ## Hallazgos
+
+  F1 · EL ENCUESTADO EN OTRO NAVEGADOR PIERDE LO QUE ESCRIBE Y NO PUEDE ENVIAR (escenario 6,
+  FAIL). Su autosave recibe 404 DRAFT_NOT_FOUND porque hay un borrador activo con otro token; el
+  cliente lo trata como "la encuesta cambio", vacia el formulario y deshabilita Submit; y el
+  envio sin token se rechaza con 409. Hasta 90 dias. Incumple el AC6, contradice el objetivo de
+  la historia (perder menos respuestas) y es explotable porque la creacion es publica y la
+  identidad no se verifica (A04).
+
+  F2 · DOS FICHEROS DE TEST DEL PR NO SE EJECUTAN NUNCA. El glob src/**/*.test.ts bajo sh solo
+  baja un nivel: quedan fuera app.test.ts — el unico test que comprueba que Progress exige
+  sesion — y ProgressDashboard.test.ts. Tampoco en el CI del PR. Mutacion M1: Progress sin
+  autenticacion y el CI en verde.
+
+  F3 · LA SUITE NO PROTEGE QUE EL RESUME SE CUENTE UNA VEZ (mutacion M4 en verde). Funciona
+  hoy; solo lo prueba esta ejecucion.
+
+  F4 · UNA ERRATA INVALIDA TODOS LOS BORRADORES. La huella de la definicion incluye el texto de
+  las preguntas.
+
+  F5 · ORDEN DE DESPLIEGUE. En dev la infraestructura termino 66 s antes que la app, pero los
+  dos workflows arrancan a la vez; para staging y produccion el README exige promocionar la
+  infraestructura primero.
+
+  F6 · CORRECCION DEL BUNDLE: el plan decia que develop es staging. Es dev. TC-185 se corrigio
+  antes de publicarse; la descripcion de IM-1306 tambien.
+
+  ## Lo que el autor dejo bien atado
+
+  La finalizacion atomica, la idempotencia del envio y del guardado, el rechazo del autosave
+  rezagado, el hash del token y un indice que de verdad solo lleva metadatos. Todo eso aguanta
+  contra DynamoDB real, y el test de CDK protege la proyeccion.
+
+results:
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC1 · The first meaningful answer creates one draft, and later changes update that same draft
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-25T20:13:00Z"
+    stepResults: []
+    actual: |
+      Contra el servidor real y DynamoDB real: la primera respuesta crea el borrador (201) y
+      devuelve el token; el cambio siguiente lo actualiza (200); el reintento identico es
+      idempotente (200) y una secuencia antigua da 409. En la tabla hay exactamente un borrador
+      para ese encuestado, organizacion y encuesta, con 2 de 3 preguntas contestadas, y ninguna
+      respuesta creada. En el navegador real, las dos primeras respuestas disparan el mismo par
+      201 -> 200. Evidencia: api/api-scenarios.json (AC1), ui/02 y ui/03.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC2 · Closing the iframe mid-save sends one last keepalive save and creates no response
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-25T20:20:00Z"
+    stepResults: []
+    actual: |
+      Se cambio una respuesta y se cerro la pestana DENTRO del debounce. Al reabrir, el valor
+      nuevo estaba en el servidor; como el temporizador del debounce muere con la pagina, solo
+      pudo llegar por el guardado al cerrar. No se creo ninguna respuesta.
+
+      Limite, dicho: la captura de red de Playwright no registro la peticion mientras la pagina se
+      cerraba, asi que el flag keepalive no se observo en red; lo asevera el test del propio autor.
+      Y se probo en la pagina directa, no dentro del iframe de Salesforce (escenario 12).
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC3 · Reopening in the same browser restores answers and step, and counts the resume once
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-25T20:20:00Z"
+    stepResults: []
+    actual: |
+      API real: el restore devuelve respuestas y paso; repetir el mismo resumeRequestId no suma y
+      uno nuevo si: resumeCount final 2 para dos restores logicos. Navegador real: al reabrir
+      vuelven el 9, el texto y el 7 (ui/04).
+
+      OJO: la suite del autor NO protege el "una vez". Con la condicion de DynamoDB mutada para
+      contar dos veces, npm test sigue en verde (mutacion M4). Hoy funciona; manana nada lo
+      vigila.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC4 · A changed survey definition asks for a fresh attempt instead of mapping answers to the wrong questions
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-25T20:25:00Z"
+    stepResults: []
+    actual: |
+      Cambio real de la definicion con un borrador vivo: el restore responde 409
+      DRAFT_DEFINITION_CHANGED y no carga ninguna respuesta; el navegador muestra "This survey
+      changed since your previous visit. A new attempt has been started." (ui/13) y descarta el
+      token; y enviar con el token de la definicion anterior da 409.
+
+      NOTA: basta cambiar el TEXTO de una pregunta — una errata — para invalidar todos los
+      borradores en curso de esa encuesta. Es mas estricto que el "incompatible" del AC.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC5 · Submitting creates one response, finalizes the draft, and late autosaves cannot revive it
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-25T20:13:00Z"
+    stepResults: []
+    actual: |
+      API real: el envio con token crea una respuesta (201); un autosave rezagado con el mismo
+      token da 409 DRAFT_INACTIVE; reintentar el envio devuelve la misma respuesta (200). En la
+      tabla, una sola respuesta y el borrador en submitted sin copia de las respuestas. Navegador
+      real: tras enviar, el token desaparece de localStorage y el borrador sale de Progress
+      (ui/07 y ui/08).
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC6 · A legacy client without a token still submits — and what happens when a draft is active
+    scenarioIndex: 5
+    status: failed
+    executedAt: "2026-09-25T20:30:00Z"
+    stepResults: []
+    defects:
+      - jiraKey: IM-1302
+        url: https://veevart.atlassian.net/browse/IM-1302
+        severity: medium
+        summary: >-
+          Historia rebotada por QA (flujo de defectos del equipo). El encuestado que abre la
+          encuesta en otro navegador pierde lo que escribe, ve un aviso falso de "la encuesta
+          cambio" y no puede enviar hasta que el borrador del primer navegador se envie o caduque
+          (90 dias). Incumple el AC6 y es explotable (OWASP A04).
+    actual: |
+      SIN borrador activo, el envio sin token funciona como hoy (201). CON un borrador activo del
+      mismo encuestado, el servidor lo rechaza: 409 "An active survey draft requires its token",
+      y no se crea la respuesta. El AC dice que debe seguir funcionando como hoy: FALLA tal como
+      esta escrito.
+
+      Y el caso real que lo hace grave no necesita ningun cliente antiguo: el MISMO encuestado en
+      OTRO navegador (otra maquina, ventana privada o datos del sitio borrados). Medido con dos
+      navegadores reales:
+        - su autosave recibe 404 DRAFT_NOT_FOUND (el borrador activo tiene otro token);
+        - el cliente lo trata como terminal, muestra "This survey changed while you were
+          answering. A fresh attempt has been started." — la encuesta no cambio — y VACIA el
+          formulario (ui/10);
+        - cada nuevo intento se vacia igual (ui/11), y Submit queda deshabilitado (ui/12);
+        - por API, ni sin token (409) ni con el suyo (409 DRAFT_INACTIVE) puede enviar.
+      Dura hasta que el borrador del primer navegador se envie o caduque: 90 dias. Y como la
+      creacion es publica y la identidad no se verifica, se puede provocar a proposito (A04).
+      Detalle y causa en hallazgo-segundo-navegador.txt.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC7 · An admin sees incomplete drafts in Progress, and nobody else can
+    scenarioIndex: 6
+    status: passed
+    executedAt: "2026-09-25T20:35:00Z"
+    stepResults: []
+    actual: |
+      Servidor real: lista y detalle responden 401 sin sesion; con sesion, la lista trae solo
+      borradores activos (no los enviados, sustituidos ni caducados), sin respuestas ni hash. En
+      el navegador, Progress muestra encuestado, organizacion, encuesta, progreso, ultimo paso,
+      resumes y ultimo guardado, con los KPIs arriba (ui/05). En el entorno dev desplegado, la
+      lista sin sesion tambien responde 401.
+
+      OJO, riesgo de regresion: el UNICO test que protege esta ruta con el cableado real
+      (app.test.ts) no se ejecuta nunca, ni en local ni en el CI del PR. Montando las rutas de
+      Progress antes de la guarda de auth, npm test sigue 176/176 (mutacion M1).
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC8 · Draft detail shows answered and unanswered questions, and drafts never leak into responses or metrics
+    scenarioIndex: 7
+    status: passed
+    executedAt: "2026-09-25T20:40:00Z"
+    stepResults: []
+    actual: |
+      El detalle marca cada pregunta como Answered o Unanswered (ui/06). Responses y el CSV
+      estandar, con control positivo, traen las respuestas enviadas y ningun borrador. Metricas
+      medidas en una encuesta nps: con solo un borrador de 10, total 0 y NPS 0; tras enviar, total
+      1 y NPS 100, una sola vez.
+
+      Salesforce, como evidencia de codigo y no observada: la sincronizacion solo se invoca tras
+      insertar una respuesta, y la ruta de borradores no la importa.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC9 · A caller without the draft token can neither read nor change the draft
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-25T20:13:00Z"
+    stepResults: []
+    actual: |
+      Contra el servidor real: sin token, 400; con un token inventado, 404 DRAFT_NOT_FOUND sin
+      devolver ningun dato; guardar encima con un token ajeno, 404, y el borrador queda identico.
+      En la tabla esta el sha256 del token y nunca el token en claro.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      AC10 · The admin listing index carries metadata only
+    scenarioIndex: 9
+    status: passed
+    executedAt: "2026-09-25T20:13:00Z"
+    stepResults: []
+    actual: |
+      DescribeTable del GSI2: proyeccion INCLUDE con metadatos. Una consulta al indice devuelve
+      solo metadatos, sin respuestas ni token. Proyecta respondentName, que la lista usa. El test
+      de CDK detecta que se anada comment a la proyeccion (mutacion M6 en rojo).
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      Edge · Preview mode, missing identity and expired drafts create or restore nothing
+    scenarioIndex: 10
+    status: passed
+    executedAt: "2026-09-25T20:45:00Z"
+    stepResults: []
+    actual: |
+      En modo preview el navegador no hace ninguna peticion de borrador ni guarda token (ui/14).
+      Sin organizacion o sin encuestado, 400. Un borrador caducado — con la fila todavia en la
+      tabla — no se restaura (404) y no aparece en Progress.
+  - testCaseId: "1e1b1639-8372-4aa5-93c1-60115ff2a182"
+    testCaseKey: TC-185
+    scenarioTitle: >-
+      Functional · Answer, close, reopen, continue and submit inside the Salesforce iframe
+    scenarioIndex: 11
+    status: not-run
+    stepResults: []
+    actual: |
+      NO EJECUTADO. El cambio solo esta en dev; staging y produccion aun no lo tienen. Para
+      ejecutarlo hace falta una org de pruebas de Survey Tool cuyo iframe apunte a dev, o esperar a
+      la promocion a staging. Y conviene hacerlo DESPUES de corregir el hallazgo del escenario 6,
+      porque el recorrido dentro del iframe es justo donde el almacenamiento del navegador puede
+      diferir del de la pagina directa.
+
+      El mismo recorrido ya esta ejecutado en navegador real sobre la pagina directa (capturas 01
+      a 08); lo que falta es la capa del iframe de Salesforce.
+
+summary:
+  total: 12
+  passed: 10
+  failed: 1
+  blocked: 0
+  skipped: 0
+  notRun: 1
+  passRate: 83
+
+history:
+  - action: run-started
+    timestamp: "2026-09-25T20:05:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca TC-185 sobre el merge c29b3aed. Se decide ejecutarlo todo en local con servidor,
+      cliente, navegador y DynamoDB reales, porque el cambio solo esta en dev y la leccion de TR-200
+      exige observar el sistema y no un doble.
+  - action: run-completed
+    timestamp: "2026-09-25T21:10:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      10/12 PASS, 1 FAIL, 1 sin ejecutar. El mecanismo de borradores es solido contra DynamoDB
+      real. Falla el caso del mismo encuestado en otro navegador: pierde lo que escribe, ve un aviso
+      falso y no puede enviar durante 90 dias. Y dos ficheros de test del PR no se ejecutan nunca,
+      entre ellos el que protege la autenticacion de Progress.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T21:10:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T21:10:00Z"
+  version: 1
