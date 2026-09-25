@@ -1,0 +1,464 @@
+schemaVersion: "1.0"
+id: tr-d0f91168-12ba-4ecb-92f6-617c8cdf49bd
+key: TR-204
+title: >-
+  TR-204 · IM-1207 · TC-186 · 14/19 PASS, 4 FAIL, 1 bloqueado — el motor es solido en las
+  simulaciones y en dev, pero una jugada activada "sin backfill" enrola eventos anteriores a ella,
+  el log de evaluacion confunde, la disponibilidad no mide datos y los borradores huerfanos no se
+  pueden borrar
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend main 49f459f5, frontend main 0aa87980) con sesion admin en el
+    navegador y el generador de eventos del autor (skill csm-playbook-qa) compilado contra main y
+    ejecutado contra la base de dev; mas un Postgres 16 local desechable con las 85 migraciones para
+    los once bancos de simulacion. Produccion solo se miro por metadatos de despliegue; no se leyo
+    ni escribio ningun dato de produccion.
+  buildVersion: >-
+    Mixto — backend NestJS + Lambdas de ingesta/evaluacion + SQL (migraciones 0035-0085) + frontend
+    React. MigrationAppBackend "PR #357" (merge 904c6e14) y MigrationAppFrontend "PR #181" (merge
+    d3a0127e), mergeados a main el 2026-09-11, mas los PRs posteriores del ticket hasta el 24-sep.
+    main despliega en dev; stable (prod) sigue en el 18-ago; la infraestructura CSM OS de prod se
+    desplego a mano el 22-sep.
+startedAt: "2026-09-25T20:54:00Z"
+completedAt: "2026-09-25T21:45:00Z"
+executedBy: codex
+
+notes: |
+  ## Solution understood
+
+  Un almacen de senales append-only (0035) con dedupe_key UNIQUE; las senales se derivan por
+  reconciliacion desde las tablas de origen, no por un outbox transaccional. Derivers reactivos y
+  detectores programados con estado por sujeto que emiten en el flanco de subida y en el de bajada y
+  se abstienen si su fuente no esta fresca. Un catalogo de 29 disparadores y 51+ campos con su
+  disponibilidad. Una capa de guardas (supresion, re-enrolamiento, dedupe, frescura) entre el disparo
+  y la instancia. Instancias en 'proposed' con instantanea congelada y fechas fijadas al enrolar;
+  modo sombra; log de evaluacion con veredicto y traza. En el frontend: biblioteca, builder, ciclo
+  de vida, log y las instancias en My Day y en la cuenta.
+
+  ## Inferred technical tests
+
+  - Suites del backend (raiz y Lambdas) y del frontend en main. EJECUTADO.
+  - Los once bancos de simulacion sobre Postgres real. EJECUTADO, con dos mutaciones para probar
+    que pueden fallar (una detectada, otra no).
+  - Inventario generado del catalogo con --check y control positivo. EJECUTADO.
+  - Autoria en el builder real de dev, sombra, activacion, disparo, My Day y cuenta. EJECUTADO.
+  - Pares cumple / no cumple con el generador contra dev. EJECUTADO.
+  - Salidas, guardas, activacion sin sombra, huerfanos y disponibilidad contra la API de dev.
+    EJECUTADO.
+  - Estado de despliegue por metadatos de GitHub y AWS. EJECUTADO.
+  - 403 de un usuario fuera de los grupos. NO EJECUTADO: no hay usuario de prueba sin admin.
+
+  ## Resultado
+
+  14 PASS, 4 FAIL, 1 BLOQUEADO. F1 (alta, nueva): una jugada activada con backfill apagado enrola
+  eventos anteriores a su creacion, contra el aviso de la interfaz y la respuesta de la API, y en
+  produccion la ingesta ya escribe senales que nadie consume. F2, F3 y F4 (medias) son defectos
+  que el autor declaro "no bloqueantes" y siguen vivos; dos de ellos contradicen ACs que la
+  historia marca como cumplidos (AC8 y AC11). Detalle en hallazgos.txt y matriz-escenarios.txt.
+
+  ## Correcciones al plan
+
+  - La 0082 elimino las jugadas sembradas: escenario 3 y precondicion corregidos en TC-186 v2.
+  - "Nada esta en produccion" solo vale para API y frontend: la captura esta en prod desde el 22-sep.
+  - La pestana de la cuenta se llama Playbooks, no Tasks & Playbooks.
+
+results:
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Deployment state · Backend and frontend run the same main in dev, and neither is in production
+    scenarioIndex: 0
+    status: passed
+    executedAt: "2026-09-25T21:00:00Z"
+    stepResults: []
+    actual: |
+      Backend y frontend en dev corren la punta de main: 49f459f5 (deploy termino 22:18:40Z) y
+      0aa87980 (22:35:35Z). El backend llego 16m55s antes que el frontend que lo consume, y lo mismo
+      en cada par del ticket (#395 -> #207, #396/#397 -> #208). stable sigue en el 18-ago en los dos
+      repos (backend 50 commits por detras, frontend 30) y no tiene ninguna migracion 0035+.
+      PlaybooksDailyScheduleEnabled=false en dev y en produccion.
+
+      CORRIGE AL PLAN: "ninguno esta en produccion" solo vale para la API y el frontend. La mitad de
+      captura SI esta en produccion: csm-os-prod-aurora y csm-os-prod-sync-orchestrator se
+      desplegaron a mano el 2026-09-22 (db-migrate de prod invocado 19:43:31Z), fuera del pipeline y
+      sin registro del commit, y los workers de ingesta de prod corren a diario, cada hora y cada 15
+      minutos. Es lo que convierte F1 en un riesgo de produccion. deploy.yml no tiene `concurrency`.
+      Evidencia: scenario-1-deployment/estado-despliegue.txt.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Functional · A playbook authored in the builder runs in shadow, goes live, fires and appears in
+      My Day and on the account
+    scenarioIndex: 1
+    status: passed
+    executedAt: "2026-09-25T21:17:00Z"
+    stepResults: []
+    actual: |
+      Hecho en la interfaz de dev, sin codigo: "QA TC-186 Health Red" (health.assessed, cambia a RED,
+      tres pasos). En sombra, un GREEN->RED da shadow_fired y ninguna instancia. Activa, el mismo
+      evento da fired y crea la instancia 91573ab4 en 'proposed', con el mismo evaluationRunId que
+      devuelve el generador. La instancia aparece como una sola tarjeta con sus 3 pasos y fechas en
+      My Day (vista como la CSM de la cuenta) y en la pestana Playbooks de la cuenta. Aceptar la
+      pasa a active y completar el paso 1 lo deja en done, en pantalla y en la base de datos.
+      Capturas ui/00-07 (cuenta enmascarada). Evidencia: dev/dispatch/d01-*, d02-*.
+
+      Dos notas: con login de admin My Day avisa que no puede filtrar por propietario y muestra todas
+      las cuentas, asi que el filtrado por CSM no se pudo comprobar (O9); y la tarjeta muestra
+      "Done by <uuid>" en vez de un nombre (O3). El frontend real de la cuenta llama "Playbooks" a la
+      pestana, no "Tasks & Playbooks".
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC1 · Every one of the eight core plays is expressible with the shipped components
+    scenarioIndex: 2
+    status: passed
+    executedAt: "2026-09-25T21:05:00Z"
+    stepResults: []
+    actual: |
+      El plan asumia seis jugadas sembradas; la migracion 0082 las elimino por decision de producto
+      (las ocho eran ejemplos, lo que se entrega es el motor y el catalogo). Se corrigio el escenario
+      en TC-186 v2. Evidencia de expresividad: los bancos de las jugadas 1, 3, 4, 5, 6 y 8 pasan
+      enteros sobre Postgres 16 local (44, 72, 51, 58, 56 y 45 comprobaciones), el catalogo tiene las
+      tres client_user.* disponibles para la 2 y module.unused bloqueado para la 7, y en dev no
+      existe ninguna jugada sembrada. Evidencia: simulaciones/sim-all.log, dev/api-catalog-and-list.json.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC9 · A trigger that happens on every account cannot be authored unnarrowed
+    scenarioIndex: 3
+    status: passed
+    executedAt: "2026-09-25T21:24:00Z"
+    stepResults: []
+    actual: |
+      Builder: con health.assessed sin condicion, "Create playbook" queda deshabilitado con el motivo
+      ("happens on every account, all the time… Answer at least one of…"), captura ui/s4-01. API,
+      saltandose el builder: 400 "'health.assessed' fires for every account, every time… Add a
+      condition on 'event.color' or 'event.prevColor'" y lo mismo para account.field_changed con
+      'event.field'. Con la condicion puesta, la jugada se crea (escenario 2).
+      Nota: cada rechazo deja la jugada creada sin version (F4). Evidencia: dev/api-s4-s6-s18.json.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Payload conditions · A matching event fires and a non-matching one is refused for a stated
+      reason
+    scenarioIndex: 4
+    status: passed
+    executedAt: "2026-09-25T21:23:00Z"
+    stepResults: []
+    actual: |
+      Once disparos contra las jugadas en sombra de dev, en una cuenta limpia, evitando cualquier
+      evento que cumpla la jugada activa del autor: todos los que cumplen dan shadow_fired y todos
+      los que no dan blocked=payload, sin instancias. health.assessed sin color bloqueado;
+      score_changed 45->35 dispara (cruza 40) y 35->30 no (ya estaba por debajo); ARR -25 dispara y
+      +25 no (la regla se guarda changePercent is_under -10); casos por ventana month si, week no;
+      casos abiertos 3->8 cruza 5, 1->3 no; sf_health_status "Red" dispara y "RED" no.
+      El builder ya avisa del texto exacto ("Matched exactly, capitalisation included — copy it the
+      way the source writes it"), captura ui/s5-02: el defecto conocido sigue (texto libre) pero ya
+      no es silencioso. Evidencia: dev/pairs/*.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC7 · The catalog exposes 29 entries, each with its data source, and an unavailable one cannot
+      be activated
+    scenarioIndex: 5
+    status: passed
+    executedAt: "2026-09-25T21:08:00Z"
+    stepResults: []
+    actual: |
+      Catalogo: 29 entradas en la API y en la base de dev (20 deriver, contando las dos de
+      health.assessed; 7 detector; module.unused y playbook.manually_enrolled). El inventario generado
+      pasa --check y, alterado a proposito, falla con "STALE" (control positivo). module.unused:
+      gated, "Available for 0 of 243 accounts", y la API rechaza su version con 400 "'module.unused'
+      is not available… A playbook cannot be made live on an unavailable…". El catalogo de campos en
+      dev tiene 63 entradas (51 fijas mas las de metricas y campos mapeados).
+      Evidencia: dev/catalog-composition.jsonl, scenario-0-unit-tests/catalogo-doc-check*.log.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC11 · The availability the builder shows matches the data that exists behind each entry
+    scenarioIndex: 6
+    status: failed
+    executedAt: "2026-09-25T21:12:00Z"
+    stepResults: []
+    actual: |
+      Campos: las 11 cifras comparadas del builder coinciden con conteos del read model (arr 243,
+      sf_health_status 239, health.score 2, open_case_count 0, casos 164, emails 23, llamadas 3,
+      oportunidades 0, contactos 243, metricas 6).
+      Disparadores: la disponibilidad NO mide datos. catalog.service.signalAvailability solo distingue
+      gated, detector abstenido o 'available'. En dev, las 4 contact.* y las 3 client_user.* dicen
+      "Available for 243 of 243 accounts" con 0 contactos y 0 usuarios de org; health.assessed dice
+      243 de 243 con 2 cuentas con lectura. La historia declara la salvedad solo para las 3
+      client_user.*; en produccion (con contactos) el efecto se limita a esas 3, pero la causa es la
+      misma para todas. Hallazgo F3. Evidencia: dev/api-catalog-*.json, dev/fields-availability.tsv,
+      dev/read-model-counts.json.
+    defects:
+      - jiraKey: IM-1207
+        url: https://veevart.atlassian.net/browse/IM-1207
+        severity: medium
+        summary: >-
+          Historia rebotada por QA (F3). La disponibilidad de un disparador nunca mide si hay datos:
+          entradas sin ninguna fila detras (client_user.* en dev y prod, contact.* en dev) se ofrecen como
+          "Available for 243 of 243 accounts" y se pueden activar, contra AC11 y AC7.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC12, superseded by product · Going live without a shadow run warns, is allowed, and leaves a
+      receipt
+    scenarioIndex: 7
+    status: failed
+    executedAt: "2026-09-25T21:33:00Z"
+    stepResults: []
+    actual: |
+      Lo que funciona: activar sin sombra muestra un aviso y se permite; el aviso dice si el backfill
+      esta encendido (con backfill: "enrols its entire standing set on the first sweep… unobserved");
+      la version queda marcada con activated_without_shadow_at y el usuario que activo; la version que
+      si paso por sombra (escenario 2) se activo sin aviso y con el recibo en NULL. El aviso nombra
+      la jugada pero no el numero de version (O6). Capturas ui/s8-01..04, dev/s8-receipts.jsonl.
+
+      Lo que falla (F1, ALTA): con backfill apagado el aviso dice "Accounts that already match are not
+      enrolled" y la API "enrols nobody who already qualifies". Reproducido: se escribe un
+      account.renewal_window_entered a las 21:32:37Z, se crea la jugada a las 21:32:57Z (backfill
+      false, directo a active) y el siguiente pipeline crea la instancia b0f9cc59 con ese evento
+      anterior a la jugada. La fase de entrada toma toda senal pendiente dentro de la ventana (7 dias)
+      sin mirar cuando se creo la version. En produccion los workers escriben senales desde el 22-sep
+      y nada las consume: la primera jugada activada enrolara una semana de eventos de su tipo, sin
+      sombra y sin cortacircuitos. Evidencia: dev/backlog/*, hallazgos.txt F1.
+    defects:
+      - jiraKey: IM-1207
+        url: https://veevart.atlassian.net/browse/IM-1207
+        severity: high
+        summary: >-
+          Historia rebotada por QA (F1). Una jugada activada con backfill apagado enrola eventos
+          anteriores a su creacion (dentro de la ventana de 7 dias), aunque el aviso y la API dicen que no
+          enrola a nadie que ya cumpla. En produccion, con la ingesta viva desde el 22-sep y el evaluador
+          apagado, la primera activacion barrera una semana de eventos.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC6 · Step text renders from the frozen snapshot and due dates are fixed at enrolment
+    scenarioIndex: 8
+    status: passed
+    executedAt: "2026-09-25T21:18:00Z"
+    stepResults: []
+    actual: |
+      La instancia guarda el texto del paso ya renderizado ("Lectura nueva: RED (antes GREEN).
+      Motivo: A new health reading came in") y la instantanea con la observacion del evento; los
+      tokens de cuenta estan prohibidos por el validador, asi que el texto no puede reescribirse
+      despues. Fechas: disparo 25-sep + 2 = 2026-09-27; renovacion 2027-03-03 - 30 = 2027-02-01;
+      inicio de contrato 2023-06-22 + 0 = 2023-06-22. El caso "la cuenta no tiene la fecha" no se
+      pudo ejercitar: las 243 cuentas de dev tienen ambas fechas. Observacion O4: un paso anclado al
+      inicio de contrato nace vencido en cualquier cuenta que no sea nueva, sin aviso en el builder.
+      Evidencia: dev/dispatch/d02-steps.jsonl.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC5 · A running instance closes itself on an exit event or an account-state predicate
+    scenarioIndex: 9
+    status: passed
+    executedAt: "2026-09-25T21:29:00Z"
+    stepResults: []
+    actual: |
+      Dos jugadas activas en una cuenta limpia. Salida por evento (health.assessed que cambia a
+      GREEN): un YELLOW no cierra la instancia; el GREEN la cierra con close_reason=exit_signal.
+      Salida por predicado (account.churned is false): la instancia se cierra con
+      exit_condition_met. Una salida por evento sin estrechar se rechaza con 400 ("an exit on it would
+      close this play on the first one to arrive"). Nota: el campo de la condicion de salida es
+      payloadWhen; un primer intento con 'when' fue rechazado y dejo un huerfano.
+      Evidencia: dev/exit/*, dev/api-s10-create.json.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC8 · The evaluation log answers why it fired and why it did not, and each line agrees with its
+      result
+    scenarioIndex: 10
+    status: failed
+    executedAt: "2026-09-25T21:21:00Z"
+    stepResults: []
+    actual: |
+      Lo que funciona: cada bloqueo nombra la regla y su detalle ("Stopped by guard: this play enrolls
+      each subject once and this one was enrolled 1 time(s) before"), y cada fila coincide con
+      playbook_evaluation_log.
+      Lo que falla (F2, defectos conocidos 2, 3 y 4, vivos): en una fila "Would have created one"
+      aparecen "GUARD · The account is suppressed" y "GUARD · Cooling-off period has not elapsed" para
+      guardas que pasaron; el resultado va solo en el color de un icono con aria-hidden="true" y sin
+      texto alternativo; "Did not match" no puede moverse (0 filas no_match en toda la base de dev);
+      el afinador dice que un disparador de deriver "has no single measurement to tune". La historia
+      marca AC8 como cumplido. Capturas ui/03 y ui/08.
+    defects:
+      - jiraKey: IM-1207
+        url: https://veevart.atlassian.net/browse/IM-1207
+        severity: medium
+        summary: >-
+          Historia rebotada por QA (F2). El log de evaluacion no responde bien "por que no disparo": las
+          guardas que pasan se leen como fallo, el resultado solo va en color con el icono oculto al
+          lector de pantalla, y el contador "Did not match" no se mueve nunca.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Guard layer · Dedupe, re-enrolment and stale events block for a named reason
+    scenarioIndex: 11
+    status: passed
+    executedAt: "2026-09-25T21:21:00Z"
+    stepResults: []
+    actual: |
+      Re-enrolamiento: con la politica "never", el segundo disparo sobre la cuenta con instancia viva
+      queda blocked=reenrollment con politica, motivo y lastEnrolledAt, y no crea otra instancia.
+      Dedupe con politica "every time" y evento viejo (stale_event) quedan fijados por el banco de
+      playbooks ("the dedupe index is what stops it", [EVENT WINDOW]); en dev no se pueden reproducir
+      porque el generador siempre fecha el evento "ahora". Evidencia: dev/dispatch/d03-evals.jsonl,
+      simulaciones/sim-all.log.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC14 · One reading evaluated by several plays at once, and a play on another signal type stays
+      silent
+    scenarioIndex: 12
+    status: passed
+    executedAt: "2026-09-25T21:16:00Z"
+    stepResults: []
+    actual: |
+      Una sola lectura health.assessed la evaluaron por separado las cuatro jugadas que escuchan ese
+      tipo: dos shadow_fired y dos blocked=payload, cada una con su fila. La jugada sobre
+      health.score_dropped no evaluo esa lectura. Sus dos filas son de dos senales
+      health.dropped_sharply del 24-sep que nadie habia consumido, anteriores a la jugada: de ahi sale
+      F1 (escenario 8). Evidencia: dev/dispatch/d01-evals.jsonl, dev/s13/*.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC3 and AC4 · Detectors emit once on the rising edge, once on the falling edge, and abstain on a
+      stale source
+    scenarioIndex: 13
+    status: passed
+    executedAt: "2026-09-25T21:02:00Z"
+    stepResults: []
+    actual: |
+      Bancos sobre Postgres 16 local con las 85 migraciones: detectores 120/120 (S1 una sola senal en
+      30 dias, S2 subida y bajada con el mismo transition_seq, S3 abstencion sin emitir y sin
+      sobrescribir veredictos, S4 sin segundo flanco en la misma ventana) y flanco de bajada 20/20.
+      El banco sabe fallar: sin la abstencion (mutacion M1) salen 23 FAIL. En dev los 7 detectores se
+      abstienen con la fuente nombrada ("source 'gmail' has no successful run covering back to…"),
+      74 veces seguidas, y el builder los muestra como "Availability not known". En el log de
+      evaluacion no hay filas 'abstained' porque un detector que se abstiene no emite nada que evaluar.
+      Evidencia: simulaciones/*, dev/detector-state.jsonl.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC2 · A dropped event loses no signal and replaying a sync window duplicates none
+    scenarioIndex: 14
+    status: passed
+    executedAt: "2026-09-25T21:03:00Z"
+    stepResults: []
+    actual: |
+      El mecanismo real no es el que dice el AC: no hay outbox en la misma transaccion (el Data API
+      no tiene transacciones en ese bundle, signals.ts lo explica). Las senales se derivan por
+      reconciliacion desde las tablas de origen con dedupe_key UNIQUE, asi que no dependen del bus y
+      un mensaje de EventBridge perdido no pierde la senal. Repetir la ventana inserta 0 filas
+      (bancos play3, play8 y detectores). Excepcion aceptada por producto el 2026-09-09: el delta de
+      field_change_log no es re-derivable si falla entre su escritura y el upsert (O12).
+      Evidencia: simulaciones/sim-all.log.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC13, not verifiable on dev · Two departing champions give two instances, the same champion
+      twice gives one
+    scenarioIndex: 15
+    status: passed
+    executedAt: "2026-09-25T21:03:00Z"
+    stepResults: []
+    actual: |
+      Banco play3: "TWO rising edges, one per person", "the same champion detected twice emits ONE
+      signal in total", "two champions leaving ONE account produce TWO instances". En dev (0
+      contactos) dos contact.created sin identidad en la misma cuenta dejan la misma clave de sujeto
+      "<cuenta>|contact|-" y subject_id NULL: el riesgo del autor se confirma para senales sin
+      identidad, que en produccion solo produciria el generador. Evidencia: simulaciones/sim-all.log,
+      dev/s16/*.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      AC15, not met · Two of the three off-list plays are expressible without engineering, NPS is
+      deferred
+    scenarioIndex: 16
+    status: passed
+    executedAt: "2026-09-25T21:23:00Z"
+    stepResults: []
+    actual: |
+      Segun la decision de producto del 2026-09-09 (AC2 cumplido a 2 de 3). Support Backlog Cleanup
+      sobre account.open_cases_changed y Expansion sobre account.arr_changed se expresan en el builder
+      y disparan con su par (p3, p5). No hay ninguna entrada de NPS en las 29 del catalogo: dependencia
+      de datos diferida, no defecto. Evidencia: dev/pairs/p3*, p5*, dev/api-catalog-and-list.json.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Known defect · A refused definition leaves a draft the author can delete
+    scenarioIndex: 17
+    status: failed
+    executedAt: "2026-09-25T21:25:00Z"
+    stepResults: []
+    actual: |
+      Una definicion rechazada deja la jugada creada sin version: reproducido 4 veces. El builder no
+      la abre ("This playbook could not be loaded. That says nothing about whether it still exists.")
+      y la biblioteca no ofrece borrarla. DELETE /csm/playbooks/:id (PR 396) funciona por API (204 y
+      luego 404), pero el frontend no lo llama en ningun sitio. Dev tiene hoy 5 huerfanos. Hallazgo
+      F4. Capturas ui/s18-01, ui/s18-02. Evidencia: dev/api-s4-s6-s18.json.
+    defects:
+      - jiraKey: IM-1207
+        url: https://veevart.atlassian.net/browse/IM-1207
+        severity: medium
+        summary: >-
+          Historia rebotada por QA (F4). Crear una jugada son dos peticiones: si el servidor rechaza la
+          definicion queda un borrador sin version que el builder no abre ni deja borrar. El DELETE del PR
+          396 existe en la API pero el frontend no lo usa.
+  - testCaseId: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+    testCaseKey: TC-186
+    scenarioTitle: >-
+      Access · The Playbooks surfaces and API require a session in an allowed group
+    scenarioIndex: 18
+    status: blocked
+    executedAt: "2026-09-25T21:13:00Z"
+    stepResults: []
+    actual: |
+      Ejecutado lo posible sin un segundo usuario: las 7 rutas de playbooks responden 401 "Missing
+      Bearer token", un JWT falso 401 "Invalid token", y las rutas inexistentes 404 (control
+      negativo). Codigo: lecturas csm-team, escrituras csm-managers, admin satisface todo; las
+      mutaciones de instancia por cualquier csm-team son la decision registrada (2026-09-10). El pool
+      de dev no tiene el grupo csm-managers (O10): hoy solo los admins pueden crear jugadas.
+      BLOQUEADO el 403 de un usuario fuera de los grupos: no hay usuario de prueba sin admin en dev.
+      Evidencia: dev/probe-sin-credenciales.txt.
+
+summary:
+  total: 19
+  passed: 14
+  failed: 4
+  blocked: 1
+  skipped: 0
+  notRun: 0
+  passRate: 74
+
+history:
+  - action: run-started
+    timestamp: "2026-09-25T20:54:00Z"
+    user: codex
+    from: planned
+    to: in-progress
+    reason: >-
+      Arranca TC-186 sobre main. Se usa el skill csm-playbook-qa del autor, instalado por copia y
+      revisado antes, para disparar eventos contra dev, y un Postgres local propio para los bancos.
+  - action: run-completed
+    timestamp: "2026-09-25T21:45:00Z"
+    user: codex
+    from: in-progress
+    to: completed
+    reason: >-
+      14/19 PASS, 4 FAIL, 1 bloqueado. El motor pasa sus 595 comprobaciones de simulacion y se
+      comporta bien en dev en autoria, sombra, pares de eventos, salidas y guardas. Falla la promesa
+      de que una jugada sin backfill no enrola lo que ya habia pasado, el log de evaluacion, la
+      disponibilidad de los disparadores y el borrado de huerfanos. Las jugadas QA quedan pausadas o
+      archivadas en dev.
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T21:45:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T21:45:00Z"
+  version: 1

@@ -1,0 +1,115 @@
+HALLAZGOS · TR-204 · TC-186 · IM-1207 Playbook Trigger Engine
+Medido el 2026-09-25 contra dev (main 49f459f5 backend / 0aa87980 frontend) y contra un
+Postgres 16 local con las 85 migraciones de main. Ninguna escritura en produccion.
+
+=============================================================================
+F1 · ALTA · Una jugada nueva, activada con backfill apagado, enrola eventos anteriores a ella
+=============================================================================
+Escenario 8 (y descubierto en el 13).
+
+Lo que dice el producto:
+  - Dialogo "Go live" con backfill apagado: "Backfill is off, so this play only starts on
+    accounts that match from now on. Accounts that already match are not enrolled."
+  - Respuesta de la API al activar: "this play sets activation.backfill = false, so
+    activating it enrols nobody who already qualifies".
+  - Decision registrada en IM-1207 (2026-09-09): "a play triggered by 'email received'
+    waits for the next email rather than sweeping up yesterday's".
+
+Lo que hace (reproducido en dev, cuenta QA 38e10b6c):
+  21:32:37Z  se escribe un account.renewal_window_entered; ninguna jugada lo escucha
+  21:32:57Z  se crea "QA TC-186 Backlog previo", backfill=false, draft -> active
+  21:33:xxZ  un despacho ajeno (contact.created en otra cuenta) corre el pipeline
+  resultado  verdict=fired, instancia b0f9cc59 en la cuenta 38e10b6c, con la senal de
+             21:32:37Z: 20 segundos ANTERIOR a que la jugada existiera.
+  Evidencia: dev/backlog/b1-*, b2-*.
+
+  El mismo efecto aparecio sin buscarlo: "QA TC-186 Score dropped" (creada 21:30:19Z, en
+  sombra) evaluo dos senales health.dropped_sharply del 2026-09-24 21:14Z, de otra cuenta,
+  que nadie habia consumido. Evidencia: dev/s13/score-dropped-rows.jsonl.
+
+Causa (evaluate-playbooks-worker.ts, fase de entrada, ~l.755): toma toda senal con
+processed_at IS NULL de los tipos suscritos y occurred_at dentro de la ventana mas ancha
+(7 dias; 27 para metric_changed). No filtra por la fecha de creacion ni de activacion de
+la version. Una senal solo se marca procesada cuando alguna jugada la evalua; si ninguna
+escucha su tipo, queda pendiente hasta la ventana.
+
+Por que importa en produccion: desde el 2026-09-22 los workers de ingesta con el codigo de
+IM-1207 corren en prod (dark deploy, ver scenario-1-deployment) y escriben senales, y el
+evaluador no tiene programacion, asi que ninguna se consume. El dia que se encienda la
+programacion y CS Ops active su primera jugada, esa jugada enrolara todas las cuentas con
+un evento de su tipo en los ultimos 7 dias, sin sombra obligatoria, sin cortacircuitos de
+volumen (mide pero no rechaza) y habiendole dicho al autor lo contrario.
+
+=============================================================================
+F2 · MEDIA · El log de evaluacion no cumple AC8 (defectos conocidos 2, 3 y 4, vivos)
+=============================================================================
+Escenario 11. Capturas ui/03 y ui/08.
+  - Una fila "Would have created one" muestra "GUARD · The account is suppressed" y
+    "GUARD · Cooling-off period has not elapsed" junto a guardas que PASARON.
+  - El resultado de cada guarda va solo en el color de un icono svg con aria-hidden="true"
+    y sin texto alternativo: un lector de pantalla solo lee la frase de fallo.
+  - "Did not match" no se puede mover: en toda la base de dev hay 0 filas no_match
+    (blocked 65, shadow_fired 37, fired 4 antes de esta corrida). Los rechazos por payload
+    se cuentan en "Stopped by a rule".
+  - El afinador dice "This trigger has no single measurement to tune" en un disparador de
+    deriver (defecto conocido 4).
+  - "Needed never · measured —" en la guarda de re-enrolamiento no es legible.
+La historia marca AC8 como "Met and verified" y a la vez lista estos defectos.
+
+=============================================================================
+F3 · MEDIA · La disponibilidad de los disparadores no mide datos (AC11, mas amplio de lo declarado)
+=============================================================================
+Escenario 7. dev/api-catalog-and-list.json, dev/fields-availability.tsv, dev/read-model-counts.json.
+  - catalog.service.signalAvailability solo distingue gated, detector abstenido o
+    'available' con accountsTotal: nunca pregunta si hay datos.
+  - En dev: contact.created/removed/champion_named/field_changed y client_user.* (7
+    entradas) dicen "Available for 243 of 243 accounts" con 0 contactos y 0 usuarios.
+    health.assessed dice 243 de 243 con 2 cuentas con lectura de salud.
+  - La historia declara la salvedad solo para las 3 client_user.*. En produccion hay
+    contactos, asi que alli el efecto se limita a esas 3; la causa es la misma para todas.
+  - La disponibilidad de CAMPOS si mide: 11/11 cifras del builder coinciden con conteos
+    del read model.
+
+=============================================================================
+F4 · MEDIA · Un borrador huerfano no se puede abrir ni borrar desde el producto
+=============================================================================
+Escenario 18. Capturas ui/s18-01, ui/s18-02. dev/api-s4-s6-s18.json.
+  - Una definicion rechazada (sin estrechar, module.unused, salida sin estrechar) deja la
+    jugada creada sin version: reproducido 4 veces.
+  - El builder la abre como "This playbook could not be loaded. That says nothing about
+    whether it still exists." sin ninguna accion; la biblioteca no ofrece borrarla.
+  - DELETE /api/csm/playbooks/:id (PR 396) funciona por API (204 y luego 404), pero el
+    frontend no lo llama en ningun sitio.
+  - dev tiene hoy 5 huerfanos: 4 de la sesion del autor y qa-tc-186-module-unused.
+
+=============================================================================
+OBSERVACIONES (no bloquean; se dejan escritas)
+=============================================================================
+O1 Dark deploy: csm-os-prod-aurora y csm-os-prod-sync-orchestrator se desplegaron a mano el
+   2026-09-22, fuera del pipeline, sin registro del commit; db-migrate de prod invocado
+   19:43:31Z. La API y el frontend de prod siguen en stable del 18-ago.
+O2 deploy.yml del backend no tiene `concurrency`: dos pushes seguidos despliegan en
+   paralelo (el 24-sep termino primero el mas viejo; salio bien por orden, no por diseno).
+O3 La tarjeta muestra "Done by <uuid>" (el sub de Cognito del usuario) en vez de un nombre.
+O4 Un paso anclado al inicio de contrato vence en esa fecha: en dev las 243 cuentas empezaron
+   hace mas de un ano, asi que nace vencido (2023-06-22 en la prueba). El builder no avisa.
+O5 La vista previa del desplazamiento con -30 dijo "Due 30 days after the renewal" a la vez
+   que el error "cannot be negative".
+O6 El aviso de activacion sin sombra nombra la jugada pero no el numero de version.
+O7 La cabecera de la cuenta dice "Renewal —" y el paso anclado a la renovacion uso
+   2027-03-03 de csm_os.accounts: dos fuentes distintas para el mismo dato.
+O8 open_case_count es NULL (no medible) en las 243 cuentas y oldest_open_case_age_days tiene
+   valor en 164: dos columnas hermanas del read model cuentan historias distintas.
+O9 Con login de admin, My Day avisa "your Salesforce user is not linked to this login yet"
+   y muestra todas las cuentas: el filtrado por propietario no se pudo comprobar.
+O10 csm-managers no existe en el pool de Cognito de dev (grupos: csm-team,
+   implementations-team, admin, Google): solo los admins pueden crear jugadas.
+O11 Mutacion M2 (supresion abierta leida como no suprimida) no la detecta ningun banco: hoy
+   ningun escritor crea supresiones con ends_at NULL, asi que no hay impacto vivo, pero la
+   propiedad que el diseno defiende no esta fijada por ningun test.
+O12 El AC2 describe un outbox en la misma transaccion; el codigo (signals.ts) implementa
+   reconciliacion idempotente por dedupe_key. field_change_log no es re-derivable si falla
+   entre la escritura del delta y el upsert (aceptado por producto el 2026-09-09).
+O13 npm audit (solo dependencias de produccion): backend 1 critica + 7 altas, frontend 7
+   altas. Todas estaban ya en stable; ningun PR del ticket toca lockfiles. No es regresion
+   de IM-1207; conviene un ticket aparte.

@@ -1,0 +1,894 @@
+
+> operating-system-backend@0.0.1 csm-os:simulate:all
+> npm run csm-os:detectors:simulate && npm run csm-os:playbooks:simulate && npm run csm-os:falling-edge:simulate && npm run csm-os:payload-conditions:simulate && npm run csm-os:lifecycle:simulate && npm run csm-os:play1:simulate && npm run csm-os:play3:simulate && npm run csm-os:play4:simulate && npm run csm-os:play5:simulate && npm run csm-os:play6:simulate && npm run csm-os:play8:simulate
+
+
+> operating-system-backend@0.0.1 csm-os:detectors:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/detector-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.sim-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .sim-build.js; ec=$?; rm -f .sim-build.js; exit $ec
+
+
+[S5] switch-on: a condition ALREADY true DOES fire [PRODUCT RULING]
+  PASS  the first sweep is NOT primed by default
+  PASS  it sees Alpha qualifying
+  PASS  and it EMITS, so Alpha enrols
+  PASS  the rising signal exists
+  ...and a detector that OPTS IN still starts quiet
+  PASS  the opt-in detector IS primed
+  PASS  it sees the same subject
+  PASS  and emits nothing
+  PASS  and still nothing once the verdict is recorded
+  PASS  the default path fires again after the reset
+
+[S7] a delta condition ages out of its window, at exactly the right time
+  PASS  Alpha aged out on day 12 (14d window minus a 2d-old assessment)
+  PASS  it aged out via a FALLING edge
+  PASS  and produced exactly ONE rising edge, at switch-on
+
+[S2] a condition that BECOMES true fires, and recovery closes it
+  PASS  Beta rises
+  PASS  one rising signal for Beta
+  ...and re-running in the SAME window emits no second edge [S4]
+  PASS  second run in the same window: 0 rising
+  PASS  signal count unchanged
+  PASS  Beta falls on recovery
+  PASS  one falling signal for Beta
+  PASS  verdict re-armed to false
+  PASS  falling reuses the rising transition_seq (one episode)
+
+[S6] a params retune RE-PRIMES rather than emitting a flood
+  PASS  retuned sweep is primed
+  PASS  retuned sweep emits nothing despite a lower threshold
+
+[S1] a STANDING condition true for 30 days produces EXACTLY ONE signal
+  PASS  switch-on fires for those already silent
+  PASS  Gamma is not silent yet
+  PASS  detector_state.observation is a jsonb OBJECT, not a string
+  PASS  and is readable in SQL
+  PASS  EXACTLY ONE rising signal after 30+ days of continuous silence
+  PASS  and no other signal for that subject at all
+  PASS  only the account that TRANSITIONED rose
+  PASS  nothing else was emitted in 47 sweeps
+  ...and the falling edge appears when the silence ends [S2b]
+  PASS  Gamma falls when the client writes in
+  PASS  one falling signal for Gamma
+
+[S3] a Gmail outage makes the silence detector ABSTAIN, not fire
+  PASS  healthy coverage: detector does NOT abstain
+  PASS  switch-on fires for the silent portfolio
+  PASS  detector ABSTAINS on a hole in the window
+  PASS  abstention emits ZERO signals
+  PASS  abstain streak starts at 1
+        reason: source 'gmail' has a 71h gap starting 2026-05-22T00:00:00.000Z, over the 25h tolerance
+  PASS  the outage adds no signals at all
+  PASS  a second abstention increments the streak (alert at 2)
+  PASS  abstention did not overwrite any subject verdict
+
+[S3b] coverage healed: the detector judges again
+  PASS  no longer abstaining
+  PASS  abstain streak reset
+
+[S3c] deployed DURING an outage: recovery must prime, not burst
+  PASS  the very first sweep abstains — nothing was ever primed
+  PASS  and so does the next
+  PASS  the first HEALTHY sweep judges
+  PASS  and it has real subjects to judge
+  PASS  it fires, deliberately, as a first conclusion
+  PASS  for every subject that qualifies
+  PASS  and the standing condition does not fire AGAIN afterwards
+
+[S8] the tuner: sub-threshold measurements are recorded, not discarded
+  PASS  the detector MEASURES the whole eligible population
+  PASS  and only one of them crosses
+  PASS  every measurement is recorded
+  PASS  ...and recorded whether or not the sweep emitted
+  PASS  observation is a jsonb OBJECT, not a string
+  PASS  SQL can read the near-miss measurement out of it
+  PASS  and it is recorded as NOT qualifying
+  PASS  the sub-threshold rows the log could never hold
+  PASS  a second sweep the same day UPDATES rather than duplicating
+  PASS  an abstaining detector abstains
+  PASS  and records ZERO observations — absence of evidence, not evidence
+  PASS  nothing was written for the outage sweep
+  PASS  the prune drops what is past the 180-day window
+  PASS  and leaves everything inside it
+
+[S9] coverage: when did this detector START recording?
+  PASS  the first sweep abstains
+  PASS  an abstention does NOT date the coverage window
+  PASS  the first healthy sweep records
+  PASS  and THAT is what dates the coverage window
+  PASS  at the sweep instant, not the deploy
+  PASS  and it never moves afterwards
+  PASS  a LATER outage abstains again
+  PASS  without disturbing the recorded start
+
+[S10] no OUTBOUND email: measured against a NON-EMPTY corpus
+  PASS  every non-churned account is MEASURED
+  PASS  two of the three qualify
+  PASS  and both fire at switch-on
+  PASS  Beta, emailed 3 days ago, does NOT fire
+  PASS  Gamma fires DESPITE writing to us yesterday
+  PASS  observation is a jsonb OBJECT
+  PASS  NEVER emailed reads as everOutbound=false on the channel key
+  PASS  and the TUNED key is a number for it, not null
+  PASS  the sub-threshold row is RECORDED with its measurement [tuner]
+  ...and it falls when we finally write to them [S10b]
+  PASS  Gamma falls when we email them
+  PASS  Alpha, still un-emailed, holds without re-firing
+
+[S11] no outbound email: a GMAIL outage abstains, it does not fire
+  PASS  healthy coverage: nobody is overdue yet
+  PASS  and nothing is emitted
+  PASS  the detector ABSTAINS rather than firing
+  PASS  it measured nothing at all
+  PASS  it emitted nothing at all
+  PASS  and the reason names gmail
+  PASS  THE POINT: not one of the three accounts got a signal
+  ...and it judges again once coverage is whole [S11b]
+  PASS  no longer abstaining
+  PASS  and NOW the three genuinely-overdue accounts fire
+
+[S12] no CALLS: its own source, its own outage
+  PASS  all three measured
+  PASS  Alpha (80d) and Gamma (never) qualify; Beta (10d) does not
+  PASS  Beta is recorded at 10 days against a bar of 60
+  PASS  a hole inside the window abstains
+  PASS  and the reason names avoma, not gmail
+
+[S13] the COMPOUND detector abstains on EITHER leg, and names both
+  PASS  all three measured
+  PASS  Beta is NOT stalled -- one live channel is enough
+  PASS  both legs are reported silent, with a plottable number
+  PASS  never engaged is a NUMBER for the tuner, flagged rather than dropped
+  PASS  one stale leg abstains the whole detector
+  PASS  Beta was NOT swept into the play by the outage
+  PASS  both stale sources are named, not just the first
+
+[S14] every absence detector hands the tuner a NUMBER for a subject with no activity
+  PASS  the absence family is found at all, so this is not vacuous
+  PASS  account.email_silence: declares a never-null measure
+  PASS  account.email_silence: measures the whole portfolio
+  PASS  account.email_silence: all three qualify with no activity
+  PASS  account.email_silence: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.no_outbound_email: declares a never-null measure
+  PASS  account.no_outbound_email: measures the whole portfolio
+  PASS  account.no_outbound_email: all three qualify with no activity
+  PASS  account.no_outbound_email: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.no_calls: declares a never-null measure
+  PASS  account.no_calls: measures the whole portfolio
+  PASS  account.no_calls: all three qualify with no activity
+  PASS  account.no_calls: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.engagement_stalled: declares a never-null measure
+  PASS  account.engagement_stalled: measures the whole portfolio
+  PASS  account.engagement_stalled: all three qualify with no activity
+  PASS  account.engagement_stalled: 'daysSinceEngagement' is a NUMBER for every qualifying subject
+
+ALL GREEN — 120/120 checks passed
+
+> operating-system-backend@0.0.1 csm-os:playbooks:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/playbook-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.pb-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .pb-build.js; ec=$?; rm -f .pb-build.js; exit $ec
+
+
+[AC] two champions leaving the same account produce TWO instances;
+     the same champion detected twice produces ONE
+  PASS  two DIFFERENT champions on one account -> two instances
+  PASS  the SAME champion detected twice -> no second instance
+  PASS  ...and it is recorded as a block, not silence
+  PASS  still exactly two live instances
+  PASS  the log names re-enrollment as the blocker under policy never
+  ...and with an EVERY-TIME policy, the dedupe index is what stops it
+  PASS  first detection enrolls
+  PASS  second detection of the SAME champion -> no second instance
+  PASS  the DEDUPE index is what refused it
+
+[AC] a running instance auto-closes when its exit condition is met
+     (a client who replies the day after Ghost Account fires)
+  PASS  Ghost Account fires
+  PASS  the reply closes it the next day
+  PASS  no live instances remain
+  PASS  closed for the right reason
+  ...and the FALLING edge closes it even with no authored exit [not a mode]
+  PASS  it fires
+  PASS  the falling edge closes it
+  PASS  close_reason distinguishes it from an authored exit
+
+[M2] a MIXED exit list closes on EITHER condition
+  PASS  [event] the mixed-exit play fires
+  PASS  [event] it closes
+  PASS  [event] and close_reason says WHICH closer fired
+  PASS  [predicate] the mixed-exit play fires
+  PASS  [predicate] it closes
+  PASS  [predicate] and close_reason says WHICH closer fired
+
+[M5] due dates are absolute, and the anchor records which one produced them
+  PASS  both accounts enroll
+  PASS  an account WITH a renewal date counts back from it
+  PASS  and the anchor says so
+  PASS  an account WITHOUT one falls back to trigger time rather than a NULL
+  PASS  and the anchor records the FALLBACK, not what was asked for
+  PASS  no step anywhere carries a null due date
+
+[AC] shadow mode evaluates and logs everything WITHOUT creating an instance
+  PASS  shadow mode creates NO instance
+  PASS  zero live instances
+  PASS  it DID evaluate and log
+  PASS  logged as shadow_fired
+
+[AC] step text renders from the frozen snapshot and does not change
+  PASS  step text is rendered from the snapshot
+  PASS  due date is materialised to an absolute date
+  PASS  step text is UNCHANGED after the data moves
+
+[ADVERSARIAL] an account matching FOUR plays at once
+  PASS  all four fire (no per-account cap, by design)
+  PASS  four live instances on one account
+
+[ADVERSARIAL] an account with no csm_owner_id still enrolls
+  PASS  it enrolls rather than being dropped
+  PASS  the owner frozen at enrolment is null, because the account had none
+  PASS  and the live account owner is null too, so My Day shows it to everyone
+
+[ADVERSARIAL] a first-run burst is MEASURED and alerted, never capped
+evaluate-playbooks-worker: ALERT 'sim-bursty' has passed its usual volume this run (11 vs 10). Not blocking -- instances are 'proposed' and can be declined.
+  PASS  every account in the burst enrols
+  PASS  none is blocked
+  PASS  and nothing anywhere is blocked on volume
+  PASS  but the volume is still on the trace, and flagged unusual
+
+[ADVERSARIAL] suppression blocks, and an OPEN-ENDED one still blocks
+  PASS  an open-ended suppression BLOCKS (fails closed)
+  PASS  named in the log as suppression
+
+[AC] the evaluation log answers "why did it fire" and "why did it not"
+  PASS  the trace names the specific guard
+  PASS  and its detail stands alone rather than saying "a guard blocked it"
+        explanation: "suppressed (terminating) with no end date"
+
+[ACTIVATION] a newly activated play enrols the accounts ALREADY qualifying
+evaluate-playbooks-worker: ALERT unusually large standing-set enrolment for 'sim-activation': 12 subject(s), against a usual range of 10. Enrolling all of them -- instances are created 'proposed' and a CSM can decline them. Look at the play if this was not expected.
+evaluate-playbooks-worker: ALERT 'sim-activation' has passed its usual volume this run (11 vs 10). Not blocking -- instances are 'proposed' and can be declined.
+  PASS  a large activation enrols EVERYTHING
+  PASS  nothing is withheld
+  PASS  and nothing is recorded as blocked
+  PASS  no circuit_breaker block exists any more
+  PASS  the volume is still MEASURED on the trace
+  PASS  and recorded as unusual
+  PASS  while passing regardless
+  PASS  and the version records that it consumed its standing set
+  PASS  and the trace says it was an activation backfill, not a signal
+  ...and it does not run twice
+  PASS  a second run enrols nobody new
+  ...and a play that asks for a quiet start gets one
+  PASS  the opt-out play enrols nobody from the standing set
+  PASS  and stays empty
+  ...and so does a play that says NOTHING, which is the default
+  PASS  a play with no activation block enrols nobody from the standing set
+  PASS  and stays empty too
+
+[EVENT WINDOW] an old undrained signal is history, not a candidate
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  only the live event enrols
+  PASS  and it is the one from today
+  PASS  the ancient signal is retained, not expired
+  PASS  ...and left undrained rather than consumed
+  ...and where two plays share a signal type, each applies its OWN window
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (30d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  the play with the wider window enrols it
+  PASS  and the narrower one blocks rather than enrolling
+  PASS  with its own reason, not folded into filter
+  PASS  and the age it declined on
+
+[PROMOTION] activating a SHADOW play enrols its standing set
+  PASS  in shadow it rehearses the standing set
+  PASS  and creates nothing
+  PASS  promoting to active enrols the standing set for real
+  PASS  all of them live
+  PASS  and it does not run a third time
+
+ALL GREEN — 74/74 checks passed
+
+> operating-system-backend@0.0.1 csm-os:falling-edge:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/falling-edge-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.fe-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .fe-build.js; ec=$?; rm -f .fe-build.js; exit $ec
+
+
+[S1] fell 80->60 and STAYED at 60: the falling edge must close NOTHING
+  PASS  day 14 opens the play
+  PASS    and the instance exists
+  PASS  day 15 still emits the falling edge (the detector re-arms)
+  PASS    but the instance is NOT closed
+  PASS    and carries no close_reason
+  PASS  the falling signal says WHY it fell
+  PASS    and carries the measurement: a drop of 0
+  PASS  still open on day 20, with the account still at 60
+  PASS    and still no close_reason
+
+[S2] fell 80->60 then RECOVERED to 85: closes on the AUTHORED condition
+  PASS  day 14 opens the play
+  PASS  day 15 falling edge leaves it open, as in S1
+  PASS  day 16 CLOSES it, on health.score > 70
+  PASS    with the authored reason, not condition_cleared
+
+[S3] fell 80->60 and assessments STOP: stays open, then times out
+  PASS  day 14 opens the play
+  PASS  day 15 falling edge does not close it
+  PASS    no close_reason
+  PASS  still open on day 40, with nothing being measured
+  PASS  day 46 closes it on the TIMEOUT
+  PASS    and says so, distinguishably
+
+[GATE] the three scenarios reach three DIFFERENT reasons
+  PASS  S1 open / S2 exit_condition_met / S3 timeout are all distinct
+
+ALL GREEN — 20/20 checks passed
+
+> operating-system-backend@0.0.1 csm-os:payload-conditions:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/payload-conditions-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.pc-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .pc-build.js; ec=$?; rm -f .pc-build.js; exit $ec
+
+
+[S1] the pure event reaches a play, and the payload narrows it
+  PASS  the emitter produced three change signals
+  PASS  emitted as DERIVED, so the entry pass can drain it
+  PASS  the payload nests under observation
+  PASS  exactly ONE of the three events starts the play
+  PASS    and it is the account that went RED
+  PASS  the other two are blocked BY PAYLOAD, not by filter
+
+[S2] two plays, different payload conditions, ONE sweep and ONE params_hash
+  PASS  ONE sweep emitted ONE signal for the account
+  PASS  and detector_state holds exactly ONE params_hash
+  PASS    which is the detector params, untouched by either play
+  PASS  the RED play enrols
+  PASS  the YELLOW play does not
+  PASS    from the SAME one signal
+
+[S3] an exit payload condition cannot close across subjects
+  PASS  both accounts enrol
+  PASS  exactly one instance closes
+  PASS    and the one still open is ALPHA, who did not recover
+  PASS    closed for the authored reason
+
+[S4] the health transition, which needed no new capture work
+  PASS  the emitter produced one signal per reading
+  PASS  the transition is in the observation, not just the latest reading
+  PASS  "went RED" enrols exactly once
+  PASS  "crossed below 40" enrols exactly once
+  PASS    and it is Alpha, not the account that stayed GREEN
+  PASS  the readings neither play asked for are blocked by payload
+
+[S5] the threshold crossing, and more than one colour at a time
+  PASS  only the account that CROSSED 40 enrols, not the one already below it
+  PASS    and it enrolled once, from the one reading that crossed
+  PASS  more than one colour now, more than one colour before, and both honoured
+  PASS    and a move within the band is blocked BY PAYLOAD, not by the guard
+  PASS  a health change with neither changed-from nor changed-to set
+  PASS  one signal per reading, shared by both entries
+
+ALL GREEN — 28/28 checks passed
+
+> operating-system-backend@0.0.1 csm-os:lifecycle:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/lifecycle-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.lc-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .lc-build.js; ec=$?; rm -f .lc-build.js; exit $ec
+
+
+[L1] the ARR emitter EXISTS, which is what ungated the entry
+  PASS  the deriver list carries it
+  PASS  and the entry claims exactly that emitter
+  PASS  with no gate left on it
+
+[L2] the SQL runs, and the numbers it writes are right
+  PASS  three ARR changes become signals
+  PASS  and the churn deriver beside it is untouched
+  PASS  exactly the three accounts whose figure we could actually read
+  PASS  48000 -> 60000 is +25.00%
+  PASS  48000 -> 45000 is -6.25%, SIGNED rather than a magnitude
+  PASS  a previous value of ZERO has no percentage, and does not divide
+  PASS  the pair is written as jsonb NUMBERS, which is what the cast needs
+  PASS  and both sides of the pair are carried
+  PASS  the unreadable account is absent, not present with a null
+  PASS  a re-run of the same window emits nothing new
+
+[L3] the three conditions the product asked for, on real signals
+  PASS  "changed by more than 10%" takes the grower only
+  PASS  and a 6.25% slip is NOT a 10% fall
+  PASS  "surpassed 50000" fires only on the change that crossed it
+  PASS  "changed at all" takes every readable change and nothing else
+
+[L4] the renewal window kept its fortnight and lost its option
+  PASS  the scheduled sweep asks a one-parameter question
+  PASS  the fortnight is fourteen days
+  PASS  the sweep is not abstaining
+  PASS  an account 13 days PAST an unmoved renewal is still in the window
+  PASS  and one 15 days past is not, which is the fortnight in the SQL
+  PASS  the window is frozen onto every observation
+
+[L5] the handoff criteria as a STATE, from the real field catalog
+  PASS  the handoff is derived
+  PASS  a play that checks the STATE refuses an account taken back
+  PASS  ...and one that cannot check it enrols anyway, which is the gap
+  PASS  and it is the FILTER that refused it, not an accident of ordering
+
+ALL GREEN — 27/27 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play1:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play1-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p1-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p1-build.js; ec=$?; rm -f .p1-build.js; exit $ec
+
+
+[GATE 3] Play 1 ships in SHADOW, on the REAL criteria
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  the trigger is the handoff catalog entry
+  PASS  it enrols each account once
+  PASS  it has five steps
+  PASS  and nothing in it was built on the plan-run status
+
+[GATE 1] no special case: a deriver, a catalog entry, a definition
+[GATE 2] end to end, on the CDC transition
+
+[MOMENT, NOT CONDITION] the historic handoffs never enrol
+  PASS  an account already handed off enrols nobody
+  PASS  no handoff instance exists at all
+  PASS  because a deriver leaves no standing set to back-fill
+  PASS  and the activation backfill still ran and found nothing
+
+[FIRST SYNC] reading the field for the first time is NOT a handoff
+  PASS  NULL -> false emits no handoff signal
+  PASS  so nothing enrols from it
+
+[TRANSITION] true -> false IS the handoff
+  PASS  the transition emits exactly one signal per account
+  PASS  its payload is a jsonb OBJECT
+  PASS  SQL can read what it moved FROM
+  PASS  and to
+  PASS  and the account name for the step copy
+  PASS  tiered derived, not fact
+  PASS  the handed-off account enrols
+  PASS  exactly one instance
+  PASS  on the account that transitioned
+  PASS  labelled by name
+  PASS  and the reason reads as the handoff sentence the catalog carries
+  PASS  and the name is on the instance regardless
+  PASS  a churned account is filtered out, not enrolled
+  PASS  ...and it is recorded as a filter block, not silence
+  PASS  the step text renders the account and the date from the frozen snapshot
+  PASS  and leaves no placeholder unrendered
+  PASS  anchored to trigger time, not a renewal
+
+[GATE 4] the evaluation log answers both questions
+  PASS  a fired row exists
+  PASS  naming the trigger
+  PASS  and saying a SIGNAL drove it, not a backfill
+  PASS  with the filter it evaluated
+
+[OUT OF ORDER] the CDC window is replayed, as the 25h lookback guarantees
+  PASS  the same transition emits no second signal
+  PASS  and no second instance
+  PASS  still exactly one
+
+[OUT OF ORDER] the account goes BACK on implementation, then hands off again
+  PASS  going back ON implementation emits nothing
+  PASS  the SECOND handoff is a genuine new signal
+  PASS  but re-enrollment refuses it, by policy
+  PASS  and says so
+  PASS  naming re-enrollment as the blocker
+  PASS  and after all of that, the historic handoff STILL never enrolled
+  PASS  the exit phase leaves it open (timeout is the only closer)
+  PASS  the play is left in shadow, as shipped
+
+ALL GREEN — 44/44 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play3:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play3-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p3-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p3-build.js; ec=$?; rm -f .p3-build.js; exit $ec
+
+
+[GATE 3] Play 3 ships in SHADOW
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  the subject type is contact
+  PASS  the exit is a conditions LIST
+  PASS  carrying two conditions
+  PASS  both at ACCOUNT scope — the departed champion is not who ends the play
+  PASS  re-enrollment is never — a person departs once
+  PASS  it has four steps
+
+[GATE 1] no special case: the play runs on the stock engine
+[GATE 2] end to end, INCLUDING the fan-out criterion
+  PASS  an ancient backlog is out of the window entirely
+  PASS  so switch-on fires for none of it
+  PASS  and the sweep is not primed -- it concluded, it just found nothing
+  PASS  a churned account has no champion to lose
+  PASS  both departures qualify
+  PASS  TWO rising edges, one per person
+  PASS  two signals, not one and not three
+  PASS  each is keyed on the PERSON, so they cannot collide
+  PASS  signals.payload is a jsonb OBJECT
+  PASS  and so is its nested observation
+  PASS  SQL can read the frozen name out of it
+  PASS  and the route that produced it
+  PASS  the same champions still qualify
+  PASS  but a standing departure is not an event
+  PASS  so the same champion detected twice emits ONE signal in total
+  PASS  the run enrols both champions, and nothing from the backlog
+  PASS  two champions leaving ONE account produce TWO instances
+
+[FINDING 1] the label survives the deletion that created the signal
+  PASS  the contacts rows are GONE — departure IS the deletion
+  PASS  yet the instance carries the human name
+  PASS  which is NOT the Salesforce id
+  PASS  the live-join label alone would print the raw id
+  PASS  the reason line names the ROUTE that fired
+  PASS  and the card still names the person, from the frozen label
+
+[ROUTE 2] a bouncing address, and why one bounce is not enough
+  PASS  ONE bounce is a full mailbox, not a departure
+  PASS  the SECOND bounce crosses the threshold
+  PASS  attributed to the person we mailed, via the thread
+  PASS  with the bounce count recorded
+  PASS  and the route named
+  PASS  the bouncing champion enrolls too
+
+[GATE 5] the derivers, asserted in SQL
+  PASS  email.client_replied fired once
+  PASS  contact.champion_named fired once
+  PASS  one reply signal
+  PASS  its payload is a jsonb OBJECT, not a string
+  PASS  SQL can read the message id out of it
+  PASS  it is account-subject
+  PASS  and tiered as derived
+  PASS  one champion-named signal
+  PASS  payload is a jsonb OBJECT
+  PASS  naming the NEW person, not the departed one
+  PASS  on their own contact subject
+  PASS  a BOUNCE is never read as a reply
+  PASS  re-deriving the same window inserts 0 replies
+  PASS  and 0 champion-named
+
+[FINDING 2] a contact-subject play needs an ACCOUNT-scoped exit
+evaluate-playbooks-worker: 2 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  the control play enrolled the same departures
+  PASS  every ACCOUNT-scoped instance on THIS account closed on a signal about someone else
+  PASS  all three of them
+  PASS  the SUBJECT-scoped control closed NOTHING on the same signals
+
+[GATE 4] the evaluation log answers both questions on real rows
+  PASS  a fired row exists
+  PASS  its trace names the trigger
+  PASS  with NO measurement, deliberately — only one route has a number
+  PASS  and the filters it evaluated
+  PASS  a churned account never produced a signal to log
+
+[RE-ENROLLMENT] never, because a person departs once
+evaluate-playbooks-worker: 2 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  a closed departure never re-enrolls the same person
+  PASS  and it is recorded as blocked, not silently dropped
+
+[FRESHNESS] a stale Salesforce reconcile abstains rather than sweeping
+  PASS  the detector abstains
+  PASS  emitting nothing portfolio-wide
+  PASS  the streak is counted for the alert
+  PASS  and the reason names the source
+  PASS  a second outage sweep bumps the streak to the alert threshold
+  PASS  and no subject verdict was overwritten by the outage
+  PASS  the first healthy sweep after an outage concludes rather than priming
+  PASS  and fires for the departure it can now see
+  PASS  and the standing departure stays recorded, not re-fired
+  PASS  the play is left in shadow, as shipped
+
+ALL GREEN — 72/72 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play4:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play4-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p4-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p4-build.js; ec=$?; rm -f .p4-build.js; exit $ec
+
+
+[GATE 3] Play 4 ships in SHADOW, and its ladder counts BACK
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  every rung is anchored to the renewal date
+  PASS  and the offsets DESCEND — T-90 first, the renewal itself last
+  PASS  nothing gates automatically on the ARR change
+  PASS  and there is no authored exit event
+  PASS  the seeded play still carries the removed parameter
+  PASS  and the detector built from it hashes as if it did not
+  PASS  which is the SAME question the scheduled sweep asks
+
+[GATE 1] no special case: the play runs on the stock engine
+[GATE 2] end to end, on the date-anchored ladder
+  PASS  accounts with a renewal date are measured
+  PASS  only the one inside the window qualifies
+  PASS  switch-on fires for the renewal already in the window
+  PASS  a PAST renewal is measured and does not qualify
+  PASS  an account with NO renewal date is not measured at all
+  PASS  nor is a churned one, however close its renewal
+  PASS  an account crossing T-90 produces ONE rising edge
+  PASS  and the one already inside does not re-fire
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  only the one that CROSSED enrols; the one already inside does not
+  PASS  and it is ENTERING, not SOON
+
+[LADDER] absolute dates, counted back from the renewal
+  PASS  each rung is the renewal date MINUS its offset
+  PASS  the anchor is recorded as renewal_date, not the trigger fallback
+  PASS  and the rungs are in chronological order despite descending offsets
+  PASS  the snapshot is a jsonb OBJECT
+  PASS  SQL can read the ARR change out of it
+  PASS  and the step renders the numbers for a human to judge
+  PASS  while saying plainly that it is not the contractual increase
+  PASS  the step ASKS the 8% question outright
+  PASS  and the 7% flag appears nowhere in what a CSM reads
+
+[FROZEN] a renewal date that MOVES does not rewrite the ladder
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  every due date is exactly what it was
+  PASS  and the instance is still open
+  PASS  even though the ladder now runs past the new date
+
+[CLOSER] the renewal date moving FORWARD is what ends this play
+  PASS  the account leaves the window
+  PASS  the play closes itself
+  PASS  and the reason says the condition evaporated, not that it timed out
+
+[GATE 4] the evaluation log answers both questions on real rows
+  PASS  a fired row exists
+  PASS  its trace names the trigger
+  PASS  the fired row is the account that CROSSED
+  PASS  carrying the days-until it fired on
+  PASS  against the window in force
+
+[OUT OF ORDER] deployed while Salesforce is stale, then recovers
+  PASS  the detector abstains rather than counting stale dates
+  PASS  emitting nothing
+  PASS  and measuring nothing
+  PASS  the first healthy sweep concludes rather than priming
+  PASS  and fires for the renewal already inside its window
+  PASS  while still measuring everything for the tuner
+
+[OUT OF ORDER] the window is widened while a play is running
+  PASS  a settled sweep emits nothing new
+  PASS  widening the window RE-PRIMES rather than flooding
+  PASS  even though it now sees more accounts
+  PASS  and emits nothing
+  PASS  the measurements are filed under both questions, distinguishably
+  PASS  the play is left in shadow, as shipped
+
+ALL GREEN — 51/51 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play5:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play5-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p5-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p5-build.js; ec=$?; rm -f .p5-build.js; exit $ec
+
+
+[GATE 3] Play 5 ships in SHADOW
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  the exit block is a conditions LIST
+  PASS  carrying one condition
+  PASS  whose mode is predicate
+  PASS  it has four steps
+
+[GATE 1] no special case: the play runs on the stock engine
+[GATE 2] end to end — fires once, does not re-fire, closes on its exit
+  PASS  priming sweep emits nothing
+  PASS  the detector sees TWO qualifying accounts
+  PASS  and emits two rising edges
+  PASS  payload is a jsonb OBJECT, not a double-encoded string
+  PASS  the drop is measured across the REAL 39-day gap, not an assumed 14
+  PASS  and reports the true delta
+
+  SHADOW: evaluates and logs, creates nothing
+  PASS  zero instances created
+  PASS  but it DID evaluate
+  PASS  the churned account was filtered out, not silently skipped
+  PASS  the log records both the shadow fire and the filter block
+
+  ACTIVE (simulated activation — the shipped play stays in shadow)
+  PASS  it fires ONCE
+  PASS  one instance, on the right account
+  PASS  urgency comes from the definition
+  PASS  all four steps are materialised
+  PASS  due dates are absolute, anchored to trigger time
+        step 1 body: "Health fell from 78 to 58 (20 points), measured across 39 days. Read the latest assessment and the vital signs before reaching out."
+  PASS  the step text tells the CSM what actually happened, from the frozen snapshot
+
+  it does NOT re-fire on a second sweep in the same window
+  PASS  no second instance
+  PASS  and the block is recorded
+
+  it closes when health RECOVERS above 70 (the exit predicate)
+  PASS  still open while the score is 58
+  PASS  recovery closes it
+  PASS  closed for the exit condition, not a timeout
+
+  the step text is UNCHANGED after the score moved
+  PASS  frozen snapshot holds
+
+[GATE 4] the evaluation log answers both questions on REAL rows
+  PASS  there is a fired row
+  PASS  its trace records the filter that PASSED, with the measured value
+  PASS  and `actual` is present on the PASS
+  PASS  there is a filter-blocked row
+  PASS  naming the specific field
+  PASS  with expected and actual
+        why not: field=account.churned expected=false actual=true
+  PASS  the second sweep is blocked by re-enrollment
+  PASS  the trace names the guard
+  PASS  and its detail stands alone
+        why not: last enrolled 0 days ago, policy is 60
+
+[M1] the trace carries a TRIGGER entry with its measurement
+  PASS  there is a trigger entry at all
+  PASS  naming the catalog entry
+  PASS  with the THRESHOLD it was compared against
+  PASS  and the MEASURED value it fired on
+  PASS  and the operator
+  PASS  populated on a PASS, not only on failure
+
+[M4.3] the instance carries a one-line reason
+  PASS  reason is populated
+  PASS  and rendered from the observation, not a template left raw
+        reason: "Health score dropped by 15 or more points within 14 days"
+
+[M4.2 / M4.4 / M5] step fields on the wire
+  PASS  step body is present and non-empty
+  PASS  due_date is never NULL
+  PASS  completed_by is exposed (null until someone completes it)
+  PASS  NO step anywhere has a null due date
+
+[M4.1] the subject label is human, never the dedupe key
+  PASS  an account subject labels as the account name
+  PASS  which is NOT the subject key
+  PASS  and it was MATERIALISED at enrollment, not resolved at read time
+
+[TUNER] the shipped play records the near-misses, not only the crossings
+  PASS  every measured account is on record
+  PASS  the observation is a jsonb OBJECT
+  PASS  the crossing is recorded as qualified
+  PASS  and at least one NEAR MISS is on record beside it
+  PASS  whose measurement is below the seeded threshold
+  PASS  the play is left in shadow, as shipped
+
+ALL GREEN — 58/58 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play6:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play6-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p6-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p6-build.js; ec=$?; rm -f .p6-build.js; exit $ec
+
+
+[GATE 3] Play 6 ships in SHADOW, and never claims to measure logins
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  no step mentions logging in
+  PASS  the exit is one condition covering BOTH channels
+  PASS  email OR call ends it
+  PASS  at subject scope — this play IS about the account
+  PASS  re-enrollment allows a later relapse
+
+[GATE 1] no special case: the play runs on the stock engine
+[GATE 2] end to end, and the COMPOUND axis
+  PASS  the whole non-churned portfolio is measured
+  PASS  only the account silent in BOTH channels qualifies
+  PASS  switch-on fires for the account already silent
+  PASS  an account that emails us has no verdict row
+  PASS  nor does one that gets on calls
+  PASS  a churned account is not even measured
+  PASS  ...but both ARE measured, and recorded as not qualifying
+  PASS  a churned account is excluded from the population entirely
+  PASS  the observation is a jsonb OBJECT
+  PASS  SQL can read which leg is silent
+  PASS  ...and which is not
+  PASS  so the near-miss is on record for the tuner
+  PASS  measured from the LATER channel, not the earlier
+  PASS  CALLER crosses into silence 21 days after its last call
+  PASS  and GHOST does not re-fire, having been primed
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  the newly silent account enrols too
+  PASS  on the right account
+  PASS  labelled by name, not by key
+  PASS  the step text names BOTH channels, with their real gaps
+  PASS  and no placeholder was left unrendered
+
+[EXIT] a call ends it — the closer an email-only exit would miss
+  PASS  the instance closes
+  PASS  naming the exit signal as the closer
+
+[GATE 4] the evaluation log answers both questions on real rows
+  PASS  a fired row exists
+  PASS  its trace names the trigger
+  PASS  and carries the MEASUREMENT it fired on
+  PASS  against the threshold in force
+
+[COMPOUND FRESHNESS] one leg stale must ABSTAIN, not fire on the other
+  PASS  a hole in ONE feed abstains the whole detector
+  PASS  and emits nothing portfolio-wide
+  PASS  the reason names the broken source
+  PASS  and NOT the healthy one
+  PASS  nothing was measured, so nothing is recorded
+  PASS  no subject verdict was overwritten by the outage
+  PASS  the abstain detail records the stale source
+  PASS  and the healthy one beside it
+  ...and BOTH feeds broken is one incident with two causes
+  PASS  still abstaining
+  PASS  the reason names gmail
+  PASS  AND avoma — not just whichever was checked first
+
+[OUT OF ORDER] deployed mid-outage, both feeds recover: prime, do not burst
+  PASS  the first healthy sweep judges at last
+  PASS  and has the whole silent portfolio in front of it
+  PASS  it concludes rather than priming
+  PASS  and fires for the whole silent portfolio
+  PASS  which enrols them
+  ...and a HALF recovery still abstains: one feed back is not both
+  PASS  one source healthy is not enough
+  PASS  and the streak keeps climbing for the alert
+
+[OUT OF ORDER] retuned while instances are open: re-prime, do not flood
+  PASS  an account that speaks up produces a FALLING edge
+  PASS  a retune RE-PRIMES rather than emitting a flood
+  PASS  emitting nothing at all
+  PASS  and the measurements are filed under both questions, distinguishably
+  PASS  the play is left in shadow, as shipped
+
+ALL GREEN — 56/56 checks passed
+
+> operating-system-backend@0.0.1 csm-os:play8:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/play8-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.p8-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .p8-build.js; ec=$?; rm -f .p8-build.js; exit $ec
+
+
+[GATE 3] Play 8 ships in SHADOW — and it matters most here
+  PASS  the migration seeds status = 'shadow'
+  PASS  and never seeds an ACTIVE playbook
+  PASS  the suppression scope is stated
+  PASS  its reason is stated
+  PASS  and it is BOUNDED, not open-ended
+
+[ADVERSARIAL] one account legitimately trips FOUR shipped plays
+  PASS  the priming sweep enrols nobody
+  PASS  four plays fire on the same account, in the same run
+  PASS  each one a different play — no per-account cap, by decision
+  PASS  and the neighbouring account has none
+
+[CDC] the first play triggered by a CHANGE, not by a sweep
+  PASS  the CDC row becomes exactly one signal
+  PASS  its payload is a jsonb OBJECT
+  PASS  SQL can read what it changed FROM
+  PASS  and what it changed to
+  PASS  tiered as derived, not as a fact
+
+[SUPPRESSION] enrolling silences the rest — and closes what is open
+evaluate-playbooks-worker: termination suppressed 4 open instance(s) on account 11110000-0000-0000-0000-000000000001
+  PASS  the termination play enrols
+  PASS  the step text renders the CDC values from the frozen snapshot
+  PASS  and leaves no placeholder unrendered
+  PASS  all four other plays are closed
+  PASS  and the reason is SUPPRESSED, not that their conditions cleared
+  PASS  while the termination play itself stays open
+  PASS  one suppression row was written
+  PASS  with the declared reason
+  PASS  scoped to EVERY play for the account
+  PASS  and BOUNDED, so a reversal heals itself
+  PASS  ninety days out, as the definition says
+  PASS  the exit phase has nothing left to close
+  PASS  so no close_reason was overwritten
+  PASS  nothing re-enrols while the suppression holds
+  PASS  and it is recorded as blocked, not silently dropped
+  PASS  and suppression is the blocker named, ahead of every other guard
+  PASS  and a play the guard actually REACHES is stopped by suppression
+  PASS  the neighbouring account is untouched by any of it
+
+[OUT OF ORDER] the CDC window is replayed, as the 25h lookback guarantees
+  PASS  the same CDC row emits NO second signal
+  PASS  there is still exactly one churn signal
+  PASS  and no second termination instance
+  PASS  nor a second suppression row
+
+[OUT OF ORDER] the suppression expires and the engine comes back
+  PASS  the engine is evaluating again somewhere
+  PASS  the plays whose conditions are STILL true come back
+  PASS  but one whose condition AGED OUT does not
+  PASS  and the trace records that it was a re-arm, not a signal
+  PASS  the untouched neighbour is unaffected throughout
+  ...and a genuine new EDGE does bring a play back, so nothing is stuck
+evaluate-playbooks-worker: 1 signal(s) older than the widest subscribing window (7d) were not considered. They are history, not candidates -- retained in csm_os.signals, never deleted.
+  PASS  Ghost Account returns once its condition actually transitions again
+
+[GATE 4] the evaluation log answers both questions on real rows
+  PASS  a fired row exists for the termination play
+  PASS  naming the CDC trigger
+  PASS  all five shipped plays are left in shadow
+
+ALL GREEN — 45/45 checks passed

@@ -1,0 +1,185 @@
+
+> operating-system-backend@0.0.1 csm-os:detectors:simulate
+> cd infra/sam/csm-os/sync-orchestrator/lambdas && ./node_modules/.bin/esbuild simulation/detector-simulation.ts --bundle --platform=node --target=node20 --format=cjs --outfile=.sim-build.js --external:pg --external:@aws-sdk/* --log-level=warning && node .sim-build.js; ec=$?; rm -f .sim-build.js; exit $ec
+
+
+[S5] switch-on: a condition ALREADY true DOES fire [PRODUCT RULING]
+  PASS  the first sweep is NOT primed by default
+  PASS  it sees Alpha qualifying
+  PASS  and it EMITS, so Alpha enrols
+  PASS  the rising signal exists
+  ...and a detector that OPTS IN still starts quiet
+  PASS  the opt-in detector IS primed
+  PASS  it sees the same subject
+  PASS  and emits nothing
+  PASS  and still nothing once the verdict is recorded
+  PASS  the default path fires again after the reset
+
+[S7] a delta condition ages out of its window, at exactly the right time
+  PASS  Alpha aged out on day 12 (14d window minus a 2d-old assessment)
+  PASS  it aged out via a FALLING edge
+  PASS  and produced exactly ONE rising edge, at switch-on
+
+[S2] a condition that BECOMES true fires, and recovery closes it
+  PASS  Beta rises
+  PASS  one rising signal for Beta
+  ...and re-running in the SAME window emits no second edge [S4]
+  PASS  second run in the same window: 0 rising
+  PASS  signal count unchanged
+  PASS  Beta falls on recovery
+  PASS  one falling signal for Beta
+  PASS  verdict re-armed to false
+  PASS  falling reuses the rising transition_seq (one episode)
+
+[S6] a params retune RE-PRIMES rather than emitting a flood
+  PASS  retuned sweep is primed
+  PASS  retuned sweep emits nothing despite a lower threshold
+
+[S1] a STANDING condition true for 30 days produces EXACTLY ONE signal
+  PASS  switch-on fires for those already silent
+  PASS  Gamma is not silent yet
+  PASS  detector_state.observation is a jsonb OBJECT, not a string
+  PASS  and is readable in SQL
+  PASS  EXACTLY ONE rising signal after 30+ days of continuous silence
+  PASS  and no other signal for that subject at all
+  PASS  only the account that TRANSITIONED rose
+  PASS  nothing else was emitted in 47 sweeps
+  ...and the falling edge appears when the silence ends [S2b]
+  PASS  Gamma falls when the client writes in
+  PASS  one falling signal for Gamma
+
+[S3] a Gmail outage makes the silence detector ABSTAIN, not fire
+  PASS  healthy coverage: detector does NOT abstain
+  PASS  switch-on fires for the silent portfolio
+  FAIL  detector ABSTAINS on a hole in the window
+        expected true, got false
+  PASS  abstention emits ZERO signals
+  FAIL  abstain streak starts at 1
+        expected 1, got undefined
+        reason: undefined
+  PASS  the outage adds no signals at all
+  FAIL  a second abstention increments the streak (alert at 2)
+        expected 2, got undefined
+  PASS  abstention did not overwrite any subject verdict
+
+[S3b] coverage healed: the detector judges again
+  PASS  no longer abstaining
+  PASS  abstain streak reset
+
+[S3c] deployed DURING an outage: recovery must prime, not burst
+  FAIL  the very first sweep abstains — nothing was ever primed
+        expected true, got false
+  FAIL  and so does the next
+        expected true, got false
+  PASS  the first HEALTHY sweep judges
+  PASS  and it has real subjects to judge
+  PASS  it fires, deliberately, as a first conclusion
+  FAIL  for every subject that qualifies
+        expected 3, got 0
+  PASS  and the standing condition does not fire AGAIN afterwards
+
+[S8] the tuner: sub-threshold measurements are recorded, not discarded
+  PASS  the detector MEASURES the whole eligible population
+  PASS  and only one of them crosses
+  PASS  every measurement is recorded
+  PASS  ...and recorded whether or not the sweep emitted
+  PASS  observation is a jsonb OBJECT, not a string
+  PASS  SQL can read the near-miss measurement out of it
+  PASS  and it is recorded as NOT qualifying
+  PASS  the sub-threshold rows the log could never hold
+  PASS  a second sweep the same day UPDATES rather than duplicating
+  FAIL  an abstaining detector abstains
+        expected true, got false
+  FAIL  and records ZERO observations — absence of evidence, not evidence
+        expected 0, got 3
+  FAIL  nothing was written for the outage sweep
+        expected 0, got 3
+  FAIL  the prune drops what is past the 180-day window
+        expected 1, got 2
+  PASS  and leaves everything inside it
+
+[S9] coverage: when did this detector START recording?
+  FAIL  the first sweep abstains
+        expected true, got false
+  FAIL  an abstention does NOT date the coverage window
+        expected null, got "2026-06-01T00:00:00.000Z"
+  PASS  the first healthy sweep records
+  PASS  and THAT is what dates the coverage window
+  PASS  at the sweep instant, not the deploy
+  PASS  and it never moves afterwards
+  FAIL  a LATER outage abstains again
+        expected true, got false
+  PASS  without disturbing the recorded start
+
+[S10] no OUTBOUND email: measured against a NON-EMPTY corpus
+  PASS  every non-churned account is MEASURED
+  PASS  two of the three qualify
+  PASS  and both fire at switch-on
+  PASS  Beta, emailed 3 days ago, does NOT fire
+  PASS  Gamma fires DESPITE writing to us yesterday
+  PASS  observation is a jsonb OBJECT
+  PASS  NEVER emailed reads as everOutbound=false on the channel key
+  PASS  and the TUNED key is a number for it, not null
+  PASS  the sub-threshold row is RECORDED with its measurement [tuner]
+  ...and it falls when we finally write to them [S10b]
+  PASS  Gamma falls when we email them
+  PASS  Alpha, still un-emailed, holds without re-firing
+
+[S11] no outbound email: a GMAIL outage abstains, it does not fire
+  PASS  healthy coverage: nobody is overdue yet
+  PASS  and nothing is emitted
+  FAIL  the detector ABSTAINS rather than firing
+        expected true, got false
+  FAIL  it measured nothing at all
+        expected 0, got 3
+  FAIL  it emitted nothing at all
+        expected 0, got 3
+  FAIL  and the reason names gmail
+        expected true, got false
+  FAIL  THE POINT: not one of the three accounts got a signal
+        expected 0, got 3
+  ...and it judges again once coverage is whole [S11b]
+  PASS  no longer abstaining
+  FAIL  and NOW the three genuinely-overdue accounts fire
+        expected 3, got 0
+
+[S12] no CALLS: its own source, its own outage
+  PASS  all three measured
+  PASS  Alpha (80d) and Gamma (never) qualify; Beta (10d) does not
+  PASS  Beta is recorded at 10 days against a bar of 60
+  FAIL  a hole inside the window abstains
+        expected true, got false
+  FAIL  and the reason names avoma, not gmail
+        expected [true,false], got [false,false]
+
+[S13] the COMPOUND detector abstains on EITHER leg, and names both
+  PASS  all three measured
+  PASS  Beta is NOT stalled -- one live channel is enough
+  PASS  both legs are reported silent, with a plottable number
+  PASS  never engaged is a NUMBER for the tuner, flagged rather than dropped
+  FAIL  one stale leg abstains the whole detector
+        expected true, got false
+  PASS  Beta was NOT swept into the play by the outage
+  FAIL  both stale sources are named, not just the first
+        expected [true,true], got [false,false]
+
+[S14] every absence detector hands the tuner a NUMBER for a subject with no activity
+  PASS  the absence family is found at all, so this is not vacuous
+  PASS  account.email_silence: declares a never-null measure
+  PASS  account.email_silence: measures the whole portfolio
+  PASS  account.email_silence: all three qualify with no activity
+  PASS  account.email_silence: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.no_outbound_email: declares a never-null measure
+  PASS  account.no_outbound_email: measures the whole portfolio
+  PASS  account.no_outbound_email: all three qualify with no activity
+  PASS  account.no_outbound_email: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.no_calls: declares a never-null measure
+  PASS  account.no_calls: measures the whole portfolio
+  PASS  account.no_calls: all three qualify with no activity
+  PASS  account.no_calls: 'daysSilent' is a NUMBER for every qualifying subject
+  PASS  account.engagement_stalled: declares a never-null measure
+  PASS  account.engagement_stalled: measures the whole portfolio
+  PASS  account.engagement_stalled: all three qualify with no activity
+  PASS  account.engagement_stalled: 'daysSinceEngagement' is a NUMBER for every qualifying subject
+
+FAILURES — 97/120 checks passed

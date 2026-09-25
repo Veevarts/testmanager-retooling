@@ -1,0 +1,45 @@
+MATRIZ DE ESCENARIOS · TR-204 · TC-186 · IM-1207
+Formato: escenario | que se esperaba | que se obtuvo | cumple? | veredicto | evidencia
+
+ 1 Estado de despliegue | cada lado documentado, orden BE->FE, stable sin el ticket, evaluador sin programacion
+   | dev: BE 49f459f5 fin 22:18:40Z antes que FE 0aa87980 fin 22:35:35Z; stable 18-ago (BE -50, FE -30); PlaybooksDailyScheduleEnabled=false en dev y prod.
+     Ademas: la infraestructura CSM OS se desplego a mano en prod el 22-sep (dark deploy) | SI | PASS | scenario-1-deployment/estado-despliegue.txt
+ 2 Funcional de punta a punta | builder sin codigo, sombra sin instancia, activa crea 'proposed', My Day + pestana, aceptar y completar
+   | shadow_fired sin instancia; fired + instancia 91573ab4; tarjeta unica en My Day y en la pestana Playbooks; accept -> active; paso 1 done | SI | PASS | ui/00-07, dev/dispatch/d01-d02
+ 3 AC1 ocho jugadas expresables | cada jugada expresable con los componentes
+   | 0082 elimino las jugadas sembradas (decision de producto). Plays 1,3,4,5,6,8 pasan sus bancos (44,72,51,58,56,45 checks); 2 = client_user.* disponibles; 7 = module.unused gated. Ninguna jugada sembrada existe | SI | PASS | simulaciones/sim-all.log, dev/api-catalog-and-list.json
+ 4 AC9 estrechamiento obligatorio | builder y API rechazan sin estrechar
+   | builder: Create deshabilitado con motivo; API 400 nombrando event.color/event.prevColor y event.field | SI | PASS | ui/s4-01, dev/api-s4-s6-s18.json
+ 5 Condiciones de payload | cumple->dispara, no cumple->bloqueado nombrado
+   | 6 pares, 11 disparos: todos como se esperaba; score solo en el cruce; 'RED' bloqueado frente a 'Red'; el builder avisa del texto exacto | SI | PASS | dev/pairs/*, ui/s5-01..02
+ 6 AC7 catalogo 29 y no disponible no activable | 29 = 20+7+2; --check sabe fallar; module.unused rechazado
+   | 29 (20 deriver, 7 detector, 2 especiales) en API y en dev; --check pasa y falla con el inventario alterado; module.unused 400 "is not available" | SI | PASS | dev/catalog-composition.jsonl, scenario-0-unit-tests/catalogo-doc-check*.log
+ 7 AC11 disponibilidad = datos | cifra del builder = conteo
+   | campos 11/11 coinciden; disparadores: 7 entradas dicen 243/243 con 0 datos detras en dev; la disponibilidad de senales nunca mide datos | NO | FAIL (F3) | dev/api-catalog-*.json, dev/fields-availability.tsv, dev/read-model-counts.json
+ 8 AC12 activar sin sombra | aviso con version y backfill, se permite, recibo; con sombra sin aviso
+   | aviso con estado de backfill (sin numero de version); se permite; activated_without_shadow_at/by en las dos; la version con sombra NULL.
+     PERO el aviso con backfill apagado ("Accounts that already match are not enrolled") es falso: enrola eventos previos a la jugada | NO | FAIL (F1) | ui/s8-01..04, dev/s8-receipts.jsonl, dev/backlog/*
+ 9 AC6 instantanea y fechas | texto renderizado al enrolar; fechas = ancla + desplazamiento
+   | cuerpo guardado ya renderizado ("Lectura nueva: RED (antes GREEN)"); 2026-09-27 = disparo+2; 2027-02-01 = renovacion-30; 2023-06-22 = inicio contrato. Caso de fecha ausente no ejercitable: 243/243 cuentas tienen ambas fechas | SI | PASS | dev/dispatch/d02-steps.jsonl
+10 AC5 salidas | cierre por evento y por estado; evento que no cumple no cierra; salida sin estrechar rechazada
+   | YELLOW no cierra; GREEN cierra (exit_signal); predicado cierra (exit_condition_met); salida sin estrechar 400 | SI | PASS | dev/exit/*, dev/api-s10-create.json
+11 AC8 log de evaluacion | nombra la regla; texto coherente; sin depender del color; contadores movibles
+   | nombra la regla bloqueante; guardas que pasaron se leen como fallo; resultado solo por color aria-hidden; 0 no_match en toda la base | NO | FAIL (F2) | ui/03, ui/08
+12 Guardas | re-enrolamiento nombrado; dedupe; evento viejo
+   | 2do disparo blocked=reenrollment con politica y lastEnrolledAt; dedupe every_time y stale_event fijados por el banco de playbooks ([EVENT WINDOW]); en dev el generador siempre fecha "ahora" | SI | PASS | dev/dispatch/d03-evals.jsonl, simulaciones/sim-all.log
+13 AC14 una lectura, varias jugadas | cada jugada decide sola; la de otro tipo no evalua esa lectura
+   | 4 jugadas health.assessed con fila propia cada una; la jugada health.score_dropped no evaluo la lectura (sus 2 filas son de senales dropped_sharply previas -> F1) | SI | PASS | dev/dispatch/d01-evals.jsonl, dev/s13/*
+14 AC3+AC4 detectores | un flanco de subida, uno de bajada, abstencion con fuente vieja
+   | bancos detectores 120/120 y flanco de bajada 20/20; mutacion M1 -> 23 FAIL; en dev los 7 detectores se abstienen con motivo nombrado (74 seguidas) | SI | PASS | simulaciones/*, dev/detector-state.jsonl
+15 AC2 no perder ni duplicar senales | repetir ventana = 0 filas; mecanismo identificado
+   | reconciliacion idempotente por dedupe_key (no outbox transaccional, contra lo que dice el AC); repeticiones 0 filas en play3/play8/detectores | SI | PASS | simulaciones/sim-all.log
+16 AC13 reparto por contacto | 2 champions = 2 instancias; mismo champion 2 veces = 1
+   | banco play3: "two champions leaving ONE account produce TWO instances", "same champion detected twice emits ONE signal". En dev: clave de sujeto "...|contact|-" identica para dos contactos distintos | SI | PASS | simulaciones/sim-all.log, dev/s16/*
+17 AC15 jugadas fuera de lista | 2 de 3 expresables; NPS diferido
+   | Support Backlog (open_cases_changed) y Expansion (arr_changed) disparan con sus pares; ninguna entrada NPS en el catalogo | SI | PASS | dev/pairs/p3*, p5*, dev/api-catalog-and-list.json
+18 Borrador huerfano | se puede borrar desde el builder
+   | no se puede abrir ni borrar en la UI; solo por API | NO | FAIL (F4) | ui/s18-*, dev/api-s4-s6-s18.json
+19 Acceso | 401 sin credenciales, 404 de control, 403 fuera de grupo
+   | 401/404/401 OK; codigo: lectura csm-team, escritura csm-managers, admin superusuario. Sin usuario de prueba fuera de admin: el 403 no se ejecuto | - | BLOCKED | dev/probe-sin-credenciales.txt
+
+Totales: 19 · PASS 14 · FAIL 4 · BLOCKED 1 · tasa 74%.

@@ -1,0 +1,397 @@
+schemaVersion: "1.0"
+
+id: "be4b1daf-e4a9-406d-8125-9a6d41b1733e"
+key: "TC-186"
+title: "Playbook Trigger Engine: signal store, detectors, no-code trigger catalog, guards and playbook instances"
+
+description: |
+  Cobertura QA de IM-1207 (Playbook Trigger Engine — signal store, derivers/detectors, no-code
+  trigger catalog and playbook instances). Sub-tarea de QA: IM-1307. Epic: IM-588 Turn
+  recommendations into daily operational work. Historia en In QA Review, prioridad Medium.
+
+  QUE SE ENTREGO. Un almacen de senales append-only con dedupe_key unica (0035_signals.sql);
+  derivers reactivos y detectores programados con estado por sujeto que emiten en el flanco de
+  subida y en el de bajada, y que se abstienen si su fuente no esta fresca; un catalogo de 29
+  disparadores (20 con deriver, 7 con detector, module.unused y playbook.manually_enrolled) mas
+  un catalogo de campos, cada uno con la fuente de datos de la que depende (0036_playbooks.sql);
+  una capa de guardas (dedupe, re-enrolamiento, supresion y frescura) entre el disparo y la
+  instancia; instancias creadas en 'proposed' con una instantanea de contexto congelada y
+  fechas de vencimiento materializadas al enrolar; modo sombra y log de evaluacion con el
+  veredicto y la regla que decidio. En el frontend: biblioteca, builder, ciclo de vida, log de
+  evaluacion y las instancias en My Day y en la pestana Tasks & Playbooks de la cuenta.
+
+  Repositorios en alcance: Veevarts/MigrationAppBackend "PR #357" (merge 904c6e14, 504 ficheros)
+  y Veevarts/MigrationAppFrontend "PR #181" (merge d3a0127e, 180 ficheros), los dos mergeados a
+  main el 2026-09-11, mas los PRs posteriores del mismo ticket a main: backend "#384", "#386",
+  "#389", "#391", "#392", "#394", "#395", "#396" y "#397"; frontend "#198", "#204", "#206",
+  "#207" y "#208". El autor cuenta 45 PRs.
+
+  Estado de los ACs segun la propia historia (medido en dev el 2026-09-24): 10 cumplidos, 1
+  cumplido con salvedad, 1 sustituido por decision de producto, 2 no verificables en dev y 1
+  no cumplido. QA no hereda esas marcas: las vuelve a medir.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. NADA DE ESTO ESTA EN PRODUCCION. main despliega a dev y stable a produccion. stable esta
+    parada desde el 2026-08-18 en los dos repos: el backend va 50 commits por delante en main y
+    el frontend 30. Ninguna migracion desde 0035 existe en stable. El propio autor deja como
+    pendiente un ensayo de las 50 migraciones sobre datos con forma de produccion. El backend
+    tiene que llegar antes que el frontend.
+  - R2. EL EVALUADOR DESPLEGADO NUNCA SE HA EJECUTADO. PlaybooksDailyScheduleEnabled vale false
+    en dev y en produccion ("PR #391"). En dev nada invoca la Lambda. Lo que se prueba es el
+    motor compilado desde main y ejecutado en proceso por el generador de eventos del autor.
+    El builder y la API si son los desplegados.
+  - R3. En dev casi todos los disparos llegan en el nivel C: la senal se escribe directamente y
+    se saltan la fila de origen y el deriver. La mitad de captura (un worker real leyendo una
+    fila real) no queda probada por el generador, solo por las simulaciones y los tests.
+  - R4. Los 7 disparadores con detector no pueden disparar nunca en dev: las fuentes estan
+    congeladas en 2026-01-01 y se abstienen. Sus propiedades solo se prueban con los bancos de
+    simulacion, sobre Postgres real y reloj simulado.
+  - R5. Dev no tiene contactos (produccion tiene 2,504) ni usuarios de org de cliente. El
+    reparto por contacto no se puede ejercitar en dev. Riesgo abierto del autor: una senal de
+    contacto sin identidad de contacto comparte clave de sujeto y el reparto se colapsa en uno.
+  - R6. CONTRADICCION EN EL AC DEL OUTBOX. La historia dice que cada worker emite la senal en la
+    misma transaccion que su insert. El primer comentario del autor (D7) dice que eso no era
+    posible en los workers y que se resolvio con un barrido de reconciliacion idempotente por
+    dedupe_key. Hay que medir cual de los dos mecanismos existe.
+  - R7. CONTRADICCION EN LA CAPA DE GUARDAS. La historia lista un cortacircuitos de volumen; por
+    decision de producto mide y avisa pero nunca rechaza. Y activar sin sombra con
+    activation.backfill true enrola todo el conjunto vigente en el primer barrido, sin
+    observacion. Consecuencia aceptada por producto.
+  - R8. EL AC DEL LOG DE EVALUACION SE DA POR CUMPLIDO A LA VEZ QUE SE LISTAN DOS DEFECTOS QUE LO
+    CONTRADICEN: las lineas de guarda se leen como fallo aunque la guarda pase, el veredicto va
+    solo en el color de un icono aria-hidden, y el contador 'Did not match' no se mueve nunca.
+  - R9. Siete defectos conocidos que el autor declara "no bloqueantes" sin clave de Jira: el alta
+    en dos peticiones no atomicas (mitigado por "#396"), los dos del log (R8), el afinador de
+    umbral que no funciona con disparadores de deriver, sf_health_status comparado como texto
+    exacto ('Red' dispara, 'RED' no), el grupo csm-managers que no existe en Cognito (solo los 7
+    admins ven la pestana) y la falta de una forma de detener una jugada en una cuenta. QA mide
+    si siguen vivos y los clasifica; la etiqueta de no bloqueante no la pone el autor.
+  - R10. La salvedad de disponibilidad: las tres entradas client_user.* dicen "disponible para 243
+    de 243 cuentas" con client_org_users vacia en dev y en produccion.
+  - R11. Fuera de alcance, y no se prueba: el disparador de NPS (no existe fuente de datos;
+    diferido por producto), los disparadores de inteligencia conversacional, la categoria de
+    calidad de datos y el backfill historico de call_interactions.analysis.
+
+type: integration
+priority: medium
+status: active
+
+preconditions:
+  - "Se comprueba antes de empezar que commit de main corre el entorno dev de Migration App en backend y en frontend, y que stable no tiene las migraciones 0035 en adelante."
+  - "Hay una sesion del grupo admin de Cognito en el entorno dev de Migration App (<migration-app-dev>), con la pestana Playbooks visible."
+  - "El generador de eventos del autor (skill csm-playbook-qa) esta compilado contra un checkout de MigrationAppBackend en main al dia, con destino dev y la cabecera del motor verificada. El generador rechaza produccion por nombre."
+  - "Hay una sesion de AWS SSO para leer la base de datos de dev de forma solo lectura: playbook_evaluation_log, signals, playbook_instances y detector_state."
+  - "Para los bancos de simulacion, un Postgres 16 local (colima) y el backend instalado; nunca contra dev ni produccion."
+  - "Las jugadas de prueba se crean con el prefijo 'QA TC-186' y no se borran al terminar: son evidencia. Se pausan o archivan y se inventarian."
+  - "No se activa ni se modifica ninguna jugada que no sea de QA (las del autor en dev incluidas). Desde la migracion 0082 no existen jugadas sembradas: el motor se entrega sin jugadas por decision de producto."
+
+format: gherkin
+
+scenarios:
+  - title: "Deployment state · Backend and frontend run the same main in dev, and neither is in production"
+    tags:
+      - deployment
+      - release-risk
+      - regression
+    given:
+      - "el trabajo del ticket esta repartido en dos repositorios que se despliegan por separado"
+    when:
+      - "se compara el commit que corre cada lado en dev con la punta de main, y la punta de stable con los merges del ticket"
+      - "se comparan las horas de FIN de los ultimos despliegues de backend y frontend a dev"
+    then:
+      - "queda escrito, entorno por entorno, que commit corre cada lado"
+      - "el backend termino de desplegar antes que el frontend que lo consume, o la ventana en que no fue asi queda medida"
+      - "queda escrito que stable no contiene ningun merge del ticket y cuantos commits le faltan"
+      - "queda escrito que la Lambda del evaluador no tiene programacion en ningun entorno"
+
+  - title: "Functional · A playbook authored in the builder runs in shadow, goes live, fires and appears in My Day and on the account"
+    tags:
+      - ac-10
+      - happy-path
+      - functional-ui
+    given:
+      - "el usuario admin esta en la pestana Playbooks de dev"
+    when:
+      - "crea desde el builder, sin tocar codigo, una jugada 'QA TC-186 health red' sobre health.assessed con color RED y dos pasos"
+      - "inicia una ejecucion en sombra y dispara con el generador un health.assessed de GREEN a RED en una cuenta de dev"
+      - "activa la jugada y vuelve a disparar el mismo evento"
+      - "abre My Day y la pestana Tasks & Playbooks de la cuenta, acepta la instancia y completa el primer paso"
+    then:
+      - "en sombra, el log registra shadow_fired y no se crea ninguna instancia"
+      - "activa, se crea una instancia en 'proposed' y el log registra fired con el mismo evaluationRunId que devuelve el generador"
+      - "la instancia aparece como una sola unidad en My Day del propietario de la cuenta y en la pestana de la cuenta, con sus pasos y fechas"
+      - "aceptar y completar el paso cambian el estado en pantalla y en playbook_instances"
+      - "cada paso queda capturado: 01 builder, 02 sombra, 03 log, 04 activacion, 05 instancia en My Day, 06 pestana de la cuenta, 07 paso completado"
+
+  - title: "AC1 · Every one of the eight core plays is expressible with the shipped components"
+    tags:
+      - ac-1
+      - happy-path
+    given:
+      - "la migracion 0082 elimino las seis jugadas sembradas; las ocho jugadas son ejemplos de lo que el motor debe poder expresar"
+    when:
+      - "se ejecutan los bancos de simulacion de las jugadas 1, 3, 4, 5, 6 y 8 sobre un Postgres 16 local"
+      - "se comprueba en el catalogo y en el builder que existen los disparadores de la jugada 2 (client_user.*) y de la 7 (module.unused)"
+    then:
+      - "cada banco de jugada pasa entero, sin ningun componente inventado"
+      - "la jugada 2 se puede componer con los componentes existentes"
+      - "la jugada 7 se puede expresar pero su disparador sale como no disponible"
+      - "no existe ninguna jugada sembrada en dev"
+
+  - title: "AC9 · A trigger that happens on every account cannot be authored unnarrowed"
+    tags:
+      - ac-9
+      - negative
+    given:
+      - "health.assessed exige estrechar por color o prevColor y account.field_changed por field"
+    when:
+      - "se intenta guardar desde el builder una jugada sobre cada uno de esos disparadores sin la condicion de estrechamiento"
+      - "se intenta lo mismo directamente contra la API"
+    then:
+      - "el builder no permite publicarla y explica que condicion falta"
+      - "la API la rechaza aunque se salte el builder"
+      - "con la condicion puesta, la misma jugada se guarda"
+
+  - title: "Payload conditions · A matching event fires and a non-matching one is refused for a stated reason"
+    tags:
+      - ac-8
+      - happy-path
+      - negative
+      - regression-evidence
+    given:
+      - "hay jugadas de prueba en sombra estrechadas de la forma obvia sobre health.assessed, health.score_changed, account.arr_changed, account.cases_opened_changed y account.field_changed"
+    when:
+      - "se dispara para cada una el par de la referencia del autor: uno que cumple y uno que no"
+      - "para account.field_changed sobre sf_health_status se dispara 'Red' y 'RED'"
+    then:
+      - "cada evento que cumple produce shadow_fired y cada uno que no cumple produce blocked con la condicion del payload nombrada"
+      - "score_changed con 'went below 50' dispara solo en el cruce y no en una lectura que ya estaba por debajo"
+      - "ARR 'fell by more than 10' se guarda como changePercent is_under -10"
+      - "'Red' dispara y 'RED' queda bloqueado con el motivo visible en el log; si el builder no avisa de que el valor es texto exacto, queda escrito como el defecto conocido"
+
+  - title: "AC7 · The catalog exposes 29 entries, each with its data source, and an unavailable one cannot be activated"
+    tags:
+      - ac-7
+      - negative
+    given:
+      - "el catalogo generado y su inventario en im-1207-authoring-catalog.md"
+    when:
+      - "se lee el catalogo desde la API y desde el builder, y se ejecuta la comprobacion del inventario generado en modo --check"
+      - "se intenta crear y activar una jugada sobre module.unused"
+    then:
+      - "hay 29 entradas: 20 con deriver, 7 con detector y las dos especiales"
+      - "el inventario generado coincide con el catalogo y la comprobacion pasa; si se altera el inventario, la comprobacion falla"
+      - "module.unused sale como 'Available for 0 of 243 accounts' y la API rechaza crearla o activarla"
+
+  - title: "AC11 · The availability the builder shows matches the data that exists behind each entry"
+    tags:
+      - ac-11
+      - edge-case
+      - known-gap
+    given:
+      - "client_org_users esta vacia en dev"
+    when:
+      - "se compara la disponibilidad que el builder muestra para cada entrada con un conteo en la base de datos de las cuentas que tienen datos de esa fuente"
+    then:
+      - "para cada entrada con disponibilidad calculada, la cifra del builder coincide con el conteo"
+      - "para las tres entradas client_user.* queda medido lo que dice el builder frente a lo que hay detras; si dice 243 de 243 sin ningun usuario, queda escrito como la salvedad declarada"
+
+  - title: "AC12, superseded by product · Going live without a shadow run warns, is allowed, and leaves a receipt"
+    tags:
+      - ac-12
+      - superseded-ac
+      - happy-path
+      - regression
+    given:
+      - "una jugada de prueba en draft que nunca ha pasado por sombra"
+    when:
+      - "se activa directamente desde el builder, una vez con activation.backfill en true y otra en false"
+    then:
+      - "el builder avisa antes de activar, nombra la version y dice si el backfill esta encendido"
+      - "la transicion de draft a active se permite"
+      - "la version queda marcada con quien la activo sin sombra y cuando"
+      - "una version que si paso por sombra se activa sin ese aviso"
+
+  - title: "AC6 · Step text renders from the frozen snapshot and due dates are fixed at enrolment"
+    tags:
+      - ac-6
+      - happy-path
+    given:
+      - "una instancia creada cuyos pasos usan valores del contexto y anclan su fecha al disparo, a la fecha de renovacion o al inicio del contrato"
+    when:
+      - "despues de crear la instancia cambia en la base de datos el dato de origen que usa el texto del paso, y se refresca el read model"
+    then:
+      - "el texto del paso sigue mostrando el valor del momento del enrolamiento"
+      - "cada fecha de vencimiento coincide con su ancla y con el desplazamiento del paso"
+      - "el paso anclado a una fecha que la cuenta no tiene muestra que falta la fecha o lo impide en el builder, sin inventar una"
+
+  - title: "AC5 · A running instance closes itself on an exit event or an account-state predicate"
+    tags:
+      - ac-5
+      - happy-path
+      - negative
+    given:
+      - "dos jugadas activas de prueba, una con salida por evento estrechado y otra con salida por predicado de estado de la cuenta, cada una con una instancia abierta"
+    when:
+      - "se dispara el evento de salida en la cuenta de la primera y se hace cierto el predicado en la segunda"
+      - "se intenta guardar una salida por evento sin estrechar"
+    then:
+      - "las dos instancias se cierran solas y el motivo de cierre queda registrado"
+      - "un evento de salida que no cumple la condicion no cierra nada"
+      - "la salida por evento sin estrechar se rechaza"
+
+  - title: "AC8 · The evaluation log answers why it fired and why it did not, and each line agrees with its result"
+    tags:
+      - ac-8
+      - happy-path
+      - known-defect
+    given:
+      - "el log de evaluacion tiene veredictos fired, shadow_fired y blocked de los escenarios anteriores"
+    when:
+      - "se abre el log de cada jugada y se compara cada linea con su fila en playbook_evaluation_log"
+      - "se recorre con lector de pantalla o el arbol de accesibilidad"
+    then:
+      - "cada veredicto bloqueado nombra el filtro, la condicion o la guarda que lo detuvo, con el valor esperado y el real"
+      - "el texto de cada guarda concuerda con su resultado; una guarda que paso no se lee como fallo"
+      - "el veredicto se transmite tambien sin color"
+      - "cada contador del log se puede mover; si 'Did not match' no puede moverse, queda escrito"
+
+  - title: "Guard layer · Dedupe, re-enrolment and stale events block for a named reason"
+    tags:
+      - guards
+      - negative
+      - edge-case
+    given:
+      - "una jugada activa de prueba con una instancia abierta en una cuenta"
+    when:
+      - "se dispara el mismo evento en la misma cuenta mientras la instancia esta viva"
+      - "se cierra la instancia y se vuelve a disparar dentro y fuera de la ventana de re-enrolamiento"
+      - "se dispara un evento con fecha mas antigua que eventWindowDays"
+    then:
+      - "el segundo disparo no crea otra instancia y el log nombra la guarda de dedupe"
+      - "el re-enrolamiento sigue la politica de la jugada y el log dice cuando fue el ultimo enrolamiento"
+      - "el evento viejo queda bloqueado con el motivo stale_event"
+
+  - title: "AC14 · One reading evaluated by several plays at once, and a play on another signal type stays silent"
+    tags:
+      - ac-14
+      - adversarial
+      - edge-case
+    given:
+      - "tres jugadas en sombra: una sobre health.assessed, otra sobre health.score_changed y otra sobre health.score_dropped"
+    when:
+      - "se dispara un unico health.assessed que cumple las dos primeras"
+    then:
+      - "las dos primeras evaluan la misma lectura y deciden cada una por su lado, cada una con su fila en el log"
+      - "la jugada sobre health.score_dropped no tiene ninguna fila, porque escucha otro tipo de senal"
+
+  - title: "AC3 and AC4 · Detectors emit once on the rising edge, once on the falling edge, and abstain on a stale source"
+    tags:
+      - ac-3
+      - ac-4
+      - happy-path
+      - edge-case
+    given:
+      - "los bancos de simulacion de detectores y de flanco de bajada del backend, sobre un Postgres 16 local"
+      - "en dev, las 7 entradas con detector frente a fuentes congeladas"
+    when:
+      - "se ejecutan los bancos de simulacion de main"
+      - "en dev, se revisa lo que registran las jugadas sobre entradas con detector"
+    then:
+      - "una condicion que sigue siendo cierta produce exactamente una senal y volver a barrer la misma ventana no produce otra"
+      - "cuando deja de ser cierta aparece una senal de bajada que rearma el disparador y cierra las instancias abiertas"
+      - "con un hueco simulado en la fuente, el detector se abstiene en toda la cartera y no sobrescribe ningun veredicto"
+      - "en dev las jugadas sobre detectores registran abstencion y no un veredicto bloqueado"
+      - "el banco puede fallar: al reintroducir el defecto, alguna comprobacion se pone en rojo"
+
+  - title: "AC2 · A dropped event loses no signal and replaying a sync window duplicates none"
+    tags:
+      - ac-2
+      - happy-path
+    given:
+      - "el almacen de senales con dedupe_key unica y el mecanismo de emision que exista en el codigo de main"
+    when:
+      - "se identifica en el codigo si la senal se emite en la transaccion del worker o la deriva un barrido de reconciliacion"
+      - "se ejecutan los tests y la simulacion que reproducen un mensaje de EventBridge perdido y la repeticion de una ventana de sincronizacion"
+    then:
+      - "la senal del mensaje perdido aparece igualmente"
+      - "repetir la ventana inserta 0 filas nuevas"
+      - "queda escrito cual de los dos mecanismos existe y si coincide con lo que dice el AC"
+
+  - title: "AC13, not verifiable on dev · Two departing champions give two instances, the same champion twice gives one"
+    tags:
+      - ac-13
+      - edge-case
+      - missing-doc
+    given:
+      - "dev no tiene contactos"
+    when:
+      - "se ejecuta la simulacion de la jugada 3 sobre un Postgres 16 local, con dos champions de la misma cuenta y con el mismo champion detectado dos veces"
+      - "en dev, se disparan dos contact.created a la misma cuenta sin identidad de contacto en una jugada de prueba en sombra"
+    then:
+      - "la simulacion crea dos instancias para dos champions y una para el mismo champion repetido"
+      - "en dev queda medido si la clave de sujeto acaba en '-' y si los dos disparos se colapsan en uno; si lo hacen, queda escrito como el riesgo abierto del autor, confirmado"
+
+  - title: "AC15, not met · Two of the three off-list plays are expressible without engineering, NPS is deferred"
+    tags:
+      - ac-15
+      - happy-path
+      - known-gap
+    given:
+      - "las tres jugadas fuera de la lista original: Support Backlog Cleanup, NPS detractor y Expansion opportunity"
+    when:
+      - "se componen en el builder, sin codigo, Support Backlog Cleanup sobre account.open_cases_changed y Expansion como aproximacion por cambio de ARR"
+      - "se busca en el catalogo cualquier entrada de NPS"
+    then:
+      - "las dos primeras se guardan y disparan con su par de eventos"
+      - "no existe entrada de NPS y queda escrito como dependencia de datos diferida por producto, no como defecto"
+
+  - title: "Known defect · A refused definition leaves a draft the author can delete"
+    tags:
+      - known-defect
+      - regression
+      - negative
+    given:
+      - "crear una jugada son dos peticiones y no son atomicas"
+    when:
+      - "se crea una jugada de prueba con una definicion que el servidor rechaza"
+    then:
+      - "si queda una jugada en draft sin version, el builder permite borrarla y desaparece de la biblioteca"
+      - "queda contado cuantos borradores huerfanos hay hoy en dev"
+
+  - title: "Access · The Playbooks surfaces and API require a session in an allowed group"
+    tags:
+      - access-control
+      - security
+      - negative
+    given:
+      - "la pestana Playbooks esta limitada al grupo admin, porque csm-managers no existe en Cognito"
+    when:
+      - "se llama a las rutas de la API de playbooks sin credenciales, con una ruta inexistente como control negativo"
+      - "si hay un usuario de prueba fuera de admin, se abre la aplicacion con el"
+    then:
+      - "sin credenciales la API responde 401 y la ruta inexistente responde 404"
+      - "un usuario fuera de los grupos permitidos no ve la pestana y la API le responde 403"
+      - "queda escrito que cualquier miembro del grupo puede aceptar, rechazar, cerrar o restaurar la instancia de otro, que es la decision registrada"
+
+tags:
+  - im-1207
+  - im-588
+  - im-1307
+  - migration-app
+  - csm-os
+  - playbooks
+  - signal-store
+  - trigger-catalog
+  - detectors
+  - evaluation-log
+
+estimatedDuration: 300
+
+metadata:
+  createdBy: "codex"
+  createdAt: "2026-09-25T20:50:00Z"
+  updatedBy: "codex"
+  updatedAt: "2026-09-25T21:40:00Z"
+  version: 2

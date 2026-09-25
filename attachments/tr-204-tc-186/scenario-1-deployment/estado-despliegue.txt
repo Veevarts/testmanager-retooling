@@ -1,0 +1,53 @@
+ESCENARIO 1 · Estado de despliegue de IM-1207 (medido 2026-09-25 ~21:00Z)
+Fuentes: gh api compare/commits, gh run list (deploy.yml / cdn-app-deploy.yml),
+aws cloudformation describe-stacks y aws lambda get-function-configuration (solo metadatos,
+ningun dato de negocio leido), aws logs describe-log-streams (solo fecha del ultimo evento).
+
+1. MAPA RAMA -> ENTORNO
+   MigrationAppBackend  deploy.yml         on push [main, stable]  main -> dev, stable -> prod
+   MigrationAppFrontend cdn-app-deploy.yml on push main (dev) / stable (prod)
+   deploy.yml NO tiene bloque `concurrency`: dos pushes seguidos despliegan en paralelo.
+   Las pilas de CSM OS (csm-os-<env>-aurora con el Lambda db-migrate, y
+   csm-os-<env>-sync-orchestrator con los workers y el evaluador) NO las despliega el pipeline:
+   se despliegan a mano con `npm run csm-os:*:deploy:<env>` y las migraciones corren al invocar
+   el Lambda csm-os-<env>-db-migrate.
+
+2. DEV (main)
+   Backend  main 49f459f5 (#397)  deploy.yml run 36065282061  fin 2026-09-24T22:18:40Z  success
+            run paralelo 93c74a1c (#396) fin 22:13:48Z; el mas nuevo termino ultimo -> dev queda en 49f459f5
+   Frontend main 0aa87980 (#208)  cdn run 36068063703          fin 2026-09-24T22:35:35Z  success
+   Orden: backend termino 16m55s ANTES que el frontend que lo consume. Correcto.
+   Pares de este ticket (backend fin -> frontend fin):
+     #395 shadow gate warning   17:11:29Z -> FE #207 17:24:00Z   correcto
+     #396/#397                  22:18:40Z -> FE #208 22:35:35Z   correcto
+   csm-os-dev-aurora            UPDATE_COMPLETE 2026-09-24T17:00:30Z; db-migrate invocado 17:01:00Z
+   csm-os-dev-sync-orchestrator UPDATE_COMPLETE 2026-09-24T22:21:52Z; evaluador LastModified 22:21:59Z
+   Programaciones en dev: DailyScheduleEnabled=false, CasesPollingScheduleEnabled=false,
+     AvomaHourlyScheduleEnabled=false, PlaybooksDailyScheduleEnabled=false
+     -> en dev no corre NINGUN worker ni el evaluador; las fuentes estan congeladas.
+
+3. PRODUCCION (stable + despliegues manuales)
+   Backend  stable 94097156  2026-08-18T23:56:52Z   main va 50 commits por delante
+   Frontend stable 818d1d9a  2026-08-18T22:16:22Z   main va 30 commits por delante
+   stable no contiene ninguna migracion 0035+ ni ningun merge del ticket (gh api trees/compare).
+   PERO:
+   csm-os-prod-aurora            UPDATE_COMPLETE 2026-09-22T19:42:08Z; db-migrate invocado 2026-09-22T19:43:31Z
+                                 (la invocacion anterior era del 2026-06-24)
+   csm-os-prod-sync-orchestrator UPDATE_COMPLETE 2026-09-22T19:51:06Z; evaluador existe, LastModified 19:51:13Z
+   Programaciones en prod: DailyScheduleEnabled=true, CasesPollingScheduleEnabled=true (15 min),
+     AvomaHourlyScheduleEnabled=true, PlaybooksDailyScheduleEnabled=false
+
+4. CONCLUSION
+   - El frontend y la API de playbooks NO estan en produccion (stable del 18-ago).
+   - La mitad de captura SI esta en produccion desde el 2026-09-22 ("dark deploy"): migraciones
+     aplicadas en la Aurora de prod y workers de ingesta nuevos corriendo a diario, cada 15 min
+     y cada hora. Eso incluye el diff ampliado de sf-accounts-worker (changed_account_ids ahora
+     incluye cuentas que antes no), field_change_log y la emision de senales.
+   - Se desplego a mano, fuera del pipeline y sin registro del commit: no hay tag ni parametro
+     con el sha. Que migraciones llegaron a prod solo se sabe leyendo pgmigrations de prod, que
+     QA no hace. Por fecha, 0081-0085 (incluida 0085_activation_without_shadow, del 24-sep) no
+     pueden estar.
+   - El evaluador no tiene programacion en ningun entorno: ninguna jugada crea instancias sola.
+   - Riesgo de despliegue: la base de datos y los workers de prod van por delante de la API de
+     prod; cuando stable se promocione, el backend (API) debe ir antes que el frontend y las
+     migraciones 0081+ antes que ambos.
