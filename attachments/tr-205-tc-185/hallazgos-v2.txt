@@ -1,0 +1,116 @@
+HALLAZGOS · TR-205 · TC-185 v2 · IM-1302 · re-test del arreglo del segundo navegador
+===================================================================================
+Arreglo probado: survey-tool "PR #91" (fix/cross-browser-draft-takeover-IM-1302), merge 3789cb5c
+en develop el 2026-09-25, desplegado en dev. Ejecucion LOCAL con servidor, cliente, navegador
+Chromium y DynamoDB reales (tablas del stack sintetizado). Encuestados sinteticos qa-tc185-*.
+
+LO QUE EL ARREGLO RESUELVE (motivo del rechazo en TR-202)
+---------------------------------------------------------
+En navegador real, pagina directa y widget embebido:
+  - el segundo navegador ya no ve "This survey changed...", no se le vacia el formulario y no
+    queda bloqueado 90 dias;
+  - ve "Saved progress is active in another browser." con un boton Continue here, y sus
+    respuestas siguen en pantalla (ui/v2-03, ui/v2-13);
+  - no se toma el borrador sin pulsar el boton; al pulsarlo lo toma (201) y puede enviar: una
+    sola respuesta, con lo que hay en pantalla (ui/v2-06, v2-09, v2-14, v2-16);
+  - el navegador anterior ya no escribe (409 DRAFT_ACTIVE_ELSEWHERE) ni lee (restore 409 sin datos);
+  - carreras: 20/20 con dos Continue here simultaneos -> un solo ganador, que queda como dueno;
+    20/20 con autosave del anterior + toma -> dueno final el que toma (api CONCURRENCIA).
+El motivo del rechazo esta resuelto. Quedan tres problemas nuevos en el camino del arreglo.
+
+N1 · MEDIA · El navegador desplazado pierde lo que tiene en pantalla al pulsar Submit
+--------------------------------------------------------------------------------------
+Escenario 13. Capturas ui/v2-07 -> ui/v2-08 (pagina) y ui/v2-15 (widget).
+  navegador 1 contesta 6 + texto; todo guardado          (v2-01)
+  navegador 2 toma el borrador con Continue here          (v2-06)
+  navegador 1, sin tocar nada, pulsa Submit               (v2-07: sus respuestas en pantalla)
+  resultado pagina: formulario VACIO, aviso "Your saved progress is no longer active. A fresh
+    attempt has been started.", Submit deshabilitado, token borrado, 0 respuestas   (v2-08)
+  resultado widget: desaparece el formulario; solo queda "Survey draft is no longer active"
+    y el enlace Close                                                               (v2-15)
+Causa:
+  - client/src/pages/SurveyRespondPage.tsx persistLatestDraft (~l.813): si no hay cambios
+    pendientes no guarda y envia con el token que tiene -> no pasa por el 409 de conflicto.
+  - server/src/routes/responses.ts (~l.331-337, no cambia en el PR): token que no coincide con
+    un borrador en curso -> 409 DRAFT_INACTIVE, no DRAFT_ACTIVE_ELSEWHERE (api paso 8).
+  - el cliente trata DRAFT_INACTIVE como terminal: recoverFromTerminalDraftFailure pone a cero
+    todas las respuestas (~l.596-633).
+El contrato nuevo no llega al envio: guardar y restaurar distinguen "activo en otro navegador";
+enviar no. Si el desplazado cambia algo antes de enviar, SI ve el aviso con Continue here y
+conserva lo escrito (ui/v2-10): solo falla cuando ya estaba todo guardado, que es el caso normal
+de quien deja una pestana abierta.
+Contradice lo que el propio arreglo promete ("Answers entered in the current browser remain
+intact") y el objetivo de la historia ("reduces lost responses caused by interruptions").
+Direccion posible: que el envio responda DRAFT_ACTIVE_ELSEWHERE cuando el borrador sigue en curso
+con otro token, y que el cliente lo trate como en el autosave.
+
+N2 · BAJA · Continue here guarda las respuestas del momento del conflicto, no las de la pantalla
+-----------------------------------------------------------------------------------------------
+Escenario 13. ui/ui-pasos-v2.jsonl pasos 06, 10a, 10b; captura ui/v2-11.
+  navegador 2 contesta 10 -> aviso de conflicto
+  con el aviso visible escribe el texto y contesta la segunda pregunta (9)
+  pulsa Continue here -> el servidor guarda score 10, SIN texto y SIN segunda pregunta
+  cierra y reabre -> se restaura el 10; el texto escrito con el aviso visible se PERDIO
+Causa: mientras hay conflicto el efecto de autosave sale antes de construir el payload
+(draftOwnershipConflict en la guarda), asi que draftPayloadRef se queda con el del primer
+conflicto; continueDraftHere reenvia ese payload viejo; skipNextDraftAutosaveRef salta el
+autosave siguiente; y el guardado al cerrar (pagehide) no se dispara porque las secuencias
+coinciden. Si el encuestado envia en la misma visita, la respuesta sale completa (paso 08): el
+formulario de envio usa lo que hay en pantalla. La perdida ocurre solo si cierra despues de
+Continue here sin tocar nada mas. El aviso dice "The answers currently entered on this page will
+be kept": se conservan en pantalla, no en el servidor.
+
+N3 · MEDIA · AC9: sin el token se pueden reemplazar las respuestas de un borrador ajeno
+------------------------------------------------------------------------------------
+Escenario 9. api/api-scenarios-v2.json, bloque AC9_TERCERO.
+  un tercero que conoce encuesta, organizacion y encuestado, SIN el token:
+    restore con token inventado       409 DRAFT_ACTIVE_ELSEWHERE, sin datos        (no lee: OK)
+    guardado normal                   409, borrador intacto                         (OK)
+    guardado con replaceExistingDraft 201, las respuestas del borrador REEMPLAZADAS (NO OK)
+    envio con su token                201, respuesta a nombre de ese encuestado
+El AC9 dice: "Given a public caller does not possess the opaque draft token, When they attempt to
+read or update an existing draft, Then Survey Tool does not disclose or modify its answers". La
+mitad "disclose" se cumple; la mitad "modify" ya no. La confirmacion Continue here solo existe
+en el cliente; el servidor acepta replaceExistingDraft de cualquiera.
+Lo que NO es nuevo, para no exagerarlo: la identidad del encuestado nunca se ha verificado
+(IM-1178), asi que enviar una respuesta a nombre de alguien ya era posible siempre que no
+tuviera un borrador activo. Lo nuevo es poder sobrescribir las respuestas a medias de otro, y
+sumado a N1, hacer que pierda lo que tiene en pantalla al enviar. Antes del arreglo, en cambio,
+un tercero podia bloquear el envio 90 dias; eso ya no es posible (el afectado recupera el
+borrador con Continue here).
+Sin identidad verificada no hay arreglo que cumpla a la vez el AC6 del segundo navegador y el AC9
+literal. Decision de PRODUCTO: aceptar y reescribir el AC9, o pedir una mitigacion (por ejemplo,
+que el reemplazo no destruya las respuestas previas y que el token anterior aun pueda enviar las
+suyas, lo que ademas resolveria N1).
+Relacionado, BAJA: el restore ahora distingue "hay un borrador activo" (409) de "no hay" (404)
+para cualquier llamador. Revela si un encuestado tiene una encuesta a medias; el guardado ya lo
+revelaba antes del arreglo, aunque creando un borrador.
+
+SIGUE SIN CORREGIR (reportado en TR-202)
+----------------------------------------
+F2 · app.test.ts y ProgressDashboard.test.ts siguen sin ejecutarse: los scripts de test no
+cambiaron. 0 apariciones en npm test local y en los dos CI del merge (runs 36193199018 y
+36193204771: 179 y 85 tests, igual que en local). A mano pasan 1/1 y 2/2.
+scenario-0-unit-tests/hallazgo-tests-que-no-corren.txt.
+
+COBERTURA DE LOS TESTS NUEVOS (mutaciones, scenario-0-unit-tests/mutaciones-v2.txt)
+------------------------------------------------------------------------------------
+Detectadas 4 de 5: reemplazo sin condicion de dueno (M7), toma automatica en el servidor (M8),
+toma automatica en el autosave (M9b), vuelve el aviso falso (M10). NO detectada: toma
+automatica al pulsar Submit (M9, en persistLatestDraft). Ningun test cubre el envio del
+navegador desplazado: por eso N1 pasa el CI.
+
+OBSERVACIONES
+-------------
+O1 Pulsar Submit con el aviso de conflicto visible no hace nada: no envia ni muestra nada nuevo
+   (el aviso ya esta; ui/v2-05). Aceptable, sin respuesta al clic.
+O2 Autosave del anterior y toma a la vez: en 9 de 20 carreras los dos reciben exito (200 y
+   luego 201). Es orden correcto: el anterior guardo y despues lo reemplazaron. Dueno final 20/20
+   el que toma.
+O3 El envio del navegador que aun no tomo el borrador (API paso 4) da DRAFT_INACTIVE; en pantalla
+   no se llega ahi porque el guardado previo falla antes con el conflicto.
+O4 El control del CSV de TR-202 comparaba subcadenas; con encuestados nuevos (r11) daba falsos
+   positivos. Sustituido por la columna respondent_id exacta: el CSV lleva exactamente los 8
+   encuestados que enviaron y ningun borrador.
+O5 PR #90 (promocion a staging, abierto) lleva PR #89 y PR #91 juntos. PR #89 crea el indice GSI2:
+   el README exige promocionar primero la infraestructura y esperar a GSI2 ACTIVE.

@@ -1,0 +1,36 @@
+MATRIZ · TC-185 v2 / TR-205 · IM-1302 · re-test del arreglo PR #91 (merge 3789cb5c)
+===================================================================================
+Donde se midio: servidor REAL (src/index.ts de 3789cb5c) + DynamoDB REAL (DynamoDB Local, tablas
+del stack sintetizado; el PR no cambia infraestructura) + cliente REAL (Vite) + navegador REAL
+(Chromium). En local, base limpia, una sola corrida. Encuestados sinteticos qa-tc185-*.
+Dos navegadores = dos contextos aislados de Chromium, cada uno con su localStorage.
+
+ #  Escenario                               TR-202   TR-205   Evidencia principal
+ 1  AC1 un borrador, actualizado en su sitio PASS     PASS     api AC1: 201 -> 200 -> reintento 200 -> seq vieja 409; ui/02, ui/03
+ 2  AC2 cierre con keepalive                 PASS     PASS     ui-flow.json: cambio y cierre dentro del debounce; al reabrir el 7 esta
+                                                               restaurado (ui/04). Mismo limite que en TR-202: pagina directa, no iframe
+ 3  AC3 restore y resume contado una vez     PASS     PASS     api AC3: resumeCount 2 para dos restores logicos; ui/04
+ 4  AC4 definicion cambiada                  PASS     PASS     api AC4: 409 DRAFT_DEFINITION_CHANGED sin respuestas; ui/13 mismo aviso
+ 5  AC5 envio atomico, rezagado, reintento   PASS     PASS     api AC5: 201; rezagado 409 DRAFT_INACTIVE; reintento 200 misma respuesta
+ 6  AC6 cliente heredado sin token           FAIL     PASS     sin borrador 201; con borrador activo 409 "An active survey draft requires
+                                                               its token" (SIN CAMBIO, R1, decision de producto). En TR-202 fallo por el
+                                                               segundo navegador; ese caso pasa al escenario 13
+ 7  AC7 Progress solo para admin             PASS     PASS     api: 401 sin sesion en lista y detalle; ui/05. OJO: app.test.ts sigue sin
+                                                               ejecutarse en el CI
+ 8  AC8 detalle y exclusiones                PASS     PASS     ui/06 detalle; CSV por columna exacta = los 8 que enviaron, ningun
+                                                               borrador (csv-control-exacto.json); metricas: borrador 0, envio 1
+ 9  AC9 sin token ni se lee ni se cambia     PASS     FAIL     no se lee (restore 409/404 sin datos) y el guardado normal no cambia nada;
+                                                               PERO con replaceExistingDraft un tercero sin token reemplaza las
+                                                               respuestas (201) y envia (201). N3: decision de producto
+10  AC10 indice solo metadatos               PASS     PASS     GSI2 INCLUDE; la consulta al indice no trae respuestas ni token
+11  Borde: preview, identidad, caducado      PASS     PASS     ui/14 preview sin peticiones; sin org/encuestado 400; caducado 404 y
+                                                               fuera de Progress
+12  Funcional en el iframe de Salesforce     NOT-RUN  NOT-RUN  el cambio sigue solo en dev; falta una org de pruebas de Survey Tool
+                                                               cuyo iframe apunte a dev, o la promocion a staging (PR #90 abierto)
+13  Segundo navegador (contrato del arreglo) --       FAIL     RESUELTO el rechazo de TR-202: aviso de conflicto, sin aviso falso,
+                                                               respuestas en pantalla, toma solo con Continue here, carreras 20/20,
+                                                               una respuesta. FALLA: N1 el navegador desplazado pierde todo al pulsar
+                                                               Submit (ui/v2-08, v2-15); N2 Continue here no guarda lo escrito con el
+                                                               aviso visible (ui/v2-11)
+
+Totales: 13 · PASS 10 · FAIL 2 · NOT-RUN 1 · tasa 77%.

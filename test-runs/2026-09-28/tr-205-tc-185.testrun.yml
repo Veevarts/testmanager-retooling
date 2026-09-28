@@ -1,0 +1,313 @@
+schemaVersion: '1.0'
+id: tr-85fe7236-faed-403c-9503-8fff0620ea02
+key: TR-205
+title: >-
+  TR-205 · IM-1302 · TC-185 v2 · re-test del arreglo PR #91 · 10/13 PASS, 2 FAIL — el segundo navegador
+  ya puede seguir y enviar, pero el navegador que pierde el borrador borra lo que tiene en pantalla al
+  enviar
+status: completed
+environment:
+  name: >-
+    Ejecucion LOCAL completa del merge 3789cb5c (PR #91 sobre PR #89): servidor real, cliente real (Vite),
+    navegador real (Chromium, dos contextos aislados como dos navegadores) y DynamoDB real (DynamoDB Local
+    con las tablas del stack sintetizado), base limpia y una sola corrida. Encuestados sinteticos qa-tc185-*.
+    En dev solo sondas sin efectos (cuerpos invalidos y el bundle servido). No se toco ninguna org de
+    Salesforce.
+  buildVersion: >-
+    Mixto — API Express + cliente React (pagina directa y widget). Veevarts/survey-tool "PR #91", rama
+    fix/cross-browser-draft-takeover-IM-1302, MERGEADO a develop como 3789cb5c el 2026-09-25 (13 ficheros,
+    +612/-52), sin revision humana. Sin cambios de infraestructura. develop despliega en dev; staging
+    (PR #90 abierto) y produccion aun no lo tienen.
+startedAt: '2026-09-28T13:30:00Z'
+completedAt: '2026-09-28T14:35:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  TR-202 rechazo la historia porque un segundo navegador sin el token recibia 404 DRAFT_NOT_FOUND,
+  el cliente lo leia como "la encuesta cambio", vaciaba el formulario y no dejaba enviar durante
+  90 dias. PR #91 hace cuatro cosas:
+  - guardar y restaurar distinguen "hay un borrador activo con otro token" y responden 409
+    DRAFT_ACTIVE_ELSEWHERE;
+  - el cliente, en la pagina directa y en el widget, conserva lo escrito y muestra un aviso con un
+    boton Continue here;
+  - el boton reenvia con replaceExistingDraft: true, y el servidor reemplaza el borrador con una
+    escritura condicionada al hash del token anterior (atomica frente a carreras);
+  - los mensajes terminales solo dicen "la encuesta cambio" cuando cambio la definicion.
+  No toca responses.ts (el envio), ni la infraestructura, ni los scripts de test.
+
+  ## Inferred technical tests
+
+  - Suites server, client e infra como el CI, contando ficheros ejecutados. EJECUTADO: 179, 85 y
+    9, todo en verde; siguen fuera app.test.ts y ProgressDashboard.test.ts.
+  - Cinco mutaciones sobre el arreglo. EJECUTADO: 4 detectadas; no la toma automatica al enviar.
+  - Todos los escenarios de TR-202 otra vez, contra servidor y DynamoDB reales y base limpia.
+    EJECUTADO.
+  - Contrato del segundo navegador por API (9 pasos), tercero sin token y 40 carreras. EJECUTADO.
+  - Segundo navegador y navegador desplazado en navegador real, pagina directa y widget. EJECUTADO.
+  - Despliegue en dev: workflows, esquema servido y bundle servido, sin efectos. EJECUTADO.
+  - Recorrido dentro del iframe de Salesforce. NO EJECUTADO: el arreglo solo esta en dev.
+
+  ## Hallazgos (detalle en hallazgos-v2.txt)
+
+  RESUELTO · el motivo del rechazo. El segundo navegador ya no ve un aviso falso, conserva lo que
+  escribe, toma el borrador solo al pulsar Continue here y puede enviar. Carreras 20/20.
+
+  N1 · MEDIA · EL NAVEGADOR DESPLAZADO PIERDE LO QUE TIENE EN PANTALLA AL ENVIAR (escenario 13).
+  Con todo guardado, su Submit va con el token viejo; el envio responde 409 DRAFT_INACTIVE porque
+  responses.ts no conoce el contrato nuevo, y el cliente vacia el formulario (en el widget lo
+  sustituye por "no longer active"). Mismo tipo de perdida que TR-202, en el otro navegador.
+
+  N2 · BAJA · CONTINUE HERE NO GUARDA LO ESCRITO CON EL AVISO VISIBLE (escenario 13). Guarda las
+  respuestas del primer conflicto; si el encuestado cierra justo despues, lo escrito entre medias
+  se pierde. Enviando en la misma visita no se pierde nada.
+
+  N3 · MEDIA · AC9 (escenario 9). Sin el token nadie lee un borrador, pero cualquiera que conozca
+  encuesta, organizacion y encuestado puede reemplazar sus respuestas con replaceExistingDraft. Es
+  consecuencia del arreglo sin identidad verificada (IM-1178). Decision de producto.
+
+  F2 de TR-202 · SIGUE: app.test.ts (auth de Progress) y ProgressDashboard.test.ts no se ejecutan
+  ni en local ni en el CI del merge.
+
+  ## Lo que el arreglo deja bien atado
+
+  El reemplazo atomico condicionado al dueno anterior, el aviso accesible (role=alert), la
+  separacion de mensajes, que nada filtra respuestas a quien no tiene el token, y cuatro tests
+  nuevos que si saben fallar.
+results:
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC1 · The first meaningful answer creates one draft, and later changes update that same draft
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-28T13:43:00Z'
+  stepResults: []
+  actual: |
+    Base limpia, servidor y DynamoDB reales sobre 3789cb5c: la primera respuesta crea el
+    borrador (201) y devuelve el token; el cambio siguiente lo actualiza (200); el reintento
+    identico es idempotente (200) y una secuencia antigua da 409. Un solo borrador y ninguna
+    respuesta. En el navegador, 201 -> 200 igual que en TR-202. Evidencia: api/api-scenarios-v2.json
+    (AC1), ui/02, ui/03.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC2 · Closing the iframe mid-save sends one last keepalive save and creates no response
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-28T13:43:30Z'
+  stepResults: []
+  actual: |
+    Cambio y cierre de la pestana dentro del debounce; al reabrir, el 7 de la segunda pregunta
+    esta restaurado, asi que llego por el guardado al cerrar. Ninguna respuesta creada
+    (ui/ui-flow.json, ui/04). Mismo limite que en TR-202: pagina directa, no el iframe.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC3 · Reopening in the same browser restores answers and step, and counts the resume once
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-28T13:43:30Z'
+  stepResults: []
+  actual: |
+    El restore devuelve respuestas y paso; el mismo resumeRequestId no suma y uno nuevo si:
+    resumeCount 2 para dos restores logicos (api AC3). Al reabrir en el navegador vuelven el 9, el
+    texto y el 7 (ui/04). PR #91 no toca este camino ni su test; la mutacion M4 de TR-202 (la suite
+    no protege el "una vez") no se repitio.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC4 · A changed survey definition asks for a fresh attempt instead of mapping answers to the wrong
+    questions
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-09-28T14:05:00Z'
+  stepResults: []
+  actual: |
+    409 DRAFT_DEFINITION_CHANGED sin cargar respuestas; enviar con el token anterior, 409. En el
+    navegador, cambio real de la definicion: "This survey changed since your previous visit. A new
+    attempt has been started." (ui/13). El arreglo reescribe los mensajes con draftTerminalNotice y
+    solo este caso dice que la encuesta cambio (mutacion M10 detectada).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC5 · Submitting creates one response, finalizes the draft, and late autosaves cannot revive it
+  scenarioIndex: 4
+  status: passed
+  executedAt: '2026-09-28T13:40:00Z'
+  stepResults: []
+  actual: |
+    Enviar con token: 201. Autosave rezagado: 409 DRAFT_INACTIVE. Reintento del envio: 200 con la
+    misma respuesta. Borrador "submitted" y sin respuestas copiadas. En el navegador, token borrado
+    y fuera de Progress (ui/07, ui/08).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC6 · A legacy client without a token still submits — and what happens when a draft is active
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-28T13:40:00Z'
+  stepResults: []
+  actual: |
+    Sin borrador activo, un cliente sin token envia igual que antes (201). Con un borrador activo
+    del mismo encuestado, sigue el 409 "An active survey draft requires its token": responses.ts no
+    cambia en PR #91. Esto contradice el AC6 al pie de la letra y queda para producto (R1), como pide
+    el escenario. En TR-202 este escenario fallo por el caso del segundo navegador; desde v2 ese caso
+    tiene su propio escenario (13), y el cliente actual ya no envia sin token cuando hay borrador.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC7 · An admin sees incomplete drafts in Progress, and nobody else can
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-28T13:43:30Z'
+  stepResults: []
+  actual: |
+    401 sin sesion en lista y detalle contra el servidor real; con sesion, la lista trae
+    encuestado, organizacion, encuesta, estado, contestadas, paso, inicio, ultimo guardado y resumes,
+    sin respuestas ni hash (api AC7_AC8, ui/05). El test que protege esa autenticacion con el
+    cableado real (app.test.ts) sigue SIN ejecutarse en el CI: no es exposicion actual, es riesgo
+    de regresion (scenario-0-unit-tests/hallazgo-tests-que-no-corren.txt).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC8 · Draft detail shows answered and unanswered questions, and drafts never leak into responses or
+    metrics
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-28T14:10:00Z'
+  stepResults: []
+  actual: |
+    El detalle distingue contestadas y no contestadas (ui/06, ui/admin-detalle.txt). CSV estandar
+    por la columna respondent_id exacta: exactamente los 8 encuestados que enviaron y ningun borrador
+    (api/csv-control-exacto.json). La comparacion por subcadena de TR-202 daba falsos positivos con
+    encuestados nuevos (r1 esta dentro de r11); queda anotado en exportaciones-y-metricas.txt.
+    Metricas: con solo el borrador total 0; tras enviar total 1, NPS 100.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC9 · A caller without the draft token can neither read nor change the draft
+  scenarioIndex: 8
+  status: failed
+  executedAt: '2026-09-28T13:40:00Z'
+  stepResults: []
+  actual: |
+    Leer: se cumple. Restore sin token 400; con token inventado sobre un borrador activo, 409
+    DRAFT_ACTIVE_ELSEWHERE sin datos; sin borrador, 404. En la tabla solo el sha256 del token.
+    Modificar: NO se cumple. El guardado normal con un token ajeno da 409 y deja el borrador intacto.
+    Pero con replaceExistingDraft: true un tercero sin el token reemplaza las respuestas (201) y
+    despues envia una respuesta a nombre de ese encuestado (201) (api AC9_TERCERO). La confirmacion
+    Continue here solo existe en el cliente. Es consecuencia directa del arreglo: sin identidad
+    verificada (IM-1178) el servidor no distingue al encuestado en otro navegador de un tercero.
+    Decision de producto: aceptar y reescribir el AC9, o mitigar. Ver hallazgos-v2.txt, N3.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: medium
+    summary: >-
+      AC9: un llamador sin el token puede reemplazar las respuestas de un borrador activo ajeno con replaceExistingDraft
+      (201). No las lee. Consecuencia del arreglo del segundo navegador sin identidad verificada (IM-1178);
+      pide decision de producto: aceptar y reescribir el AC9, o mitigar.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC10 · The admin listing index carries metadata only
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-09-28T13:40:00Z'
+  stepResults: []
+  actual: |
+    GSI2 con proyeccion INCLUDE; una consulta al indice no trae respuestas, hash ni material del
+    token. Proyecta respondentName, que usa la lista (R4). PR #91 no toca infraestructura.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Edge · Preview mode, missing identity and expired drafts create or restore nothing
+  scenarioIndex: 10
+  status: passed
+  executedAt: '2026-09-28T13:44:00Z'
+  stepResults: []
+  actual: |
+    Preview sin peticiones de borrador ni token (ui/14). Sin organizacion o sin encuestado, 400.
+    Caducado con la fila aun presente: restore 404 y fuera de Progress.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Functional · Answer, close, reopen, continue and submit inside the Salesforce iframe
+  scenarioIndex: 11
+  status: not-run
+  stepResults: []
+  actual: |
+    NO EJECUTADO. El arreglo sigue solo en dev (PR #90 a staging, abierto). Hace falta una org de
+    pruebas de Survey Tool cuyo iframe apunte a dev, o la promocion a staging. El mismo recorrido
+    esta ejecutado en navegador real sobre la pagina directa y el widget; falta la capa del iframe.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Cross-browser · A second browser keeps its answers, takes over only on Continue here, and neither
+    browser loses what it typed
+  scenarioIndex: 12
+  status: failed
+  executedAt: '2026-09-28T13:55:00Z'
+  stepResults: []
+  actual: |
+    LO QUE RESUELVE (el rechazo de TR-202), en navegador real, pagina y widget: el navegador 2 ve
+    "Saved progress is active in another browser." con Continue here, ningun aviso falso de cambio,
+    y conserva sus respuestas (ui/v2-03, v2-13). Sin pulsar el boton no toma nada; al pulsarlo toma
+    el borrador (201), el navegador 1 ya no escribe (409) y el 2 envia una sola respuesta
+    (ui/v2-06, v2-09, v2-14, v2-16). Carreras: 20/20 un solo dueno (api CONCURRENCIA).
+
+    LO QUE FALLA:
+    N1. El navegador 1, desplazado y con todo guardado, pulsa Submit: el envio va con su token viejo,
+    el servidor responde 409 DRAFT_INACTIVE (responses.ts no conoce el contrato nuevo) y el cliente
+    vacia el formulario: "Your saved progress is no longer active. A fresh attempt has been
+    started.", 0 respuestas (ui/v2-07 -> v2-08). En el widget desaparece el formulario (ui/v2-15).
+    Si antes cambia algo, si ve el aviso con Continue here (ui/v2-10).
+    N2. Continue here guarda las respuestas del primer conflicto, no las de la pantalla: lo escrito
+    con el aviso visible no llega al servidor y, si el encuestado cierra y reabre, se pierde
+    (ui/v2-11). Si envia en la misma visita, la respuesta sale completa.
+    Ningun test cubre el envio del desplazado; la toma automatica al enviar (M9) tampoco la detecta
+    la suite. Ver hallazgos-v2.txt.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: medium
+    summary: >-
+      El navegador desplazado pierde lo que tiene en pantalla al enviar: el envio no usa el contrato DRAFT_ACTIVE_ELSEWHERE
+      y el cliente vacia el formulario (pagina) o lo sustituye por "no longer active" (widget). Y Continue
+      here no guarda lo escrito con el aviso visible.
+summary:
+  total: 13
+  passed: 10
+  failed: 2
+  blocked: 0
+  skipped: 0
+  notRun: 1
+  passRate: 77
+history:
+- action: run-started
+  timestamp: '2026-09-28T13:30:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Re-test de IM-1302 tras el rechazo de TR-202: el dev devolvio la historia a QA con PR #91. TC-185
+    pasa a v2 con un escenario nuevo para el contrato del segundo navegador. Se repite todo en local con
+    servidor, cliente, navegador y DynamoDB reales, sobre base limpia.
+- action: run-completed
+  timestamp: '2026-09-28T14:35:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    10/13 PASS, 2 FAIL, 1 sin ejecutar. El motivo del rechazo esta resuelto: el segundo navegador ya no
+    ve un aviso falso, conserva lo escrito y puede tomar el borrador y enviar. Pero el navegador que pierde
+    el borrador borra lo que tiene en pantalla al enviar, Continue here no guarda lo escrito con el aviso
+    visible, y un tercero sin token puede reemplazar un borrador (AC9, decision de producto). Los dos
+    ficheros de test que no corrian siguen sin correr.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-28T14:35:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-28T14:35:00Z'
+  version: 1

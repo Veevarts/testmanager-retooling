@@ -59,12 +59,26 @@ description: |
   - R9. Fuera de alcance, y no se prueba: resume entre dispositivos, backfill historico,
     sincronizar borradores a Salesforce y cambios a la elegibilidad de General NPS.
 
+  v2 (2026-09-28). QA rechazo la historia en TR-202: el mismo encuestado en otro navegador
+  perdia lo que escribia y no podia enviar durante 90 dias. El arreglo es "PR #91" (rama
+  fix/cross-browser-draft-takeover-IM-1302, MERGEADO a develop como 3789cb5c el 2026-09-25, 13
+  ficheros, +612 / -52, sin revision humana). El servidor responde 409 DRAFT_ACTIVE_ELSEWHERE
+  cuando otro navegador tiene el borrador activo. El cliente conserva lo escrito y ofrece
+  "Continue here". Ese boton reenvia con replaceExistingDraft: true, que reemplaza el borrador de
+  forma atomica, condicionado al token anterior. Se anade el escenario 13 para ese contrato.
+
+  - R10. AC9 frente al arreglo. El servidor no puede distinguir al mismo encuestado en otro
+    navegador de un tercero (la identidad se verifica en IM-1178). Por eso replaceExistingDraft
+    lo acepta de cualquier llamador que conozca encuesta, organizacion y encuestado, y el AC9 dice
+    que sin el token no se modifican sus respuestas. La confirmacion "Continue here" solo existe
+    en el cliente.
+
 type: integration
 priority: high
 status: active
 
 preconditions:
-  - "El entorno dev de Survey Tool (rama develop) corre el merge c29b3aed del PR, comprobado antes de empezar. Staging y produccion aun no lo tienen."
+  - "El entorno dev de Survey Tool (rama develop) corre el merge del PR a probar (c29b3aed en v1; 3789cb5c, con el arreglo del segundo navegador, en v2), comprobado antes de empezar. Staging y produccion aun no lo tienen."
   - "Hay una sesion de administrador de Cognito para el Dashboard de staging."
   - "Hay al menos una encuesta NPS y una CSAT activas de prueba, con el prefijo QA TC-185 en el nombre."
   - "Para el escenario funcional: una org de pruebas de Salesforce de las asignadas a Survey Tool con el iframe instalado. No se toca ninguna otra org logueada ni ninguna productiva."
@@ -204,10 +218,10 @@ scenarios:
       - "existe un borrador en curso de otro encuestado"
     when:
       - "un llamador publico intenta restaurarlo sin token, con un token inventado y con el token de otro borrador"
-      - "intenta guardar sobre el con un token que no es el suyo"
+      - "intenta guardar sobre el con un token que no es el suyo, tambien pidiendo reemplazarlo (replaceExistingDraft)"
     then:
-      - "el restore responde 404 DRAFT_NOT_FOUND y no devuelve ninguna respuesta ni dato del borrador"
-      - "el guardado ajeno no modifica el borrador"
+      - "el restore no devuelve ninguna respuesta ni dato del borrador (404 si no hay borrador activo; desde v2, 409 DRAFT_ACTIVE_ELSEWHERE si lo hay)"
+      - "ningun guardado sin el token modifica las respuestas del borrador, tampoco pidiendo reemplazarlo"
       - "en la tabla se guarda el hash del token, nunca el token en claro"
 
   - title: "AC10 · The admin listing index carries metadata only"
@@ -253,6 +267,28 @@ scenarios:
       - "antes del envio el borrador esta en Progress y no cuenta en Responded, NPS ni CSAT"
       - "despues del envio hay una respuesta, el borrador sale de Progress y las metricas cambian una sola vez"
 
+  - title: "Cross-browser · A second browser keeps its answers, takes over only on Continue here, and neither browser loses what it typed"
+    tags:
+      - ac-6
+      - regression
+      - edge-case
+      - cross-browser
+    given:
+      - "el mismo encuestado tiene un borrador activo en el navegador 1, con todo guardado"
+      - "abre la misma encuesta en el navegador 2, que no tiene su token"
+    when:
+      - "contesta en el navegador 2 y llega el autosave"
+      - "sigue contestando con el aviso visible y pulsa Continue here"
+      - "vuelve al navegador 1 y pulsa Submit sin cambiar nada; o cambia una respuesta"
+      - "dos navegadores pulsan Continue here a la vez, o uno guarda mientras el otro toma el borrador"
+      - "lo mismo en el widget embebido"
+    then:
+      - "el navegador 2 ve un aviso de conflicto con Continue here, no un falso cambio de encuesta, y conserva sus respuestas en pantalla"
+      - "no se toma el borrador sin pulsar Continue here; al pulsarlo se guarda todo lo que hay en pantalla, incluido lo escrito con el aviso visible"
+      - "el navegador 1, desplazado, no pierde lo que tiene en pantalla: al enviar o al cambiar algo ve el mismo aviso con Continue here"
+      - "en cada carrera queda un solo dueno, y el navegador anterior ya no escribe"
+      - "el navegador que queda como dueno envia y se crea una sola respuesta"
+
 tags:
   - im-1302
   - im-970
@@ -265,11 +301,11 @@ tags:
   - dynamodb
   - security
 
-estimatedDuration: 240
+estimatedDuration: 270
 
 metadata:
   createdBy: "codex"
   createdAt: "2026-09-25T19:50:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-09-25T21:05:00Z"
-  version: 1
+  updatedAt: "2026-09-28T14:30:00Z"
+  version: 2
