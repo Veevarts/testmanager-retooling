@@ -1,0 +1,296 @@
+schemaVersion: '1.0'
+id: tr-7c9ff7c3-16ee-4645-88ce-a54bc3e6019f
+key: TR-207
+title: >-
+  TR-207 · IM-1302 · TC-185 v4 · tercer re-test (PR #92 mergeado y desplegado en dev) · 9/13 PASS, 4 FAIL
+  — el codigo es el probado, pero en dev ningun encuestado identificado puede enviar: al rol de la app
+  le falta dynamodb:ConditionCheckItem
+status: completed
+environment:
+  name: >-
+    DEV real (surveytool.dev.veevart.ai, bundle de da19283f) para el escenario 12, dentro del iframe de
+    Salesforce de la scratch nps_03 de Survey Tool, con el admin de dev; y repeticion LOCAL completa de
+    TR-206 sobre da19283f (servidor, cliente, Chromium x2 y DynamoDB Local, sin IAM). No se toco ninguna
+    otra org ni entorno.
+  buildVersion: >-
+    Mixto — API Express + cliente React (pagina y widget). Veevarts/survey-tool develop da19283f = squash
+    de "PR #92" (arbol identico al head 5656962f), desplegado en dev el 2026-09-28 21:01Z. Staging y produccion
+    sin el cambio (PR #90 abierto).
+startedAt: '2026-09-28T21:20:00Z'
+completedAt: '2026-09-28T22:20:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  El dev mergeo PR #92 en develop (da19283f) y devolvio IM-1302 a "In QA Review". El arbol del merge
+  es identico al head 5656962f probado en TR-206, y dev sirve su bundle byte a byte. Sigue sin
+  reescribirse el AC9: la decision de producto sobre su traslado a IM-1309 esta pendiente.
+
+  Esta ronda hace dos cosas: repite en local todo lo de TR-206 sobre el codigo mergeado, y ejecuta
+  por primera vez el escenario 12 en el entorno desplegado, dentro del iframe de Salesforce de una
+  org de pruebas de Survey Tool (nps_03) que apunta a dev.
+
+  ## Inferred technical tests
+
+  - Suites y build como el CI, contando ficheros. EJECUTADO: servidor 180/180 (13/13 ficheros),
+    cliente 89/89 (16/16), build en verde con el mismo bundle que sirve dev.
+  - Fallo del CI del PR #90 (test 4 del widget colgado 8 min). EJECUTADO: 30/30 en local, 15 con la
+    CPU cargada. Parada del runner, no del codigo.
+  - Corrida local completa (API y dos navegadores) sobre da19283f. EJECUTADO: identica a TR-206.
+  - Recorrido funcional en el iframe real de Salesforce contra dev, con Progress y Summary del admin
+    de dev. EJECUTADO: guardar, keepalive al cerrar, restaurar y continuar funcionan; ENVIAR falla.
+  - Envio directo sin token (cliente heredado identificado) contra dev. EJECUTADO: 500.
+
+  ## Hallazgos (detalle en hallazgos-v4.txt)
+
+  F1 · ALTA · En dev ningun encuestado identificado puede enviar: POST /api/responses da 500 con y
+  sin borrador porque el rol de ejecucion no tiene dynamodb:ConditionCheckItem sobre las tablas
+  surveys y respondent-state, que las transacciones de envio de PR #89 necesitan. Desde el 25-sep
+  dev no registra ninguna respuesta identificada. Lo local no lo podia ver: DynamoDB Local no aplica
+  IAM. Bloquea PR #90 hasta que los roles de staging y produccion tengan el permiso.
+  S1 · SEGURIDAD · reportado por canal interno, no se detalla aqui.
+  SIGUE · AC9 (escenario 9): pendiente de producto (IM-1309).
+  OBSERVACIONES · check intermitente del PR #90; la escala NPS no cabe en el modal de Salesforce.
+
+  ## Condiciones para aprobar
+
+  1. Anadir dynamodb:ConditionCheckItem al rol de ejecucion de la app sobre surveys y
+     respondent-state en dev (y en staging y produccion antes de promocionar), y corregir la lista
+     de permisos del README. QA repite el envio en el iframe de nps_03: el borrador que quedo
+     pendiente debe poder enviarse con su token.
+  2. Producto acepta que la mitad "modify" del AC9 pase a IM-1309 y lo refleja en el AC.
+results:
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC1 · The first meaningful answer creates one draft, and later changes update that same draft
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-28T21:55:19Z'
+  stepResults: []
+  actual: |
+    Local sobre da19283f, identico a TR-206 (local/api-scenarios-v4.json AC1). En dev real, desde el iframe
+    de Salesforce: la primera respuesta crea el borrador (201) y el cambio siguiente lo actualiza en su
+    sitio (200), saveSequence 2 -> 3, answeredQuestionCount 1 -> 2, un solo borrador en Progress
+    (iframe-dev/01, net.jsonl, 03).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC2 · Closing the iframe mid-save sends one last keepalive save and creates no response
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-28T21:55:47Z'
+  stepResults: []
+  actual: |
+    En dev real, dentro del iframe de Salesforce: se escribe y se cierra el widget antes del debounce. El
+    guardado keepalive llega: el borrador tiene el texto escrito justo antes de cerrar y el restore
+    posterior devuelve saveSequence 4 (iframe-dev/02, 03b, probes.jsonl "tras-cerrar"). Ninguna
+    respuesta creada (Summary 0). CDP no ve la peticion porque el frame ya se desmonta; se prueba por el
+    estado del servidor. Local, identico a TR-206.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC3 · Reopening in the same browser restores answers and step, and counts the resume once
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-28T21:57:54Z'
+  stepResults: []
+  actual: |
+    En dev real, al reabrir el widget en Salesforce se restauran el 9 y el texto (iframe-dev/04); un solo
+    restore por apertura, resumeCount 0 -> 1 -> 2 en dos reaperturas (net.jsonl, 07a). El token vive en el
+    localStorage del iframe (veevart:surveyDraft:27:<id>). Local, identico a TR-206.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC4 · A changed survey definition asks for a fresh attempt instead of mapping answers to the wrong
+    questions
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-09-28T22:08:00Z'
+  stepResults: []
+  actual: |
+    Local, identico a TR-206 (ac4.jsonl sin diferencias; widget con cambio real de definicion no crea
+    respuesta). No se repitio en dev para no invalidar el borrador del recorrido del iframe.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC5 · Submitting creates one response, finalizes the draft, and late autosaves cannot revive it
+  scenarioIndex: 4
+  status: failed
+  executedAt: '2026-09-28T21:58:15Z'
+  stepResults: []
+  actual: |
+    El codigo cumple en local (identico a TR-206: 201, rezagado 409, reintento 200). En dev real NO: el
+    envio con borrador desde el iframe responde 500 AccessDeniedException, siempre (3 intentos), porque el
+    rol de ejecucion no tiene dynamodb:ConditionCheckItem sobre la tabla surveys (F1). No hay escritura
+    parcial: el borrador sigue in_progress con 3/3 y no se crea respuesta (iframe-dev/06, 07a, 07b,
+    probes.jsonl). El encuestado conserva lo escrito, pero no puede enviar.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: high
+    summary: >-
+      F1: en dev POST /api/responses responde 500 a todo envio identificado, con y sin borrador, porque
+      el rol de ejecucion no tiene dynamodb:ConditionCheckItem sobre las tablas surveys y respondent-state,
+      que usan las transacciones de envio introducidas en PR #89. Bloquea la promocion (PR #90).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC6 · A legacy client without a token still submits — and what happens when a draft is active
+  scenarioIndex: 5
+  status: failed
+  executedAt: '2026-09-28T22:00:00Z'
+  stepResults: []
+  actual: |
+    El codigo cumple en local (sin borrador activo, 201). En dev real, un envio sin token de un cliente
+    heredado identificado responde 500: el rol no tiene dynamodb:ConditionCheckItem sobre la tabla
+    respondent-state (F1, iframe-dev/api-envio-directo.txt). Antes de PR #89 esa misma peticion
+    funcionaba: es una regresion del entorno desplegado. Desde el deploy del 25-sep dev solo registra
+    una respuesta, y es sin identidad.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: high
+    summary: >-
+      F1: en dev POST /api/responses responde 500 a todo envio identificado, con y sin borrador, porque
+      el rol de ejecucion no tiene dynamodb:ConditionCheckItem sobre las tablas surveys y respondent-state,
+      que usan las transacciones de envio introducidas en PR #89. Bloquea la promocion (PR #90).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC7 · An admin sees incomplete drafts in Progress, and nobody else can
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-28T21:56:30Z'
+  stepResults: []
+  actual: |
+    Local identico a TR-206 (401 sin sesion; app.test.ts se ejecuta). En dev, Progress lista el borrador
+    con encuestado, organizacion, encuesta, 2/3, paso, reanudaciones y ultimo guardado (iframe-dev/03);
+    la consulta al indice GSI2 funciona con el rol real.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC8 · Draft detail shows answered and unanswered questions, and drafts never leak into responses or
+    metrics
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-28T21:57:00Z'
+  stepResults: []
+  actual: |
+    En dev, el detalle distingue contestadas y no contestadas (iframe-dev/03b) y el Summary de la org de
+    nps_03 da 0 respuestas y NPS "-" con el borrador activo (03c). Local: CSV por columna exacta sin
+    borradores y metricas identicas a TR-206.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC9 · A caller without the draft token can neither read nor change the draft
+  scenarioIndex: 8
+  status: failed
+  executedAt: '2026-09-28T22:08:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios desde TR-205 (local identico): sin el token no se lee nada, pero un tercero puede
+    reemplazar un borrador con replaceExistingDraft y enviar a nombre del encuestado. El dev lo traslada a
+    IM-1309; el AC9 del ticket sigue sin reescribir, asi que falta la decision de producto.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: medium
+    summary: >-
+      AC9: un llamador sin el token puede reemplazar un borrador activo ajeno con replaceExistingDraft.
+      Trasladado por el dev a IM-1309; pendiente de que producto acepte el traslado y reescriba el AC9.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC10 · The admin listing index carries metadata only
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-09-28T22:08:00Z'
+  stepResults: []
+  actual: |
+    Local, identico a TR-206 (GSI2 INCLUDE, sin respuestas ni token). En dev la lista de Progress, que lee
+    ese indice, no muestra respuestas.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Edge · Preview mode, missing identity and expired drafts create or restore nothing
+  scenarioIndex: 10
+  status: passed
+  executedAt: '2026-09-28T22:08:00Z'
+  stepResults: []
+  actual: |
+    Local, identico a TR-206: preview sin peticiones; sin organizacion o encuestado 400; caducado 404 y
+    fuera de Progress.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Functional · Answer, close, reopen, continue and submit inside the Salesforce iframe
+  scenarioIndex: 11
+  status: failed
+  executedAt: '2026-09-28T21:58:15Z'
+  stepResults: []
+  actual: |
+    Primera ejecucion en el entorno desplegado: nps_03 (scratch Auctifera de Survey Tool) con
+    Survey_Base_URL__c -> dev, encuesta QA 27 solo para esa org, lanzada con la secuencia exacta del LWC
+    npsWidget (entorno-dev.txt). Captura por paso:
+    - 01 contesta parte: autosave 201 -> 200 (OK);
+    - 02 cierra antes del debounce: el keepalive llega (OK);
+    - 03 Progress del admin con el borrador 2/3; detalle; Summary de la org en 0 (OK);
+    - 04 reabre: restaurado (OK);
+    - 05 continua con la pregunta de empresa, guardado (OK);
+    - 06 ENVIA: 500 (F1), el error se muestra al encuestado (tapado en la captura);
+    - 07 Progress sigue con el borrador 3/3 y Summary en 0: no se crea la respuesta.
+    El recorrido se corta en el envio.
+  defects:
+  - jiraKey: IM-1302
+    url: https://veevart.atlassian.net/browse/IM-1302
+    severity: high
+    summary: >-
+      F1: en dev POST /api/responses responde 500 a todo envio identificado, con y sin borrador, porque
+      el rol de ejecucion no tiene dynamodb:ConditionCheckItem sobre las tablas surveys y respondent-state,
+      que usan las transacciones de envio introducidas en PR #89. Bloquea la promocion (PR #90).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Cross-browser · A second browser keeps its answers, takes over only on Continue here, and neither
+    browser loses what it typed
+  scenarioIndex: 12
+  status: passed
+  executedAt: '2026-09-28T22:08:00Z'
+  stepResults: []
+  actual: |
+    Local, identico a TR-206 (ui-pasos-v2 y v3 sin diferencias; carreras 20/20 con un solo dueno). No se
+    repitio en dev.
+summary:
+  total: 13
+  passed: 9
+  failed: 4
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 69
+history:
+- action: run-started
+  timestamp: '2026-09-28T21:20:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Tercer re-test de IM-1302: el dev mergeo PR #92 y devolvio la historia a QA. Se repite en local todo
+    TR-206 sobre el codigo mergeado y se ejecuta por primera vez el escenario 12 en dev, en el iframe
+    de Salesforce de nps_03.
+- action: run-completed
+  timestamp: '2026-09-28T22:20:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    9/13 PASS, 4 FAIL. El codigo desplegado es el probado y en local todo sigue igual que en TR-206, pero
+    en dev el envio identificado da 500 (F1: falta dynamodb:ConditionCheckItem en el rol de la app), lo
+    que tumba AC5, AC6 y el recorrido del iframe. El AC9 sigue pendiente de producto.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-28T22:20:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-28T22:20:00Z'
+  version: 1

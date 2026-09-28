@@ -1,0 +1,12 @@
+import { connect, findPage, shot, DEV } from "./lib.mjs";
+const { ctx } = await connect();
+const page = findPage(ctx, /surveytool\.dev\.veevart\.ai/);
+await page.goto(`${DEV}/admin/dashboard?tab=progress`, { waitUntil: "networkidle" }).catch(() => {});
+await page.waitForTimeout(2000);
+await page.getByRole("row", { name: /QA TC-185 Iframe/ }).getByRole("button", { name: /view/i }).click();
+await page.waitForTimeout(2000);
+const t = (await page.locator("body").innerText()).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, "<correo>");
+const i = t.indexOf("QA TC-185 iframe: how likely");
+console.log(t.slice(Math.max(0, i - 400), i + 700));
+await shot(page, process.argv[2]);
+process.exit(0);

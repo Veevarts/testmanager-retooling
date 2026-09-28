@@ -1,0 +1,49 @@
+HALLAZGOS · TR-207 · TC-185 v4 · IM-1302 · tercer re-test (PR #92 mergeado y desplegado en dev)
+
+F1 · ALTA · En dev, ningun encuestado identificado puede enviar una encuesta
+  Que pasa. POST /api/responses responde 500 en toda respuesta que lleve organizacion y encuestado:
+    - con borrador (el cliente actual en Salesforce): la transaccion de createResponseFromDraft
+      incluye un ConditionCheck sobre la tabla surveys;
+    - sin borrador (cliente heredado identificado): la de createResponseWithoutActiveDraft incluye
+      un ConditionCheck sobre la tabla respondent-state.
+    AWS rechaza las dos transacciones porque el rol de ejecucion de la app en dev no tiene
+    dynamodb:ConditionCheckItem sobre esas tablas. Solo pasa la ruta sin identidad (Put simple).
+  Donde se vio. En el recorrido real del escenario 12, dentro del iframe de Salesforce (nps_03) contra
+    surveytool.dev.veevart.ai (iframe-dev/06, pasos.jsonl, net.jsonl), repetido 3 veces, y con un
+    envio directo sin token (iframe-dev/api-envio-directo.txt).
+  Que NO pasa. No hay escritura parcial: la transaccion falla entera, el borrador sigue in_progress
+    con sus 3 respuestas y el encuestado conserva lo escrito en pantalla (iframe-dev/07a, probes.jsonl).
+    Si se corrige el permiso, el mismo encuestado puede reenviar con su token.
+  Desde cuando. Los dos ConditionCheck llegaron con PR #89 (c29b3aed), desplegado en dev el
+    2026-09-25 a las 18:42Z. Desde entonces dev registra UNA respuesta, y es sin identidad; la
+    anterior identificada es del 2026-09-11.
+  Por que no lo vieron los tests. DynamoDB Local no aplica IAM: suites, CI y las tres corridas locales
+    de QA (TR-202, TR-205, TR-206) pasan. El README del repo lista los permisos del rol (Get, Put,
+    Update, Delete, Scan, Query, TransactWriteItems) y no incluye ConditionCheckItem; ademas pide
+    un smoke test de envio tras desplegar, que habria mostrado el 500.
+  Riesgo. PR #90 (develop -> staging) promociona #89, #91 y #92 juntos. Si el rol de staging, y
+    despues el de produccion, tiene los permisos del README, staging y produccion dejarian de
+    aceptar respuestas de Salesforce.
+  Arreglo propuesto. Anadir dynamodb:ConditionCheckItem al rol de ejecucion en las tablas surveys y
+    respondent-state de dev, staging y produccion; corregir la lista del README; y hacer el smoke
+    test de envio en dev antes de promocionar. No hace falta tocar el codigo.
+  Escenarios afectados: 5 (AC5), 6 (AC6) y 12 (funcional en el iframe).
+
+S1 · SEGURIDAD · Reportado por canal interno (IM-1302 en Jira). No se detalla en este repositorio
+  publico. Relacionado con el mensaje de error que ve el encuestado en iframe-dev/06, tapado en la
+  captura porque contiene identificadores internos.
+
+SIGUE · AC9 (escenario 9). Sin cambios desde TR-205: sin el token no se lee nada, pero se puede
+  reemplazar un borrador ajeno con replaceExistingDraft. El dev lo traslada a IM-1309; el AC9 del
+  ticket sigue sin reescribir, asi que falta la decision de producto.
+
+OBSERVACIONES (no bloquean)
+  O1. CI de PR #90: el run "Test" del evento pull_request fallo en el test 4 de
+      SurveyDraftLifecycle.integration ("keeps widget answers and transfers draft ownership only
+      after confirmation"): se quedo 8 minutos en "Loading…". El mismo arbol paso en el run del push
+      en 57 s, y en local da 30/30 (15 sin carga y 15 con 8 CPU ocupadas). Es una parada del runner;
+      conviene relanzar el check antes de mergear #90.
+  O2. Dentro del modal de Salesforce la escala NPS no cabe: 8, 9 y 10 quedan tras un scroll
+      horizontal (iframe-dev/00, 04). Es del recurso estatico / layout, no de esta historia.
+  O3. Al abrir, el iframe repite en paralelo tres peticiones (by-slug, general/eligible y
+      features/16/surveys). No tiene efecto: el restore se hace una vez y resumeCount sube de uno en uno.
