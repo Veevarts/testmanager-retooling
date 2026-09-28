@@ -1,0 +1,68 @@
+HALLAZGOS · TR-206 · TC-185 v3 · IM-1302 · segundo re-test (PR #92)
+=====================================================================
+Probado: survey-tool "PR #92" (fix/draft-takeover-data-loss-IM-1302), head 5656962f, ABIERTO contra
+develop (base 3789cb5c). Sin mergear ni desplegar: dev sigue sirviendo el bundle de PR #91
+(index-BMrGo9kl.js); el build de este PR genera index-BWuXQveN.js, el mismo que reporta su CI.
+Ejecucion LOCAL, base limpia, una sola corrida: servidor, cliente, Chromium (dos contextos
+aislados = dos navegadores) y DynamoDB reales.
+
+LO QUE TR-205 PIDIO CORREGIR, Y SU ESTADO
+-----------------------------------------
+N1 · el desplazado perdia lo que tenia en pantalla al enviar ............ CORREGIDO
+  - servidor: el envio con un token que no es el del borrador en curso responde 409
+    DRAFT_ACTIVE_ELSEWHERE (api SEGUNDO_NAVEGADOR paso 8; antes DRAFT_INACTIVE).
+  - pagina: aviso con Continue here, respuestas intactas, 0 respuestas creadas (ui/v2-08,
+    ui/v3-01). Si recupera con Continue here y envia, se crea 1 respuesta con SUS respuestas
+    (ui/v3-02, v3-03).
+  - widget: igual (ui/v2-15, ui/v3-05, v3-06).
+N2 · Continue here guardaba el payload del primer conflicto .............. CORREGIDO
+  - tras Continue here el servidor tiene lo que hay en pantalla: 10 + texto + 9 en la segunda
+    pregunta (ui-v2.log paso 06).
+  - lo escrito con el aviso visible sobrevive a cerrar y reabrir (pasos 10a/10b, ui/v2-11).
+F2 · app.test.ts y ProgressDashboard.test.ts no se ejecutaban ............ CORREGIDO
+  - los scripts usan find: server 13/13 y client 16/16 ficheros; 180 y 89 tests en verde.
+  - la mutacion M1 de TR-202 (Progress sin auth), que antes pasaba en verde, ahora la detecta
+    app.test.ts.
+N3 · AC9: sin el token se puede reemplazar un borrador ajeno ............. SIN CAMBIO, DERIVADO
+  - un tercero sigue pudiendo reemplazar con replaceExistingDraft (201) y enviar a nombre del
+    encuestado (201) (api AC9_TERCERO). Sigue sin poder LEER nada.
+  - el dev creo IM-1309 ("Bind survey draft ownership transfer to signed respondent
+    identity", Sin iniciar), cuyos AC piden literalmente rechazar replaceExistingDraft sin una
+    asercion firmada. Esta planificado, pero el AC9 de IM-1302 tal como esta escrito no se
+    cumple. Que se acepte trasladarlo a IM-1309 es decision de PRODUCTO.
+
+LO NUEVO QUE HE PROBADO
+-----------------------
+- Desplazado que recupera y envia (pagina y widget): OK, una respuesta con sus respuestas.
+- El otro navegador YA envio y el desplazado pulsa Submit:
+    pagina: formulario vaciado con "Your saved progress is no longer active. A fresh attempt
+            has been started.", Submit deshabilitado, 1 respuesta (no duplica) (ui/v3-04).
+    widget: conserva las respuestas, aviso "Your saved progress is no longer active. Close and
+            reopen it to start a fresh attempt.", Submit habilitado pero no envia nada;
+            reintentar o cambiar la respuesta no crea otra respuesta (ui/v3-07, v3-08).
+  Correcto en lo que importa (la respuesta existe y no se duplica). Pero el mismo caso se ve
+  distinto en la pagina y en el widget, y ninguno dice que la encuesta YA SE ENVIO desde otro
+  navegador. Observacion de UX, baja.
+- Widget con cambio real de definicion antes de enviar: aviso "This survey changed while you
+  were answering. Close and reopen...", respuestas en pantalla, Submit habilitado pero reintentar
+  NO envia (0 respuestas): el AC4 se mantiene (ui/v3-09, v3-10). Temia que al dejar Submit
+  habilitado se pudiera reenviar sin token; no es asi, porque el error terminal queda retenido.
+
+COBERTURA DE LOS TESTS (scenario-0-unit-tests/mutaciones-v3.txt)
+----------------------------------------------------------------
+Detectadas: M1 (auth de Progress, nueva gracias a F2), M11 (envio del desplazado, servidor), M12
+(pagina), M13 (widget), M14b (Continue here con payload viejo).
+Siguen sin detectarse: M4 (el mismo resumeRequestId cuenta dos veces, desde TR-202) y M9 (toma
+automatica al pulsar Submit, desde TR-205). Funcionan hoy; ningun test los vigila.
+Nota: la primera version de M14 no cambiaba nada (`({} as never) && X` vale X); se rehizo como
+M14b.
+
+OBSERVACIONES
+-------------
+O1 Submit habilitado pero inerte en el widget tras un error terminal (ya se veia en TR-205 con el
+   aviso de conflicto). El aviso explica que hay que cerrar y reabrir.
+O2 Pagina y widget resuelven distinto "el otro navegador ya envio" (vaciar vs conservar).
+O3 El AC6 literal no cambia (R1): un cliente heredado sin token con borrador activo sigue en 409.
+O4 PR #92 esta ABIERTO. La aprobacion queda sujeta a su merge en develop y a comprobar en dev
+   que se sirve (bundle y codigo de error del envio), igual que en TR-205.
+O5 Escenario 12 (iframe de Salesforce) sigue sin ejecutar: el arreglo no esta ni en dev.
