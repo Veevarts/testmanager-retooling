@@ -1,0 +1,26 @@
+AC4 CONTRA EL BACKEND REAL · IM-1297 / TC-182 / TR-200 v2 · dev · 2026-09-28
+============================================================================
+POST /clients/<cliente-qa>/backups/:backupId/upload-url {key}, desde la pagina con la sesion de QA
+(harness/05 y harness/06). La URL firmada del 201 se sustituye por un marcador antes de salir del
+navegador.
+
+ hora UTC   caso                                               HTTP  cuerpo
+ 19:41:45   db_1 (FAILED), su propia clave del certificado     201   {"key":"<su clave>","url":"<url firmada, X-Amz-Expires=3600>"}
+ 19:41:45   db_1 con la clave del certificado de db_2          400   "Key does not belong to this backup"
+ 19:41:46   respaldo inexistente 00000000-0000-4000-8000-...   400   "Backup not found"
+ 19:41:46   db_1 con una clave inventada del mismo prefijo     400   "Key does not belong to this backup"
+            (…/certificate.cer -> …/otro.cer)
+ 20:55:47   db_3 (DONE), su propia clave del certificado       409   "Backup upload is already complete; its files cannot be replaced"
+
+Lo que confirma en vivo:
+- un respaldo FAILED SI obtiene URL para sus propios ficheros, y esa es la via para completarlo sin
+  tocar S3 a mano;
+- la clave se compara contra las del propio respaldo: ni la de otro respaldo del mismo cliente ni una
+  inventada con su mismo prefijo;
+- un respaldo inexistente responde 400, NUNCA 404, porque el frontend lee 404 como "ruta sin
+  desplegar" y caeria al enlace de creacion;
+- con el upload ya DONE, 409: no se pueden reemplazar ficheros de un respaldo completo.
+
+No probado en vivo: las guardas de borrado (DELETING / DELETED / DELETE_FAILED -> 409). Exigen
+borrar un respaldo, y los datos de QA se conservan. Siguen cubiertas por las pruebas unitarias del
+dev y por la mutacion M8 (TR-200 v1).

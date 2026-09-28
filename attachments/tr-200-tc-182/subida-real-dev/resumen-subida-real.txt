@@ -1,0 +1,139 @@
+SUBIDAS REALES EN DEV · IM-1297 / TC-182 / TR-200 v2 · 2026-09-28
+=================================================================
+
+QUE SE HIZO Y CONTRA QUE
+- Entorno de pruebas (dev) de la Migration App, en el navegador y con la sesion de admin de QA. El
+  token no sale del navegador: cada llamada directa a la API es un fetch dentro de la pagina.
+- Cliente de QA "Test QA Backup", sin datos de ningun cliente real. Siete respaldos, del
+  Test-QA-Backup_db_1 al db_7, todos creados desde el formulario real "Upload New Backup".
+- Dos tipos de fichero:
+  · SINTETICOS NO restaurables (db_1-db_4, db_6, db_7): el .bak son bytes aleatorios; el .cer y el
+    .pvk, textos de relleno de 75 y 67 bytes. Sirven para la subida, no para el aprovisionamiento.
+  · RESPALDO REAL PROPIO DE QA (db_5): una base de SQL Server con datos sinteticos de QA, cifrada con
+    TDE y con un certificado de QA, y restaurada antes en un servidor limpio como control. Ver
+    respaldo-real-qa/README.txt.
+- Produccion no se toco. Tampoco se toco S3 directamente ni ninguna variable del entorno. La caducidad
+  se lee en las propias URLs firmadas (X-Amz-Expires).
+- Las URLs prefirmadas no se guardan en ningun sitio. Cada una se reduce a un hash cyrb53 (urlHash),
+  a su X-Amz-Expires y a su X-Amz-Date. Dos URLs con el mismo hash son la misma URL.
+
+S3_PRESIGN_EXPIRATION EN DEV = 3600 s
+Todas las URLs firmadas de la corrida llevan X-Amz-Expires=3600: las 18 de creacion, las 8 de
+refirmado y las 10 de las partes (eventos-red.txt). Basta una subida del .bak de mas de una hora
+para que caduquen las URLs de creacion. No hizo falta leer la variable en SSM ni pedir que se
+bajara.
+
+NINGUN 403 EN TODA LA CORRIDA
+2280 eventos grabados. Codigos: 200 x1077, 201 x30, 202 x3, 400 x4, 404 x2, 409 x1 y 500 x1. Todos
+los 4xx y 5xx los provoca QA: 404, 500 y 400 forzados en B2 y B6, y los 400 y el 409 de las
+llamadas de AC4.
+
+BLOQUES
+ B1 · db_1 · AC5, negativa 409 (19:37:03)
+      QA intercepta la ruta de refirmado y la hace responder 409. El certificado NO se envia y no
+      sale ningun PUT a S3. El respaldo queda en uploadStatus FAILED con uploadFailure.stage =
+      single_sign, httpStatus 409, fileType CERTIFICATE y s3Key "...cate.cer". El mensaje llega al
+      panel "Backup uploads" (capturas 03 y 04). Secuencia de red: upload-link 201 -> upload-url 409
+      -> PATCH status 200, sin ningun PUT.
+      (El primer grabador no podia parsear las URLs: el sandbox no tiene el global URL. De B1 se
+      conservan la secuencia de metodos y codigos y el estado leido de la API.)
+
+ B2 · db_2 · AC5, ruta ausente o caida (19:38:15)
+      El refirmado responde 404, 500 y 404, forzados por QA. El frontend cae al enlace de creacion
+      las tres veces, y el hash lo demuestra:
+        certificado  refirmado 404 -> PUT con 0729e021dde57f = uploads.1 de upload-link -> 200
+        clave        refirmado 500 -> PUT con 1411e07d3afbbe = uploads.2 de upload-link -> 200
+        .bak         refirmado 404 -> PUT con 172d58c25c486b = uploads.0 de upload-link
+      QA corta el PUT del .bak para que db_2 no llegue a DONE ni aprovisione. Queda FAILED con
+      single_put / BACKUP.
+
+ B3 · db_3 · AC1 (subida) + AC2 + AC3 + multipart, .bak SINTETICO (19:39:51 -> 20:53:11)
+      Subida limitada a 110000 B/s con CDP. El .bak mide 441450496 B y va por multipart en 5 partes,
+      cada una firmada justo antes de subirla.
+        19:39:52  upload-link firma 3 URLs que CADUCAN a las 20:39:52
+        19:39:53  certificado y clave, cada uno con URL refirmada (02f9452b05e806, 0fcb0c4f2e32b2,
+                  ninguna de las de creacion) -> 200 y 200
+        19:39:54  empieza el .bak: parte 1
+        20:29:56  el token de sesion, que caducaba a las 20:30:53, se renueva solo
+        20:39:52  CADUCAN LAS URLs DE CREACION
+        20:49:50  se firma la parte 5, DESPUES de la caducidad
+        20:53:11  multipart/complete 201 -> complete 201 -> uploadStatus DONE, status PENDING
+      73m20s, sin 403 ni uploadFailure. Como el .bak es aleatorio, la restauracion no puede
+      terminar: db_3 sigue en PENDING y la app no deja apagarlo (PENDING es transitorio y el toggle
+      responde 400). Pasara a FAILED al vencer el plazo de aprovisionamiento (8 h), y el watchdog
+      escalara la maquina a 0.
+
+ B4 · db_4 · AC3, .bak pequeno por PUT unico (20:56:04)
+      El .bak mide 1 MiB. Las tres subidas piden su URL justo antes del PUT:
+        certificado  refirmado 20:56:04 -> 09307060db3830 -> PUT 200
+        clave        refirmado 20:56:05 -> 1fe2e1b4be781c (creacion: 12f0236a0ee573) -> PUT 200
+        .bak         refirmado 20:56:05 -> 133f9e98e539ee (creacion: 017ca2e0ed3553) -> PUT 200
+      El hash del certificado COINCIDE con el uploads.1 de creacion, y no es un fallback: el
+      refirmado respondio 201 en el mismo segundo que la creacion (X-Amz-Date 20260928T205604Z en
+      las dos). SigV4 es determinista: con la misma clave, la misma caducidad y el mismo segundo, la
+      URL sale igual. QA corta el /complete para que db_4 no aprovisione.
+
+ B5 · db_5 · AC1 DE PUNTA A PUNTA, respaldo REAL de QA (21:46:41 -> 22:54:29 -> ON)
+      Subida limitada a 110000 B/s. El .bak mide 446816256 B, con TDE, y va en 5 partes.
+        21:46:42  upload-link firma 3 URLs (1a871c2183a0e6, 0ccd6f5d2cb8c7 y 1b04bff750b76d) que
+                  CADUCAN a las 22:46:42
+        21:46:42  certificado: refirmado 201 -> PUT 200 a las 21:46:42.9
+                  (mismo hash que uploads.1 porque se firmo en el mismo segundo; ver B4)
+        21:46:43  clave: refirmado 201 -> 058db2a9142d1f (creacion: 1b04bff750b76d) -> PUT 200 a
+                  las 21:46:43.4
+        21:46:44  multipart/init 201; parte 1 firmada -> 200 a las 22:02:37
+        22:02:37  parte 2 firmada -> 200 a las 22:18:31
+        22:18:31  parte 3 firmada -> 200 a las 22:34:25
+        ~22:28    el token de sesion se renueva solo (el nuevo caduca a las 23:28:04)
+        22:34:25  parte 4 firmada -> 200 a las 22:50:19
+        22:46:42  CADUCAN LAS URLs DE CREACION
+        22:50:19  parte 5 firmada DESPUES de la caducidad -> 200 a las 22:54:29
+        22:54:29  multipart/complete 201 -> complete 201 -> uploadStatus DONE, status PENDING
+                  ("Setting up...", captura 06)
+        22:56:34  sigue PENDING, aprovisionando
+        23:08:20  status ON: la app confirma que SQL Server acepta conexiones para esa base
+                  (captura 07)
+        23:08:53  QA la apaga desde su interruptor ({"turnedOn":false} -> 202, TURNING_OFF)
+      67m48s de subida, sin 403 ni uploadFailure. El aprovisionamiento descarga de S3 el .bak, el
+      certificado y la clave, crea el certificado con la contrasena del formulario y restaura. Que
+      llegue a ON prueba que los tres ficheros estan en el prefijo de S3 del respaldo y se pueden
+      usar. Hace falta esa prueba porque /complete no comprueba S3: se fia de lo que dice el cliente.
+
+ B6 · db_6 · AC5, negativa 400 (22:57:05)
+      El refirmado responde 400 (forzado por QA). Resultado: 0 PUTs a S3, uploadStatus FAILED,
+      uploadFailure single_sign, httpStatus 400, fileType CERTIFICATE, s3Key "...cate.cer".
+
+ B7 · db_7 · AC5, refirmado SIN RESPUESTA (23:02:39)
+      QA corta la conexion del refirmado (ERR_CONNECTION_REFUSED) en las tres llamadas. El frontend
+      cae al enlace de creacion:
+        certificado  PUT con 15cd8531184bb3 = uploads.1 -> 200
+        clave        PUT con 001a332ad73fd5 = uploads.2 -> 200
+        .bak         PUT con 1c01f56a51ab3a = uploads.0 (cortado por QA para que no aprovisione)
+      Queda FAILED con single_put / BACKUP.
+
+AC4 CONTRA EL BACKEND REAL: ver ac4-backend-real.txt (201 / 400 / 400 / 400 / 409).
+
+INTENTO DESCARTADO: REUTILIZAR EL RESPALDO DE OTRO WORKSPACE
+Primero se intento restaurar un respaldo real ya existente en dev, de otro workspace de pruebas.
+Hacia falta su contrasena de respaldo (Secrets Manager) y su clave privada (S3), y el control de
+permisos de la herramienta bloqueo las dos lecturas. No se forzo. Para inspeccionar su base se
+encendio su maquina (21:31, 202) y se volvio a apagar en cuanto llego a ON (22:02, 202), sin
+conectarse: el host es privado de la VPC de dev. De ese workspace no se leyo ningun dato.
+
+OBSERVACIONES (no son defectos del arreglo)
+- O1 · files.*.uploadedAt vale el instante en que se crearon los enlaces (21:46:42.134Z en db_5,
+  para los tres ficheros), no el de la subida. En db_5 el .bak llego 68 minutos despues. Quien lea
+  ese campo como "cuando llego el fichero" se equivoca.
+- O2 · Durante la subida, la tarjeta dice "Setting up..." y muestra "Resume Upload" y "Start Over"
+  deshabilitados, con el texto "Upload recovery actions are temporarily unavailable" (capturas 03 y
+  05). Es el mismo "Setting up..." que durante el aprovisionamiento, asi que desde la tarjeta no se
+  distingue "subiendo" de "montando la base". El panel "Backup uploads" si lo distingue.
+
+INVENTARIO FINAL EN DEV (se conserva todo)
+  Test-QA-Backup_db_1  FAILED  OFF          single_sign 409 forzado (B1)
+  Test-QA-Backup_db_2  FAILED  OFF          single_put, .bak cortado por QA (B2)
+  Test-QA-Backup_db_3  DONE    PENDING      .bak sintetico; pasa a FAILED al vencer el plazo (B3)
+  Test-QA-Backup_db_4  FAILED  OFF          /complete cortado por QA (B4)
+  Test-QA-Backup_db_5  DONE    OFF          respaldo real de QA: restaurado (ON) y apagado (B5)
+  Test-QA-Backup_db_6  FAILED  OFF          single_sign 400 forzado (B6)
+  Test-QA-Backup_db_7  FAILED  OFF          single_put, .bak cortado por QA (B7)
