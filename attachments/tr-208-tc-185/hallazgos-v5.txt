@@ -1,0 +1,49 @@
+HALLAZGOS · TR-208 · TC-185 v5 · IM-1302 · cuarto re-test (PR #94 mergeado y desplegado en dev)
+
+F1 · ALTA · SIGUE ABIERTO · En dev ningun encuestado identificado puede enviar
+  Estado 2026-09-29 14:16-14:20Z: POST /api/responses sigue en 500 en las dos rutas identificadas.
+    - sin borrador (cliente heredado): 2 de 2 intentos, dev/api-envio-directo.txt;
+    - con borrador, desde el iframe de Salesforce tras tomar el borrador con Continue here:
+      dev/iframe/11, net.jsonl.
+  Causa confirmada en la infraestructura. El rol de ECS de survey-tool se define en
+    Veevarts/IaCLive, en {dev,staging,prod}/us-east-1/services/survey-tool/service/terragrunt.hcl.
+    En los tres entornos concede GetItem, PutItem, UpdateItem, DeleteItem, Query y Scan, y NO
+    concede dynamodb:ConditionCheckItem (bloques "dynamodb:*" en dev ~l.315, staging ~l.332,
+    prod ~l.412). No hay PR abierto; el ultimo cambio del fichero es del 2026-08-21.
+  Arreglo. Anadir "dynamodb:ConditionCheckItem" a esos bloques, limitado a las tablas base surveys y
+    respondent-state, como ya documenta el README tras PR #94, y aplicarlo en dev. Tambien en staging
+    y produccion antes de mergear PR #90: produccion tampoco lo tiene.
+  PR #94 no toca IAM (el propio dev lo declara). Afecta a los escenarios 5, 6, 12 y 13; en local,
+    los cuatro pasan.
+
+S1 · CORREGIDO en las rutas de esta historia
+  Tras PR #94, los 500 de respuestas y borradores devuelven "Unable to complete the survey request.
+  Please try again." con code SURVEY_REQUEST_FAILED y un requestId, sin cuenta, rol ni ARN. Verificado
+  en dev: 3 respuestas, y el mensaje que ve el encuestado en el iframe (dev/iframe/11). El log del
+  servidor guarda el nombre del error de una lista permitida y el requestId de AWS, nunca el mensaje.
+  Riesgo residual, anterior a esta historia y fuera de su alcance: otras rutas siguen devolviendo
+  String(e). Entre ellas hay tres publicas que usa el widget (features by-slug, impressions y
+  dismissals) y el resto son de admin (surveys, features, organizations, settings, analytics).
+  Recomendado en un ticket aparte.
+
+AC9 · CERRADO COMO EXCEPCION ACEPTADA
+  El dev reescribio el AC9 en la descripcion del ticket el 2026-09-28 a las 20:05 (-0500):
+    - ya no se leen ni se actualizan borradores por la via ordinaria sin el token;
+    - el reemplazo explicito (replaceExistingDraft) queda como "Accepted Release Exception",
+      aprobada por el product owner segun el texto del ticket, y ligada a IM-1309 (identidad firmada).
+  Contra el AC reescrito el comportamiento cumple (local, identico a TR-207). El hallazgo original se
+  conserva como excepcion aceptada y no como identidad firmada. La aprobacion del product owner consta
+  en la descripcion escrita por el dev; no hay un comentario suyo en el ticket.
+
+OBSERVACIONES
+  O1. CI intermitente: SurveyDraftLifecycle.integration se colgo dos veces en dos dias, en tests
+      distintos (el test 4, 8 minutos, en PR #90; el test 8, 15 minutos, en el primer run de PR #94).
+      En local, el fichero entero pasa 20/20 en 2-4 s, tambien con la CPU cargada. Recomendado:
+      timeout por test para que el cuelgue falle rapido, y revisar temporizadores o fetch pendientes
+      en ese fichero.
+  O2. La escala NPS del modal de Salesforce no cabe con un viewport de 1400x806 (TR-207), pero si con
+      1400x900 (esta ronda). Depende del tamano de la ventana.
+  O3. El borrador de TR-207 se quedo sin token: el token vivia en el perfil temporal del navegador de
+      QA, que se borro al cerrar la ronda. En esta ronda el navegador nuevo lo tomo con Continue here
+      (es dato de QA). Ahora el token esta en un perfil persistente de QA, para enviar ese borrador en
+      el re-test tras el arreglo.
