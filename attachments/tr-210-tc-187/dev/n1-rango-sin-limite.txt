@@ -1,0 +1,35 @@
+N1 (media) · Un periodo desmesurado no se rechaza con 400: el servicio lo calcula, supera el limite de
+respuesta de Lambda y la pestana muestra "Failed to fetch"
+
+AC: "Invalid filters are rejected by the API with a reason. The tab resets them and shows the message
+inline." La DTO valida el FORMATO de from/to (YYYY-MM) y resolveMetricsFilters la LOGICA (from<=to,
+solape, agrupacion), pero nada limita la LONGITUD del periodo. buildMetricView genera una tendencia
+con un punto por mes del rango para cada metrica, y la comparacion otro tanto.
+
+1) Servicio real en local (harness/qa-im1245-harness.spec.ts, WorkspaceService de main con las filas
+   de dev, filtros from/to + compare=previous_period):
+     from=2000-01 to=2026-07   ->  respuesta de 3.7 MB,   RSS del proceso ~0.9 GB
+     from=1900-01 to=2026-07   ->  respuesta de 17.7 MB,  RSS ~0.9 GB
+     from=0001-01 to=9999-12   ->  36 s, RSS 3.2 GB, y revienta al serializar: RangeError: Invalid string length
+
+2) Dev (una peticion de cada, sesion admin dentro del navegador):
+     from=2000-01 to=2026-07   ->  200, 2.6 MB en ~0.75 s
+     from=1900-01 to=2026-07   ->  sin respuesta utilizable: el navegador la recibe sin cabeceras CORS
+                                    (error de la pasarela, no de la aplicacion)
+   Log de la Lambda del backend de dev en esos minutos (solo lectura, CloudWatch):
+     LAMBDA_RUNTIME Failed to post handler success response. Http response code: 413.
+     {"errorMessage":"Exceeded maximum allowed payload size (6291556 bytes).","errorType":"RequestEntityTooLarge"}
+   El caso 0001-9999 NO se lanzo contra dev a proposito: en local ya consume 3.2 GB y 36 s.
+
+3) En la pestana (captura ui/18): el enlace ?mPeriod=custom&mFrom=1900-01&mTo=2026-07 es aceptado por
+   el parser del frontend (dos YYYY-MM en orden), se envia, y la pestana queda en "Couldn't load product
+   metrics · Failed to fetch" sin controles de filtro. "Reset filters" permite salir, pero no hay motivo
+   ni reinicio automatico como en los 400.
+
+Por que importa: cualquiera con sesion puede provocar calculo y memoria sin tope con una URL, y un
+enlace compartido con un rango asi deja la pestana en error. Es consumo de recursos sin limite
+(OWASP API4:2023) ademas de un incumplimiento del AC.
+
+Esperado: el backend rechaza con 400 y motivo un periodo o una comparacion fuera de un tope (p. ej.
+la ventana de lectura de 36 meses, o el rango de availableMonths), y el parser del frontend no envia
+rangos fuera de los meses disponibles. Un test que fije el 400.

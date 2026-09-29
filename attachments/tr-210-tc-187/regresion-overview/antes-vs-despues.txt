@@ -1,0 +1,35 @@
+Regresion de Overview: la vista SIN filtros antes y despues de "PR #405"
+
+AC: "The Overview tab's metrics and signals are unchanged: it keeps reading the unfiltered view,
+with its 18-month horizon."
+
+Metodo (harness/qa-im1245-harness.spec.ts): se ejecuta el WorkspaceService REAL de cada arbol con un
+repositorio falso que devuelve las mismas filas, filtradas como filtraba el SQL de cada version:
+  antes  = 7d0ff803 (padre del merge): period_start >= hoy - 18 meses exactos  -> desde 2025-03-29
+  despues = 975869ed (merge):          period_start >= inicio del mes - 36 meses -> desde 2023-09-01
+Se llama getAccountMetrics(cuenta) sin filtros en los dos y se compara campo a campo, excluyendo solo
+los campos nuevos que anade el PR (availableMonths, dataThrough*, appliedFilters, period,
+comparisonPeriod, comparisonOptions, groupings; y por serie latestAsOf, previousAsOf, category,
+aggregation, comparisonLabel, coverage, comparisonCoverage, comparisonTrend y trend[].partial).
+
+conjunto                                        filas visibles  metricas   diferencias
+                                                antes / despues antes/desp
+d1  filas de dev tal cual                        524 / 1113      39 / 39    0
+d2  d1 + una serie que acabo en Jan 2025         524 / 1126      39 / 39    0   (la serie antigua no reaparece)
+d3  d1 sin ningun dato de 2026-03                492 / 1081      39 / 39    0
+
+La serie de d2 (13 meses de 2024-01 a 2025-01) esta dentro de la ventana nueva de 36 meses y fuera
+del horizonte de 18: el PR la vuelve a recortar en el servicio (unfilteredHorizonStart), y sin ese
+recorte apareceria en Overview. La mutacion M02 lo confirma: quitar el recorte pone 2 tests en rojo.
+
+En dev: Overview de <cuenta-qa> hace la peticion SIN parametros (la ruta sin filtros) y sus seis
+senales coinciden con el cambio mes a mes de esa respuesta:
+  Visitor Traffic +21%  (number_of_visitors +20.8%)   Membership Base 0% (current_members -0.2%)
+  Ticketing +41%        (ticketing_income +41.1%)     Fundraising -62%   (donations_income -61.5%)
+  Transactions +44%     (credit_card_transactions_count +43.8%)   Shop -10% (shop_income -10.1%)
+(captura ui/15, solo el bloque de senales)
+
+Regla del mes no reportado a mitad de serie (d3, vista filtrada por defecto, servicio de main):
+  2026-03 sale de availableMonths; todas las metricas clasificadas quedan con cobertura 11 de 12 y
+  ninguna muestra %. Q1 2026 de tickets_sold: Jan 545, Feb 715, Mar null (partial) -> total 1260 con
+  cobertura 2/3 y sin %, en vez de sumar un 0 por marzo. Con los datos completos: 1999, 3/3, +90.6%.

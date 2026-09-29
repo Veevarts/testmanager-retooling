@@ -1,0 +1,373 @@
+schemaVersion: '1.0'
+id: tr-29f13b4b-fd7d-4d62-93ac-ce2ea8c9faad
+key: TR-210
+title: >-
+  TR-210 · IM-1245 · TC-187 · filtros de periodo y comparacion en Account Metrics · 16/18 PASS, 2 FAIL
+  — los numeros coinciden con un calculo independiente y Overview no cambia, pero un periodo sin tope
+  tumba la respuesta en vez de dar 400
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend main 975869ed, frontend main 2bebbe88 que contiene 813693d9) con sesion
+    admin y View as de la CSM duena de la cuenta sembrada por el autor; lectura SELECT de la base de dev
+    via Data API; servicio real en local para antes/despues y rangos extremos. Produccion no se consulto.
+  buildVersion: >-
+    Mixto — backend NestJS (dominio, servicio, DTO, SQL de lectura) + frontend React. MigrationAppBackend
+    "PR #405" y MigrationAppFrontend "PR #212", mergeados a main el 2026-09-28 y desplegados en dev; stable
+    sigue en el 18-ago.
+startedAt: '2026-09-29T15:30:00Z'
+completedAt: '2026-09-29T17:30:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  La pestana Metrics mostraba un solo mes, a menudo con dos meses de retraso. El PR del backend ("#405")
+  anade a GET /csm/workspace/account-metrics un periodo principal y uno de comparacion de la misma
+  longitud, con totales por periodo (flujos sumados y niveles al final, segun la clasificacion del
+  catalogo de playbooks; lo no clasificado solo tiene valor en un mes), tendencias agrupadas por mes,
+  trimestre o anio con la comparacion alineada por indice, las comparaciones que tiene sentido ofrecer
+  y las agrupaciones que dan dos o mas puntos. Los huecos siguen a produccion: mes reportado sin fila =
+  0, mes no reportado = desconocido, y antes de la primera fila de una metrica = desconocido. La ventana
+  de lectura pasa a 36 meses y la vista sin filtros re-aplica su horizonte de 18 para no cambiar
+  Overview. El PR del frontend ("#212") pone la barra de filtros, el estado en la URL, el modal con la
+  misma agrupacion, los estados vacios, el 400 que reinicia y la recarga fallida que conserva el
+  resultado.
+
+  ## Inferred technical tests
+
+  - Suites y tipos sobre main, contando ficheros. EJECUTADO: backend src/csm/workspace 303 tests en 13
+    suites; frontend csm 2351 tests en 120 ficheros (1 saltado, ajeno); tsc en los dos; contract:check.
+  - Mutaciones, una por regla (15). EJECUTADO: 14 detectadas; M06 (chargebacks won a other) no.
+  - Oraculo independiente desde las filas crudas de la base de dev contra 30 peticiones a la API.
+    EJECUTADO: 702 comprobaciones por metrica, 0 discrepancias; control positivo con 5 desviaciones
+    sembradas, todas detectadas.
+  - UI contra API en los 7 presets (273 tarjetas) y en los modales. EJECUTADO: 0 discrepancias.
+  - Regresion de Overview antes/despues con el servicio real y las mismas filas. EJECUTADO: identica.
+  - Regla del mes no reportado: con el servicio real en local, quitando un mes. EJECUTADO.
+  - Seguridad: inyeccion (los filtros no llegan al SQL), lista blanca de parametros, secretos en el
+    diff, y consumo de recursos. EJECUTADO; de ahi sale N1.
+
+  ## Resultado
+
+  16 PASS y 2 FAIL.
+  - **N1 (media):** un periodo desmesurado no da 400: en dev supera el limite de 6 MB de Lambda (413) y la
+    pestana queda en "Failed to fetch"; en local 0001-9999 consume 3.2 GB y 36 s.
+  - **N2 (baja):** al pasar a Custom range desde This quarter o Year to date, el selector de fin queda
+    vacio ("End") mientras se aplica un rango hasta Sep 2026.
+  - Observaciones O1-O6 en hallazgos.txt; la mas relevante para producto es O1: 7 de 39 metricas no
+    tienen total en periodos de varios meses, 4 mas de las que nombra la historia.
+
+  ## Condiciones para aprobar
+
+  1. **N1:** el backend rechaza con 400 y motivo un periodo o una comparacion fuera de un tope, el
+     frontend no los envia desde la URL, y un test fija el 400.
+  2. **N2:** los selectores de Custom range muestran siempre el rango aplicado.
+  3. Recomendado: decidir O1 (clasificar los chargebacks won y los *_inactive) y fijar
+     number_of_chargebacks_won en un test.
+results:
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    Deployment state · Both merges run in dev, backend before frontend, and neither is in production
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-29T16:05:00Z'
+  stepResults: []
+  actual: |
+    Backend 975869ed ("#405") desplegado en dev de 19:14:07Z a 19:25:40Z; frontend 813693d9 ("#212") de
+    19:23:54Z a 19:25:48Z: el backend termino 8 s antes. La API de dev responde con el contrato nuevo y el
+    navegador carga el mismo index-*.js que el index.html vivo. stable sigue en el 18-ago en los dos
+    repos y no contiene ninguno de los merges (backend 19 commits por detras de main, frontend 18). QA no
+    consulto produccion. attachments/tr-210-tc-187/dev/despliegue-y-estado.txt
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    Functional · A CSM filters an account's metrics end to end in dev
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-29T16:10:00Z'
+  stepResults: []
+  actual: |
+    Recorrido completo en dev con View as de la CSM duena de <cuenta-qa>: vista por defecto (01), presets
+    (02, 03), Custom range (04a), comparaciones deshabilitadas con motivo (05), no comparado por cobertura
+    (06), modal por trimestre con tabla A | B (07), tooltip y cambio a Year desde el modal (08a-c), chips,
+    busqueda y orden (09a), filtros que ocultan todo (09b), URL compartible (10), 400 (11), sin datos
+    (12a), recarga fallida (13), cuenta sin metricas (14), Overview (15), Custom start (16), modal con
+    controles a medida (17). Los numeros coinciden con la API y el oraculo. El unico defecto visto en el
+    recorrido es N2 (escenario 5). attachments/tr-210-tc-187/ui/ y attachments/tr-210-tc-187/dev/ui-vs-api-presets.txt
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · The default primary period is the 12 months ending at the newest month with data, compared with
+    the previous 12
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-29T15:53:00Z'
+  stepResults: []
+  actual: |
+    Sin filtros en la URL, la pestana pide compare=previous_period (nunca la peticion sin parametros de
+    Overview) y el backend aplica Aug 2025 - Jul 2026 contra Aug 2024 - Jul 2025: los 12 meses que
+    terminan en el mes mas nuevo con datos (Jul 2026). Las 39 tarjetas coinciden con la API y el
+    oraculo. attachments/tr-210-tc-187/ui/01-vista-por-defecto-12m-vs-anterior.png
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Period presets: rolling ones end at the newest month with data and Last month names it; calendar
+    ones start from today
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-09-29T15:58:00Z'
+  stepResults: []
+  actual: |
+    El selector ofrece los ocho presets; Last month se llama "Last month (Jul 2026)". Los moviles terminan
+    en Jul 2026 (Last 3 = May-Jul, Last 6 = Feb-Jul); This quarter (Jul-Sep 2026), Last quarter (Apr-Jun)
+    y Year to date (Jan-Sep 2026) se anclan en hoy y, con meses sin datos, lo dicen: "1 of 3 months with
+    data" y "Not compared: ...". 7 presets x 39 tarjetas = 273, 0 discrepancias con la API; la peticion de
+    cada preset es identica a la de la matriz validada por el oraculo. attachments/tr-210-tc-187/dev/ui-vs-api-presets.txt
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Custom range picks a start and an end month, and months without data are disabled
+  scenarioIndex: 4
+  status: failed
+  executedAt: '2026-09-29T17:10:00Z'
+  stepResults: []
+  actual: |
+    N2. Los meses sin datos si salen deshabilitados (comprobado con una respuesta alterada solo en el
+    navegador: Mar y Apr 2025 deshabilitados, ui/19). Pero al pasar de This quarter a Custom range se
+    copia Jul-Sep 2026 y el selector de fin queda en "End"; desde Year to date, "Jan 2026" y "End" con
+    Jan-Sep 2026 aplicado; con un enlace 2020-01..2020-06, "Start" y "End". Al elegir despues un inicio,
+    la peticion arrastra el fin invisible (to=2026-09). attachments/tr-210-tc-187/dev/n2-custom-range-selectores-vacios.txt
+  defects:
+  - jiraKey: IM-1245
+    url: https://veevart.atlassian.net/browse/IM-1245
+    severity: low
+    summary: >-
+      Custom range copies a range that ends in a month without data (This quarter, Year to date, or a
+      link) and the End picker shows the placeholder while that range is applied
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Tiles show period totals: flows summed, levels at the period's end with 'as of', unclassified
+    only for a single month
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-29T15:50:00Z'
+  stepResults: []
+  actual: |
+    19 combinaciones validas contra el oraculo independiente: 702 comprobaciones por metrica, 0
+    discrepancias (totales, as of, cobertura, % y tendencias). Los niveles que no vienen del ultimo mes
+    dicen "as of Jul 2026" (ui/03). Las metricas sin clasificar solo tienen valor con un mes: son 7 de
+    39, cuatro mas de las que nombra la historia (O1). attachments/tr-210-tc-187/dev/oraculo-independiente.txt
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Comparison options keep the primary length, and the ones that make no sense are disabled with
+    a reason
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-29T16:00:00Z'
+  stepResults: []
+  actual: |
+    Con Nov 2024 - Apr 2026 (18 meses): "Same period last year" deshabilitada con "overlaps the selected
+    period"; Previous period "14 of 18 months with data"; 2 years back "8 of 18"; 3 years back no se
+    ofrece (no alcanza la historia). Custom start con A = Jan-Jun 2024 lista 25 ventanas de 6 meses,
+    ninguna solapada, y elegir Jan 2025 (posterior a A) envia compare=custom&compareFrom=2025-01, validado
+    por el oraculo. La API rechaza con 400 el solape a mano. O6: la ventana inicial es la ultima
+    posible. attachments/tr-210-tc-187/ui/05-18-meses-comparaciones-deshabilitadas-con-motivo.png y ui/16
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · A percentage is shown only when both periods are fully reported; otherwise the tile states the
+    coverage
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-29T16:01:00Z'
+  stepResults: []
+  actual: |
+    En las respuestas validas el % aparece solo con las dos coberturas completas (442 metricas con %, 221
+    sin %, 0 discrepancias con el oraculo). Same period 2 years back: 32 tarjetas "Not compared: Aug 2023
+    - Jul 2024 has 11 of 12 months with data", y 10 o 9 de 12 en las metricas que empezaron en Oct o Nov
+    2023. attachments/tr-210-tc-187/ui/06-dos-anios-atras-no-comparado-11-de-12.png
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Charts overlay the comparison bucket by bucket, and the modal shows both series, a tooltip with
+    both periods and an A | B table
+  scenarioIndex: 8
+  status: passed
+  executedAt: '2026-09-29T16:02:00Z'
+  stepResults: []
+  actual: |
+    Tickets Sold por trimestre: linea principal y comparacion discontinua alineadas; el tooltip dice "Q1
+    2026 1,999 / Q1 2025 1,049"; la tabla PERIOD | VALUE | COMPARED WITH | VALUE marca "(partial)" los
+    tramos cortados. Las tablas de dos modales coinciden valor a valor con la API. attachments/tr-210-tc-187/ui/07 y ui/08a
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Group chart by is offered only with two or more points, is shared by the bar and the modal, and
+    cut buckets are named by their months
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-09-29T16:03:00Z'
+  stepResults: []
+  actual: |
+    Las agrupaciones de un solo punto salen deshabilitadas con "The period is shorter than two
+    quarters/years". Cambiar a Year en el modal pide groupBy=year y la barra y la URL pasan a Year (mGroup).
+    Tramos cortados nombrados por sus meses: "Aug 2025 - Sep 2025", "Jul 2026", "Jan 2026 - Jul 2026". Con
+    Custom range y Custom start, los controles del modal quedan alineados (misma fila y altura).
+    attachments/tr-210-tc-187/ui/08b, ui/08c y ui/17
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Category chips with counts, search, sort and hide-empty work together over both periods, with
+    categories from the backend
+  scenarioIndex: 10
+  status: passed
+  executedAt: '2026-09-29T16:04:00Z'
+  stepResults: []
+  actual: |
+    Chip Payments & Risk = 10 metricas, con los dos chargebacks won. Con la busqueda "value" los
+    contadores pasan a Payments & Risk 4 y el resto 0; el orden "Biggest decline first" ordena por
+    cambio. El frontend solo guarda las etiquetas de las categorias; el codigo -> categoria viene del
+    backend. "Hide empty metrics" oculta metricas con valor 0 o nulo y tendencia vacia; en Last month
+    oculta Number of Chargebacks, que muestra -100% (O2). Sin coincidencias: "No metrics match these
+    filters" y Clear filters. attachments/tr-210-tc-187/ui/09a y ui/09b
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Data honesty: freshness line, quiet month as 0, unreported month as unknown, months before a
+    metric's first row unknown, 36 months of history
+  scenarioIndex: 11
+  status: passed
+  executedAt: '2026-09-29T16:20:00Z'
+  stepResults: []
+  actual: |
+    Linea "Data through Jul 2026 · VeevartAnalytics publishes monthly, after the month closes" con "2
+    months behind". Mes reportado sin fila = 0 (Mar 2024 de Donations Income, $0) y antes de la primera
+    fila de una metrica no se inventa cambio (oraculo, variante V2). Mes no reportado: la siembra de dev
+    no tiene ninguno; con el servicio real y las filas de dev sin 2026-03, todas quedan con cobertura
+    11/12 y sin %, y Q1 2026 de tickets_sold suma 1260 con 2/3 en vez de sumar 0 (O5). Ventana de lectura
+    desde 2023-09-01. attachments/tr-210-tc-187/regresion-overview/antes-vs-despues.txt
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Filter state lives in the URL, survives tab switches and reloads, and can be shared
+  scenarioIndex: 12
+  status: passed
+  executedAt: '2026-09-29T16:08:00Z'
+  stepResults: []
+  actual: |
+    El enlace con mPeriod=last_6, mCompare=years_back, mYears=1, mGroup=quarter, mCat=fundraising, mQ=don
+    y mSort=change conserva los siete filtros al ir a Overview y volver y al recargar, y los datos son Feb
+    2026 - Jul 2026 vs Feb 2025 - Jul 2025 por trimestre. O3: al abrir el enlace se ven ~0.4 s los 12
+    meses por defecto con el indicador de actualizacion. attachments/tr-210-tc-187/ui/10-url-compartible-sobrevive-pestana-y-recarga.png
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · Empty states: no product metrics yet, no data for the period with a jump, and filters hiding
+    every metric with a clear action
+  scenarioIndex: 13
+  status: passed
+  executedAt: '2026-09-29T16:12:00Z'
+  stepResults: []
+  actual: |
+    Cuenta sin metricas: "No product metrics yet". Rango 2020: "No data for Jan 2020 - Jun 2020" con
+    "Show the newest data (Jul 2026)", que vuelve a Last 12 months. Busqueda sin coincidencias: "No
+    metrics match these filters" con Clear filters. attachments/tr-210-tc-187/ui/14, ui/12a y ui/09b
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC + security · Invalid or disproportionate filters are rejected by the API with a reason, and the
+    tab resets them and shows it inline
+  scenarioIndex: 14
+  status: failed
+  executedAt: '2026-09-29T16:55:00Z'
+  stepResults: []
+  actual: |
+    N1. Las 11 combinaciones sin lectura dan 400 con motivo, y desde la UI (mGroup=year con Last 3) la
+    pestana reinicia los filtros de servidor, conserva la categoria y muestra el motivo (ui/11). Inyeccion:
+    los filtros no llegan al SQL; parametros desconocidos rechazados. Pero ningun tope limita la longitud
+    del periodo: 1900-01..2026-07 supera en dev el limite de 6 MB de Lambda (413 en el log, navegador sin
+    CORS) y la pestana queda en "Failed to fetch" sin controles (ui/18); en local 0001..9999 consume 3.2
+    GB y 36 s y revienta al serializar. attachments/tr-210-tc-187/dev/n1-rango-sin-limite.txt
+  defects:
+  - jiraKey: IM-1245
+    url: https://veevart.atlassian.net/browse/IM-1245
+    severity: medium
+    summary: >-
+      An unbounded period is not rejected with a 400: it exceeds the 6 MB Lambda response limit in dev
+      (413) and the tab shows Failed to fetch; 0001-9999 takes 3.2 GB and 36 s locally
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    AC · A failed reload keeps the controls and the last result on screen
+  scenarioIndex: 15
+  status: passed
+  executedAt: '2026-09-29T16:14:00Z'
+  stepResults: []
+  actual: |
+    Con la siguiente peticion forzada a 500 en el navegador, cambiar a No comparison deja los controles y
+    las 39 tarjetas anteriores con el aviso "Couldn't update the metrics for these filters. The numbers
+    below are from before the change." Retry pide compare=none, responde 200 y el aviso desaparece.
+    attachments/tr-210-tc-187/ui/13-recarga-fallida-conserva-controles-y-resultado.png
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    Regression · Overview keeps reading the unfiltered view with its 18-month horizon
+  scenarioIndex: 16
+  status: passed
+  executedAt: '2026-09-29T16:18:00Z'
+  stepResults: []
+  actual: |
+    Servicio real antes (7d0ff803) y despues (975869ed) con las mismas filas y la ventana SQL de cada
+    version: vista sin filtros identica en tres conjuntos (dev, dev con una serie antigua, dev sin un
+    mes), sin contar los campos nuevos; la serie antigua no reaparece. En dev, Overview hace la peticion
+    sin parametros y sus seis senales coinciden con el cambio mes a mes de la API. attachments/tr-210-tc-187/regresion-overview/antes-vs-despues.txt y ui/15
+- testCaseId: 39edd7c2-8145-463c-816b-630778cfd7d4
+  testCaseKey: TC-187
+  scenarioTitle: >-
+    Technical · Suites, types, contract and mutations prove the rules are guarded
+  scenarioIndex: 17
+  status: passed
+  executedAt: '2026-09-29T15:58:00Z'
+  stepResults: []
+  actual: |
+    Backend src/csm/workspace: 303/303 en 13 de 13 suites. Frontend csm: 2351 pasan en 120 ficheros (1
+    saltado, ajeno); los nueve ficheros de IM-1245 corren. tsc limpio en los dos y contract:check al dia.
+    Mutaciones: 14 de 15 detectadas; M06 (number_of_chargebacks_won a other) no la detecta ningun test (O4).
+    attachments/tr-210-tc-187/scenario-0-unit-tests/
+summary:
+  total: 18
+  passed: 16
+  failed: 2
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 89
+history:
+- action: run-started
+  timestamp: '2026-09-29T15:30:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Primera revision de QA de IM-1245: la historia quedo Cerrada por error sin QA y el autor ya entrego.
+    Se ejecuta el TC-187 en dev con la cuenta sembrada, un oraculo independiente desde la base, antes/despues
+    del servicio y mutaciones.
+- action: run-completed
+  timestamp: '2026-09-29T17:30:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    16/18 PASS, 2 FAIL. Totales, coberturas, %, agrupaciones, comparaciones, estado en la URL y estados
+    vacios correctos y medidos contra la base; Overview sin cambios. Falla N1 (media): un periodo sin
+    tope no da 400 y supera el limite de respuesta de Lambda. Falla N2 (baja): Custom range no muestra
+    el fin del rango que aplica.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-29T17:30:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-29T17:30:00Z'
+  version: 1

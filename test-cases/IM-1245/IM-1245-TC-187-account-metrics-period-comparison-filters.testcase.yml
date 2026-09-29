@@ -1,0 +1,317 @@
+schemaVersion: '1.0'
+id: 39edd7c2-8145-463c-816b-630778cfd7d4
+key: TC-187
+title: 'CSM account metrics: primary vs comparison period filters, charts, category filters and data honesty
+  (Account View)'
+description: |
+  Cobertura QA de IM-1245 (CSM OS: filters on account metrics, Account View). Sub-tarea de QA:
+  IM-1311. Epic: IM-1229 CSM OS: Feedback. Prioridad Medium. La historia quedo en Cerrada por error
+  el 2026-09-24 (paso de Not started a Closed sin QA); el autor entrego despues y QA la revisa ahora.
+
+  QUE SE ENTREGO. GET /csm/workspace/account-metrics compara un periodo principal con un periodo de
+  comparacion de la misma longitud (anterior, N anios atras, inicio a medida o ninguno), con totales
+  por periodo (flujos sumados, niveles al final del periodo, sin clasificar solo para un mes),
+  graficas agrupadas por mes, trimestre o anio con la comparacion superpuesta tramo a tramo, las
+  comparaciones que tiene sentido ofrecer (con su cobertura y el motivo si no estan disponibles) y
+  las agrupaciones que dan al menos dos puntos. Los huecos siguen a produccion: un mes que la cuenta
+  reporto sin fila de la metrica es 0; un mes que la cuenta no reporto es desconocido; los meses
+  anteriores a la primera fila de una metrica son desconocidos para ella. La ventana de lectura pasa
+  de 18 a 36 meses y la vista sin filtros (la de Overview) conserva su horizonte de 18 meses. En el
+  frontend: barra de filtros (Period, Compare to, Group chart by, busqueda, orden, chips de categoria
+  y ocultar vacias), estado en la URL, modal de detalle con la misma agrupacion y estados vacios.
+
+  Repositorios en alcance: Veevarts/MigrationAppBackend "PR #405" (merge 975869ed, 11 ficheros) y
+  Veevarts/MigrationAppFrontend "PR #212" (merge 813693d9, 22 ficheros), los dos mergeados a main el
+  2026-09-28 y desplegados en dev. main despliega a dev y stable a produccion.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. NADA DE ESTO ESTA EN PRODUCCION: stable sigue en el 2026-08-18 en los dos repos y no
+    contiene ninguno de los dos merges. El backend tiene que llegar antes que el frontend.
+  - R2. Dev no sincroniza metricas reales: el autor sembro una cuenta de dev con datos sinteticos
+    con forma de produccion (39 codigos, Sep 2023 a Jul 2026, 1,113 filas, source_run_id
+    seed-im1245-dev). Esa siembra no tiene ningun mes en que la cuenta no reportara, asi que la
+    regla del mes no reportado a mitad de serie se prueba con el servicio real en local.
+  - R3. La clasificacion flujo/nivel se hereda del catalogo de playbooks; lo que no esta en el no
+    tiene total para periodos de varios meses. La historia nombra tres codigos asi; hay que medir
+    cuantos son.
+  - R4. Ningun limite declarado para la longitud del periodo: from y to aceptan cualquier YYYY-MM.
+  - R5. El AC de filtros invalidos exige un 400 con motivo y que la pestana los reinicie; hay que
+    medir tambien las entradas que no son combinaciones ilogicas sino desmesuradas.
+type: integration
+priority: medium
+status: active
+preconditions:
+- Se comprueba antes de empezar que commit de main corre dev en backend y frontend, y que stable no los
+  contiene.
+- Hay una sesion admin en el entorno dev de Migration App con 'View as' de la CSM duena de la cuenta sembrada
+  por el autor.
+- Hay una sesion de AWS SSO para leer, solo con SELECT, csm_os.product_metrics de la cuenta de prueba
+  en la base de dev.
+- Los dos repositorios estan clonados en main con dependencias instaladas, y hay un arbol en el commit
+  anterior al merge del backend para la comparacion antes/despues.
+format: gherkin
+scenarios:
+- title: Deployment state · Both merges run in dev, backend before frontend, and neither is in production
+  tags:
+  - deployment
+  - release-risk
+  - regression
+  given:
+  - el trabajo esta repartido en dos repositorios que se despliegan por separado
+  when:
+  - se comparan los commits desplegados en dev con los merges del ticket, y la punta de stable con esos
+    merges
+  - se comparan las horas de FIN de los despliegues de backend y frontend a dev
+  then:
+  - queda escrito que commit corre cada lado en dev y que el backend termino antes que el frontend que
+    consume su contrato
+  - queda escrito que stable no contiene ningun merge del ticket
+- title: Functional · A CSM filters an account's metrics end to end in dev
+  tags:
+  - functional-ui
+  - happy-path
+  - ac-1
+  - ac-4
+  - ac-6
+  - ac-9
+  given:
+  - un usuario admin con 'View as' de la CSM duena de la cuenta de prueba sembrada en dev
+  when:
+  - abre Accounts > <cuenta-qa> > Metrics
+  - recorre presets de periodo, opciones de comparacion, agrupacion en la barra y en el modal, chips,
+    busqueda y orden
+  - cambia de pestana, recarga y abre el enlace compartido
+  then:
+  - cada paso muestra lo que pide el AC y queda capturado por paso, de 01 a 19
+  - los numeros de cada tarjeta coinciden con la API y con un calculo independiente desde las filas de
+    la base
+- title: AC · The default primary period is the 12 months ending at the newest month with data, compared
+    with the previous 12
+  tags:
+  - ac-1
+  - happy-path
+  given:
+  - la cuenta de prueba tiene datos hasta Jul 2026 (dos meses de retraso)
+  when:
+  - la pestana Metrics carga sin filtros en la URL
+  then:
+  - el periodo es Aug 2025 – Jul 2026 contra Aug 2024 – Jul 2025
+  - la peticion lleva compare=previous_period y nunca es la peticion sin parametros de Overview
+- title: 'AC · Period presets: rolling ones end at the newest month with data and Last month names it;
+    calendar ones start from today'
+  tags:
+  - ac-2
+  - happy-path
+  given:
+  - la cuenta tiene datos hasta Jul 2026 y hoy es Sep 2026
+  when:
+  - se elige cada preset del selector Period
+  then:
+  - Last month se llama 'Last month (Jul 2026)' y los presets moviles terminan en Jul 2026
+  - This quarter, Last quarter y Year to date se anclan en hoy y, si incluyen meses sin datos, lo dicen
+    con la cobertura
+  - cada tarjeta de cada preset coincide con la API y con el oraculo independiente
+- title: AC · Custom range picks a start and an end month, and months without data are disabled
+  tags:
+  - ac-2
+  - edge-case
+  given:
+  - la pestana esta en un preset de calendario o en un enlace cuyo rango incluye meses sin datos
+  when:
+  - se pasa a Custom range, o se abre el enlace con ese rango
+  - se abren los selectores de inicio y fin
+  then:
+  - los meses sin datos aparecen deshabilitados
+  - los dos selectores muestran siempre el rango que se esta aplicando, nunca un marcador vacio
+- title: 'AC · Tiles show period totals: flows summed, levels at the period''s end with ''as of'', unclassified
+    only for a single month'
+  tags:
+  - ac-3
+  - data-integrity
+  given:
+  - las 39 metricas de la cuenta, con su clasificacion del catalogo
+  when:
+  - se piden 19 combinaciones validas de periodo, comparacion y agrupacion
+  then:
+  - cada total coincide con un calculo independiente desde las filas crudas de la base
+  - los niveles que no vienen del ultimo mes del periodo dicen 'as of <mes>'
+  - las metricas sin clasificar solo tienen valor con un periodo de un mes, y queda escrito cuantas son
+- title: AC · Comparison options keep the primary length, and the ones that make no sense are disabled
+    with a reason
+  tags:
+  - ac-5
+  - negative
+  given:
+  - un periodo a medida de 18 meses
+  when:
+  - se abre Compare to y despues Custom start con un periodo antiguo
+  then:
+  - Same period last year aparece deshabilitada con 'overlaps the selected period'
+  - cada opcion disponible dice su rango y cuantos meses tienen datos
+  - Custom start mantiene la longitud del periodo y admite una ventana anterior o posterior, nunca una
+    que se solape
+- title: AC · A percentage is shown only when both periods are fully reported; otherwise the tile states
+    the coverage
+  tags:
+  - ac-5
+  - data-honesty
+  given:
+  - un periodo o una comparacion que llega a meses sin datos
+  when:
+  - se compara con Same period 2 years back y se elige This quarter
+  then:
+  - 'no se muestra ningun % y la tarjeta dice ''Not compared: <rango> has N of M months with data'''
+  - las metricas que empezaron mas tarde muestran su propia cobertura (10 o 9 de 12)
+- title: AC · Charts overlay the comparison bucket by bucket, and the modal shows both series, a tooltip
+    with both periods and an A | B table
+  tags:
+  - ac-6
+  - functional-ui
+  given:
+  - una comparacion con el periodo anterior agrupada por trimestre
+  when:
+  - se abre el detalle de una tarjeta y se pasa el cursor por la grafica
+  then:
+  - la comparacion va discontinua y alineada tramo a tramo
+  - el tooltip nombra los dos periodos y la tabla lista periodo A, valor A, periodo B y valor B, con los
+    tramos parciales marcados
+  - los valores de la tabla coinciden con la API
+- title: AC · Group chart by is offered only with two or more points, is shared by the bar and the modal,
+    and cut buckets are named by their months
+  tags:
+  - ac-6
+  - edge-case
+  given:
+  - periodos de 1, 3, 6, 9 y 12 meses
+  when:
+  - se abre Group chart by en la barra y en el modal, y se cambia la agrupacion desde el modal
+  then:
+  - una agrupacion que da un solo punto aparece deshabilitada con su motivo
+  - el cambio en el modal se refleja en la barra y en la URL
+  - un trimestre o anio cortado por el borde del periodo se nombra por sus meses, nunca como trimestre
+    o anio entero
+  - los controles de la barra y del modal quedan alineados tambien con Custom range
+- title: AC · Category chips with counts, search, sort and hide-empty work together over both periods,
+    with categories from the backend
+  tags:
+  - ac-7
+  - functional-ui
+  given:
+  - las 39 metricas repartidas en las categorias del backend
+  when:
+  - se combinan un chip, una busqueda, un orden y 'Hide empty metrics'
+  then:
+  - los contadores de los chips siguen a la busqueda y Payments & Risk incluye los chargebacks won
+  - el frontend no tiene su propio mapa de codigos a categorias
+  - queda escrito que considera vacia 'Hide empty metrics'
+- title: 'AC · Data honesty: freshness line, quiet month as 0, unreported month as unknown, months before
+    a metric''s first row unknown, 36 months of history'
+  tags:
+  - ac-8
+  - data-honesty
+  - data-integrity
+  given:
+  - la cuenta de dev y, para el mes sin reporte, el servicio real en local con las mismas filas menos
+    un mes entero
+  when:
+  - se leen la linea de frescura y los totales, y se ejecuta el servicio con el mes quitado
+  then:
+  - la linea dice 'Data through Jul 2026' con el aviso '2 months behind'
+  - un mes reportado sin fila cuenta 0, un mes no reportado baja la cobertura sin sumar ceros, y antes
+    de la primera fila de una metrica no se inventa cambio
+  - la ventana de lectura empieza 36 meses de calendario antes del mes en curso
+- title: AC · Filter state lives in the URL, survives tab switches and reloads, and can be shared
+  tags:
+  - ac-9
+  - functional-ui
+  given:
+  - un enlace con periodo, comparacion, agrupacion, categoria, busqueda y orden
+  when:
+  - se abre el enlace, se va a Overview y se vuelve, y se recarga
+  then:
+  - los siete filtros siguen puestos y los datos son los de esos filtros
+- title: 'AC · Empty states: no product metrics yet, no data for the period with a jump, and filters hiding
+    every metric with a clear action'
+  tags:
+  - ac-9
+  - negative
+  given:
+  - una cuenta sin metricas, un rango sin datos y una busqueda sin coincidencias
+  when:
+  - se abre cada caso
+  then:
+  - se ven 'No product metrics yet', 'No data for Jan 2020 – Jun 2020' con 'Show the newest data (Jul
+    2026)' y 'No metrics match these filters' con 'Clear filters'
+  - cada accion lleva a un estado con datos
+- title: AC + security · Invalid or disproportionate filters are rejected by the API with a reason, and
+    the tab resets them and shows it inline
+  tags:
+  - ac-9
+  - negative
+  - security
+  given:
+  - combinaciones sin lectura (from > to, solape, agrupacion no disponible, parametros sueltos o desconocidos,
+    formato) y periodos desmesurados
+  when:
+  - se piden a la API y se abren como enlace en la pestana
+  then:
+  - cada una recibe un 400 con un motivo legible, y la pestana reinicia los filtros de servidor y lo muestra
+    en linea
+  - ningun filtro puede hacer que el servicio falle, se quede sin memoria o supere el limite de respuesta
+- title: AC · A failed reload keeps the controls and the last result on screen
+  tags:
+  - ac-9
+  - negative
+  given:
+  - la pestana tiene un resultado cargado
+  when:
+  - se cambia un filtro y la siguiente peticion falla con 500 (simulado en el navegador)
+  - se pulsa Retry
+  then:
+  - los controles y el ultimo resultado siguen en pantalla con un aviso de que los numeros son de antes
+    del cambio
+  - Retry vuelve a pedir los filtros actuales y el aviso desaparece
+- title: Regression · Overview keeps reading the unfiltered view with its 18-month horizon
+  tags:
+  - regression
+  - ac-10
+  given:
+  - el servicio de antes del PR (7d0ff803) y el de despues (975869ed)
+  when:
+  - los dos reciben las mismas filas de dev, las mismas con una serie que acabo hace 20 meses y las mismas
+    sin un mes, emulando la ventana SQL de cada version
+  - se abre Overview en dev
+  then:
+  - la vista sin filtros es identica campo a campo fuera de los campos nuevos, y la serie antigua no reaparece
+  - Overview hace la peticion sin parametros y sus senales coinciden con el cambio mes a mes de la API
+- title: Technical · Suites, types, contract and mutations prove the rules are guarded
+  tags:
+  - unit-tests
+  - mutation-testing
+  - regression
+  given:
+  - main de los dos repositorios con las dependencias instaladas
+  when:
+  - se ejecutan src/csm/workspace, la suite csm del frontend, tsc en los dos lados y contract:check
+  - se reintroducen 15 errores plausibles, uno por regla, y se re-ejecutan las suites
+  then:
+  - todo pasa, contando ficheros
+  - cada mutacion la detecta al menos un test, o queda escrita la que no
+tags:
+- im-1245
+- im-1229
+- im-1311
+- csm-os
+- account-metrics
+- period-comparison
+- filters
+- data-honesty
+- migration-app
+estimatedDuration: 240
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-29T15:30:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-29T15:30:00Z'
+  version: 1

@@ -1,0 +1,48 @@
+Hallazgos de TR-210 (IM-1245, TC-187) — 2026-09-29
+
+DEFECTOS
+
+N1 (media) · Un periodo desmesurado no se rechaza con 400
+  from/to aceptan cualquier YYYY-MM y el servicio construye un punto por mes del rango para cada
+  metrica. 1900-01..2026-07 da 17.7 MB en local y en dev supera el limite de 6 MB de Lambda (413 en el
+  log, sin CORS en el navegador); 0001-01..9999-12 consume 3.2 GB y 36 s en local y revienta al
+  serializar. El parser del frontend acepta ese rango desde un enlace y la pestana queda en "Failed to
+  fetch" sin controles. Incumple "Invalid filters are rejected by the API with a reason" y es consumo
+  de recursos sin tope (OWASP API4:2023). Detalle: dev/n1-rango-sin-limite.txt, ui/18.
+  Esperado: 400 con motivo para periodos o comparaciones fuera de un tope (la ventana de 36 meses o
+  availableMonths), el frontend sin enviarlos, y un test que fije el 400.
+
+N2 (baja) · Custom range no muestra el rango que aplica
+  Al pasar de This quarter o Year to date a Custom range se copia un rango que termina en Sep 2026, un
+  mes sin datos, y el selector de fin queda en el marcador "End"; con un enlace fuera de los datos
+  quedan "Start" y "End". Las tarjetas y la cabecera si son de ese rango. Detalle:
+  dev/n2-custom-range-selectores-vacios.txt, ui/04a y ui/12a.
+
+OBSERVACIONES (no bloquean)
+
+O1 · 7 de 39 metricas no tienen total en ningun periodo de varios meses. La historia y el comentario
+  del autor nombran tres (active_campaigns_revenue, recurring_donations_income,
+  recurring_memberships_income). Hay otras cuatro: number_of_chargebacks_won,
+  total_value_of_chargebacks_won, recurring_donations_inactive y recurring_memberships_inactive. Los
+  chargebacks won son conteos e importes de eventos como sus hermanos number_of_chargebacks y
+  total_value_of_chargebacks, que son 'sum'. En Last month, un mes anterior tranquilo sale "—" y "Not
+  compared: a value is missing" en vez de 0. La clasificacion vive en el catalogo de playbooks.
+O2 · "Hide empty metrics" oculta una metrica con 0 en el periodo aunque la comparacion tenga datos: en
+  Last month oculta Number of Chargebacks, que muestra -100% (1 -> 0).
+O3 · Un enlace con un preset movil muestra ~0.4 s los 12 meses por defecto (con el indicador de
+  actualizacion) antes de los datos pedidos. Es el arranque documentado (hace falta el mes mas nuevo).
+O4 · Hueco de tests: ninguna prueba fija number_of_chargebacks_won en payments_risk (mutacion M06).
+O5 · La siembra de dev no tiene ningun mes sin reporte a mitad de serie; esa regla se probo con el
+  servicio real en local (regresion-overview/antes-vs-despues.txt, d3) y la regla de la UI con una
+  respuesta alterada en el navegador (ui/19).
+O6 · Al elegir Custom start, la ventana inicial es la ultima posible (con A = Jan-Jun 2024, Jul-Dec
+  2026: 1 de 6 meses con datos).
+
+RIESGO DE PUBLICACION
+  stable (produccion) no contiene ninguno de los dos merges; el backend tiene que llegar antes que el
+  frontend. Cuando llegue, el filtro mas util (comparar con anios anteriores) dependera de la historia
+  de produccion, que segun la historia empieza en Dec 2024.
+
+DATOS DE PRUEBA
+  No se escribio nada en dev. Las filas sembradas por el autor (source_run_id seed-im1245-dev) siguen
+  en su sitio.
