@@ -1,0 +1,52 @@
+El log de evaluacion de dev, fila por fila, contra playbook_evaluation_log (2026-09-29, frontend cdbe2804 / 09830fce)
+
+Metodo: se abre el log de cada jugada con la sesion admin, se despliegan TODAS las filas y se lee el pie
+de cada una (data-testid evaluation-footer-*). Los nombres de cuentas se enmascaran en el DOM antes de
+leer o capturar. La base se lee con SELECT de solo lectura (Data API). Horas en UTC; la pantalla las
+muestra en UTC-5.
+
+1) "QA TC-186 v4 sombra" (en pausa; v2 encendida en sombra a las 18:35:09, despues a live)
+
+  evaluated_at  veredicto              base: instancia  pantalla: resultado       pie
+  18:37:16      fired                  si               Created a playbook        evaluated in live mode
+  18:37:16      fired                  si               Created a playbook        evaluated in live mode
+  18:36:04      fired                  si               Created a playbook        evaluated in live mode
+  18:35:22      shadow_fired           no               Would have created one    evaluated in shadow mode
+  18:35:22      blocked · predates     no               Stopped by a rule         (sin pie: no afirma modo)
+  18:35:22      blocked · predates     no               Stopped by a rule         (sin pie: no afirma modo)
+
+  Las dos bloqueadas son E1 y E2 de TR-211, evaluadas con la jugada EN SOMBRA. En TR-211 decian
+  "evaluated in live mode" (ui/04 de TR-211); ahora no afirman modo. ui/01, ui/02, ui/03, ui/04.
+
+2) "QA TC-186 v4 directo" (en pausa; v1 a live sin sombra 18:38:46, v2 republicada y sellada 18:40:36)
+
+  evaluated_at  veredicto              version  pantalla: resultado       pie
+  18:40:49      fired                  2        Created a playbook        evaluated in live mode
+  18:40:49      blocked · predates     2        Stopped by a rule         (sin pie)
+  18:38:59      fired                  1        Created a playbook        evaluated in live mode
+  18:38:59      blocked · predates     1        Stopped by a rule         (sin pie)
+
+  ui/05. La columna version sale de la base: la pantalla no dice que version evaluo cada fila (el
+  adaptador fija playbookVersion a null porque la lectura no la trae; ver hallazgos O2).
+
+3) "E2E Open Cases Changed" (jugada del autor, EN SOMBRA; solo lectura)
+
+  evaluated_at        veredicto          pantalla: resultado       pie
+  09-25 21:24:01      blocked · payload  Stopped by a rule         (sin pie)
+  09-25 21:23:47      shadow_fired       Would have created one    evaluated in shadow mode
+  09-23 18:15:04      blocked · payload  Stopped by a rule         (sin pie)
+  09-23 18:14:54      shadow_fired       Would have created one    evaluated in shadow mode
+
+  Un bloqueo por condicion del evento (no por predates_version) en una jugada en sombra tampoco afirma
+  modo. ui/06.
+
+Resultado: 14 de 14 filas concuerdan. Ninguna fila bloqueada dice "live mode"; "live mode" aparece solo
+en filas fired (con instancia) y "shadow mode" solo en shadow_fired.
+
+No hay filas con veredicto error en todo el log de dev (SELECT ... WHERE verdict = 'error': 0 filas), asi
+que ese caso solo se prueba con los tests del adaptador (scenario-0-unit-tests).
+
+Por que la regla del frontend es correcta, leido en el motor (evaluate-playbooks-worker.ts, a2ceb94b): la
+rama de sombra escribe shadow_fired y hace return ANTES de instanciar, y fired solo se escribe despues de
+crear la instancia; la inscripcion manual solo corre sobre jugadas activas. blocked y error se escriben
+igual en los dos modos, y la fila no tiene columna de modo.
