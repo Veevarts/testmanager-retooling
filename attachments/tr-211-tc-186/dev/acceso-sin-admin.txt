@@ -1,0 +1,30 @@
+ESCENARIO 19 · acceso sin admin, con la cuenta de QA (2026-09-29, con autorizacion del usuario)
+
+Como propuso el autor: se quita temporalmente a la cuenta de QA el grupo admin en el pool de Cognito
+de dev (AWS SSO, admin-remove-user-from-group), se cierra la sesion de la app y se vuelve a entrar con
+Google para que el token lleve los grupos nuevos, y al final se devuelve admin.
+
+ hora UTC   grupos en el token                 resultado
+ 19:40:42   quitado de admin
+            [grupo automatico de Google]       la app entera va a /unauthorized ("Your account does not
+                                               have access to this workspace"); /csm/playbooks, /new,
+                                               /:id y /:id/evaluations tambien.
+                                               API: GET /csm/playbooks 403, POST /csm/playbooks 403,
+                                               POST /:id/status 403, GET /:id/evaluations 403, todas con
+                                               "Insufficient group membership".
+ 19:41:53   anadido a csm-team (CSM sin admin)
+            [csm-team, Google]                 entra a My Day; la navegacion es My Day, Portfolio y
+                                               Accounts: no aparece Playbooks. Las cuatro rutas de
+                                               Playbooks van a /unauthorized.
+                                               API: lecturas 200 (lista, detalle, log: la clase exige
+                                               csm-team, por diseno); escrituras 403 (crear, cambiar de
+                                               estado, publicar version) con "Insufficient group
+                                               membership": el backend ya exige admin ("#406").
+ 19:43:33   devuelto admin y quitado csm-team
+            [Google, admin]                    Playbooks vuelve a abrir. Estado final = estado inicial.
+
+Nota: tras el cambio de grupos, "Sign Out" + "Continue with Google" reutilizo la sesion del dominio de
+Cognito y el token no cambio; hubo que borrar las cookies de ese dominio y el almacenamiento de la
+app. La jugada P1 no cambio con los intentos de escritura (siguio en pausa).
+Observacion menor: para un CSM, /unauthorized dice "does not have access to this workspace" y no
+ofrece volver; tiene acceso al workspace, no a Playbooks.

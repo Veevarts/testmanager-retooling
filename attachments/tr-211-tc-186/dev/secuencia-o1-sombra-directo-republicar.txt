@@ -1,0 +1,68 @@
+O1 EN VIVO · el limite pasa a ser el primer encendido (sombra o live) · TR-211 · 2026-09-29
+==========================================================================================
+Motor: generador de eventos del autor (csm-playbook-qa) compilado desde main a2ceb94b (incluye
+"#408") y ejecutado contra la base de dev (0088). Cada despacho corre el pipeline completo.
+Disparador: account.renewal_window_entered (days=90), re-enrolamiento "every time", backfill apagado.
+Antes de empezar: ninguna jugada en sombra o activa suscrita a ese tipo y 0 senales pendientes, asi
+que cada evento queda pendiente (processed_at null) hasta que una jugada se enciende; no hizo falta
+tocar processed_at. Cada evento va a una cuenta distinta (E1..E10); solo se anota el prefijo del id.
+Jugadas de QA creadas en el builder de dev: "QA TC-186 v4 sombra" (P1) y "QA TC-186 v4 directo" (P2).
+
+P1 · RUTA POR SOMBRA
+ hora UTC     paso                                                              first_evaluating_at
+ 18:33:51     "Create playbook": v1 publicada, jugada en draft                  NULL
+ 18:34:11     E1 (00172cc8) -> pendiente
+ 18:34:34     "Save and publish": v2 publicada, jugada en draft                 NULL
+ 18:34:47     E2 (00666a19) -> pendiente   <- el hueco de O1: despues de guardar, antes de encender
+ 18:35:09     "Start shadow run": draft -> shadow                               18:35:09.264
+ 18:35:22     E3 (00747b00); el pipeline evalua E1, E2 y E3
+                E1  blocked · predates_version · "this happened 58 seconds before this play was
+                    switched on, so the play was not watching yet" · sin instancia
+                E2  blocked · predates_version · "this happened 22 seconds before ..." · sin instancia
+                E3  shadow_fired · sin instancia
+ 18:35:51     "Go live": shadow -> active (sin dialogo)                         18:35:09.264 (no se mueve)
+ 18:36:03     E4 (014d37a8) -> fired · instancia 32813e7c
+ 18:36:31     "Pause"                                                           18:35:09.264
+ 18:36:46     E5 (019c1525) durante la pausa -> pendiente
+ 18:37:05     "Resume"                                                          18:35:09.264 (no se mueve)
+ 18:37:16     E6 (02ae9414); el pipeline evalua E5 y E6
+                E5  fired · instancia bb51beab   <- la pausa no hizo olvidar el evento
+                E6  fired · instancia d4a24132
+ ~18:37:40    "Pause" (queda en pausa)
+
+P2 · DE DRAFT A LIVE SIN SOMBRA, Y REPUBLICAR EN PAUSA
+ 18:37:58     "Create playbook": v1 publicada, draft                            NULL
+ 18:38:09     E7 (046e3b18) -> pendiente
+ 18:38:49     "Go live" -> dialogo "Put 'QA TC-186 v4 directo' live on v1 without observing it
+              first? ... it will not start on events recorded before this version was first switched
+              on" -> "Go live without a shadow run": draft -> active             v1: 18:38:46.982
+              activated_without_shadow_at 18:38:46.923 (el recibo)
+ 18:38:59     E8 (049ad070); el pipeline evalua E7 y E8
+                E7  blocked · predates_version · "this happened 37 seconds before this play was
+                    switched on ..." · sin instancia
+                E8  fired · instancia 23775fad
+ 18:39:28     "Pause"
+ 18:39:37     E9 (04b8fe67) durante la pausa -> pendiente
+ 18:40:01     se edita el paso y "Save and publish" con la jugada en pausa: v2 publicada; la jugada
+              SIGUE en pausa (el builder no la degrada a sombra)                v2: NULL
+ 18:40:36     "Resume" -> dialogo "Put ... live on a version nothing has evaluated? v2 has never
+              been evaluated ..." -> "Go live on v2 anyway"                      v2: 18:40:36.714
+ 18:40:48     E10 (05b62f37); el pipeline evalua E9 y E10 con la v2
+                E9  blocked · predates_version (v2) · "this happened 1 minute before this play was
+                    switched on, so the play was not watching yet"
+                E10 fired · instancia c03f9d6e
+ ~18:41       "Pause" (queda en pausa)
+
+LECTURA
+- O1 corregido: el evento entre guardar y encender (E2 en sombra, E7 en live directo) ya no se enrola.
+  En TR-209 el mismo caso (27 s) creaba una instancia.
+- La sombra cuenta como encendida: el sello es el inicio de la sombra y no se mueve al pasar a live.
+- Escritura unica: pausar y reanudar no mueve el limite, y un evento de la pausa dispara al reanudar
+  (E5). Republicar da a la version nueva su propio reloj: un evento de la pausa anterior a la v2 queda
+  fuera (E9). Es lo que dice la migracion ("a new version starts its own clock").
+- La frase del motor dice "before this PLAY was switched on" tambien en E9, cuando la jugada llevaba
+  encendida desde las 18:38:46 y lo que se encendio a las 18:40:36 fue la VERSION v2; el dialogo si dice
+  "this version". Ver hallazgos O2.
+- En el log, las filas E1 y E2, evaluadas con la jugada en SOMBRA, dicen "evaluated in live mode":
+  ver hallazgos N1.
+Estado final: las dos jugadas en pausa, 5 instancias en proposed, 0 senales pendientes del tipo.

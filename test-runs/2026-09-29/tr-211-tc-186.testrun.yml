@@ -1,0 +1,325 @@
+schemaVersion: '1.0'
+id: tr-75a9473c-8a0c-4024-a19e-3c6ef450aafa
+key: TR-211
+title: >-
+  TR-211 · IM-1207 · TC-186 v4 · re-test de lo entregado tras TR-209 · 18/19 PASS, 1 FAIL — N1 y O1 corregidos
+  y el acceso ya se prueba, pero el log dice 'live mode' en evaluaciones hechas en sombra
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend main a2ceb94b con #406 y #408, frontend main ce57bcac con #214 y #215)
+    con sesion admin en el navegador, la base de dev en migracion 0088 y el generador de eventos del autor
+    compilado contra ese main; Postgres 16 local desechable para suites, bancos y mutaciones. Produccion
+    no se consulto.
+  buildVersion: >-
+    Mixto — backend NestJS + Lambdas + SQL (0088) + frontend React. Re-test de MigrationAppBackend "PR
+    #406" y "PR #408" ("#407" es el mismo cambio, mergeado en una rama equivocada) y MigrationAppFrontend
+    "PR #214" y "PR #215", mergeados a main el 2026-09-29 y desplegados en dev; stable sigue en el 18-ago.
+startedAt: '2026-09-29T18:15:00Z'
+completedAt: '2026-09-29T20:15:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  TR-209 rebotó la historia por N1 y dejó O1 para producto. El autor entrega:
+  - **N1** (frontend #214 y #215): el log toma la explicación que escribe el motor para `predates_version`
+    y `stale_event` y la usa como etiqueta de la fila y del detalle; quita el par "Needed/measured" que el
+    motor nunca evaluó; y las plantillas de esas frases se copian del motor al frontend, así que
+    `contract:check` falla si el motor cambia la redacción.
+  - **O1**, con decisión de producto del 2026-09-29, opción B (backend #408, migración 0088): el límite de
+    `predates_version` es `playbook_versions.first_evaluating_at`, la primera vez que la versión entra en
+    sombra o activo. Se escribe una sola vez, en la misma transacción que el cambio de estado o que el
+    repunte de versión. La migración lo rellena con `published_at` en las jugadas en sombra, activas o
+    pausadas, y aborta si queda alguna encendida sin límite.
+  - **Acceso** (backend #406): las escrituras del backend exigen `admin`, como ya hacía el frontend, y se
+    fija con tests que un límite ilegible hace fallar cerrado.
+
+  ## Inferred technical tests
+
+  - Suites, tipos, contrato y bancos sobre el main desplegado en dev. EJECUTADO: raíz 2583, Lambdas 1305
+    (sobre base limpia), frontend 2842, 611/611 en los bancos, tsc en los dos repos y contract:check.
+  - Mutaciones de cada arreglo, con una base nueva por corrida. EJECUTADO: 9 de 9 detectadas; volver a
+    `published_at` solo lo detecta el banco.
+  - O1 en vivo en dev, con el motor de main y el builder real: por sombra, a live directo, pausar y
+    reanudar, y republicar en pausa. EJECUTADO.
+  - N1 en el log real de dev. EJECUTADO; de ahí sale el N1 nuevo.
+  - Migración 0088: el relleno medido en la base de dev, y el evaluador desplegado. EJECUTADO.
+  - Escenario 19 con la cuenta de QA sin `admin` y con `csm-team`, y el rol devuelto al terminar.
+    EJECUTADO, con autorización del usuario.
+
+  ## Resultado
+
+  18 PASS y 1 FAIL (TR-209: 17 PASS, 1 FAIL y 1 bloqueado).
+  - **Corregidos:** N1 de TR-209, O1 (opción B) y el diálogo de go-live, que ahora nombra la versión.
+  - **Desbloqueado y en verde:** el escenario 19.
+  - **N1 nuevo (baja):** el log dice "evaluated in live mode" en filas evaluadas con la jugada en sombra.
+    Viene de #181, no de esta vuelta.
+  - **Observaciones:** "1 instances" sigue; la frase dice "play" cuando se encendió una versión; hay una
+    ventana entre la migración y el código; el límite solo lo protege el banco; hay tests que no aíslan
+    sus datos.
+
+  ## Condiciones para aprobar
+
+  1. **N1:** que el log no afirme "live mode" en una evaluación hecha en sombra (guardar el modo, o no
+     afirmarlo), con un test.
+  2. **Recomendado para la subida a producción:** aplicar 0088 y el código sin nadie creando jugadas, y
+     repetir después del despliegue la comprobación del bloque DO de la migración.
+results:
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Deployment state · Backend and frontend run the same main in dev, and neither is in production
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-29T18:25:00Z'
+  stepResults: []
+  actual: |
+    Dev corre backend 1b8f067a ("#408"; antes 90df53f7, "#406"), desplegado 16:16:18Z -> 16:30:03Z, y
+    frontend a667dcdd ("#215"; antes a26b8313, "#214"), 16:43:40Z -> 16:45:10Z. La base de dev tiene 0088
+    desde las 16:17:41Z, en mitad del despliegue del backend (ver hallazgos O3). El evaluador desplegado
+    (Lambda, sin programacion) es de las 16:18:16Z y su paquete trae first_evaluating_epoch. Despues solo
+    entraron PRs de IM-1245 que no tocan playbooks. stable sigue en el 18-ago. attachments/tr-211-tc-186/dev/despliegue-y-migracion.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Functional · A playbook authored in the builder runs in shadow, goes live, fires and appears in My
+    Day and on the account
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-29T18:37:16Z'
+  stepResults: []
+  actual: |
+    En el builder real de dev: crear, guardar y publicar v2, iniciar sombra, pasar a live, pausar y
+    reanudar (P1), y crear y pasar a live sin sombra (P2). Las jugadas disparan y crean 5 instancias en
+    proposed. My Day y la pestana de la cuenta no los tocan estos PRs y se verificaron en TR-209.
+    attachments/tr-211-tc-186/dev/secuencia-o1-sombra-directo-republicar.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC1 · Every one of the eight core plays is expressible with the shipped components
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; los 11 bancos de simulacion en verde (611/611; TR-209: 602/602), incluidos los de las 8 jugadas.
+    attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC9 · A trigger that happens on every account cannot be authored unnarrowed
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; el validador de definiciones sigue cubierto por la raiz (2583/2583). attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Payload conditions · A matching event fires and a non-matching one is refused for a stated reason
+  scenarioIndex: 4
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; bancos y suites en verde; no se repitio en vivo. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC7 · The catalog exposes 29 entries, each with its data source, and an unavailable one cannot be
+    activated
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-29T18:33:30Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; el builder de dev muestra las 29 entradas y marca las que no tienen datos ("no data behind it
+    yet"). attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC11 · The availability the builder shows matches the data that exists behind each entry
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-29T18:33:30Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; el builder muestra la disponibilidad de cada entrada; renewal_window_entered aparece como
+    "Availability not known" porque su fuente de dev lleva 6521 h sin sincronizar. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC12, superseded by product · Going live without a shadow run warns, is allowed, and leaves a receipt
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-29T18:40:48Z'
+  stepResults: []
+  actual: |
+    O1 corregido en vivo con backfill apagado. P1 (por sombra): el sello se pone al iniciar la sombra
+    (18:35:09, no la publicacion de las 18:34:34) y no se mueve al pasar a live ni al pausar y reanudar; E1
+    (antes de la v1) y E2 (despues de guardar la v2, antes de encender: el hueco de O1) quedan blocked ·
+    predates_version sin instancia; E3 shadow_fired; E4, E5 (ocurrido en la pausa) y E6 fired. P2 (live sin
+    sombra): el dialogo nombra la version y dice "it will not start on events recorded before this version
+    was first switched on"; sello 18:38:46 con su recibo; E7 blocked, E8 fired. Republicar en pausa: la v2 se
+    sella al reanudar y E9 (de la pausa) queda fuera. attachments/tr-211-tc-186/dev/secuencia-o1-sombra-directo-republicar.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC6 · Step text renders from the frozen snapshot and due dates are fixed at enrolment
+  scenarioIndex: 8
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; suites y bancos en verde. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC5 · A running instance closes itself on an exit event or an account-state predicate
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; bancos de salida en verde. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC8 · The evaluation log answers why it fired and why it did not, and each line agrees with its result
+  scenarioIndex: 10
+  status: failed
+  executedAt: '2026-09-29T18:50:00Z'
+  stepResults: []
+  actual: |
+    N1 de TR-209 corregido: las filas rechazadas muestran la frase del motor ("this happened 58 seconds
+    before this play was switched on, so the play was not watching yet") con "Stopped by a rule", y el
+    detalle ya no pinta "Needed 90 · measured —" ni "Needed never"; tests y contract:check lo fijan. Falla un
+    N1 nuevo, de baja severidad: esas mismas filas, evaluadas con la jugada en sombra, dicen "evaluated in
+    live mode" porque el frontend deduce el modo del veredicto. attachments/tr-211-tc-186/ui/04-log-detalle-predates-dice-live-mode.png y attachments/tr-211-tc-186/hallazgos.txt
+  defects:
+  - jiraKey: IM-1207
+    url: https://veevart.atlassian.net/browse/IM-1207
+    severity: low
+    summary: >-
+      Rows blocked while the play was in shadow say 'evaluated in live mode': the frontend derives the
+      mode from the verdict (only shadow_fired counts as shadow) and the log row does not store it
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Guard layer · Dedupe, re-enrolment and stale events block for a named reason
+  scenarioIndex: 11
+  status: passed
+  executedAt: '2026-09-29T18:50:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; las guardas se leen segun su resultado; persiste "1 instances is within the usual range of 10"
+    (hallazgos O1). attachments/tr-211-tc-186/ui/05-log-fila-disparada-guardas.png
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC14 · One reading evaluated by several plays at once, and a play on another signal type stays silent
+  scenarioIndex: 12
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; bancos en verde. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC3 and AC4 · Detectors emit once on the rising edge, once on the falling edge, and abstain on a stale
+    source
+  scenarioIndex: 13
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; bancos de detectores en verde. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC2 · A dropped event loses no signal and replaying a sync window duplicates none
+  scenarioIndex: 14
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; suites contra Postgres en verde sobre base limpia (20 suites, 215 tests). attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC13, not verifiable on dev · Two departing champions give two instances, the same champion twice
+    gives one
+  scenarioIndex: 15
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; sigue sin poder verificarse en dev (sin contactos); queda como en TR-209. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC15, not met · Two of the three off-list plays are expressible without engineering, NPS is deferred
+  scenarioIndex: 16
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; queda como en TR-209 (decision de producto). attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Known defect · A refused definition leaves a draft the author can delete
+  scenarioIndex: 17
+  status: passed
+  executedAt: '2026-09-29T19:05:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios de codigo en esta vuelta; suites en verde. attachments/tr-211-tc-186/scenario-0-unit-tests/suites.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Access · The Playbooks surfaces and API require a session in an allowed group
+  scenarioIndex: 18
+  status: passed
+  executedAt: '2026-09-29T19:43:33Z'
+  stepResults: []
+  actual: |
+    Desbloqueado con autorizacion del usuario: se quito admin a la cuenta de QA en el pool de dev y se
+    devolvio al terminar. Solo con el grupo de Google, toda la app va a /unauthorized y la API da 403 a
+    todo. Con csm-team, no aparece Playbooks, sus rutas van a /unauthorized, las lecturas de la API dan 200
+    (por diseno) y las escrituras 403 "Insufficient group membership". attachments/tr-211-tc-186/dev/acceso-sin-admin.txt
+summary:
+  total: 19
+  passed: 18
+  failed: 1
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 95
+history:
+- action: run-started
+  timestamp: '2026-09-29T18:15:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Re-test de IM-1207: el autor corrigio N1 de TR-209, producto decidio O1 (opcion B) y el acceso se
+    desbloquea quitando admin a la cuenta de QA en dev. Se repite en vivo la secuencia de O1, se re-corren
+    suites, bancos y mutaciones, y se prueba el acceso.
+- action: run-completed
+  timestamp: '2026-09-29T20:15:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    18/19 PASS, 1 FAIL. N1 y O1 de TR-209 corregidos y medidos en vivo; el escenario de acceso pasa. Falla
+    un N1 nuevo de baja severidad: el log dice 'evaluated in live mode' en filas evaluadas con la jugada
+    en sombra.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-29T20:15:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-29T20:15:00Z'
+  version: 1

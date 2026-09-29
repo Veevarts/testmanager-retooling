@@ -1,0 +1,56 @@
+Hallazgos de TR-211 (IM-1207, TC-186 v4) — re-test de lo entregado tras TR-209 — 2026-09-29
+
+CORREGIDO DESDE TR-209
+
+N1 de TR-209 (media) · el log presentaba predates_version como un fallo de la condicion del disparador.
+  Ahora la fila dice la frase del motor ("this happened 58 seconds before this play was switched on, so
+  the play was not watching yet") con "Stopped by a rule", y el detalle ya no pinta "Needed 90 ·
+  measured —". Tests que lo fijan: playbookAdapters.test (mutaciones MF1 y MF2 detectadas), y
+  contract:check detecta un cambio de la frase en el motor (MX1). ui/03, ui/04.
+O1 de TR-209 (producto) · decidido: opcion B. El limite es el primer encendido de la version (sombra o
+  live), en first_evaluating_at (0088). Medido en vivo: los eventos entre guardar y encender ya no se
+  enrolan (E2 en sombra, E7 en live directo); la sombra sella; pasar de sombra a live y pausar/reanudar
+  no mueven el limite; una version republicada tiene su propio reloj. dev/secuencia-o1-*.txt
+Dialogo de go-live · nombra la version ("live on v1", "v2 has never been evaluated") y dice "it will
+  not start on events recorded before this version was first switched on". ui/01, ui/02.
+"Needed never" bajo la guarda de re-enrolamiento · ya no aparece. ui/05.
+Escenario 19 (acceso) · desbloqueado y en verde: sin admin la app o la pestana Playbooks no se abren y
+  la API rechaza las escrituras con 403 por el grupo correcto. dev/acceso-sin-admin.txt
+
+DEFECTO NUEVO
+
+N1 (baja) · "evaluated in live mode" en filas evaluadas con la jugada en SOMBRA.
+  El frontend deduce el modo del veredicto (`mode: row.verdict === "shadow_fired" ? "shadow" : "active"`,
+  api/playbookEvaluations.ts) y la fila del log no guarda el modo. Toda fila bloqueada o con error sale
+  "evaluated in live mode" aunque la jugada estuviera en sombra: E1 y E2 de P1 (evaluadas a las
+  18:35:22, en sombra) lo dicen (ui/04). Viene de "#181" (11-sep), no de esta vuelta, pero ahora pesa
+  mas: con la regla nueva la sombra rechaza eventos por predates_version, y el log es lo que el autor lee
+  para decidir si pasa a live. AC8 pide que cada linea concuerde con su resultado.
+  Esperado: el modo real de la evaluacion (guardado por el motor, o sin afirmarlo cuando no se sabe) y un
+  test que lo fije.
+
+OBSERVACIONES (no bloquean)
+
+O1 · "1 instances" sigue: "GUARD PASSED · 1 instances is within the usual range of 10" (ui/05). La
+  frase la escribe el motor (_shared/guards.ts) y el frontend la muestra tal cual; el comentario del
+  autor la daba por corregida.
+O2 · La frase de predates_version dice "before this PLAY was switched on" tambien cuando lo que se
+  encendio fue una VERSION nueva de una jugada que ya estaba encendida (E9 de P2: "1 minute before this
+  play was switched on", con la jugada encendida desde 2 minutos antes). El dialogo dice "this version".
+O3 · Ventana entre la migracion y el codigo: 0088 corrio a las 16:17:41 y el codigo que sella termino de
+  desplegar a las 16:30:03. Una jugada encendida en ese intervalo quedo sin limite (la de repro del
+  autor, a las 16:21) y el lector la rechazaria entera. En produccion hay 0 jugadas, pero el runbook de
+  la subida deberia aplicar 0088 y el codigo sin nadie creando jugadas, y re-ejecutar la comprobacion del
+  bloque DO de la migracion despues del despliegue.
+O4 · Que el limite sea first_evaluating_at y no published_at solo lo detecta el banco de simulacion
+  (MB1): ni los tests del worker ni las 20 suites contra Postgres. Igual que F1 en TR-209.
+O5 · standing-set-boundary-pg.integration no aisla sus datos: sobre una base con filas de corridas
+  anteriores falla (4 filas donde espera 1); sobre una base limpia pasa. Y AccountDetailPage.test tiene un
+  findBy de 5 s que falla bajo carga (ajeno a IM-1207).
+O6 · Para un CSM, /unauthorized dice "Your account does not have access to this workspace" y no ofrece
+  volver; si tiene acceso al workspace, no a Playbooks.
+
+DATOS DE PRUEBA EN DEV (se quedan)
+  "QA TC-186 v4 sombra" y "QA TC-186 v4 directo", en pausa, con 5 instancias en proposed. El grupo admin
+  de la cuenta de QA se quito y se devolvio (estado final = inicial). Nada se escribio en la base salvo
+  a traves de la app y del generador.
