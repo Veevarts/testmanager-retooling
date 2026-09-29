@@ -1,0 +1,10 @@
+import { connect, findPage, adminApi } from "./lib.mjs";
+const { ctx } = await connect();
+const page = findPage(ctx, /surveytool\.dev\.veevart\.ai/);
+const det = await adminApi(page, "GET", "/api/admin/survey-drafts/27/00drt00000wkwj0maj/005Rt00000aTMIrIAO");
+const d = det.data ?? {};
+console.log(JSON.stringify({ detalleStatus: det.status, estado: d.status ?? d.code ?? null, score: d.score ?? null, comment: d.comment ?? null, companyRecommendScore: d.companyRecommendScore ?? null, error: d.error ?? null }));
+const all = await adminApi(page, "GET", "/api/admin/survey-drafts");
+const l = Array.isArray(all.data) ? all.data : all.data?.items ?? [];
+console.log(JSON.stringify({ borradoresEncuesta27EnProgress: l.filter((x) => String(x.surveyId) === "27").length }));
+process.exit(0);
