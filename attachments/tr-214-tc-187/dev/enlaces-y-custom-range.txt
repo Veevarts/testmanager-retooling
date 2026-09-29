@@ -1,0 +1,48 @@
+La pestana Metrics en dev con enlaces y con el paso a Custom range (2026-09-29, frontend d8a356cb, que contiene
+ce57bcac "PR #216"; chunk AccountMetricsPanel-Dm9mN8NZ.js, el que referencia el index vivo).
+Sesion admin con 'View as' de la CSM duena. Nombres de la cuenta y de personas enmascarados en el DOM antes de
+cada captura. En cada caso se registraron TODAS las respuestas de /csm/workspace/account-metrics (sin accountId).
+
+N1 · un enlace nunca envia el rango crudo
+
+u01  ?mPeriod=custom&mFrom=1900-01&mTo=2026-07
+     peticiones: 200 compare=previous_period (arranque) -> 200 from=2023-09&to=2026-07&compare=previous_period
+     URL corregida a mFrom=2023-09&mTo=2026-07; selectores Sep 2023 / Jul 2026; sin error.     ui/u01
+     (TR-210: la peticion salia con from=1900-01, 413 de Lambda y "Failed to fetch" sin controles)
+u06  ?mPeriod=custom&mFrom=0001-01&mTo=9999-12
+     igual que u01: se piden Sep 2023 - Jul 2026; el rango crudo no sale.                        ui/u06
+u05  ?mPeriod=custom&mFrom=2026-01&mTo=2026-09   (Aug y Sep sin datos)
+     peticion: from=2026-01&to=2026-07; selectores Jan 2026 / Jul 2026.                           ui/u05
+u03  ?mPeriod=custom&mFrom=2025-08&mTo=2026-07&mCompare=custom&mCmpFrom=1900-01
+     peticion: compareFrom=2023-09; "Custom start" muestra Sep 2023 - Aug 2024.                   ui/u03
+u04  ?...&mCompare=custom&mCmpFrom=2030-01
+     el inicio se acota a Jul 2026, que solaparia el periodo principal: la pestana envia Previous period y
+     corrige la URL (quita mCompare), sin mensaje. Es la regla que ya tenia la pestana para una comparacion
+     que no se puede enviar (TR-210, FE-2).                                                        ui/u04
+u02  ?mPeriod=custom&mFrom=2020-01&mTo=2020-06   (ningun mes con datos)
+     una sola peticion: compare=previous_period. La pestana vuelve a Last 12 months y limpia la URL, sin
+     mensaje. En TR-210 este enlace mostraba "No data for Jan 2020 - Jun 2020" con "Show the newest data".
+     Ver hallazgos O7.                                                                             ui/u02
+
+N2 · al pasar a Custom range los selectores muestran lo que se aplica
+
+n2a  This quarter (Jul - Sep 2026 vs Apr - Jun 2026) -> Custom range
+     peticion: from=2026-07&to=2026-07; selectores Jul 2026 / Jul 2026; cabecera "Jul 2026 vs Jun 2026".
+     (TR-210: el selector de fin quedaba en "End" con Jul - Sep aplicado)                          ui/n2a
+n2b  Year to date (Jan - Sep 2026) -> Custom range
+     peticion: from=2026-01&to=2026-07; selectores Jan 2026 / Jul 2026.                           ui/n2b
+     Efecto a saber (hallazgos O8): abrir Custom cambia el periodo y por tanto la comparacion (en n2a pasa
+     de Apr - Jun a Jun) antes de que el usuario elija nada.
+
+Sin regresion visible
+
+u00  vista por defecto: una peticion compare=previous_period, "Aug 2025 - Jul 2026 vs Aug 2024 - Jul 2025",
+     "Data through Jul 2026" con "2 months behind".                                               ui/u00
+Overview: una peticion sin parametros, 200, cuerpo identico al de TR-210 (dev/api-matriz, c30 y n16). La
+     captura no se publica: la pestana muestra datos del cliente y el nombre de un participante de una llamada.
+
+Nota de entorno: el primer intento de u02 mostro "ERROR · Loading metrics" sin ninguna peticion. La consola
+decia "Failed to fetch dynamically imported module .../AccountMetricsPanel-CDjiYNgm.js" (el servidor devolvia
+HTML): el perfil del navegador tenia en cache un chunk de una build anterior, borrado por el despliegue de
+d8a356cb (21:26Z). Tras vaciar la cache del navegador, el mismo enlace carga Dm9mN8NZ y se comporta como arriba.
+No es un defecto de esta historia.

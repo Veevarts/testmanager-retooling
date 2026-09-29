@@ -1,0 +1,61 @@
+Hallazgos de TR-214 (IM-1245, TC-187 v2) — re-test de lo entregado tras TR-210 — 2026-09-29
+
+CORREGIDO DESDE TR-210
+
+N1 (media) · un periodo desmesurado no se rechazaba.
+  Backend "#410": el periodo principal debe caer en la ventana de lectura (del mes en curso menos 36 al mes
+  en curso: hoy Sep 2023 - Sep 2026) y una comparacion a medida debe terminar dentro; si no, 400 que nombra
+  la ventana y lo enviado. 1900-01..2026-07 da 400 en ~0.6 s (antes 413 de Lambda); 0001..9999 da 400 en
+  local sin construir nada (antes 3.2 GB y 36 s). Los bordes exactos se aceptan; el mes anterior y los
+  futuros se rechazan, tambien cuando llegan solos. dev/api-matriz-49-peticiones.txt
+  Frontend "#216": el rango y el inicio de comparacion de un enlace se acotan a los meses con datos antes de
+  pedir nada; el rango crudo no sale nunca a la red (1900, 0001..9999, 2026-01..2026-09).
+  dev/enlaces-y-custom-range.txt, ui/u01, u05, u06
+N2 (baja) · Custom range no mostraba el rango aplicado.
+  Al pasar a Custom range desde This quarter o Year to date, el rango copiado se acota a los meses con datos
+  y los dos selectores muestran lo que se envia (Jul 2026 / Jul 2026; Jan 2026 / Jul 2026). ui/n2a, ui/n2b
+O4 de TR-210 · number_of_chargebacks_won ya lo fija un test (mutacion B5 detectada).
+
+SIN REGRESION
+  - 29 de las 30 peticiones de TR-210 devuelven el mismo cuerpo byte a byte en dev; la otra es el rango 2020,
+    que ahora es un 400 a proposito. La peticion sin parametros de Overview es identica.
+  - Servicio real antes/despues (1b8f067a -> a2ceb94b) con tres conjuntos de filas: 35 llamadas identicas y
+    11 que cambian, exactamente las de fuera de la ventana. regresion/antes-vs-despues.txt
+  - Oraculo independiente: 897 comprobaciones por metrica sobre 25 respuestas, 0 fallos; control positivo en
+    rojo. dev/oraculo-independiente.txt
+  - 18 de 18 mutaciones detectadas por tests del arreglo. scenario-0-unit-tests/mutaciones.txt
+
+DEFECTOS
+
+Ninguno.
+
+OBSERVACIONES (no bloquean)
+
+O7 · Un enlace con un rango sin ningun mes con datos (Jan - Jun 2020) vuelve a Last 12 months y limpia la
+  URL sin decir nada. En TR-210 mostraba "No data for Jan 2020 - Jun 2020" con "Show the newest data". Es el
+  comportamiento que el autor eligio (y fija un test); quien abre un enlace compartido no sabe que se cambio.
+  Lo mismo con un inicio de comparacion que, acotado, solaparia el periodo (2030-01): pasa a Previous period
+  sin aviso. El estado "No data for <periodo>" sigue existiendo para un preset de calendario sin datos (la API
+  da 200 sin datos para Aug - Sep 2026, n17) y lo fija un test del panel.
+O8 · Abrir Custom range desde This quarter cambia lo que se ve antes de elegir nada: el rango pasa de Jul - Sep
+  a Jul y la comparacion de Apr - Jun a Jun. Consecuencia del acotado; los selectores y la peticion coinciden.
+O9 · Ajeno a la historia, pero afecta a su salida: el index.html de la aplicacion se sirve con
+  "cache-control: public, max-age=31536000" (un anio) en dev y en produccion, tambien en el fallback de rutas
+  y de chunks inexistentes. Un navegador con el index anterior sigue pidiendo chunks que el despliegue borro:
+  en esta corrida, tras el despliegue de d8a356cb, la pestana mostro "ERROR · Loading metrics" sin ninguna
+  peticion hasta vaciar la cache ("Failed to fetch dynamically imported module", "[stale-chunk] reload limit
+  reached"). Es la causa del "hard-refresh" que el autor pide en su comentario de QA. Causa probable: en la
+  accion compartida VeevartMultiActions/.github/actions/s3-deploy, el primer aws s3 sync sube todo con un
+  anio de cache y el segundo, que deberia poner max-age=300 a los .html, no los vuelve a subir porque no han
+  cambiado (y su error se descarta con 2>/dev/null || true). src/lib/staleChunkReload.ts asume que "a fresh
+  load gets the new index.html", que con ese encabezado no es cierto.
+O1-O3, O5, O6 de TR-210 siguen igual (7 metricas sin total en periodos de varios meses, hide-empty, arranque
+  de un preset movil, siembra sin meses sin reporte, ventana inicial de Custom start).
+
+RIESGO DE PUBLICACION
+  stable (produccion) sigue en el 2026-08-18 en los dos repos: ninguno de los cuatro merges de IM-1245 esta en
+  produccion. El backend debe llegar antes que el frontend. Con O9, los usuarios con el index anterior en cache
+  seguiran viendo la pestana vieja o un error hasta forzar la recarga.
+
+DATOS DE PRUEBA
+  No se escribio nada en dev. Las filas sembradas por el autor (source_run_id seed-im1245-dev) siguen en su sitio.

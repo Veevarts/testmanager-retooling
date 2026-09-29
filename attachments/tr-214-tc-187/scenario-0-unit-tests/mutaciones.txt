@@ -1,0 +1,58 @@
+Mutaciones de QA sobre los arreglos de TR-210 (harness/mutate-v2.py). Cada una reintroduce un error plausible,
+corre la suite del area (backend: jest src/csm/workspace; frontend: vitest src/features/csm) y restaura el
+fichero con git checkout. Nunca se comitea. BASE = sin cambios.
+Una deteccion solo cuenta si falla un test del arreglo: bajo carga fallan a veces tests ajenos (Playbook builder,
+My Day) por tiempo, y esos no se cuentan. Ninguna deteccion es un error de compilacion.
+
+BASE backend: 314/314 en verde. BASE frontend: 2416 pasan, 9 saltados, en verde.
+
+B1-sin-tope-del-periodo: DETECTADA — backend (autor): sin tope del periodo principal
+    WorkspaceService › getAccountMetrics › IM-1245 primary vs comparison period › an unbounded period is a 400 with the reason, not a 6 MB response [QA TR-210 N1]
+    the read window bounds a request [QA TR-210 N1] › names what was sent when only `to` is outside [review L2-BE-2]
+B2-tope-a-toda-comparacion: DETECTADA — backend (autor): el tope se aplica a toda comparacion, no solo a la custom
+    WorkspaceService › getAccountMetrics › IM-1245 primary vs comparison period › the unfiltered view keeps its 18-month horizon [review BE-2] › an account whose data is all 
+    the read window bounds a request [QA TR-210 N1] › accepts its exact edges
+B3-default-sin-acotar: DETECTADA — backend (autor): el from por defecto no se acota a la ventana
+    WorkspaceService › getAccountMetrics › IM-1245 primary vs comparison period › the unfiltered view keeps its 18-month horizon [review BE-2] › an account whose data is all 
+    the read window bounds a request [QA TR-210 N1] › never refuses a DEFAULTED request, even at the window edge
+B4-ventana-35: DETECTADA — backend (autor): ventana de 36 a 35 meses
+    AuroraWorkspaceRepository › listPrimaryProductMetrics › binds accountId with ::uuid, reads only is_primary and maps snake_case → ProductMetricPoint
+    WorkspaceService › getAccountMetrics › IM-1245 primary vs comparison period › an unbounded period is a 400 with the reason, not a 6 MB response [QA TR-210 N1]
+B5-chargebacks-won-a-other: DETECTADA — backend (autor): number_of_chargebacks_won pasa a other (M06/O4 de TR-210)
+    metricCategoryOf / metricAggregationOf › maps known codes, giftcard by prefix, and everything else to other
+B6-rechaza-el-primer-mes-de-la-ventana: DETECTADA — backend (QA): el primer mes de la ventana se rechaza (< pasa a <=)
+    the read window bounds a request [QA TR-210 N1] › accepts its exact edges
+B7-acepta-meses-futuros: DETECTADA — backend (QA): se aceptan meses posteriores al mes en curso
+    the read window bounds a request [QA TR-210 N1] › refuses a primary period outside it: {"from":"2026-08","to":"2026-10"}
+B8-to-por-defecto-sin-acotar-al-mes-actual: DETECTADA — backend (QA): el to por defecto no se acota al mes en curso
+    WorkspaceService › getAccountMetrics › trims a metric to the last 12 periods (latest/previous are the last two)
+B9-sql-lee-35-meses: DETECTADA — backend (QA): la SQL lee un mes menos que el tope que valida
+    AuroraWorkspaceRepository › listPrimaryProductMetrics › binds accountId with ::uuid, reads only is_primary and maps snake_case → ProductMetricPoint
+B10-400-sin-nombrar-la-ventana: DETECTADA — backend (QA): el 400 no nombra la ventana
+    WorkspaceService › getAccountMetrics › IM-1245 primary vs comparison period › an unbounded period is a 400 with the reason, not a 6 MB response [QA TR-210 N1]
+    the read window bounds a request [QA TR-210 N1] › names what was sent when only `to` is outside [review L2-BE-2]
+B11-comparacion-custom-sin-tope: DETECTADA — backend (QA): la comparacion custom no se limita
+    the read window bounds a request [QA TR-210 N1] › refuses a CUSTOM comparison that ends after the current month [review L2-BE-1]
+    the read window bounds a request [QA TR-210 N1] › refuses a CUSTOM comparison that ends outside it
+F1-enlace-sin-acotar: DETECTADA — frontend (QA): el rango de un enlace se envia sin acotar
+    AccountMetricsPanel period bounds (QA TR-210 N1) > clamps a hand-made custom comparison start the same way
+    AccountMetricsPanel period bounds (QA TR-210 N1) > falls back to the default period when a linked range holds no month with data
+F2-no-espera-a-los-limites: DETECTADA — frontend (QA): no espera a conocer los meses con datos y envia el rango crudo
+    bounds (QA TR-210 N1, N2) > never sends a custom range before the bounds are known, and sends it clamped after
+F3-copia-a-custom-sin-acotar: DETECTADA — frontend (QA): el rango copiado a Custom range no se acota (N2)
+    AccountMetricsPanel calendar presets (IM-1245 v3) > N2: Custom from a period wholly beyond the data stays Custom, on the last 12 months with data
+    AccountMetricsPanel controls (IM-1245 v3) > resets a custom comparison and the grouping when the period changes
+F4-inicio-de-comparacion-sin-acotar: DETECTADA — frontend (QA): el inicio de comparacion de un enlace no se acota
+    AccountMetricsPanel period bounds (QA TR-210 N1) > clamps a hand-made custom comparison start the same way
+    bounds (QA TR-210 N1, N2) > clamps a custom range and a custom start, and leaves presets alone
+F5-rango-totalmente-fuera-se-acota: DETECTADA — frontend (QA): un rango sin ningun mes con datos se acota en vez de volver al defecto
+    AccountDetailPage > renders tasks and metrics in their dedicated tabs
+    AccountMetricsPanel calendar presets (IM-1245 v3) > N2: Custom from a period wholly beyond the data stays Custom, on the last 12 months with data
+F6-selectores-muestran-lo-pedido: DETECTADA — frontend (QA): los selectores muestran lo pedido, no lo enviado
+    AccountMetricsPanel period bounds (QA TR-210 N1) > clamps a hand-made custom comparison start the same way
+    AccountMetricsPanel period bounds (QA TR-210 N1) > falls back to the default period when a linked range holds no month with data
+F7-mes-actual-en-hora-local: DETECTADA — frontend (QA): los presets de calendario usan el mes local, no el UTC
+    calendar presets use the backend's UTC month (IM-1245 L2) > resolves last_quarter on the UTC month
+    calendar presets use the backend's UTC month (IM-1245 L2) > resolves this_quarter on the UTC month
+
+Resultado: 18 de 18 detectadas por tests del arreglo (5 del autor en #410 y 13 de QA).
