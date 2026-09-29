@@ -1,0 +1,355 @@
+schemaVersion: '1.0'
+id: tr-f2cafdc1-303b-435c-8591-1b3d76564158
+key: TR-209
+title: >-
+  TR-209 · IM-1207 · TC-186 v3 · re-test de lo entregado tras TR-204 · 17/19 PASS, 1 FAIL — F1, F2, F3
+  y F4 corregidos, pero el log muestra el rechazo por predates_version como un fallo del disparador
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend main 975869ed, frontend main 2bebbe88) con sesion admin en el navegador
+    y el generador de eventos del autor compilado contra ese main y ejecutado contra la base de dev (migraciones
+    hasta 0087); mas un Postgres 16 local desechable para los bancos y las 20 suites de integracion. Produccion
+    no se consulto.
+  buildVersion: >-
+    Mixto — backend NestJS + Lambdas + SQL (0086, 0087) + frontend React. Re-test de MigrationAppBackend
+    "PR #399" y "PR #404" (integra #400, #401 y #402) y MigrationAppFrontend "PR #209", "PR #211" y "PR
+    #213", todos mergeados a main el 2026-09-28 y desplegados en dev. "PR #210" (solo tests) sigue abierto
+    y no entra. stable sigue en el 18-ago.
+startedAt: '2026-09-29T13:10:00Z'
+completedAt: '2026-09-29T15:10:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  TR-204 rebotó la historia por cuatro hallazgos, y el autor los ataca así:
+  - **F1** (backend #404): el evaluador rechaza cualquier señal anterior al `published_at` de la
+    versión, con un motivo propio, `predates_version`. La migración 0086 lo admite en el log.
+  - **F2** (frontend #209 y 0087): las guardas se describen según lo que decidieron, y desaparecen los
+    veredictos `no_match` y `abstained`, que nadie escribía.
+  - **F3** (backend #399 y #404): la disponibilidad de cada disparador cuenta filas y cuentas en sus
+    tablas de origen, y una jugada sobre un disparador sin datos se rechaza al guardar y al entrar en un
+    estado que evalúa.
+  - **F4** (frontend #209): la biblioteca permite borrar el borrador que deja una definición rechazada.
+
+  Además:
+  - La autoría queda solo para admin, por decisión y no porque el grupo esté vacío (#211).
+  - El texto de go-live habla del límite en la publicación (#213).
+  - La historia se reescribió, y ya no promete outbox ni ventana de rechazo.
+
+  ## Inferred technical tests
+
+  - Suites y bancos sobre main, contando ficheros. EJECUTADO:
+    - src/csm: 2563 tests.
+    - Lambdas: 1083 tests, más las 20 suites contra Postgres (215 tests), que TR-204 saltó.
+    - 11 bancos: 602/602.
+    - Frontend: 2812 tests.
+  - Mutaciones, reintroduciendo cada defecto. EJECUTADO: F2, F3 y F4 las detectan tests de
+    comportamiento; F1 solo el banco; el cierre ante fechas ilegibles, nadie.
+  - F1 en vivo con el motor de main contra dev, con eventos antes de publicar, entre publicar y pasar a
+    live, y después. EJECUTADO.
+  - F3 y F4 en el builder y la biblioteca reales de dev. EJECUTADO.
+  - F2 en el log de evaluación real, incluido el motivo nuevo. EJECUTADO; de ahí sale N1.
+  - Ventana de rechazo eliminada: rechazar y volver a disparar. EJECUTADO.
+  - 403 para un usuario sin admin. NO EJECUTADO: no existe ese usuario en dev.
+
+  ## Resultado
+
+  17 PASS, 1 FAIL y 1 bloqueado (TR-204: 14/19).
+  - F1, F3 y F4 están corregidos.
+  - F2 está corregido en lo que se reportó.
+  - **N1 (media, nuevo):** un rechazo por `predates_version` se muestra en el log como "TRIGGER DID NOT
+    PASS · Needed 90 · measured —". El motivo real y la explicación del motor no aparecen.
+  - **O1 (decisión de producto):** el límite es la publicación, y el builder publica al guardar. Un
+    evento ocurrido entre guardar y pasar a live se enrola con el backfill apagado, mientras el diálogo
+    dice "It starts on what happens next".
+
+  Detalle en hallazgos.txt y en matriz-escenarios.txt.
+
+  ## Condiciones para aprobar
+
+  1. **N1 corregido:** la fila y el detalle muestran `predates_version` (y `stale_event`) con la
+     explicación del motor, con un test que compruebe el texto.
+  2. **O1, decisión explícita de producto:** o se acepta el hueco y el diálogo muestra la hora de
+     publicación (y el log deja de decir "went live"), o el límite pasa al primer estado que evalúa.
+results:
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Deployment state · Backend and frontend run the same main in dev, and neither is in production
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-29T14:35:00Z'
+  stepResults: []
+  actual: |
+    Dev corre los seis commits del re-test: backend d26b06e4 (#399), 7d0ff803 (#404) y 975869ed,
+    con despliegues terminados el 28-09 a las 16:49, 17:02 y 19:25Z; frontend a3157dba (#209), b59dd636
+    (#211) y 2bebbe88 (#213), terminados a las 18:40, 18:40 y 20:06Z. El backend termino antes que el
+    frontend que lo consume. Base de dev con 0086 y 0087 aplicadas el 28-09 a las 19:16Z. Los dos stable
+    siguen en el commit del 18-ago, 19 commits por detras de main. Que la base de produccion este en
+    0087 y el codigo sin desplegar lo afirma la historia; QA no consulto produccion. La programacion del
+    evaluador no se re-midio (TR-204: apagada en todos los entornos). attachments/tr-209-tc-186/dev/sonda-sin-credenciales-y-despliegue.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Functional · A playbook authored in the builder runs in shadow, goes live, fires and appears in My
+    Day and on the account
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-29T14:19:41Z'
+  stepResults: []
+  actual: |
+    Re-ejecutado el tramo que tocan estos PRs, en el builder real de dev: crear la jugada, guardar y
+    publicar una edicion, pasar a live sin sombra con el dialogo nuevo, disparar y ver la instancia
+    creada (2 instancias en proposed). My Day y la pestana de la cuenta no los tocan estos PRs y vienen
+    de TR-204. attachments/tr-209-tc-186/dev/secuencia-f1-predates-y-hueco.txt, ui/07.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC1 · Every one of the eight core plays is expressible with the shipped components
+  scenarioIndex: 2
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios de comportamiento para AC1: los 11 bancos pasan 602/602 sobre Postgres real (TR-204:
+    595; los 7 nuevos son de F1). Observacion O3: en dev ya no se pueden guardar jugadas sobre 13
+    disparadores cuya fuente esta vacia en dev (field_change_log, account_case_counts, contacts,
+    client_org_users), entre ellos los de Handoff y ARR; la expresividad queda sostenida por los bancos,
+    no por un barrido en dev. attachments/tr-209-tc-186/scenario-0-unit-tests/bancos-simulacion.log
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC9 · A trigger that happens on every account cannot be authored unnarrowed
+  scenarioIndex: 3
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios en el codigo de estrechamiento; suites de src/csm en verde (2563) y bancos en verde.
+    Resultado de TR-204.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Payload conditions · A matching event fires and a non-matching one is refused for a stated reason
+  scenarioIndex: 4
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios en las condiciones sobre el evento; bancos en verde. El log muestra la condicion y el
+    valor medido ("changed to RED — was YELLOW"), que concuerda con la traza guardada.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC7 · The catalog exposes 29 entries, each with its data source, and an unavailable one cannot be
+    activated
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-29T13:19:15Z'
+  stepResults: []
+  actual: |
+    GET catalog/signals: 29 entradas. module.unused sigue gated y fuera del selector. Las 13 entradas
+    sin datos se rechazan al guardar (400 con motivo legible) y, segun el codigo, tambien al entrar en un
+    estado que evalua (validado por la mutacion M3). attachments/tr-209-tc-186/dev/catalogo-disponibilidad-dev.tsv, ui/02.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC11 · The availability the builder shows matches the data that exists behind each entry
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-29T13:19:15Z'
+  stepResults: []
+  actual: |
+    F3 CORREGIDO. La disponibilidad se mide sobre las tablas de las que depende cada disparador: 13
+    no_data con la tabla vacia nombrada ("Nothing has been written to csm_os.client_org_users yet."), 8
+    available con su numero real de cuentas (email 24, metricas 7, llamadas 3, salud 2) y 7 unknown por
+    detectores que se abstienen. En TR-204 todas decian "243 of 243". El builder muestra "Available for 0
+    of 243 accounts" y el servidor rechaza al guardar; el mensaje se ve en la pagina. Mutaciones M2c y M3
+    detectadas. Observacion O2: 13 jugadas del autor siguen en sombra sobre disparadores sin datos.
+    attachments/tr-209-tc-186/dev/f3-f4-builder-y-biblioteca.txt, ui/01, ui/02.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC12, superseded by product · Going live without a shadow run warns, is allowed, and leaves a receipt
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-29T14:19:41Z'
+  stepResults: []
+  actual: |
+    F1 CORREGIDO segun el AC reescrito. En vivo, con el motor de main: evento en la cuenta A a las
+    14:16:54, v2 publicada a las 14:18:13 -> "blocked · predates_version", sin instancia; evento en C
+    despues del paso a live -> fired. El dialogo de go-live avisa de que no hubo sombra y dice que el
+    backfill esta apagado; el paso draft -> active se permite.
+    OBSERVACION O1 (producto): el limite es la PUBLICACION y el builder publica al guardar. Un evento en
+    B a las 14:19:00, con la jugada en draft y 27 s antes del paso a live, SE ENROLO (instancia
+    2d1b8c45). El dialogo dice "It starts on what happens next" sin decir cuando se publico la version,
+    y el log dice "before this version went live" midiendo contra la publicacion. El dialogo sigue sin
+    nombrar la version (O8). attachments/tr-209-tc-186/dev/secuencia-f1-predates-y-hueco.txt, ui/07.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC6 · Step text renders from the frozen snapshot and due dates are fixed at enrolment
+  scenarioIndex: 8
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios; bancos y las 20 suites de Lambdas contra Postgres (215/215) en verde.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC5 · A running instance closes itself on an exit event or an account-state predicate
+  scenarioIndex: 9
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios; bancos de salidas y ciclo de vida en verde.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC8 · The evaluation log answers why it fired and why it did not, and each line agrees with its result
+  scenarioIndex: 10
+  status: failed
+  executedAt: '2026-09-29T14:24:00Z'
+  stepResults: []
+  actual: |
+    F2 CORREGIDO en lo reportado: cada guarda dice su resultado en palabras ("GUARD PASSED · No
+    suppression was in force on this account"), el rechazo por guarda la nombra, y el log solo ofrece los
+    cuatro veredictos del motor (Created, Would have, Stopped by a rule, Errored); "Did not match" y
+    "abstained" desaparecen, y la base ya solo admite esos cuatro (0087). Mutacion M4 detectada.
+    FALLA POR N1: el motivo nuevo de F1 se muestra mal. Un rechazo por predates_version aparece como
+    "Stopped by trigger: Renewal window entered" y, en el detalle, "TRIGGER DID NOT PASS · Needed 90 ·
+    measured —", como si la condicion de renovacion no se hubiera cumplido. El disparador si cumplio; la
+    explicacion del motor ("the event happened 79s before this version went live") no aparece. El test
+    del frontend solo comprueba la etapa. Restos menores: "Needed never · measured —" y "1 instances"
+    (O6). attachments/tr-209-tc-186/hallazgos.txt, ui/06, ui/08, ui/09.
+  defects:
+  - jiraKey: IM-1207
+    url: https://veevart.atlassian.net/browse/IM-1207
+    severity: medium
+    summary: >-
+      N1: el log de evaluacion muestra un rechazo por predates_version como un fallo de la condicion del
+      disparador ("TRIGGER DID NOT PASS · Needed 90 · measured —") y no muestra el motivo ni la explicacion
+      del motor, contra el AC8 y contra la propia historia.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Guard layer · Dedupe, re-enrolment and stale events block for a named reason
+  scenarioIndex: 11
+  status: passed
+  executedAt: '2026-09-29T14:21:13Z'
+  stepResults: []
+  actual: |
+    Re-enrolamiento con la politica every_time: la guarda pasa y lo dice en palabras. VENTANA DE
+    RECHAZO ELIMINADA, en vivo: instancia rechazada a las 14:20:45 (cancelled · declined) y el siguiente
+    evento en la misma cuenta crea otra instancia a las 14:21:13. Dedupe, supresion y medida de volumen
+    pasan y se leen en palabras. stale_event sigue sin poder provocarse en dev (el generador fecha los
+    eventos "ahora"); cubierto por los bancos. attachments/tr-209-tc-186/dev/rechazo-y-reenrolamiento.txt
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC14 · One reading evaluated by several plays at once, and a play on another signal type stays silent
+  scenarioIndex: 12
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios; bancos en verde.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC3 and AC4 · Detectors emit once on the rising edge, once on the falling edge, and abstain on a stale
+    source
+  scenarioIndex: 13
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios; bancos de detectores en verde. En dev los 7 detectores siguen abstenidos (unknown en
+    el catalogo).
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC2 · A dropped event loses no signal and replaying a sync window duplicates none
+  scenarioIndex: 14
+  status: passed
+  stepResults: []
+  actual: |
+    El AC reescrito ya no promete un outbox en la misma transaccion: dice que las senales las escribe
+    derive-signals-worker desde las tablas de origen, que es lo que midio TR-204 (R6 cerrado). dedupe_key
+    unica y bancos en verde.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC13, not verifiable on dev · Two departing champions give two instances, the same champion twice
+    gives one
+  scenarioIndex: 15
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios; banco Play 3 en verde. Dev sigue sin contactos: no ejercitable de punta a punta.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    AC15, not met · Two of the three off-list plays are expressible without engineering, NPS is deferred
+  scenarioIndex: 16
+  status: passed
+  stepResults: []
+  actual: |
+    Sin cambios: Support Backlog Cleanup y Expansion expresables; NPS sin fuente de datos.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Known defect · A refused definition leaves a draft the author can delete
+  scenarioIndex: 17
+  status: passed
+  executedAt: '2026-09-29T13:23:30Z'
+  stepResults: []
+  actual: |
+    F4 CORREGIDO. La definicion rechazada deja la jugada en draft sin version (sigue siendo dos
+    peticiones), y la biblioteca la muestra con "Its first version was never saved, so there is nothing
+    to open." y "Delete this draft". Dialogo de confirmacion, DELETE 204, GET 404, fuera de la lista.
+    Mutacion M5 detectada. attachments/tr-209-tc-186/dev/f3-f4-builder-y-biblioteca.txt, ui/03, ui/04, ui/05.
+- testCaseId: be4b1daf-e4a9-406d-8125-9a6d41b1733e
+  testCaseKey: TC-186
+  scenarioTitle: >-
+    Access · The Playbooks surfaces and API require a session in an allowed group
+  scenarioIndex: 18
+  status: blocked
+  executedAt: '2026-09-29T14:30:00Z'
+  stepResults: []
+  actual: |
+    Sin sesion, la API responde 401 en lectura, alta y borrado; la ruta inexistente tambien da 401
+    porque la autenticacion corta antes del enrutado. "Solo admin" es ahora decision de producto: el
+    frontend lo declara (#211) y el backend sigue pidiendo csm-managers para escribir (O7). BLOQUEADO: en
+    dev no hay ningun usuario sin admin para comprobar que la pestana no se ve y que la API responde
+    403. attachments/tr-209-tc-186/dev/sonda-sin-credenciales-y-despliegue.txt
+summary:
+  total: 19
+  passed: 17
+  failed: 1
+  blocked: 1
+  skipped: 0
+  notRun: 0
+  passRate: 89
+history:
+- action: run-started
+  timestamp: '2026-09-29T13:10:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Re-test de IM-1207: el autor entrego los cuatro hallazgos de TR-204 y reescribio la historia. Se re-ejecutan
+    los escenarios afectados en dev con el motor de main, se re-corren las suites y los bancos, y se reintroduce
+    cada defecto para comprobar que algo lo detecta.
+- action: run-completed
+  timestamp: '2026-09-29T15:10:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    17/19 PASS, 1 FAIL, 1 bloqueado. F1, F2, F3 y F4 corregidos y medidos en vivo, y la ventana de rechazo
+    eliminada. Falla N1: el log presenta el rechazo por predates_version como un fallo de la condicion
+    del disparador. Queda para producto O1: el limite es la publicacion, que ocurre al guardar, asi que
+    un evento entre guardar y pasar a live se enrola con el backfill apagado.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-29T15:10:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-29T15:10:00Z'
+  version: 1

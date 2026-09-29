@@ -1,0 +1,75 @@
+HALLAZGOS · TR-209 · TC-186 v3 · IM-1207 · re-test de los cambios del autor tras TR-204
+======================================================================================
+Medido el 2026-09-29 contra dev (backend main 975869ed con #399 y #404; frontend main 2bebbe88 con
+#209, #211 y #213; base de dev en 0087) y contra un Postgres 16 local. Ninguna escritura en
+produccion.
+
+ESTADO DE LOS HALLAZGOS DE TR-204
+  F1 (alta) · jugada con backfill apagado enrolaba eventos anteriores a ella -> CORREGIDO. Un evento
+       anterior a la publicacion de la version sale "blocked · predates_version" y no crea nada.
+       Queda el matiz O1.
+  F2 (media) · log de evaluacion -> CORREGIDO en lo que se reporto: cada guarda dice su resultado en
+       palabras, desaparecen los contadores muertos y solo quedan los cuatro veredictos que escribe
+       el motor. Pero el motivo NUEVO de F1 se muestra mal: N1.
+  F3 (media) · disponibilidad que no media datos -> CORREGIDO. 13 entradas no_data con la tabla vacia
+       nombrada, y una jugada sobre ellas se rechaza al guardar.
+  F4 (media) · borrador huerfano sin salida -> CORREGIDO. Se borra desde la biblioteca.
+
+=============================================================================
+N1 · MEDIA · El log de evaluacion da un motivo falso cuando el motor rechaza por predates_version
+=============================================================================
+Escenario 11 (AC8). Capturas ui/08 y ui/09. dev/secuencia-f1-predates-y-hueco.txt.
+  Lo que guarda el motor (playbook_evaluation_log): verdict blocked, blocked_by predates_version,
+  explanation "the event happened 79s before this version went live, so this version was not waiting
+  for it". El disparador SI cumplio.
+  Lo que ve el autor en "Why didn't it?":
+    fila:     "Stopped by trigger: Renewal window entered"
+    detalle:  "TRIGGER DID NOT PASS · Renewal window entered · Needed 90 · measured —"
+  Es decir: que la condicion de renovacion (90 dias) no se cumplio. Es falso, y manda al autor a
+  tocar el parametro de dias o a buscar la fecha de renovacion. La explicacion del motor no aparece
+  en ningun sitio de la pantalla.
+  Causa (frontend, playbookEvaluations.ts): toStage() convierte predates_version y stale_event en la
+  etapa "trigger" a proposito, y esa fila se pinta con la condicion del disparador; el
+  blockedDetail.explanation no se muestra. El test del frontend para este caso solo comprueba la
+  etapa ("reports an event refused for predating its version at the TRIGGER"), no el texto, asi que
+  ninguna suite lo ve.
+  Contradice el AC8 ("naming the specific filter or guard") y la propia historia ("refused with its
+  own reason, predates_version, and logged": se registra, pero no se muestra). Afecta igual a
+  stale_event, que en dev no se puede provocar porque el generador fecha los eventos "ahora".
+
+=============================================================================
+OBSERVACIONES (no bloquean; se dejan escritas)
+=============================================================================
+O1 · MEDIA, DECISION DE PRODUCTO · El limite de F1 es la PUBLICACION de la version, y el builder
+   publica al GUARDAR ("Create playbook" y "Save and publish" llaman a activate), no al pasar a live.
+   Medido: un evento 27 s ANTES de pasar a live, con la jugada en draft y el backfill apagado, se
+   enrolo (E_b, instancia 2d1b8c45). Es la regla de producto del 2026-09-28, pero el dialogo dice
+   "It starts on what happens next" sin decir cuando se publico, y el log dice "before this version
+   went live" cuando mide contra la publicacion. Un borrador guardado el lunes y activado el
+   miercoles recoge todo lo ocurrido entre medias, hasta la ventana del evento (7 dias; 27 para
+   metric_changed). Opciones: mostrar la hora de publicacion en el dialogo y corregir el texto del
+   log, o fijar el limite en el primer paso a un estado que evalua.
+O2 · 13 jugadas del autor (e2e-*) siguen EN SOMBRA sobre disparadores que ahora son no_data. La regla
+   actua al guardar y al entrar en un estado que evalua; lo que ya evaluaba sigue evaluando.
+O3 · En dev ya no se pueden guardar jugadas sobre 13 disparadores, entre ellos account.field_changed,
+   account.arr_changed, account.churn_confirmed, implementation.completed y los de casos, porque
+   field_change_log y account_case_counts estan vacias en dev. El generador escribe la senal directa
+   (nivel C) y antes podia ejercitarlos; ahora el barrido "una jugada por disparador" del autor ya no
+   se puede repetir en dev. La expresividad de las 8 jugadas (AC1) queda sostenida por los bancos.
+O4 · F1 solo lo sostiene el banco de simulacion (5 checks). Las suites de jest no lo fijan, y la
+   promesa de fallar cerrado si no se leen las fechas no la fija nada (mutacion M1b sobrevive).
+O5 · Si la medicion de disponibilidad falla, el catalogo responde 'available' (decision documentada)
+   mientras el log del repositorio dice "reports 'unknown' this run". El mensaje no dice lo que pasa, y
+   con la regla nueva un fallo de medicion deja guardar una jugada sin datos.
+O6 · Restos en el log: "Needed never · measured —" en la guarda de re-enrolamiento y "1 instances".
+   El afinador sigue diciendo que no hay medida (declarado por el autor como conocido).
+O7 · "Admin-only" esta solo en el frontend; las escrituras del backend siguen pidiendo csm-managers.
+   Hoy da igual (el grupo no existe); si se crea, la API permitiria lo que la UI esconde.
+O8 · El dialogo de go-live sin sombra sigue sin nombrar la version (TR-204 O6); el AC reescrito dice
+   "The warning names the version".
+O9 · Dos veces, al arrancar el navegador con el token por renovar, abrir /csm/playbooks acabo en My
+   Day. Con el token vigente carga bien. No se pudo reproducir a demanda.
+
+DATOS QUE DEJA ESTA CORRIDA EN DEV (se conservan)
+  Jugada "QA TC-186 v2 predates" (53448cb9) en pausa, con 3 instancias (2d1b8c45 y 322777d8 en
+  proposed, 2a14e042 rechazada). La jugada "QA TC-186 v2 sin datos" se creo y se borro (F4).

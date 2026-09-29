@@ -1,0 +1,42 @@
+F1 EN VIVO · predates_version y el hueco entre publicar y pasar a live · TR-209 · 2026-09-29
+==========================================================================================
+Motor: el generador de eventos del autor (csm-playbook-qa), compilado desde main 975869ed (incluye
+#404) y ejecutado contra la base de dev (migraciones hasta 0087). Cada despacho corre el pipeline
+completo. Jugada de QA: "QA TC-186 v2 predates" (53448cb9), disparador
+account.renewal_window_entered (days=90), re-enrolamiento every_time, backfill apagado. Cuentas: A
+38e10b6c (la cuenta de QA de TR-204), B 00172cc8 y C 00666a19; solo se anota el prefijo del id.
+
+Antes de empezar: 0 senales account.renewal_window_entered pendientes en los ultimos 8 dias, y
+ninguna jugada en sombra o activa suscrita a ese tipo (la de TR-204 esta en pausa).
+
+ hora UTC       paso
+ 13:25:57.137   builder "Create playbook": la v1 queda PUBLICADA (POST .../versions/:id/activate)
+                con la jugada todavia en draft
+ 14:16:54.445   E_a en la cuenta A. Nadie lo evalua: queda pendiente (processed_at null)
+ 14:18:13.824   se edita el paso y se pulsa "Save and publish": v2 publicada, jugada en draft
+ 14:19:00.182   E_b en la cuenta B. Pendiente
+ 14:19:27.259   "Go live without a shadow run": draft -> active (POST /status 201)
+ 14:19:41.246   E_c en la cuenta C; el pipeline evalua los tres eventos
+
+ Resultado en csm_os.playbook_evaluation_log (evaluated_at 14:19:41.417):
+   E_a (A) 14:16:54  blocked · predates_version · "the event happened 79s before this version went
+                     live, so this version was not waiting for it" · sin instancia
+   E_b (B) 14:19:00  fired · instancia 2d1b8c45   <- evento posterior a publicar la v2 pero
+                                                     ANTERIOR a pasar a live (27 s antes)
+   E_c (C) 14:19:41  fired · instancia 2a14e042
+ Las tres senales quedan marcadas processed_at entre 14:19:51 y 14:19:52.
+
+LECTURA
+- F1 corregido tal como lo formula ahora el AC: un evento anterior a la PUBLICACION de la version
+  se rechaza con su propio motivo y queda registrado.
+- El limite es published_at, y published_at se fija al GUARDAR (el builder llama a activate en
+  "Create playbook" y en "Save and publish"), no al pasar a live. Un evento ocurrido mientras la
+  jugada era un borrador guardado SI se enrola en cuanto pasa a live, con el backfill apagado.
+  Es la regla de producto del 2026-09-28 ("the bound is the version's published_at"), pero:
+    - el dialogo de go-live dice "It starts on what happens next" y no dice cuando se publico la
+      version;
+    - la explicacion del log dice "before this version went live" cuando mide contra la
+      publicacion (79 s = 14:18:13.8 - 14:16:54.4; el paso a live fue a las 14:19:27).
+  Con un borrador guardado dias antes, el hueco llega hasta la ventana del evento (7 dias; 27 para
+  metric_changed).
+- La UI no muestra el motivo: ver hallazgos N1 y capturas ui/08 y ui/09.

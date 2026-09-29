@@ -72,6 +72,14 @@ description: |
   - R11. Fuera de alcance, y no se prueba: el disparador de NPS (no existe fuente de datos;
     diferido por producto), los disparadores de inteligencia conversacional, la categoria de
     calidad de datos y el backfill historico de call_interactions.analysis.
+  - R12. RE-TEST v3 (2026-09-29) de lo que el autor entrego tras TR-204: backend "#399" y "#404"
+    (predates_version, dos veredictos que nadie escribia, disparador sin datos rechazado;
+    migraciones 0086 y 0087) y frontend "#209", "#211" y "#213" (log, borrador huerfano,
+    autoria solo de admin y texto de go-live). La historia se reescribio el 2026-09-28: R6 queda
+    cerrado (el AC ya no promete outbox; las senales las escribe derive-signals-worker desde las
+    tablas de origen), R8 y R10 pasan a criterios verificables, y la ventana de rechazo desaparece
+    por decision de producto (2026-09-24). Riesgo nuevo: el limite de predates_version es el
+    published_at de la version, que el builder fija al GUARDAR, no al pasar a live.
 
 type: integration
 priority: medium
@@ -104,6 +112,7 @@ scenarios:
       - "el backend termino de desplegar antes que el frontend que lo consume, o la ventana en que no fue asi queda medida"
       - "queda escrito que stable no contiene ningun merge del ticket y cuantos commits le faltan"
       - "queda escrito que la Lambda del evaluador no tiene programacion en ningun entorno"
+      - "queda escrito el estado de produccion que declara la historia (base en 0087, codigo sin desplegar) y que QA no lo consulta"
 
   - title: "Functional · A playbook authored in the builder runs in shadow, goes live, fires and appears in My Day and on the account"
     tags:
@@ -190,12 +199,12 @@ scenarios:
       - edge-case
       - known-gap
     given:
-      - "client_org_users esta vacia en dev"
+      - "la disponibilidad de cada disparador se mide sobre las tablas de las que depende, y en dev client_org_users, contacts, field_change_log y account_case_counts estan vacias"
     when:
       - "se compara la disponibilidad que el builder muestra para cada entrada con un conteo en la base de datos de las cuentas que tienen datos de esa fuente"
     then:
       - "para cada entrada con disponibilidad calculada, la cifra del builder coincide con el conteo"
-      - "para las tres entradas client_user.* queda medido lo que dice el builder frente a lo que hay detras; si dice 243 de 243 sin ningun usuario, queda escrito como la salvedad declarada"
+      - "cada entrada sin datos detras aparece como no disponible, nombra la tabla vacia, y una jugada sobre ella se rechaza al guardar con un motivo legible"
 
   - title: "AC12, superseded by product · Going live without a shadow run warns, is allowed, and leaves a receipt"
     tags:
@@ -207,11 +216,14 @@ scenarios:
       - "una jugada de prueba en draft que nunca ha pasado por sombra"
     when:
       - "se activa directamente desde el builder, una vez con activation.backfill en true y otra en false"
+      - "con el backfill apagado se escriben eventos antes de publicar la version, entre publicarla y pasar a live, y despues"
     then:
       - "el builder avisa antes de activar, nombra la version y dice si el backfill esta encendido"
       - "la transicion de draft a active se permite"
       - "la version queda marcada con quien la activo sin sombra y cuando"
       - "una version que si paso por sombra se activa sin ese aviso"
+      - "un evento anterior a la publicacion de la version se rechaza con el motivo predates_version y no crea instancia; uno posterior al paso a live dispara"
+      - "queda medido que pasa con un evento ocurrido entre guardar la version y pasar a live, y si el aviso de go-live lo dice"
 
   - title: "AC6 · Step text renders from the frozen snapshot and due dates are fixed at enrolment"
     tags:
@@ -255,7 +267,8 @@ scenarios:
       - "cada veredicto bloqueado nombra el filtro, la condicion o la guarda que lo detuvo, con el valor esperado y el real"
       - "el texto de cada guarda concuerda con su resultado; una guarda que paso no se lee como fallo"
       - "el veredicto se transmite tambien sin color"
-      - "cada contador del log se puede mover; si 'Did not match' no puede moverse, queda escrito"
+      - "el log solo ofrece los cuatro veredictos que escribe el motor: fired, shadow_fired, blocked y error"
+      - "un rechazo por predates_version o stale_event muestra ese motivo y la explicacion del motor, no un fallo de la condicion del disparador"
 
   - title: "Guard layer · Dedupe, re-enrolment and stale events block for a named reason"
     tags:
@@ -268,10 +281,12 @@ scenarios:
       - "se dispara el mismo evento en la misma cuenta mientras la instancia esta viva"
       - "se cierra la instancia y se vuelve a disparar dentro y fuera de la ventana de re-enrolamiento"
       - "se dispara un evento con fecha mas antigua que eventWindowDays"
+      - "con la politica every_time se rechaza una instancia y se vuelve a disparar el mismo evento en la misma cuenta"
     then:
       - "el segundo disparo no crea otra instancia y el log nombra la guarda de dedupe"
       - "el re-enrolamiento sigue la politica de la jugada y el log dice cuando fue el ultimo enrolamiento"
       - "el evento viejo queda bloqueado con el motivo stale_event"
+      - "tras un rechazo, el siguiente evento vuelve a enrolar: la ventana de rechazo ya no existe (decision de producto 2026-09-24)"
 
   - title: "AC14 · One reading evaluated by several plays at once, and a play on another signal type stays silent"
     tags:
@@ -317,7 +332,7 @@ scenarios:
     then:
       - "la senal del mensaje perdido aparece igualmente"
       - "repetir la ventana inserta 0 filas nuevas"
-      - "queda escrito cual de los dos mecanismos existe y si coincide con lo que dice el AC"
+      - "queda escrito cual de los dos mecanismos existe y si coincide con lo que dice el AC; desde el 2026-09-28 el AC ya no promete outbox"
 
   - title: "AC13, not verifiable on dev · Two departing champions give two instances, the same champion twice gives one"
     tags:
@@ -366,12 +381,12 @@ scenarios:
       - security
       - negative
     given:
-      - "la pestana Playbooks esta limitada al grupo admin, porque csm-managers no existe en Cognito"
+      - "la autoria de jugadas es solo de admin por decision de producto (2026-09-28); el frontend lo declara y las escrituras del backend siguen pidiendo csm-managers, que no existe en Cognito"
     when:
       - "se llama a las rutas de la API de playbooks sin credenciales, con una ruta inexistente como control negativo"
       - "si hay un usuario de prueba fuera de admin, se abre la aplicacion con el"
     then:
-      - "sin credenciales la API responde 401 y la ruta inexistente responde 404"
+      - "sin credenciales la API responde 401; si la autenticacion corta antes del enrutado, la ruta inexistente tambien da 401 y queda escrito"
       - "un usuario fuera de los grupos permitidos no ve la pestana y la API le responde 403"
       - "queda escrito que cualquier miembro del grupo puede aceptar, rechazar, cerrar o restaurar la instancia de otro, que es la decision registrada"
 
@@ -393,5 +408,5 @@ metadata:
   createdBy: "codex"
   createdAt: "2026-09-25T20:50:00Z"
   updatedBy: "codex"
-  updatedAt: "2026-09-25T21:40:00Z"
-  version: 2
+  updatedAt: "2026-09-29T15:10:00Z"
+  version: 3
