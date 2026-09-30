@@ -1,0 +1,31 @@
+TR-219 · escenario 3 · AC1 · la URL del ETL queda fuera del dominio interceptado (lecturas y sondeo sin credenciales)
+
+CAUSA, SIGUE PRESENTE (no es parte del arreglo tocarla)
+  VPC del ETL de produccion: 1 endpoint de interfaz com.amazonaws.us-east-1.execute-api, DNS privado = true,
+  available. Su DNS privado cubre execute-api.us-east-1.amazonaws.com y *.execute-api.us-east-1.amazonaws.com.
+  VPC del ETL de dev: ningun endpoint execute-api -> dev no reproduce el 403.
+
+EL ARREGLO
+  Dominio propio de dev y de produccion (implementation-api.*, bajo la zona publica de la empresa):
+    API Gateway DomainName  REGIONAL, TLS_1_2, AVAILABLE
+    BasePathMapping         raiz (sin base path) -> API del backend del mismo entorno, stage del entorno
+    Route 53                registro A de tipo ALIAS (no CNAME) hacia el nombre regional d-*.execute-api...
+  El nombre consultado (implementation-api.*) no pertenece a *.execute-api.us-east-1.amazonaws.com, asi que la zona
+  privada del endpoint no lo captura; y al ser un alias A, Route 53 devuelve directamente las IP publicas: el cliente
+  no recibe un CNAME a *.execute-api que tuviera que volver a resolver dentro de la VPC (ahi si lo interceptaria).
+  Resolucion publica: 3 registros A por dominio, direcciones publicas; certificado de Amazon para el nombre, valido
+  hasta 2027-04.
+
+  URL del ETL (MIGRATION_APP_BACKEND_URL): dominio propio de su entorno, sin sufijo /prod ni /dev (mapeo de raiz).
+
+SONDEO SIN CREDENCIALES (GET a rutas inexistentes, desde fuera)
+  dominio propio de dev   /api/etl/qa-tc191-probe        404 de la app (Cannot GET)  x-amz-apigw-id y x-amzn-RequestId
+  dominio propio de prod  /api/etl/qa-tc191-probe        404 de la app               x-amz-apigw-id y x-amzn-RequestId
+  dominio propio de prod  /prod/api/etl/qa-tc191-probe   404 de la app               (con /prod no hay ruta: por eso
+                                                                                     la URL va sin stage)
+  -> responde API Gateway y detras la app; no es la negativa del endpoint de VPC (403 ForbiddenException sin esas
+     cabeceras).
+
+EVIDENCIA EMPIRICA
+  Dev: las llamadas del ETL al dominio propio devuelven 200 al primer intento (dev/corridas-dev.txt).
+  Produccion, desde dentro de la VPC interceptada: prod/llamadas-etl-conteos.txt (403 antes, 200 despues).

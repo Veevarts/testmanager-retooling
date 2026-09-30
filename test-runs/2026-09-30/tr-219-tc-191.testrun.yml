@@ -1,0 +1,263 @@
+schemaVersion: '1.0'
+id: tr-dbb6154c-9f88-4fd8-82e5-6bba650aab88
+key: TR-219
+title: >-
+  TR-219 · IM-1202 · TC-191 · 11/13 PASS, 2 FAIL (media) — las llamadas del ETL llegan por el dominio propio y las
+  corridas terminan COMPLETED o FAILED con sus CSV descargables, pero no hay alerta ni watchdog
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend 9ea9df33, ETL con el arbol de ea90850d) con sesion admin; workspace de pruebas del
+    autor, el unico con respaldo encendido; 2 corridas lanzadas por QA con autorizacion del usuario de QA. Produccion
+    solo en lectura (configuracion, DNS y conteos agregados de logs del ETL en Datadog, autorizados). Clones locales
+    del ETL (Node 22) y del backend (Node 20).
+  buildVersion: >-
+    Mixed: infraestructura (dominio propio de la API en SAM, BE "PR #356" y "PR #412"), backend (BE "PR #415", asentar
+    objetos), ETL (ETL "PR #173", reintentos y ERROR undelivered) y la URL del ETL en sus definiciones de tarea. En
+    produccion: backend 7ad81478 ("PR #416", 16:55Z) y ETL ea90850d (16:06Z).
+startedAt: '2026-09-30T16:58:00Z'
+completedAt: '2026-09-30T17:27:36Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  El ETL informa el final de una corrida con un PUT de ficheros por objeto y un PATCH de estado a la API del backend.
+  Iban a la URL execute-api, y en la VPC del ETL de produccion un endpoint de interfaz execute-api con DNS privado
+  reescribe todo *.execute-api hacia si mismo y responde 403 a una API que no es PRIVATE. BE "#356/#412" crean un
+  dominio propio REGIONAL (alias A en Route 53, mapeo de raiz), fuera del nombre que captura el DNS privado, y lo dejan
+  activado en todos los despliegues; la URL del ETL se cambio a ese dominio sin stage. ETL "#173" reintenta las dos
+  llamadas con espera exponencial y plazo por intento, informa COMPLETED solo si llego algun inventario y deja un ERROR
+  migration.run.terminal.callback.undelivered con id de corrida y estado HTTP. BE "#415" asienta el estado de cada
+  objeto al recibir sus ficheros y, al cerrarse la corrida, marca FAILED los que no recibieron ninguno.
+
+  ## Inferred technical tests
+
+  - Suites de ETL "#173" y BE "#415" en main y en el padre, y 11 mutaciones: ejecutado.
+  - Estructura DNS y sondeo sin credenciales de los dos dominios propios: ejecutado.
+  - Produccion, conteos agregados de las llamadas del ETL en Datadog (403 antes, 200 despues): ejecutado, autorizado.
+  - Dev: una corrida correcta y una que falla lanzadas por QA, DynamoDB frente a S3, historial y descargas: ejecutado.
+  - Arnes con el adaptador y los casos de uso reales contra un servidor HTTP local (403, 503, sin respuesta), en main
+    y en el padre: ejecutado.
+  - Alerta (AC4) y watchdog (AC5): buscados en CloudWatch, Datadog y el codigo; no existen.
+  - Fuera del alcance de QA por politica: lanzar corridas o reenviar llamadas en produccion y recuperar las corridas
+    atascadas de produccion.
+
+  ## Resultado
+
+  11/13 PASS, 2 FAIL de severidad media: F1 no existe ninguna alerta sobre la llamada final no entregada (AC4) y F2 no
+  hay watchdog que saque de RUNNING una corrida que no informa (AC5). La historia vuelve al autor. Observaciones:
+  una corrida que falla a mitad deja CSV huerfanos en S3 sin enlaces, y en Datadog los ERROR del ETL llegan partidos
+  por linea y como info. Detalle en attachments/tr-219-tc-191/hallazgos.txt.
+results:
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Deployment state · Dev and production run the IM-1202 builds and the next deploy keeps the custom domain
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-30T17:15:00Z'
+  stepResults: []
+  actual: |
+    Backend: dev 9ea9df33 (16:34Z) y produccion 7ad81478 (16:55Z) contienen "#415"; EnableApiCustomDomain=true en los
+    dos stacks. Los recursos del dominio propio siguen CREATE_COMPLETE con su fecha original tras los despliegues
+    siguientes ("#414" y "#415" en dev, "#416" en produccion). ETL: produccion ea90850d desde 16:06Z y dev con una imagen
+    de rama de arbol identico; los dos apuntan a su dominio propio sin stage. attachments/tr-219-tc-191/dev/despliegue.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Unit tests · The PR suites pass on main, fail on the parent and catch mutations of the fix
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-09-30T17:05:00Z'
+  stepResults: []
+  actual: |
+    ETL: 65 suites / 881 tests en main; specs de "#173" 64/64 en main y 56 de 64 fallan en el padre. Backend: specs de
+    "#415" 27/27 en main y las 4 suites fallan en el padre. 11/11 mutaciones detectadas (sin reintentos, sin ERROR,
+    COMPLETED sin inventario, supresion de la llamada de estado, URL en logs, parseInt crudo, sin plazo; controlador
+    sin asentar, PUT sin estado, objetos sin ficheros en PENDING, barrido que pisa asentados).
+    attachments/tr-219-tc-191/scenario-0-unit-tests/
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC1 · The ETL backend URL is outside the namespace the private DNS intercepts
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-30T17:18:00Z'
+  stepResults: []
+  actual: |
+    La VPC del ETL de produccion conserva el endpoint execute-api con DNS privado. El dominio propio no pertenece a
+    *.execute-api.us-east-1.amazonaws.com y es un alias A (no un CNAME) hacia el nombre regional; resuelve a IP publicas.
+    Sin credenciales, los dos dominios responden desde API Gateway (x-amz-apigw-id, x-amzn-RequestId) con el 404 de la
+    app; con /prod tambien 404, por eso la URL va sin stage. attachments/tr-219-tc-191/dns-y-dominio-ac1.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC1 · After the repoint, the production backend receives the ETL callbacks (read-only)
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-09-30T17:14:00Z'
+  stepResults: []
+  actual: |
+    Solo conteos de los logs del ETL de produccion en Datadog: el 09-18 y el 09-29 la llamada FAILED recibio 403; el
+    09-30 a las 15h, ya con la URL nueva, dos llamadas devolvieron 200 (ficheros y estado). Ningun 403 despues del
+    cambio. QA no lanzo corridas ni reenvio llamadas en produccion. attachments/tr-219-tc-191/prod/llamadas-etl-conteos.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC2 · A successful single-object run in dev reaches COMPLETED with every part in files[]
+  scenarioIndex: 4
+  status: passed
+  executedAt: '2026-09-30T17:09:24Z'
+  stepResults: []
+  actual: |
+    Corrida QA-1 (Opportunity Membership): COMPLETED en unos 12 s; el objeto paso a COMPLETED al llegar su PUT (200 al
+    primer intento, 353 ms) y el PATCH devolvio 200. files[] = S3 en clave, bytes y etag; y lo mismo en las tres partes
+    de la corrida del autor de 16:38Z. Antes de "#415" (corrida del autor de 14:26Z) la corrida quedaba COMPLETED con el
+    objeto PENDING. attachments/tr-219-tc-191/dev/corridas-dev.txt, ui/01, ui/02
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC3 · The run history lists and downloads every generated CSV part
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-30T17:11:30Z'
+  stepResults: []
+  actual: |
+    El historial muestra QA-1 como COMPLETED con su parte; la corrida del autor lista sus tres partes. Download CSVs baja
+    las cuatro partes (una suelta y tres en un zip) con md5 igual al etag de S3 y su cabecera. "Load CSVs" no se pulso.
+    attachments/tr-219-tc-191/dev/descargas-ac3.txt, ui/03, ui/04
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Failure path · A run that fails during CSV generation ends FAILED and no object stays PENDING
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-09-30T17:12:52Z'
+  stepResults: []
+  actual: |
+    Corrida QA-2 (solo Contact Role): la consulta falla por el defecto previo @hasDateFilterFrom, el PATCH FAILED
+    devuelve 200 en 126 ms y el objeto queda FAILED 0,2 s despues; el historial la muestra FAILED, no en curso. Antes de
+    "#415" (corrida del autor de 14:27Z) sus 78 objetos quedaban PENDING. Observacion O1: esa corrida dejo 37 partes de
+    17 objetos en S3 sin files[] ni enlaces. attachments/tr-219-tc-191/dev/corridas-dev.txt, ui/05
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC4 · A refused callback is retried with backoff and then reported as an ERROR with the HTTP status and run id
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-09-30T17:02:00Z'
+  stepResults: []
+  actual: |
+    Arnes con el adaptador y los casos de uso reales contra un servidor local que responde 403 ForbiddenException: con
+    main, 4 PUT y 4 PATCH con esperas de 504, 1005 y 2006 ms, un WARN por reintento y un unico ERROR
+    migration.run.terminal.callback.undelivered con el id de la corrida, statusHttpStatus 403 y 4 intentos. Con el
+    padre: 1 PUT y 1 PATCH, el PATCH dice COMPLETED aunque no llego ningun fichero, ningun undelivered, y un backend
+    que no responde deja la llamada colgada mas de 5 s (sin plazo). attachments/tr-219-tc-191/harness/salida.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC4 · An alert fires on an undelivered terminal callback
+  scenarioIndex: 8
+  status: failed
+  executedAt: '2026-09-30T17:21:00Z'
+  stepResults: []
+  actual: |
+    No existe ninguna alerta. CloudWatch: sin alarmas ni filtros de metricas (los grupos de logs del ETL en ECS estan
+    vacios; el ETL envia solo a Datadog). Datadog: 21 monitores y ninguno sobre migration, callback, undelivered ni el
+    servicio del ETL. Ademas, en Datadog cada linea del ERROR llega como evento aparte y con status info, asi que un
+    monitor sobre status:error no saltaria. attachments/tr-219-tc-191/alertas-ac4.txt, ui/06
+  defects:
+  - jiraKey: IM-1202
+    url: https://veevart.atlassian.net/browse/IM-1202
+    severity: medium
+    summary: >-
+      AC4 "and an alert fires" is not implemented: no CloudWatch alarm or Datadog monitor watches
+      migration.run.terminal.callback.undelivered, and Datadog ingests the ETL's multi-line ERROR as separate info events
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC5 · A run that never reports is moved out of RUNNING by a watchdog
+  scenarioIndex: 9
+  status: failed
+  executedAt: '2026-09-30T17:22:00Z'
+  stepResults: []
+  actual: |
+    No hay watchdog. En main del backend los unicos horarios son los del ciclo de vida de los respaldos y ningun proceso
+    programado cambia el estado de una corrida. Una corrida cuyo ETL muere a mitad o cuya llamada FAILED no se entrega
+    sigue en RUNNING para siempre. attachments/tr-219-tc-191/watchdog-ac5.txt
+  defects:
+  - jiraKey: IM-1202
+    url: https://veevart.atlassian.net/browse/IM-1202
+    severity: medium
+    summary: >-
+      AC5 is not implemented: nothing sweeps migration runs, so a run whose ETL dies or whose FAILED callback is never
+      delivered stays RUNNING forever
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Edge case · The terminal status is honest when no inventory or only part of it lands
+  scenarioIndex: 10
+  status: passed
+  executedAt: '2026-09-30T17:02:00Z'
+  stepResults: []
+  actual: |
+    Sin inventario (PUT 403, PATCH 200) la corrida se informa FAILED. Con inventario parcial el objeto que llego no se
+    reintenta, el PATCH lleva 1 completado y 1 fallido, y queda un ERROR por el que falto. Con 503 en todos los PUT, el
+    primer objeto agota 4 intentos, los siguientes tienen 1 y la llamada de estado se reintenta igual (503, 503, 200).
+    attachments/tr-219-tc-191/harness/salida.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Regression · The shared VPC endpoint, the package pusher and the browser UI are untouched
+  scenarioIndex: 11
+  status: passed
+  executedAt: '2026-09-30T17:17:00Z'
+  stepResults: []
+  actual: |
+    El endpoint sigue con DNS privado; la API privada del package pusher sigue negando todo lo que no venga de el; los
+    parametros del T1 installer y del catalogo no cambian desde julio; los bundles de la interfaz en dev y prod siguen
+    con su URL execute-api. attachments/tr-219-tc-191/regresion-y-seguridad.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Security · The API key and the full callback URL never reach the logs, and malformed config is rejected
+  scenarioIndex: 12
+  status: passed
+  executedAt: '2026-09-30T17:02:00Z'
+  stepResults: []
+  actual: |
+    En 26 lineas de log de un 403 persistente: 0 apariciones de la clave y 0 rutas con ids; el host si aparece. La clave
+    va en x-api-key en cada intento. 1e4, 30s, 12.5 y 0x10 se rechazan con 4 WARN y se aplican 15000 ms, 4 intentos,
+    500 ms y 8000 ms. OWASP: 6 aplicables, 5 PASS, A09 FAIL (el mismo F1). attachments/tr-219-tc-191/harness/salida.txt,
+    regresion-y-seguridad.txt
+summary:
+  total: 13
+  passed: 11
+  failed: 2
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 85
+history:
+- action: run-started
+  timestamp: '2026-09-30T16:58:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Primera ejecucion de TC-191 para IM-1202: suites y mutaciones, arnes con HTTP real, lecturas de AWS, corridas
+    autorizadas en dev y conteos agregados de produccion.
+- action: run-completed
+  timestamp: '2026-09-30T17:27:36Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    11/13 PASS, 2 FAIL de severidad media: no hay alerta sobre la llamada final no entregada (AC4) ni watchdog de
+    corridas (AC5). La historia vuelve al autor.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T17:27:36Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T17:27:36Z'
+  version: 1

@@ -1,0 +1,40 @@
+TR-219 · IM-1202 · regresion tecnica, seguridad y OWASP Top 10 (2021)
+
+Superficie: infraestructura del backend (dominio propio en SAM + flujo de despliegue), backend (asentar objetos), ETL
+(adaptador de llamadas, caso de uso, controlador, configuracion) y la URL del ETL en sus definiciones de tarea.
+
+REGRESION TECNICA (escenario 12)
+ Endpoint execute-api de la VPC de prod     DNS privado sigue true, available, 2 subredes                    PASS
+ API privada del package pusher             sigue PRIVATE; su politica sigue negando todo lo que no venga
+                                            de ese endpoint (Deny salvo aws:sourceVpce = el endpoint)          PASS
+ Parametros SSM del T1 installer y catalogo sin cambios desde julio                                            PASS
+ Interfaz de la Migration App               los bundles de dev y prod siguen llamando a su URL execute-api
+                                            de siempre; el historial y las descargas funcionan (esc. 6)        PASS
+ Resto de suites                            ETL: 65 suites / 881 tests en main (18 suites de Docker omitidas);
+                                            backend: src/migration 25 suites / 89 tests                        PASS
+
+SEGURIDAD (escenario 13 y revision del diff)
+ - Clave del ETL: se envia en x-api-key en cada intento; ningun log la contiene (arnes H6: 0 apariciones en 26 lineas).
+ - URL con ids de cliente y corrida: no se registra; solo el host (H6: 0 rutas /api/etl/clients/ en logs).
+ - Configuracion: 1e4, 30s, 12.5 y 0x10 se rechazan con WARN y se aplican los valores por defecto (H7). Con parseInt
+   crudo, 1e4 daba 1 ms de plazo (mutacion E6 detectada).
+ - Certificado del dominio propio: Amazon, TLS_1_2, valido hasta 2027-04.
+ - Sin secretos en los diffs. El log de conexion del ETL imprime host, puerto, base y usuario, y passwordConfigured, no
+   la contrasena (previo a esta historia).
+
+OWASP TOP 10 (2021)
+ A01 Broken Access Control        Aplica  el dominio propio expone la misma API; el controlador ETL sigue con
+                                          ApiKeyAuthGuard (codigo); sin credenciales solo se obtuvo 404           PASS
+ A02 Cryptographic Failures       Aplica  TLS_1_2 minimo y certificado valido en el dominio nuevo                  PASS
+ A03 Injection                    N/A     sin entradas nuevas
+ A04 Insecure Design              Aplica  diseno sin watchdog ni alerta: un fallo del canal vuelve a quedar mudo
+                                          -> F1 y F2 (funcionales, no de seguridad)                               PASS*
+ A05 Security Misconfiguration    Aplica  endpoint compartido y politica del package pusher intactos; el
+                                          dominio se activa por defecto para que un despliegue no lo borre         PASS
+ A06 Vulnerable Components        N/A     sin dependencias nuevas
+ A07 Identification/Auth          N/A     misma clave de ETL, sin cambios de sesion
+ A08 Software/Data Integrity      Aplica  files[] = S3 (clave, bytes, etag) y md5 de las descargas = etag           PASS
+ A09 Logging/Monitoring           Aplica  el ERROR existe, pero sin alerta y fragmentado como info en Datadog       FAIL (F1)
+ A10 SSRF                         N/A     la URL del backend es configuracion, no entrada
+Resumen: 6 aplicables, 5 PASS, 1 FAIL (A09, el mismo F1), 4 N/A.
+ * A04 se deja en PASS en seguridad; la carencia de diseno se registra como F1/F2 funcionales.

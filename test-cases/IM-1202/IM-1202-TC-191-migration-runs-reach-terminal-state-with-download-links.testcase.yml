@@ -1,0 +1,216 @@
+schemaVersion: '1.0'
+id: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+key: TC-191
+title: 'Migration App: ETL callbacks reach the backend, runs end in a terminal state and every CSV part is downloadable'
+description: |
+  Cobertura QA de IM-1202 (Migration runs stay RUNNING forever and CSV download links never appear — ETL callbacks
+  are blocked by the execute-api VPC endpoint). Tipo Error, prioridad High. Sub-tarea de QA: IM-1319. Sin epic.
+
+  EL DEFECTO. El ETL informa el final de una corrida con dos llamadas al backend: un PUT por objeto con el inventario
+  de ficheros (files[], la unica fuente de los enlaces de descarga) y un PATCH con el estado de la corrida. Las dos iban
+  a la URL execute-api de la API. En la VPC del ETL de produccion hay un endpoint de interfaz execute-api con DNS
+  privado activado, que reescribe todo *.execute-api.us-east-1.amazonaws.com hacia el endpoint; como la API del backend
+  no es PRIVATE, el endpoint responde 403 antes de llegar a API Gateway. Sin reintentos ni aviso, desde junio ninguna
+  corrida de produccion llego a un estado final: quedaban en RUNNING, con los CSV completos en S3 y sin enlaces.
+
+  EL ARREGLO (cinco PRs):
+  - MigrationAppBackend "PR #356" y "PR #412": dominio propio REGIONAL para la API (certificado, DomainName, mapeo de
+    raiz y alias A en Route 53), activado por defecto en todos los despliegues. Queda fuera del espacio de nombres que
+    captura el DNS privado, sin tocar el endpoint compartido.
+  - MigrationToolETL "PR #173": reintentos con espera exponencial y plazo por intento en las dos llamadas, un ERROR
+    unico migration.run.terminal.callback.undelivered con el id de la corrida y el estado HTTP, COMPLETED solo si llego
+    algun inventario, y variables de configuracion validadas.
+  - MigrationAppBackend "PR #415": el estado de cada objeto sigue a sus ficheros al recibir el PUT, y al cerrar la
+    corrida (COMPLETED o FAILED) todo objeto que siga en PENDING o RUNNING se asienta.
+  - La URL del ETL (MIGRATION_APP_BACKEND_URL) se cambio a mano en las definiciones de tarea de dev y de produccion.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. Dev no reproduce la causa: la VPC del ETL de dev no tiene endpoint execute-api. Una corrida verde en dev
+    prueba la ruta nueva, no que esquive la intercepcion. AC1 se prueba por estructura (alias A fuera del dominio
+    capturado) y con una lectura agregada de produccion, sin lanzar corridas alli.
+  - R2. "and an alert fires" (AC4) y el watchdog (AC5) no estan en ningun PR: el propio autor lo escribio en "PR #173"
+    y en el comentario del 2026-08-25. No hay ticket de seguimiento enlazado.
+  - R3. La recuperacion de las 15 corridas atascadas de produccion (reenviar files y estado por corrida) es una
+    escritura en produccion: FUERA DEL ALCANCE DE QA por politica, no por omision.
+  - R4. Contact Roles falla al generar el CSV por un defecto previo (parametro @hasDateFilterFrom sin declarar),
+    ajeno a esta historia; el autor lo avisa en su nota para QA. Una corrida que lo incluya debe terminar FAILED.
+  - R5. MIGRATION_APP_BACKEND_URL solo existe como estado de AWS: ningun repositorio la declara, y el despliegue del
+    ETL relee la definicion viva. Un cambio manual se puede perder o revertir sin rastro en git.
+  - R6. La promocion a produccion de "PR #415" ("PR #416") arrastra tambien el horario diario de playbooks de IM-1207.
+type: integration
+priority: high
+status: active
+preconditions:
+- Dev corre el backend con el PR 415 y el ETL con la imagen del PR 173, apuntando al dominio propio de dev.
+- Hay acceso de solo lectura a AWS (ECS, API Gateway, Route 53, DynamoDB de dev, CloudWatch) y a GitHub.
+- Hay una sesion QA en la Migration App de dev y un workspace de QA con un respaldo encendido.
+- Clones de MigrationToolETL y MigrationAppBackend en main, con dependencias y Node 20.
+- Para los escenarios que lanzan corridas en dev hay autorizacion expresa; lo creado se queda como dato de prueba.
+- En produccion QA solo lee configuracion y agregados; no lanza corridas ni reenvia llamadas.
+format: gherkin
+scenarios:
+- title: Deployment state · Dev and production run the IM-1202 builds and the next deploy keeps the custom domain
+  tags:
+  - deployment
+  - regression
+  given:
+  - los arreglos son el PR 356, el PR 412 y el PR 415 en el backend y el PR 173 en el ETL
+  when:
+  - se consultan las imagenes desplegadas del backend y del ETL en dev y en produccion, las URL del ETL y los parametros
+    del stack tras el despliegue de la promocion el PR 416
+  then:
+  - dev y produccion corren imagenes que contienen los arreglos y el ETL apunta al dominio propio de su entorno, sin
+    sufijo de stage
+  - despues del despliegue siguiente el dominio propio, su mapeo y su alias siguen existiendo
+- title: Unit tests · The PR suites pass on main, fail on the parent and catch mutations of the fix
+  tags:
+  - unit-tests
+  - regression
+  given:
+  - los clones del ETL y del backend en main
+  when:
+  - se corren las suites del PR 173 y el PR 415 en main y en el commit padre de cada merge, y se reintroducen a mano
+    defectos del arreglo
+  then:
+  - las suites pasan en main y los specs nuevos fallan en el padre
+  - cada mutacion hace fallar al menos un test
+- title: AC1 · The ETL backend URL is outside the namespace the private DNS intercepts
+  tags:
+  - ac-1
+  - happy-path
+  given:
+  - la VPC del ETL de produccion sigue teniendo el endpoint execute-api con DNS privado activado
+  when:
+  - se leen el tipo de registro del dominio propio, su destino, el mapeo de la API y la URL del ETL, y se consulta el
+    dominio sin credenciales
+  then:
+  - el dominio propio no pertenece a *.execute-api.us-east-1.amazonaws.com y es un alias A, no un CNAME que el cliente
+    tenga que volver a resolver dentro de la VPC
+  - la respuesta sale de API Gateway (con x-amz-apigw-id o x-amzn-RequestId), no del endpoint de la VPC
+- title: AC1 · After the repoint, the production backend receives the ETL callbacks (read-only)
+  tags:
+  - ac-1
+  - regression-evidence
+  given:
+  - el ETL de produccion ya apunta al dominio propio
+  when:
+  - se cuentan en los registros del backend de produccion las llamadas del ETL (PUT de ficheros y PATCH de estado) antes
+    y despues del cambio, solo como conteos agregados
+  then:
+  - despues del cambio hay llamadas del ETL que llegan a la API y responden 2xx, donde antes no llegaba ninguna
+  - QA no lanza corridas ni reenvia llamadas en produccion
+- title: AC2 · A successful single-object run in dev reaches COMPLETED with every part in files[]
+  tags:
+  - ac-2
+  - happy-path
+  given:
+  - un workspace de dev con un respaldo encendido y un objeto sin el defecto de Contact Roles
+  when:
+  - QA lanza una corrida de un objeto y espera a que termine
+  then:
+  - la corrida queda COMPLETED y el objeto COMPLETED, no PENDING
+  - files[] del objeto lista exactamente las partes que hay en S3 bajo el prefijo de la corrida
+- title: AC3 · The run history lists and downloads every generated CSV part
+  tags:
+  - ac-3
+  - happy-path
+  given:
+  - la corrida COMPLETED del escenario anterior
+  when:
+  - QA abre la corrida en el historial de migraciones de la Migration App
+  then:
+  - aparece un enlace por cada parte y cada enlace descarga un CSV con su cabecera
+  - la corrida no se presenta como en curso
+- title: Failure path · A run that fails during CSV generation ends FAILED and no object stays PENDING
+  tags:
+  - ac-2
+  - ac-5
+  - edge-case
+  given:
+  - un workspace de QA cuyo respaldo hace fallar la extraccion
+  when:
+  - QA lanza una corrida y la extraccion falla
+  then:
+  - la corrida queda FAILED en torno a un minuto despues del fallo, no en RUNNING
+  - todos los objetos quedan FAILED; ninguno se queda en PENDING, como pasaba antes del PR 415
+- title: AC4 · A refused callback is retried with backoff and then reported as an ERROR with the HTTP status and run id
+  tags:
+  - ac-4
+  - negative
+  given:
+  - el adaptador real del ETL apuntando a un servidor HTTP local que responde 403 como el endpoint de la VPC
+  when:
+  - se envian las dos llamadas finales con el codigo de main y con el del padre del PR 173
+  then:
+  - con main cada llamada se reintenta con esperas crecientes hasta agotar los intentos
+  - al final hay un ERROR migration.run.terminal.callback.undelivered con el estado HTTP y el id de la corrida
+  - con el padre hay un solo intento y ningun ERROR con el estado
+- title: AC4 · An alert fires on an undelivered terminal callback
+  tags:
+  - ac-4
+  - missing-doc
+  given:
+  - el evento migration.run.terminal.callback.undelivered del ETL
+  when:
+  - se buscan alarmas de CloudWatch, filtros de metricas y monitores de Datadog sobre ese evento
+  then:
+  - existe una alerta sobre el evento que avisa a un canal con destinatarios
+- title: AC5 · A run that never reports is moved out of RUNNING by a watchdog
+  tags:
+  - ac-5
+  - missing-doc
+  given:
+  - una corrida sin llamada final dentro de la ventana del watchdog
+  when:
+  - el watchdog barre las corridas
+  then:
+  - la corrida pasa de RUNNING a un estado final y la interfaz deja de mostrarla en curso
+- title: Edge case · The terminal status is honest when no inventory or only part of it lands
+  tags:
+  - edge-case
+  - regression
+  given:
+  - el adaptador y el caso de uso reales del ETL con un servidor local que acepta o rechaza llamadas por objeto
+  when:
+  - no llega ningun inventario, o solo llegan algunos
+  then:
+  - sin ningun inventario la corrida se informa FAILED, no COMPLETED
+  - con inventario parcial los objetos que llegaron conservan sus ficheros y la llamada de estado nunca se suprime
+- title: Regression · The shared VPC endpoint, the package pusher and the browser UI are untouched
+  tags:
+  - regression
+  given:
+  - el endpoint execute-api de la VPC es la unica puerta de la API privada del package pusher
+  when:
+  - se comparan el endpoint, la politica de la API privada y la URL de la API que usa la interfaz
+  then:
+  - el endpoint sigue con DNS privado, la politica no cambia y la interfaz sigue usando su URL de siempre
+- title: Security · The API key and the full callback URL never reach the logs, and malformed config is rejected
+  tags:
+  - security
+  - edge-case
+  given:
+  - el adaptador del ETL con una clave de API de prueba y variables de configuracion mal formadas
+  when:
+  - se ejecutan las llamadas y se leen los registros
+  then:
+  - ningun registro contiene la clave ni la URL con ids; solo el host
+  - valores como 1e4 o 30s se rechazan con un WARN y se usa el valor por defecto
+tags:
+- im-1202
+- im-1319
+- migration-app
+- migration-tool-etl
+- etl-callbacks
+- infrastructure
+- api-gateway
+- vpc-endpoint
+- dev
+estimatedDuration: 180
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T16:52:16Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T16:52:16Z'
+  version: 1

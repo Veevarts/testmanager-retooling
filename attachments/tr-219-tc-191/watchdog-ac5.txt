@@ -1,0 +1,19 @@
+TR-219 · escenario 10 · AC5 watchdog · FAIL (F2)
+
+AC5: "Given a run that produced no terminal callback within the watchdog window / When the watchdog sweeps / Then the
+run is moved out of RUNNING into a terminal state / And the UI stops presenting it as in progress".
+
+Busqueda en MigrationAppBackend main (9ea9df33, lo desplegado en dev y prod):
+  infra/sam/template.yaml: solo dos horarios, ambos del ciclo de vida de los respaldos
+    backup-lifecycle-watchdog   cron(0 10,16,22 * * ? *)   {"type":"backup-lifecycle-sweep","runShutdown":false}
+    backup-lifecycle-night-sweep cron(0 4 * * ? *)          {"type":"backup-lifecycle-sweep","runShutdown":true}
+  src/shared/lambda/handlers: backup-infrastructure-task, backup-lifecycle-sweep, api-gateway-event. Ninguno toca
+  corridas de migracion.
+  Ningun proceso programado cambia el estado de una corrida: se mueve por llamadas (el PATCH del ETL, o FAILED si
+  falla el disparo al crearla). ListMigrationRunsByStatusUseCase existe, pero nada programado lo usa para barrer RUNNING.
+  El autor, 2026-08-25: "Backend watchdog and S3 reconciliation (the two remaining acceptance criteria) - not started".
+
+Por que importa despues de ETL #173
+  Los reintentos cubren un rechazo o un corte breve. No cubren que el ETL muera a mitad (tarea reiniciada, memoria,
+  despliegue durante una corrida larga) ni que el PATCH FAILED no se entregue: en esos casos la corrida sigue en
+  RUNNING para siempre, que es exactamente lo que el ticket describe, y sin alerta (F1).

@@ -1,0 +1,40 @@
+TR-219 · escenarios 5 y 7 · corridas en dev (escrituras autorizadas por el usuario de QA)
+
+Workspace de pruebas del autor (unico con respaldo encendido en dev). Lecturas: tabla de DynamoDB de dev, prefijo de la
+corrida en el bucket de dev y logs del ETL de dev en Datadog. Ids de corrida y de cliente sustituidos por etiquetas.
+El ETL no recibe datos de Salesforce: el backend le envia base de origen, objetos, filtro y tamano de fichero.
+
+LINEA BASE (antes de BE #415, corridas del autor en dev)
+  B-1 14:26Z  Opportunity Membership   corrida COMPLETED   objeto PENDING con 1 fichero      <- defecto del objeto
+  B-2 14:27Z  78 objetos (Contact Role) corrida FAILED      78 objetos PENDING, 0 ficheros
+  (Tres corridas de agosto: corrida FAILED, objeto PENDING, 0 ficheros.) Dev nunca tuvo el 403: su VPC no tiene
+  endpoint execute-api, asi que en dev el defecto visible era solo el de los objetos.
+
+QA-1 · corrida correcta (escenario 5)                          17:09:11Z Generate CSV (100 filas por fichero)
+  17:09:12.332Z  POST .../migration/execute -> 202, corrida RUNNING, 1 objeto
+  17:09:12.675Z  ETL: PUT de ficheros al dominio propio de dev    -> httpStatus 200, attempts 1, 353 ms
+  17:09:13.013Z  objeto OPPORTUNITY_MEMBERSHIP -> COMPLETED (lo asienta el PUT, BE #415)
+  17:09:13.089Z  ETL: PATCH de estado (CSV_DONE -> COMPLETED)     -> httpStatus 200, attempts 1, 59 ms
+  17:09:24Z      lectura: corrida COMPLETED, summary 1/1/0; objeto COMPLETED
+
+  files[] frente a S3 (clave relativa, bytes, etag):
+    S3       objects/opportunity-membership_part1.csv  1867  546e30ef8d1426436d123ebd00854fb5
+    files[]  objects/opportunity-membership_part1.csv  1867  546e30ef8d1426436d123ebd00854fb5   IDENTICOS
+  El objeto solo tiene 2 filas en la base de dev: una parte aunque el limite fuera 100. Para varias partes se uso la
+  corrida del autor de 16:38Z (despues de #415), sin lanzar otra:
+    S3 = files[] en las 3 partes (membership-program_part1, museum-offer-eventprice_part1 y _part2), IDENTICOS;
+    los dos objetos COMPLETED.
+
+QA-2 · corrida que falla (escenario 7)                         17:12:41Z Generate CSV con solo Contact Role
+  17:12:42.533Z  corrida creada (RUNNING)
+  17:12:42.628Z  ETL: la consulta falla (Must declare the scalar variable "@hasDateFilterFrom", defecto previo)
+  17:12:42.629Z  ETL: PATCH FAILED al dominio propio de dev       -> httpStatus 200, attempts 1, 126 ms
+  17:12:42.733Z  objeto CONTACT_ROLE -> FAILED (barrido al cerrar la corrida, BE #415)
+  17:12:52Z      lectura: corrida FAILED, summary 1/0/1; objeto FAILED, 0 ficheros
+  -> FAILED 0,2 s despues del fallo; ningun objeto en PENDING. Antes (B-2) los 78 objetos quedaban PENDING.
+
+OBSERVACION O1 · CSV huerfanos de una corrida que falla a mitad
+  B-2 fallo en Contact Role despues de exportar 17 objetos: su prefijo en S3 tiene 37 partes (account-hierarchy,
+  address x4, campaign-member x4, charge-without-order x7, contact x7, ...). Ningun objeto tiene files[] y el historial
+  desactiva "Download Results" para esa corrida (ui/05). El ETL solo informa ficheros en completeMigrationRun; en
+  failMigrationRun no. Es la reconciliacion desde S3 que el ticket pone en "Fix" y que no se implemento.

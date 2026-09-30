@@ -1,0 +1,42 @@
+TR-219 · IM-1202 · TC-191 · hallazgos (2026-09-30)
+
+VEREDICTO: 11/13 PASS, 2 FAIL (media) -> la historia vuelve al autor.
+Lo que dejaba las corridas colgadas esta arreglado en dev y en produccion: el ETL llama al backend por un dominio propio
+que el DNS privado de la VPC no intercepta, las corridas terminan COMPLETED o FAILED con sus objetos asentados, files[]
+coincide con S3 parte por parte y cada CSV se descarga. Una llamada rechazada se reintenta con espera creciente y acaba
+en un ERROR con el id de la corrida y el estado HTTP. Fallan los dos AC que ningun PR implementa: la alerta y el watchdog.
+
+F1 · AC4 "and an alert fires": no existe ninguna alerta (media)
+    Ni alarmas de CloudWatch ni filtros de metricas sobre los logs del ETL (el grupo de logs de ECS esta vacio: el ETL
+    envia solo a Datadog), y ninguno de los 21 monitores de Datadog menciona migration, callback, undelivered ni el
+    servicio del ETL. El autor lo dejo escrito en ETL #173 ("the alert AC is not met by this PR alone").
+    Agravante para quien la cree: en Datadog cada linea del ERROR llega como un evento aparte y con status info
+    (el ERROR "Migration failed for run" de la corrida QA-2 se ingiere como info). Un monitor sobre status:error nunca
+    saltaria; tiene que buscar el texto del evento, o hay que emitir JSON o agrupar lineas en el agente.
+    alertas-ac4.txt, ui/06
+
+F2 · AC5: no hay watchdog de corridas (media)
+    En main del backend los unicos horarios son los del ciclo de vida de los respaldos; ningun codigo saca de RUNNING
+    una corrida que no informa. Con ETL #173 la llamada final se reintenta, pero si el ETL muere a mitad (tarea
+    reiniciada, memoria) o la llamada FAILED no se entrega, la corrida sigue en RUNNING para siempre y, por F1, nadie
+    se entera. Es el caso que produjo el ticket. watchdog-ac5.txt
+
+OBSERVACIONES
+O1 · Una corrida completa que falla a mitad deja CSV huerfanos: la corrida del autor de 14:27Z fallo en Contact Roles
+     con 17 objetos ya exportados (37 partes en S3), pero ninguno tiene files[] y el historial desactiva
+     "Download Results". Es la "reconciliacion desde S3" del apartado Fix del ticket, que no se hizo. dev/corridas-dev.txt,
+     ui/05
+O2 · Produccion: ademas de las 15 corridas atascadas del ticket, las de 09-18 y 09-29 fallaron en la extraccion y su
+     llamada FAILED recibio 403: el backend nunca las supo FAILED, asi que deben seguir en RUNNING (no se leyo la tabla
+     de produccion). La recuperacion (reenviar ficheros y estado por corrida) sigue pendiente y es una escritura en
+     produccion, fuera del alcance de QA. prod/llamadas-etl-conteos.txt
+O3 · MIGRATION_APP_BACKEND_URL solo existe en las definiciones de tarea (dev revision manual, prod re-registrada por el
+     despliegue desde la viva). El dev del ETL corre una imagen de rama (mismo arbol que main, comprobado) y el flujo del
+     ETL despliega directo a produccion en cada push a main, sin pasar por dev.
+O4 · Contact Roles falla por un defecto previo (@hasDateFilterFrom sin declarar), ajeno a esta historia, como avisa el
+     autor. Hoy la corrida lo muestra como FAILED en menos de un segundo, que es lo esperado.
+
+DATOS DE PRUEBA EN DEV (se quedan, autorizados por el usuario de QA)
+  2 corridas en el workspace de pruebas del autor: QA-1 (Opportunity Membership, COMPLETED, 1 CSV) y QA-2
+  (Contact Role, FAILED). Solo escriben en DynamoDB y S3 de dev; el ETL no recibe datos de Salesforce y "Load CSVs"
+  no se pulso.
