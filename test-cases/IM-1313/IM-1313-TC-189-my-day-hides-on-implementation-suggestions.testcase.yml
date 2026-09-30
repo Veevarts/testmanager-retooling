@@ -1,0 +1,254 @@
+schemaVersion: '1.0'
+id: 38b53864-48b3-487c-b96b-17c7f98ba1e2
+key: TC-189
+title: 'CSM OS My Day suggestions: accounts on implementation are hidden by default, revealed on demand in the pool
+  and never filtered in the account view'
+description: |
+  Cobertura QA de IM-1313 (CSM OS: hide suggested tasks from accounts on implementation in My Day by default).
+  Historia, prioridad High. Sub-tarea de QA: IM-1317. Epic: IM-1229 CSM OS: Feedback.
+
+  QUE SE ENTREGO. Backend Veevarts/MigrationAppBackend "PR #411" (squash 846b7d70, 20 ficheros): la generacion del
+  lote de My Day deja fuera las cuentas con csm_os.accounts.on_implementation = true (en pendientes, candidatas y
+  senales de salud y email), el lote servido se filtra tambien al leerlo, y GET /csm/tasks/suggestions/pool las oculta
+  por defecto: includeOnImplementation=true las incluye y la respuesta anade hiddenOnImplementation (cuantas oculto en
+  todo el pool). Con accountId no se filtra nada. El cursor lleva el filtro con el que se emitio y se rechaza (400) si
+  la peticion trae el otro; un valor distinto de true/false tambien es 400. NULL cuenta como no en implementacion
+  (IS NOT TRUE). Las sugerencias ocultas siguen pendientes: nada se declina ni caduca. Frontend
+  Veevarts/MigrationAppFrontend "PR #217" (squash d8a356c, 11 ficheros): en el modal "All suggested tasks" de My Day,
+  el control "Show N from accounts on implementation" / "Hide accounts on implementation", el chip "On
+  implementation" en las filas reveladas y la vuelta a la primera pagina al cambiar el filtro; MyDaySuggestedPanel
+  tampoco muestra nunca una sugerencia de una cuenta en implementacion.
+
+  Etiquetas vistas en pantalla (dev, 2026-09-30): subtitulo "Pending for you outside accounts on implementation,
+  highest score first." con el filtro puesto y "Everything still pending for you, highest score first." sin el;
+  en la cuenta, "Everything still pending for this account, highest score first." y ningun control.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. No esta en produccion: main despliega a dev; stable (prod) de los dos repos no tiene los merges.
+  - R2. AC2 no se verifico en dev: el autor lo dejo "para el primer lote de manana". El lote se genera de forma
+    perezosa en el primer GET del dia (UTC) con una llamada a un modelo, y si la generacion falla se sirve el lote
+    anterior marcado stale. El 2026-09-30 el panel de la CSM de prueba mostraba 1 sugerencia con unas 200 elegibles
+    pendientes: hay que leer batchDate, generatedAt y stale del lote servido antes de juzgar el tope.
+  - R3. Forzar una regeneracion (POST /csm/tasks/suggestions/regenerate) o aceptar/declinar una sugerencia revelada
+    son escrituras en dev y necesitan autorizacion expresa.
+  - R4. Puede no haber en dev ninguna cuenta con on_implementation NULL y sugerencias pendientes; entonces AC6 se
+    cierra con el banco SQL y los tests.
+  - R5. Un cursor emitido antes del despliegue (sin el campo del filtro) se rechaza con 400: solo afecta a un modal
+    abierto a traves del despliegue.
+  - R6. El index.html se sirve con un anio de cache; vaciarla antes de juzgar la UI.
+  - R7. El E2E de CI no ejecuta ningun test (secreto E2E_COGNITO_REFRESH_TOKEN caducado).
+  - R8. En el mismo modal, tras "Load more" Escape no cierra el pool (O1 de TR-215); usar el boton Close.
+type: integration
+priority: high
+status: active
+preconditions:
+- Dev corre el backend 846b7d70 o posterior en la Lambda de Migration App y el frontend d8a356c o posterior, y el
+  navegador carga el index.html vivo (cache vaciada).
+- Hay una sesion admin en CSM OS de dev con 'View as' de la CSM de prueba que nombra el comentario del autor (tiene
+  sugerencias pendientes en cuentas en implementacion y fuera de ellas).
+- Hay lectura SELECT de csm_os.accounts y csm_os.control_tower_actions en la base de dev (AWS SSO y Data API) para
+  contar on_implementation por cuenta; sin ella, los conteos se hacen con la API.
+- Los dos repositorios estan clonados en main con dependencias, y hay un arbol del padre de cada merge para comparar
+  antes y despues.
+- En dev no se escribe nada sin autorizacion expresa; los datos que se creen se quedan como dato de prueba.
+format: gherkin
+scenarios:
+- title: Deployment state · Dev runs both merges and the browser loads the new frontend
+  tags:
+  - deployment
+  - release-risk
+  - regression
+  given:
+  - el backend es el squash 846b7d70 y el frontend el squash d8a356c, los dos en main
+  when:
+  - se consulta que imagen corre la Lambda de dev y que commit desplego el ultimo "Deploy App to CloudFront CDN"
+  - se vacia la cache del navegador y se comparan los assets cargados con el index.html vivo
+  - se comprueba si la rama stable de cada repo contiene esos commits
+  then:
+  - dev corre 846b7d70 (o posterior) y d8a356c (o posterior)
+  - el script cargado es el que declara el index.html vivo
+  - lo que falte en produccion se deja escrito como riesgo de salida
+- title: Unit tests and SQL bench · The new cases pass on main and fail on the parent of each merge
+  tags:
+  - unit-tests
+  - regression
+  - ac-1
+  - ac-2
+  - ac-3
+  - ac-5
+  - ac-6
+  given:
+  - "PR #411 anade specs de jest y 19 casos al banco SQL; PR #217 anade specs de vitest del panel, del modal, del hook y del esquema"
+  when:
+  - se ejecutan en main las suites afectadas del backend (jest, banco SQL, tsc) y del frontend (vitest, tsc, eslint)
+  - se ejecutan los mismos tests nuevos contra el padre de cada merge
+  - se aplican mutaciones del filtro (= false en vez de IS NOT TRUE, filtrar tambien con accountId, contar solo la pagina,
+    no comprobar el filtro del cursor, quitar el filtro del panel en el frontend)
+  then:
+  - todo pasa en main
+  - los casos nuevos fallan en el padre de cada merge
+  - cada mutacion la detecta al menos un test; una que nadie detecta se anota como hueco
+- title: My Day panel never shows a suggestion for an account on implementation
+  tags:
+  - ac-1
+  - happy-path
+  given:
+  - en 'View as' esta la CSM de prueba, que tiene sugerencias pendientes en cuentas en implementacion y fuera de ellas
+  when:
+  - se abre My Day y se despliega la seccion "Suggested tasks · N"
+  - se lee GET /csm/tasks/suggestions de esa CSM
+  then:
+  - ninguna tarjeta del panel es de una cuenta en implementacion (accountOnImplementation false en cada item, y la
+    cuenta no esta en implementacion en la base)
+  - las tarjetas del panel coinciden con los items del lote servido
+- title: The daily cap is filled with eligible suggestions only
+  tags:
+  - ac-2
+  - missing-doc
+  - risk
+  given:
+  - el tope diario (myDayCap) es 5 y la CSM de prueba tiene mas de 5 sugerencias elegibles pendientes
+  - el lote se genera de forma perezosa en el primer GET del dia (UTC)
+  when:
+  - se lee el lote servido hoy (batchDate, generatedAt, stale, numero de items) y se cuentan las elegibles pendientes
+  - si el lote de hoy no se genero tras el despliegue, se comprueba con los casos del banco SQL y, solo con autorizacion,
+    con una regeneracion forzada en dev
+  then:
+  - un lote de hoy generado tras el despliegue tiene hasta 5 items y ninguno es de una cuenta en implementacion
+  - con mas de 5 elegibles, el lote de hoy tiene 5 items; si tiene menos se explica con stale, generatedAt o el modelo, y
+    si no hay explicacion es un defecto
+- title: The My Day pool hides on-implementation suggestions and says how many
+  tags:
+  - ac-3
+  - happy-path
+  given:
+  - en My Day se abre "View all suggested tasks"
+  when:
+  - se leen el modal y GET /csm/tasks/suggestions/pool sin includeOnImplementation
+  - se cuentan en la base, o con includeOnImplementation=true, las sugerencias pendientes de la CSM en cuentas en implementacion
+  then:
+  - el subtitulo es "Pending for you outside accounts on implementation, highest score first."
+  - ninguna fila del modal ni item de la respuesta es de una cuenta en implementacion
+  - el control dice "Show N from accounts on implementation" y N es igual a hiddenOnImplementation y al conteo independiente
+- title: Revealing lists them with the On implementation chip, and they can be accepted or declined
+  tags:
+  - ac-4
+  - happy-path
+  given:
+  - el modal de My Day muestra "Show N from accounts on implementation"
+  when:
+  - la CSM pulsa "Show N from accounts on implementation"
+  - con autorizacion, acepta una sugerencia revelada y declina otra; sin ella, se prueba el destino abortando la escritura en el navegador
+  then:
+  - el subtitulo pasa a "Everything still pending for you, highest score first." y el control a "Hide accounts on implementation"
+  - aparecen las N sugerencias ocultas y cada una lleva el chip "On implementation"; las demas no lo llevan
+  - Accept y Decline actuan sobre la sugerencia revelada, la sacan del modal y no tocan otra fila
+- title: The account view lists every pending suggestion with no reveal step
+  tags:
+  - ac-5
+  - happy-path
+  given:
+  - una cuenta de la CSM de prueba esta en implementacion y tiene sugerencias pendientes
+  when:
+  - se abre la pestana Tasks de esa cuenta y su "View all suggested tasks"
+  - se lee GET /csm/tasks/suggestions/pool con accountId, con y sin includeOnImplementation
+  then:
+  - el panel y el modal de la cuenta muestran todas sus sugerencias pendientes y el modal no tiene control de revelar
+  - el subtitulo es "Everything still pending for this account, highest score first."
+  - las dos respuestas de la API son iguales y hiddenOnImplementation es 0
+- title: An account whose implementation state is unknown (NULL) is treated as not on implementation
+  tags:
+  - ac-6
+  - edge-case
+  given:
+  - una cuenta con on_implementation NULL tiene sugerencias pendientes de una CSM, o no existe ninguna en dev
+  when:
+  - se lee el pool de My Day de esa CSM sin includeOnImplementation
+  - se ejecutan los casos del banco SQL y los tests que fijan NULL
+  then:
+  - las sugerencias de la cuenta NULL aparecen en el pool por defecto y no cuentan en hiddenOnImplementation
+  - si dev no tiene ninguna cuenta NULL con sugerencias, el escenario se cierra con el banco y los tests y se deja escrito
+- title: Toggling the filter restarts the pool from page one and a cursor from the other filter is refused
+  tags:
+  - edge-case
+  - missing-doc
+  given:
+  - el modal de My Day tiene mas de una pagina ("Load more · N left")
+  when:
+  - la CSM pulsa "Load more" y despues "Show N from accounts on implementation"
+  - pulsa "Hide accounts on implementation"
+  - se llama al pool con el cursor de una pagina filtrada y includeOnImplementation=true, y al reves
+  then:
+  - cada cambio de filtro vuelve a la primera pagina con el contador de "Load more" del nuevo conjunto, sin filas repetidas ni perdidas
+  - despues de "Hide" el foco queda en el control y no en el body
+  - la API responde 400 "cursor does not match includeOnImplementation" en los dos cruces
+- title: The includeOnImplementation parameter only accepts true or false
+  tags:
+  - negative
+  - edge-case
+  given:
+  - una sesion valida para la CSM de prueba
+  when:
+  - se llama al pool de My Day con includeOnImplementation igual a true, false, 1, yes y vacio
+  then:
+  - true revela y false oculta
+  - 1, yes y vacio dan 400 y no se tratan como false en silencio
+- title: The hidden count covers the whole pool, not the page
+  tags:
+  - edge-case
+  - missing-doc
+  given:
+  - el pool de My Day de la CSM de prueba tiene varias paginas
+  when:
+  - se leen varias paginas sin includeOnImplementation y el pool completo con includeOnImplementation=true
+  then:
+  - hiddenOnImplementation es el mismo en todas las paginas
+  - es igual al numero de filas con el chip en el pool completo revelado
+- title: Hidden suggestions stay pending, nothing is declined or expired
+  tags:
+  - negative
+  - regression
+  given:
+  - las sugerencias de cuentas en implementacion estan ocultas en My Day
+  when:
+  - se comparan con el pool revelado y con la pestana Tasks de su cuenta
+  then:
+  - siguen en estado Suggested, sin expired_at, y aparecen al revelar y en la vista de la cuenta
+- title: Regression · Tasks lists, playbooks and the Accounts portfolio are not filtered by the flag
+  tags:
+  - regression
+  given:
+  - la CSM de prueba tiene tareas (no sugerencias) en cuentas en implementacion, o se localiza a otra que las tenga
+  when:
+  - se abren My tasks (Open, Completed, Deleted), Playbooks y Accounts
+  then:
+  - las tareas y cuentas en implementacion siguen apareciendo como antes del despliegue
+- title: Regression · Details on a revealed on-implementation row opens its Task Detail
+  tags:
+  - regression
+  - im-1312
+  given:
+  - las filas reveladas solo estan en el pool, no en el panel
+  when:
+  - la CSM pulsa "Details" y el titulo de una fila con el chip "On implementation"
+  then:
+  - se abre "TASK DETAIL" con la cuenta y la tarea de esa fila, y al cerrarlo se vuelve al modal
+tags:
+- im-1313
+- im-1229
+- im-1317
+- csm-os
+- suggested-tasks
+- on-implementation
+- my-day
+- migration-app
+- backend
+- frontend
+estimatedDuration: 150
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T15:09:45Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T15:09:45Z'
+  version: 1

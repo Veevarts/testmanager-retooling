@@ -1,0 +1,39 @@
+TR-216 · IM-1313 · Escenarios 3 y 4 — el panel y el lote de hoy de la CSM de prueba (dev, 2026-09-30)
+
+Fuentes: GET /csm/tasks/suggestions (la llamada que hace My Day al abrirse), lecturas SELECT de la base de dev por
+Data API y los logs de la Lambda de dev en CloudWatch. "Cuenta NNN" son etiquetas de QA, no nombres.
+
+LOTE SERVIDO HOY
+  batchDate 2026-09-30 · generatedAt 2026-09-30T14:06:05Z (despues del despliegue de 846b7d70) · stale false · cap 5
+  items: 1 -> Cuenta 196, "Ticketing checkout errors reported after the latest release", accountOnImplementation false
+  Panel en pantalla: "Suggested tasks · 1", una tarjeta, sin chip. ui/01-panel-my-day.png
+
+FILAS DEL LOTE (csm_os.task_suggestion_batches + batch_items, esta CSM)
+  batch_date   cap carried_over generated items items_de_cuentas_en_implementacion
+  2026-09-30    5       1           0       1      0
+  2026-09-29    5       1           0       1      0     (generado 19:48Z, ANTES del despliegue de las 21:56Z)
+  2026-09-22    5       1           0       1      0
+  2026-09-21    5       2           0       2      0
+  2026-09-18    5       0           2       2      0
+  Todos los lotes de dev desde el 24-sep (1 o 2 por dia, de cualquier CSM) tienen 1-3 items y generated 0.
+
+LOG DE LA GENERACION DE HOY (14:06:05Z)
+  [BedrockConverseAdapter] Converse us.anthropic.claude-haiku-4-5-20251001-v1:0: in=8256 out=431 chars=1285
+  [TaskSuggestionService] Suggestion ranking: in=8256 out=431 pending=1 candidates=40
+  -> el modelo recibio 1 pendiente y 40 candidatas, y el plan que devolvio conserva solo la pendiente.
+
+SUGERENCIAS PENDIENTES DE ESTA CSM (base de dev)
+  elegibles ya en un lote (pendientes)   1
+  elegibles sin lote (candidatas)      200
+  en implementacion sin lote            24
+  Las 40 candidatas de mayor puntuacion SIN el filtro: 5 serian de cuentas en implementacion (1 entre las 5 primeras).
+  Con el filtro, las 40 que recibio el modelo eran todas elegibles.
+
+LECTURA
+  AC1: PASS. El lote servido y el panel no tienen ninguna cuenta en implementacion.
+  AC2, lo que cambia IM-1313: PASS. El contexto de la generacion solo tiene cuentas elegibles (candidates=40 de 200
+  elegibles; sin el filtro 5 de esas 40 serian de implementacion) y el lote no tiene ninguna. El banco SQL demuestra
+  con un ranker controlado que el tope se llena con 5 elegibles (mutaciones B7 y B8 detectadas).
+  AC2, lo que no se observa: el panel no muestra 5. La causa es el modelo, que con 40 candidatas elegibles no anade
+  ninguna. No lo introduce IM-1313: los lotes de esta CSM ya tenian 1-2 items y generated 0 antes del despliegue,
+  y nunca tuvieron una cuenta en implementacion. Se deja como observacion O1 para un ticket aparte.

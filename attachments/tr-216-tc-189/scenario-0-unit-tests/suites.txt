@@ -1,0 +1,44 @@
+TR-216 · IM-1313 · Escenario 2 — tests, banco SQL y codigo anterior a cada merge
+
+BACKEND (clon limpio en main 58bee37b, que contiene 846b7d70; npm ci)
+  npx jest src/csm/tasks                         -> 16 suites, 374 passed (374)
+  npx tsc --noEmit                               -> exit 0
+  Banco SQL (scripts/csm-os/verify-task-suggestions-local.ts) contra Postgres 16 + pgvector local, base desechable
+  qa_tc189 migrada desde main:
+                                                  -> 373/373 checks passed
+  Seccion "IM-1313: accounts on implementation are hidden from My Day" (27 comprobaciones), entre ellas:
+    (i)   no on-implementation suggestion is offered to ranking, pending or candidate
+    (i)   no health / email signal for an on-implementation account reaches the prompt
+    (i)   the cap is filled from eligible accounts only: 5 items, none on implementation
+    (ii)  a batch generated before the change no longer serves its on-implementation row
+    (ii)  an account flipped to on-implementation mid-day leaves the served batch at once (y vuelve al revertirse)
+    (iii) default: no on-implementation item; hiddenOnImplementation counts every pending on-implementation row
+    (iii) the hidden count is the same on every page; every cursor records the filter that issued it
+    (iii) with accountId, every pending suggestion of an on-implementation account is listed
+    (iv)  NULL is shown by default and flagged false; NULL counts as eligible for generation
+    R1    the open list returns exactly the rows the raw predicate does - none dropped for the flag
+  Mismo script de 846b7d70 contra el padre del merge (f96deb9f), base qa_tc189_pre, TS_NODE_TRANSPILE_ONLY:
+                                                  -> 354/373, 19 FAILED, todas de la seccion IM-1313
+  -> coincide con lo que declara el autor ("19 new SQL bench cases fail on the old main").
+  CI de "PR #411": db-migrations (donde corre el banco), lambda-tests, lint-and-test y sam-validate en verde.
+
+FRONTEND (clon en main d8a356c; Node 20)
+  Los 5 ficheros de tests de "PR #217" (api/tasks, MyDaySuggestedPanel.onImplementation,
+  SuggestionPoolModal.onImplementation, useSuggestionPool, schemas/tasks):
+    main d8a356c                                  -> 5 files, 99 passed (99)
+    padre 09830fc con los tests de d8a356c         -> 5 failed files, 24 failed | 75 passed (99)
+  Suite completa del frontend en este mismo commit (TR-215): 2908 passed | 9 skipped, tsc y eslint limpios.
+  CI de "PR #217": Lint + typecheck + Vitest en verde; Playwright rojo por el secreto E2E caducado (0 tests).
+
+Cobertura AC -> tests:
+  AC1 panel               banco (ii) lote servido filtrado; spec del panel (pinta marcada una fila servida en
+                          implementacion: el panel NO filtra, confia en el backend)
+  AC2 tope                banco (i) contexto de generacion y tope lleno con ranker controlado
+  AC3 pool oculta+contador banco (iii); specs del modal ("says how many are hidden, in a control")
+  AC4 revelar, chip, acciones specs del modal ("reveals them from page 1 ... each marked", "lets a revealed
+                          suggestion be accepted or declined")
+  AC5 vista de la cuenta  banco (iii) accountId; B4 del banco; spec del panel en la cuenta
+  AC6 NULL                banco (iv) en generacion y en el pool
+  Hueco: ningun test ejerce el modelo real (el banco usa un ranker controlado); ver escenario 4.
+
+Veredicto: PASS.

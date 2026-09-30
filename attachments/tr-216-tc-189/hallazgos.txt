@@ -1,0 +1,47 @@
+TR-216 · IM-1313 · TC-189 · hallazgos (2026-09-30)
+
+VEREDICTO: 14/14 PASS. Aprobada en dev; el escenario 4 (AC2) con alcance.
+My Day deja fuera las cuentas en implementacion en el panel, en el lote que se sirve y en el contexto de la
+generacion. El modal las oculta por defecto con un contador exacto (24), las revela con el chip y se pueden aceptar y
+declinar. La vista de la cuenta no cambia y las listas tampoco. Backend y frontend estan en produccion desde hoy
+(15:11Z y 15:00Z).
+
+SIN DEFECTOS EN IM-1313.
+
+OBSERVACIONES
+
+O1 · En dev el modelo no llena el tope diario (media; no la introduce IM-1313)
+    El lote de hoy de la CSM de prueba, generado tras el despliegue, tiene 1 item con tope 5: el modelo recibio 1
+    pendiente y 40 candidatas elegibles y no anadio ninguna (generated 0). Es el patron de antes del despliegue
+    (29-sep, 22-sep: 1 item; 21-sep, 18-sep: 2) y de todos los lotes de dev desde el 24-sep. Lo que IM-1313 cambia si
+    se cumple: sin el filtro, 5 de esas 40 candidatas serian de cuentas en implementacion y ahora el modelo no ve
+    ninguna. Pero el "Then the panel shows 5 suggestions" del AC2 no se observa en dev. Sugerencia: ticket aparte
+    para revisar por que el ranking no incorpora candidatas, y mirar el primer lote de produccion de manana.
+    dev/lote-de-hoy-ac2.txt
+
+O2 · El panel no filtra por su cuenta (baja, decision de diseno)
+    MyDaySuggestedPanel pinta, marcada, una fila en implementacion si el backend la sirviera; el spec lo fija a
+    proposito ("renders a served on-implementation row, marked, instead of filtering it"). La historia decia que el
+    panel "never shows" una; hoy lo garantiza solo el backend (filtro al leer el lote, mutacion B6 detectada).
+
+O3 · Escape tras "Load more" no cierra el pool (baja; ya reportada como O1 de TR-215)
+    Sigue igual en este modal.
+
+O4 · Orden de despliegue a produccion invertido (cerrada, sin efecto)
+    Frontend 15:00:15Z, backend 15:11:09Z. Durante esos 11 minutos el frontend nuevo no mostro el control porque el
+    backend viejo no devolvia el contador; no hubo errores. dev/despliegue.txt
+
+O5 · Mutacion equivalente en el frontend (F2)
+    No vaciar el cursor al cambiar el filtro no tiene efecto observable; no es un hueco. scenario-0-unit-tests/
+
+NOTAS
+- En dev no hay ninguna cuenta con on_implementation NULL (221 false, 22 true); AC6 se cierra con el banco.
+- La imagen de la Lambda de dev cambio a c843a869 a las 15:31Z (solo infraestructura); el codigo de tareas es el
+  mismo de 846b7d70.
+- El E2E de CI sigue sin ejecutar ningun test (secreto E2E_COGNITO_REFRESH_TOKEN caducado).
+
+DATOS DE PRUEBA EN DEV (se quedan)
+- Escrituras autorizadas por el usuario para AC4: 1 sugerencia aceptada (Cuenta 142, en implementacion; ahora tarea
+  "To do" en My Day de la CSM de prueba) y 1 declinada (Cuenta 153, en implementacion). Ocultas 24 -> 22.
+- La llamada GET /csm/tasks/suggestions es la misma que hace My Day al abrirse; el lote de hoy ya existia.
+- Base local desechable qa_tc189 y qa_tc189_pre en el contenedor Postgres de QA (fuera de dev).
