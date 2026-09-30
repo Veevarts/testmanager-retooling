@@ -1,0 +1,44 @@
+TR-215 · IM-1312 · Escenario 11 — acciones de un detalle abierto desde una fila que solo esta en el pool
+
+Mismo entorno y enmascarado que dev/recorrido-ui.txt. Las rutas de la API se muestran sin host y con el id de la
+fila sustituido por <id-fila>.
+
+1) Solo lectura (14:36Z)
+   Pool de My Day, fila 8 (Cuenta 014, no esta en el panel) -> Details.
+   Edicion sin guardar: se anade " QA TC-188 sin guardar" al campo Task (una sugerencia no muestra boton Save).
+   Close -> vuelve el pool -> Details en la misma fila -> Task vuelve a ser el texto del servidor. Escrituras: 0.
+   "Open Account Detail" -> navega a /csm/accounts/<id>; la cabecera es "Accounts / Cuenta 014", la cuenta de la fila;
+   ningun modal abierto. ui/09-open-account-detail-lleva-a-la-cuenta-de-la-fila.png (recortada a la cabecera: la
+   pestana Overview muestra datos del cliente).
+   -> PASS.
+
+2) Accept task y Decline con las escrituras ABORTADAS en el navegador (14:37Z)
+   page.route('**/*') abortaba cualquier peticion que no fuera GET/OPTIONS/HEAD antes de salir del navegador.
+   Fila 10 (Cuenta 078) -> Details -> "Accept task":
+     PATCH /dev/api/csm/tasks/<id-fila>   cuerpo con title/description/dueDate/urgency de la fila   -> abortada
+     la UI muestra "Failed to fetch" y el detalle sigue abierto. ui/11-accept-abortado-antes-de-salir.png
+   Fila 11 (Cuenta 125) -> Details -> "Decline":
+     POST /dev/api/csm/tasks/<id-fila>/decline  cuerpo {}                                          -> abortada
+   Comprobacion por API despues: las dos sugerencias siguen en "Suggested". Las dos peticiones iban al id de la fila
+   abierta.
+
+3) Accept task y Decline REALES, autorizados por el usuario (14:39Z-14:41Z)
+   Las mismas dos sugerencias sinteticas de la CSM de prueba; ninguna esta en el panel.
+   Antes: pool completo por API = 203 sugerencias pendientes; las dos en "Suggested"; My tasks "Open · 1".
+   Cuenta 078 -> Details -> "Accept task":
+     PATCH /dev/api/csm/tasks/<id-fila>          200
+     POST  /dev/api/csm/tasks/<id-fila>/accept   201
+     -> vuelve "All suggested tasks" sin la fila; "Load more · 183 left" sin cambios (las filas atendidas se ocultan
+        durante la visita). ui/12-accept-real-vuelve-al-pool-sin-la-fila.png
+   Cuenta 125 -> Details -> "Decline":
+     POST  /dev/api/csm/tasks/<id-fila>/decline  201
+     -> vuelve el pool sin la fila, aviso "Suggestion declined · Undo" (no se pulso Undo).
+        ui/13-decline-real-vuelve-al-pool-con-aviso.png
+   Despues: pool completo por API = 201. Diferencia exacta con el antes: salen esas dos sugerencias y ninguna otra;
+   no entra ninguna. My tasks pasa a "Open · 2" con la tarea aceptada (Cuenta 078, "Renewal is 45 days out and the
+   champion has gone quiet", CSM, Fundraising, To do).
+   -> PASS.
+
+Datos de prueba que quedan en dev (no se limpian): 1 tarea aceptada (Cuenta 078) en My Day de la CSM de prueba y
+1 sugerencia declinada (Cuenta 125), las dos del texto sembrado "Renewal is 45 days out and the champion has gone
+quiet".

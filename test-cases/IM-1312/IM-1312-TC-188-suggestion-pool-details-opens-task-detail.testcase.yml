@@ -1,0 +1,267 @@
+schemaVersion: '1.0'
+id: dfa0eecf-520d-4418-aaba-610b5b2125ee
+key: TC-188
+title: 'CSM OS suggestion pool: Details and title open the Task Detail for rows past the panel cap (My Day and
+  Account Tasks)'
+description: |
+  Cobertura QA de IM-1312 (CSM OS: "Details" and task title do nothing in the "View all suggested tasks"
+  modal). Tipo Error, prioridad High. Sub-tarea de QA: IM-1316. Epic: IM-1229 CSM OS: Feedback.
+
+  EL DEFECTO. En My Day -> Tasks y en la pestana Tasks de una cuenta, el modal "All suggested tasks"
+  (enlace "View all suggested tasks") lista todas las sugerencias pendientes, pero el panel "Suggested
+  tasks" solo muestra unas pocas (tope de 5). Al pulsar "Details" o el titulo de una fila que solo esta
+  en el modal, el modal se cerraba y no se abria nada: MyDayTasksTab abria el detalle por id y buscaba
+  la tarea en un mapa construido solo con el panel y las listas de tareas.
+
+  EL ARREGLO. Veevarts/MigrationAppFrontend "PR #218" (squash be64208, 2 ficheros, solo frontend,
+  mergeado a main el 2026-09-29): la fila que el modal entrega a Details se guarda para el flujo del
+  detalle (poolTask), entra PRIMERO en el mapa por id para que una copia mas fresca de la misma tarea
+  en el panel o en una lista la sustituya, y closeModal la descarta. 8 specs de regresion nuevos; segun
+  el autor, 6 fallan sin el arreglo. Dev corre ademas IM-1314 ("PR #219", 09830fce): cerrar un detalle
+  abierto desde el modal vuelve al modal.
+
+  Etiquetas vistas en pantalla (dev, 2026-09-30, solo lectura): seccion "Suggested tasks · N" (plegada),
+  enlace "View all suggested tasks", modal "All suggested tasks" con el subtitulo "Pending for you
+  outside accounts on implementation, highest score first." en My Day y "Everything still pending for
+  this account, highest score first." en una cuenta, interruptor "Show N from accounts on
+  implementation" / "Hide accounts on implementation", boton "Load more · N left" (20 filas por
+  pagina), y en cada fila el titulo (es un boton), "Accept", "Decline" y "Details". El detalle es
+  "TASK DETAIL" con el nombre de la cuenta, los campos Task, Description, Due, State (Suggested),
+  Urgency, Team y Product tag, y los botones "Review & Create SF Case…", "Accept task", "Decline",
+  "Open Account Detail" y Close.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. No esta en produccion: main despliega a dev; produccion no tiene be64208.
+  - R2. El index.html se sirve con cache de un anio (accion s3-deploy): sin vaciar la cache el
+    navegador puede cargar el build anterior al arreglo y dar un FAIL falso.
+  - R3. Las sugerencias se regeneran cada dia: las filas concretas cambian. Elegir filas por su
+    propiedad (esta o no esta en el panel), no por nombre.
+  - R4. Muchas filas del modal comparten el mismo titulo en cuentas distintas (unas 20 con el mismo
+    texto en la primera pagina): abrir "la sugerencia correcta" se comprueba por la cuenta y la
+    descripcion, no solo por el titulo.
+  - R5. La fila que tambien esta en el panel puede no aparecer en la primera pagina del modal: puede
+    hacer falta "Show N from accounts on implementation" y "Load more".
+  - R6. Ni los AC ni el plan del autor cubren las acciones del detalle abierto desde una fila que solo
+    esta en el modal (Accept task, Decline, Open Account Detail). Antes del arreglo esa ruta no existia.
+  - R7. El E2E de CI esta rojo porque el secreto E2E_COGNITO_REFRESH_TOKEN caduco y no corre ningun
+    test; solo los unitarios protegen el arreglo en CI.
+  - R8. Preexistentes y fuera de alcance: el primer clic tras cargar la pagina a veces se ignora; un
+    enlace profundo con la sesion caducada da una pagina en blanco (IM-1310). En el reconocimiento,
+    tras "Load more" el foco quedo en el body y Escape dejo de cerrar el modal (a confirmar).
+type: functional
+priority: high
+status: active
+preconditions:
+- "Se comprueba que el frontend de dev corre un build que contiene be64208 (PR #218) y 09830fce (PR #219), y que
+  el navegador carga el index.html vivo (cache vaciada) y no uno anterior."
+- Hay una sesion admin en CSM OS de dev con el selector 'View as' de la barra lateral; se usa la CSM de la
+  seccion Test data de la historia, cuyo panel muestra pocas sugerencias y cuyo modal lista cientos.
+- Hay una cuenta en implementacion de esa CSM con mas sugerencias que el tope del panel (la de la seccion
+  Test data de la historia, con 6 sugerencias y el panel en "5+").
+- Veevarts/MigrationAppFrontend esta clonado en main con dependencias instaladas para vitest, tsc y eslint.
+- En dev todo es de solo lectura sobre datos de otras CSM, sin pulsar Accept, Decline, Accept task ni
+  Review & Create SF Case…
+format: gherkin
+scenarios:
+- title: Deployment state · Dev serves a frontend build with the fix and the browser loads that build, not a cached
+    one
+  tags:
+  - deployment
+  - release-risk
+  - regression
+  given:
+  - el arreglo es el squash be64208 de main en Veevarts/MigrationAppFrontend y dev corre ademas 09830fce (IM-1314)
+  - el index.html de la app se sirve con una cache de un anio
+  when:
+  - se consulta que commit desplego el ultimo "Deploy App to CloudFront CDN" de dev y si contiene be64208
+  - se vacia la cache del navegador, se abre la app desde la URL raiz y se comparan los assets que carga la pagina
+    con los que declara el index.html vivo
+  then:
+  - dev corre un commit que contiene be64208 y 09830fce
+  - el script que carga el navegador es el mismo que declara el index.html vivo
+  - produccion no contiene be64208; se deja escrito como riesgo de salida y no como fallo de la historia
+- title: Unit tests · The eight regression specs pass on main and fail when the fix is reverted or mutated
+  tags:
+  - unit-tests
+  - regression
+  - ac-1
+  - ac-2
+  - ac-3
+  - ac-4
+  given:
+  - el clon del frontend esta en main con be64208
+  - "PR #218 anade 8 specs a MyDayTasksTab.test.tsx"
+  when:
+  - se ejecutan MyDayTasksTab.test.tsx, la suite completa de vitest, tsc y eslint
+  - se revierte solo MyDayTasksTab.tsx al padre del merge y se vuelve a ejecutar el fichero de tests
+  - se aplican una a una mutaciones del arreglo (no guardar poolTask en onOpenDetail, no meterla en el mapa, meterla
+    al final del mapa, no limpiarla en closeModal) y se ejecuta el fichero tras cada una
+  then:
+  - los 8 specs y el resto de la suite pasan en main, y tsc y eslint no dan errores
+  - con el arreglo revertido fallan los specs que el autor declara (6 de 8)
+  - cada mutacion la detecta al menos un spec; una mutacion que nadie detecta se anota como hueco de cobertura
+- title: Details on a suggestion that only the pool lists opens its Task Detail (My Day)
+  tags:
+  - ac-1
+  - happy-path
+  given:
+  - en 'View as' esta seleccionada la CSM de prueba
+  - en My Day, pestana "Tasks", la seccion "Suggested tasks · N" esta desplegada
+  - se abrio "View all suggested tasks" y se ve el modal "All suggested tasks" con el subtitulo "Pending for you outside
+    accounts on implementation, highest score first."
+  - se elige una fila que no esta en el panel
+  when:
+  - la CSM pulsa "Details" en esa fila
+  then:
+  - el modal "All suggested tasks" desaparece y en su lugar se abre "TASK DETAIL"; nunca hay dos modales abiertos a la vez
+  - el detalle muestra la misma cuenta que la fila, el campo Task con el titulo de la fila y el campo Due con su fecha
+  - State es "Suggested", y Team y Product tag coinciden con los "AI SUGGESTS" de la fila
+  - abrir el detalle no envia ninguna peticion POST, PUT, PATCH ni DELETE
+- title: Clicking a pool suggestion's title opens its Task Detail (My Day)
+  tags:
+  - ac-2
+  - happy-path
+  given:
+  - el modal "All suggested tasks" de My Day esta abierto
+  - se elige otra fila que no esta en el panel
+  when:
+  - la CSM pulsa el texto del titulo de la fila, no el boton "Details"
+  then:
+  - se abre "TASK DETAIL" para esa fila, con su cuenta, su titulo en Task y su fecha en Due
+- title: Rows that share a title open the detail of the clicked account, not a sibling's
+  tags:
+  - edge-case
+  - missing-doc
+  - ac-1
+  - ac-2
+  given:
+  - en la primera pagina del modal de My Day varias filas de cuentas distintas tienen exactamente el mismo titulo (hoy
+    "Renewal is 45 days out and the champion has gone quiet")
+  when:
+  - la CSM pulsa "Details" en una de esas filas que no sea la primera
+  - cierra el detalle y pulsa el titulo de otra fila con el mismo texto
+  then:
+  - cada detalle muestra la cuenta de la fila pulsada y no la de la primera fila con ese titulo
+  - la descripcion del detalle es la de la sugerencia pulsada
+- title: A suggestion shown in both the panel and the pool opens from the pool
+  tags:
+  - ac-3
+  - happy-path
+  given:
+  - el panel "Suggested tasks" de My Day muestra al menos una sugerencia
+  - en el modal esa misma sugerencia puede no estar en la primera pagina; se activa "Show N from accounts on
+    implementation" si su cuenta esta en implementacion y se pulsa "Load more · N left" hasta que aparezca
+  when:
+  - la CSM pulsa "Details" en esa sugerencia dentro del modal
+  then:
+  - se abre "TASK DETAIL" para esa sugerencia
+  - el detalle muestra lo mismo que al abrir la misma sugerencia desde el panel
+- title: Rows reached through Load more and the implementation toggle open their Task Detail
+  tags:
+  - regression-evidence
+  - pagination
+  - edge-case
+  given:
+  - el modal "All suggested tasks" de My Day muestra "Load more · N left" (20 filas por pagina)
+  when:
+  - la CSM pulsa "Load more · N left" y despues "Details" en una fila de la segunda pagina
+  - activa "Show N from accounts on implementation" y pulsa "Details" en una fila marcada "On implementation" que no esta
+    en el panel
+  then:
+  - en los dos casos se abre "TASK DETAIL" para la fila pulsada, con su cuenta y su titulo
+- title: Account-scoped pool · Details and title on the row the panel cap hides open its Task Detail
+  tags:
+  - ac-4
+  - happy-path
+  given:
+  - en Accounts se abre la cuenta de prueba y su pestana "Tasks"
+  - la seccion "Suggested tasks · 5+" muestra 5 tarjetas
+  - el enlace "View all suggested tasks" abre el modal con el subtitulo "Everything still pending for this account, highest
+    score first." y lista mas filas que el panel
+  when:
+  - la CSM pulsa "Details" en la fila que no esta en el panel
+  - cierra el detalle y pulsa el titulo de esa misma fila
+  then:
+  - las dos veces se abre "TASK DETAIL" con el nombre de la cuenta y el titulo de esa fila en Task
+- title: Opening several pool rows in a row shows each one, returns to the pool and writes nothing
+  tags:
+  - edge-case
+  - negative
+  - im-1314
+  given:
+  - dev corre IM-1314, con el que cerrar un detalle abierto desde el modal vuelve al modal
+  - el modal "All suggested tasks" de My Day esta abierto
+  when:
+  - la CSM abre con "Details" una fila A que solo esta en el modal y cierra el detalle con Close
+  - abre con "Details" otra fila B que solo esta en el modal y la cierra con Escape
+  - cierra el modal y pulsa "Details" en una tarjeta del panel
+  then:
+  - el detalle de B muestra la cuenta y el titulo de B, no los de A
+  - al cerrar cada detalle se vuelve al modal, y el numero de "Load more · N left" y del panel no cambia
+  - el detalle abierto desde el panel muestra la tarjeta del panel, no la ultima fila abierta desde el modal
+  - en todo el recorrido no se envia ninguna peticion POST, PUT, PATCH ni DELETE
+- title: A fresher copy of the same task from the panel or a list replaces the pool row in the detail
+  tags:
+  - edge-case
+  - missing-doc
+  - unit-tests
+  given:
+  - la historia dice que, si la misma tarea tambien esta en una lista, gana la copia mas fresca
+  - la fila del modal entra primero en el mapa por id y las del panel y las listas despues
+  when:
+  - se ejecuta el spec de precedencia de MyDayTasksTab.test.tsx
+  - se mueve la fila del modal al final del mapa y se vuelve a ejecutar
+  then:
+  - con el arreglo, el detalle muestra la copia del panel o de la lista cuando la tarea esta en ambos sitios
+  - con la fila del modal al final, al menos un spec falla
+  - si en dev no se puede crear la diferencia sin escribir, el escenario se cierra con la prueba unitaria y se deja
+    escrito
+- title: Actions in a Task Detail opened from a pool-only row act on that suggestion
+  tags:
+  - missing-doc
+  - edge-case
+  - risk
+  given:
+  - un "TASK DETAIL" abierto con "Details" desde una fila que solo esta en el modal
+  - antes del arreglo esta ruta no existia y ni los AC ni el plan del autor cubren sus acciones
+  when:
+  - la CSM pulsa "Open Account Detail"
+  - edita el campo Task sin guardar, cierra el detalle y lo vuelve a abrir
+  - en local con datos sembrados, o en dev solo sobre una sugerencia de una cuenta propia de QA, pulsa "Accept task" y
+    en otra fila "Decline"
+  then:
+  - el boton "Open Account Detail" navega a la cuenta de la fila y no a otra
+  - la edicion sin guardar se descarta y el detalle vuelve a mostrar el texto del servidor
+  - Accept task y Decline actuan sobre la sugerencia abierta, la sacan del modal y no tocan otra fila
+  - si no hay datos propios de QA ni entorno local, la parte que escribe queda sin ejecutar con la nota
+    correspondiente y no se marca como PASS
+- title: Regression · Details and title on a Suggested panel card still open the Task Detail
+  tags:
+  - regression
+  - happy-path
+  given:
+  - el panel "Suggested tasks" esta desplegado en My Day y en la pestana Tasks de la cuenta de prueba
+  when:
+  - la CSM pulsa "Details" en una tarjeta del panel
+  - cierra el detalle y pulsa el titulo de otra tarjeta
+  then:
+  - las dos veces se abre "TASK DETAIL" para la tarjeta pulsada, igual que antes del arreglo
+  - al cerrarlo se vuelve a la pagina y no al modal "All suggested tasks"
+tags:
+- im-1312
+- im-1229
+- im-1316
+- csm-os
+- suggested-tasks
+- task-detail
+- my-day
+- migration-app
+- frontend
+estimatedDuration: 90
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T14:10:47Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T14:10:47Z'
+  version: 1
