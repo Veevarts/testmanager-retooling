@@ -1,0 +1,237 @@
+schemaVersion: '1.0'
+id: tr-a304de13-5350-4c0b-8fed-5c8b7a5feaeb
+key: TR-218
+title: >-
+  TR-218 · IM-1302 · TC-185 · smoke de promocion en STAGING (PR 96, staging a main) · 5 escenarios PASS en
+  staging, 8 sin repetir porque ya se aprobaron en dev (TR-213) sobre el mismo codigo de servidor — APROBADO
+  para produccion
+status: completed
+environment:
+  name: >-
+    STAGING real (surveytool.stg.veevart.ai), encuesta 1 (Fundraising, NPS, audiencia everyone), navegador
+    Chromium por script y llamadas directas al API. Identidad QA: organizacion qa-tr218-org y encuestados
+    qa-tr218-*. Lecturas de DynamoDB, ECS e IAM de staging en solo lectura. No se toco dev ni produccion.
+  buildVersion: >-
+    Mixto — API Express + cliente React. Veevarts/survey-tool staging 4c896552 (despues del PR 95), la misma
+    cabeza que el PR 96 promueve a main. Servidor e infraestructura identicos a develop 39a15452, aprobado en
+    TR-213; el cliente anade el rediseno del PR 93.
+startedAt: '2026-09-30T16:44:00Z'
+completedAt: '2026-09-30T16:50:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  El PR 96 promueve staging a main, que despliega a produccion. Trae el flujo de borradores de IM-1302,
+  aprobado en dev en TR-213, mas el rediseno del cliente del PR 93, que entro sin review ni QA. Desde el
+  commit aprobado (39a15452) no cambio nada del servidor ni de infra: solo cliente, Dockerfile y
+  dependencias. Por eso este smoke se centra en el recorrido del encuestado con la interfaz nueva y en los
+  prerrequisitos desplegados de staging.
+
+  ## Inferred technical tests
+
+  - Prerrequisitos de staging, en solo lectura: GSI2 de respondent-state ACTIVE con proyeccion INCLUDE;
+    simulacion IAM del rol de tarea: ConditionCheckItem permitido en surveys y respondent-state (los unicos
+    destinos de ConditionCheck en el codigo) y Query permitido en el indice GSI2; despliegue ECS del PR 95
+    COMPLETED. EJECUTADO.
+  - Endpoints admin sin sesion: 401. EJECUTADO.
+  - Recorrido del encuestado en navegador real: guardar, recargar y restaurar, completar, enviar,
+    reintentar con el mismo token. EJECUTADO.
+  - Envio sin token (paso 7 del runbook): sin borrador 201, con borrador activo 409. EJECUTADO.
+  - Lectura de datos despues del envio: borrador finalizado y una sola respuesta. EJECUTADO.
+  - Vista movil del formulario publico (390 px). EJECUTADO.
+  - Pantallas del admin rediseñadas (Progress, Dashboard, Surveys): NO EJECUTADO, requieren login
+    interactivo de Cognito.
+
+  ## Hallazgos
+
+  Ningun defecto. El boton Submit ahora usa isLoading del design system; en HeroUI isLoading deshabilita el
+  boton, y en staging queda deshabilitado mientras viaja el envio. El reintento con el mismo token devuelve
+  la misma respuesta, sin duplicado.
+
+  OBSERVACION para produccion: el PR toca infra, server y client, asi que al mergear se disparan en paralelo
+  Infra Deploy y Deploy. GSI2 se construye en produccion sobre una tabla con datos (en staging la tabla
+  estaba vacia y termino 15 s antes que la app). Mientras el indice no este ACTIVE solo puede fallar la
+  lista de Progress del admin; guardar y enviar no dependen de el. Despues del merge: esperar Infra Deploy
+  en main y GSI2 ACTIVE, y hacer el smoke del runbook con una encuesta de prueba autorizada.
+
+  Datos QA que quedan en staging a proposito, como evidencia: respuestas 1 y 2 y un borrador activo, todos
+  de la organizacion qa-tr218-org.
+
+  ## Veredicto
+
+  APROBADO para el merge del PR 96. Los 5 escenarios ejecutados en staging pasan; los 8 restantes no se
+  repiten porque el codigo de servidor es el mismo que aprobo TR-213 (13/13) en dev. El AC9 sigue como
+  excepcion aceptada (IM-1309).
+results:
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC1 · The first meaningful answer creates one draft, and later changes update that same draft
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-09-30T16:45:50Z'
+  stepResults: []
+  actual: |
+    Staging: el primer puntaje crea el borrador (POST /api/survey-drafts 201, in_progress, 1 pregunta
+    respondida) y el estado muestra "Progress saved at 11:45 AM" (01-draft-saved.png). Los cambios
+    siguientes actualizan el mismo borrador (200) hasta saveSequence 6 (net-smoke.jsonl).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC2 · Closing the iframe mid-save sends one last keepalive save and creates no response
+  scenarioIndex: 1
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite en staging: no hay una org de Salesforce apuntada a staging. Aprobado en dev dentro del
+    iframe real (TR-207 y TR-213), con el mismo codigo de servidor.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC3 · Reopening in the same browser restores answers and step, and counts the resume once
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-09-30T16:45:55Z'
+  stepResults: []
+  actual: |
+    Staging: al recargar en el mismo navegador, /api/survey-drafts/restore responde 200 con resumeCount 1 y
+    el puntaje 9 sigue marcado (02-restored.png).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC4 · A changed survey definition asks for a fresh attempt instead of mapping answers to the wrong questions
+  scenarioIndex: 3
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite: cambiar la definicion de la unica encuesta activa de staging afectaria a otros usuarios.
+    Aprobado en TR-213 sobre el mismo codigo de servidor.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC5 · Submitting creates one response, finalizes the draft, and late autosaves cannot revive it
+  scenarioIndex: 4
+  status: passed
+  executedAt: '2026-09-30T16:46:08Z'
+  stepResults: []
+  actual: |
+    Staging: el envio responde 201 (respuesta 1) y el boton Submit queda deshabilitado mientras viaja
+    (04-submitted.png). El reintento con el mismo token devuelve 200 con la misma respuesta 1, sin
+    duplicado. Lectura en DynamoDB: el borrador queda submitted, con las respuestas borradas y sin clave
+    GSI2, y hay una sola respuesta para ese encuestado. La mitad del autosave tardio no se repite en
+    staging; quedo aprobada en TR-213 con el mismo codigo de servidor.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC6 · A legacy client without a token still submits — and what happens when a draft is active
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-09-30T16:47:19Z'
+  stepResults: []
+  actual: |
+    Staging, por API: envio sin token de un encuestado sin borrador, 201 (respuesta 2). Envio sin token
+    con un borrador activo, 409 con el mensaje generico "An active survey draft requires its token", sin
+    detalles de AWS (api-checks.json).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC7 · An admin sees incomplete drafts in Progress, and nobody else can
+  scenarioIndex: 6
+  status: notRun
+  stepResults: []
+  actual: |
+    Parcial en staging. Sin sesion, /api/admin/survey-drafts responde 401. La vista del admin no se
+    ejecuto: requiere login interactivo de Cognito. La simulacion IAM permite al rol de tarea consultar
+    GSI2, y el indice contiene el borrador activo de QA. Aprobado en dev en TR-213.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC8 · Draft detail shows answered and unanswered questions, and drafts never leak into responses or metrics
+  scenarioIndex: 7
+  status: notRun
+  stepResults: []
+  actual: |
+    El detalle del admin no se ejecuto (login interactivo). En DynamoDB, la tabla de respuestas solo tiene
+    las dos respuestas enviadas; el borrador activo no aparece como respuesta. Aprobado en dev en TR-213.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC9 · A caller without the draft token can neither read the draft nor change it with an ordinary save;
+    explicit replacement is the accepted exception tracked in IM-1309
+  scenarioIndex: 8
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite en staging. Sigue como excepcion de release aceptada, ligada a IM-1309 (TR-208, TR-213).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    AC10 · The admin listing index carries metadata only
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-09-30T16:48:30Z'
+  stepResults: []
+  actual: |
+    Staging, en solo lectura: GSI2 de respondent-state esta ACTIVE con proyeccion INCLUDE de metadatos. La
+    unica entrada es el borrador activo de QA y no trae respuestas ni token; el borrador enviado ya salio
+    del indice.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Edge · Preview mode, missing identity and expired drafts create or restore nothing
+  scenarioIndex: 10
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite en staging. Aprobado en TR-213 con el mismo codigo de servidor.
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Functional · Answer, close, reopen, continue and submit inside the Salesforce iframe
+  scenarioIndex: 11
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite: no hay una org de Salesforce apuntada a staging. En staging se ejecuto el mismo
+    recorrido en la pagina publica, con la interfaz nueva, en escritorio y en movil (01 a 05). Aprobado
+    dentro del iframe en dev (TR-213).
+- testCaseId: 1e1b1639-8372-4aa5-93c1-60115ff2a182
+  testCaseKey: TC-185
+  scenarioTitle: >-
+    Cross-browser · A second browser keeps its answers, takes over only on Continue here, and neither
+    browser loses what it typed
+  scenarioIndex: 12
+  status: notRun
+  stepResults: []
+  actual: |
+    No se repite en staging. Aprobado en TR-208 y TR-213 con el mismo codigo de servidor.
+summary:
+  total: 13
+  passed: 5
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 8
+  passRate: 38
+history:
+- action: run-started
+  timestamp: '2026-09-30T16:44:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Smoke de staging antes de aprobar el PR 96 (promocion de staging a main, produccion) de IM-1302.
+- action: run-completed
+  timestamp: '2026-09-30T16:50:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    5 escenarios PASS en staging y 8 sin repetir, aprobados en TR-213 con el mismo codigo de servidor.
+    Sin defectos. PR 96 aprobado en GitHub.
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T16:50:00Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T16:50:00Z'
+  version: 1
