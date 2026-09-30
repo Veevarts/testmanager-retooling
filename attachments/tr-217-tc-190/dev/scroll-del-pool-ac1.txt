@@ -1,0 +1,35 @@
+TR-217 · IM-1314 · Escenario 3 (AC1) — filas, "Load more" y scroll al cerrar el Task Detail (dev, 2026-09-30)
+
+Frontend de dev d8a356c (contiene 09830fc), cache vaciada, "View as" la CSM de prueba, nombres enmascarados.
+scrollTop medido en el cuerpo del modal (data-testid="suggestion-pool-body", el contenedor que hace scroll).
+
+1) Recorrido de la historia: "Load more" (40 filas), desplazado hasta la fila 28, abrir y cerrar (ventana 1512x806)
+   antes:                       40 filas · "Load more · 161 left" · scrollTop 4123
+   Details -> Escape:           40 filas, mismos ids, "161 left" · scrollTop 3865
+   Details -> X:                40 filas, mismos ids, "161 left" · scrollTop 3607
+   titulo -> Close:             40 filas, mismos ids, "161 left" · scrollTop 3850 (Playwright desplazo la fila antes del clic)
+   Mientras el detalle esta abierto solo se ve "TASK DETAIL" (un modal). ui/02, ui/03
+
+2) Posicion de la fila pulsada (fila 28) dentro de la vista (alto de la vista 560 px)
+   vuelta 1: scrollTop 4123 -> 3865 · la fila pasa de 205 px a 463 px desde arriba
+   vuelta 2: scrollTop 3865 -> 3607 · la fila pasa de 463 px a 721 px -> queda FUERA de la vista
+   El foco vuelve al dialogo (SECTION), no al boton.
+
+3) Clic sin auto-scroll de Playwright (dispatchEvent) desde tres posiciones (1512x806)
+   1200 -> 1113 (-87) · 2600 -> 2424 (-176) · 4100 -> 3842 (-258)
+   La perdida es proporcional (~6,5-7 %) y estable: el valor ya esta asi a los 0, 60, 120, 250, 500, 1000 y 2000 ms.
+   clientHeight 560 y scrollHeight 6476 no cambian entre antes y despues.
+
+4) Descartes
+   prefers-reduced-motion: reduce      3000 -> 2798 (igual que sin la emulacion)
+   ventana 1920x1080 (clientHeight 834) 3000 -> 2798 · 4124 -> 3866 (la misma medida que cito el autor: el vio 4124 -> 4124)
+
+LECTURA
+  Filas y "Load more": se conservan (lo que la historia reportaba como perdido: PASS en esa parte).
+  Scroll: NO se conserva. Cada ida y vuelta al Task Detail sube la lista un 6-7 % de su scrollTop (unos 260 px en la
+  fila 28, mas de una tarjeta y media) y la perdida se acumula, porque el onScroll del cuerpo guarda el valor ya
+  desplazado. Tras dos vueltas la fila con la que la CSM trabajaba sale de la vista.
+  El codigo guarda scrollTop en un ref en cada scroll y lo reaplica desde el ref de un <span> marcador al volver a
+  montar el cuerpo (SuggestionPoolModal.tsx, restoreScroll). No lo corrige el spec "keeps the pool's scroll position
+  across the round trip", que corre en jsdom sin layout.
+  AC1 ("... and the scroll position"): FAIL, severidad baja.

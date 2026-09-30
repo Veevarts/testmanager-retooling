@@ -1,0 +1,229 @@
+schemaVersion: '1.0'
+id: c71de9be-bcd1-4558-833e-c654066cc34b
+key: TC-190
+title: 'CSM OS suggestion pool: closing a Task Detail and actions on pool cards return to the same pool, rows and scroll'
+description: |
+  Cobertura QA de IM-1314 (CSM OS: closing a Task Detail opened from "View all suggested tasks" does not return to
+  the list). Tipo Error, prioridad Medium. Sub-tarea de QA: IM-1318. Epic: IM-1229 CSM OS: Feedback. Continua IM-1312.
+
+  EL DEFECTO. Todo cierre o exito de un modal en MyDayTasksTab pasaba por closeModal(), que volvia siempre a la pagina.
+  Cerrar un Task Detail abierto desde "All suggested tasks" perdia el pool (filas de "Load more" y scroll), y
+  Accept/Decline sobre una tarjeta del pool cerraba el pool entero, porque las tarjetas usan los mismos handlers.
+
+  EL ARREGLO. Veevarts/MigrationAppFrontend "PR #219" (squash 09830fc, solo frontend, 5 ficheros): mientras dura una
+  visita al pool, el pool queda montado pero oculto detras de lo que abre (un solo modal visible); cerrar el detalle,
+  o terminar Accept/Decline, vuelve a mostrarlo con las mismas filas y el mismo scroll; las filas atendidas se ocultan
+  durante la visita y Undo las devuelve; a donde volver se decide cuando la accion termina (isPoolFlowRef), no al
+  pulsar; el aviso (toast) queda por encima de los modales para que Undo se pueda pulsar. Segun el autor, 16 specs
+  fallan en la base.
+
+  Riesgos abiertos que esta cobertura debe cerrar o dejar escritos:
+
+  - R1. La historia dice "Prod: not deployed yet", pero el 2026-09-30 a las 14:58Z se promovio main a stable ("PR
+    #221") y el frontend de produccion (02ca11c7, 15:00Z) ya contiene 09830fc.
+  - R2. Los AC de Accept, Decline y Undo escriben en dev sobre sugerencias de una CSM real de dev: necesitan
+    autorizacion expresa y datos sinteticos; Accept no tiene deshacer. Nunca enviar "Review & Create SF Case…"
+    (crea un Case en Salesforce): solo abrirlo y cancelarlo.
+  - R3. Compromiso conocido: con el pool abierto, un usuario de teclado no llega a Undo con Tab (el foco se queda
+    dentro del modal); el toast dura 2,4-6 s y puede tapar el final de la lista.
+  - R4. Tras "Load more" el foco queda en el body y Escape deja de cerrar el pool (O1 de TR-215): choca con "after an
+    action in the pool, focus stays inside the modal".
+  - R5. Preexistentes: el primer clic tras cargar a veces se ignora; enlace profundo con sesion caducada en blanco
+    (IM-1310); index.html con un anio de cache; E2E de CI sin ejecutar ningun test.
+type: functional
+priority: medium
+status: active
+preconditions:
+- Dev corre un frontend que contiene 09830fc y el navegador carga el index.html vivo (cache vaciada).
+- Hay una sesion admin en CSM OS de dev con 'View as' de la CSM de prueba de la historia (unas 200 sugerencias
+  pendientes en el pool de My Day, 20 por pagina) y una cuenta suya en implementacion con 6 sugerencias.
+- Veevarts/MigrationAppFrontend clonado en main con dependencias y Node 20.
+- Para los escenarios que aceptan o declinan hay autorizacion expresa y se usan sugerencias sinteticas; lo creado se queda
+  como dato de prueba.
+format: gherkin
+scenarios:
+- title: Deployment state · Dev and production serve a frontend with the fix
+  tags:
+  - deployment
+  - regression
+  given:
+  - el arreglo es el squash 09830fc de main
+  when:
+  - se consultan los despliegues del frontend en main (dev) y en stable (prod) y se vacia la cache del navegador
+  then:
+  - dev corre un commit que contiene 09830fc y el navegador carga el script del index.html vivo
+  - se deja escrito si produccion ya lo contiene
+- title: Unit tests · The new specs pass on main, fail on the parent and catch mutations of the fix
+  tags:
+  - unit-tests
+  - regression
+  given:
+  - "PR #219 anade specs a MyDayTasksTab.test.tsx y SuggestionPoolModal.test.tsx"
+  when:
+  - se ejecutan en main y contra el padre del merge (cdbe280)
+  - se aplican mutaciones (closeModal vuelve siempre a la pagina, el pool se desmonta al abrir el detalle, se decide el
+    destino con el estado del render y no con la ref, las filas ocultas no se reinician por visita, el toast sin z-index)
+  then:
+  - pasan en main, fallan en el padre los que declara el autor y cada mutacion la detecta al menos un spec
+- title: Closing the Task Detail returns to the same pool, rows and scroll (Escape, close button, Close)
+  tags:
+  - ac-1
+  - happy-path
+  given:
+  - en My Day el modal "All suggested tasks" tiene 40 filas tras "Load more" y esta desplazado hacia la fila 28
+  when:
+  - la CSM abre "Details" en esa zona y cierra el detalle con Escape
+  - repite abriendo con "Details" y cerrando con la X, y abriendo con el titulo y cerrando con el boton Close
+  then:
+  - cada vez vuelve "All suggested tasks" con las mismas 40 filas, el mismo "Load more · N left" y la misma posicion de scroll
+- title: Only one modal is rendered while the Task Detail is up
+  tags:
+  - ac-2
+  given:
+  - un Task Detail abierto desde el pool
+  when:
+  - se cuentan los dialogos visibles y se mira si el pool es visible detras
+  then:
+  - solo se ve el Task Detail; el pool no se ve debajo y vuelve intacto al cerrar
+- title: Accept or Decline from the Task Detail returns to the pool without that row
+  tags:
+  - ac-3
+  - happy-path
+  - writes-dev
+  given:
+  - un Task Detail abierto desde el pool sobre una sugerencia sintetica, con autorizacion para escribir
+  when:
+  - la CSM pulsa "Accept task" en el detalle, y en otra fila "Decline"
+  then:
+  - cada vez vuelve "All suggested tasks" sin la fila atendida y con las demas en su sitio
+- title: Nested flows (Source, Review & Create SF Case) unwind to the Task Detail and then to the pool
+  tags:
+  - ac-4
+  - edge-case
+  given:
+  - un Task Detail abierto desde el pool
+  when:
+  - la CSM abre "Review & Create SF Case…" y lo cancela sin enviarlo
+  - abre la fuente (chip SOURCE) si la fila tiene una y la cierra
+  - cierra el Task Detail
+  then:
+  - cada cancelacion vuelve al Task Detail, y cerrar el detalle vuelve al pool
+  - no se crea ningun Case en Salesforce ni se envia ninguna escritura
+- title: Details from the Suggested panel is unchanged and never brings the pool up
+  tags:
+  - ac-5
+  - regression
+  given:
+  - el pool esta cerrado
+  when:
+  - la CSM abre "Details" en una tarjeta del panel "Suggested tasks" y la cierra con Escape
+  then:
+  - vuelve a la pagina y no aparece ningun "All suggested tasks"
+- title: Accept on a pool card keeps the pool open in place, without the card, with its toast
+  tags:
+  - ac-6
+  - happy-path
+  - writes-dev
+  given:
+  - el pool abierto con "Load more" pulsado y desplazado, con autorizacion para escribir
+  when:
+  - la CSM pulsa "Accept" en una tarjeta sintetica
+  then:
+  - el pool sigue abierto en el mismo sitio y sin esa tarjeta
+  - aparece el aviso "Accepted — added to your tasks" y, al cerrar el pool, la tarea esta en My tasks → Open
+- title: Decline on a pool card keeps the pool open in place, with the Undo toast above it
+  tags:
+  - ac-7
+  - happy-path
+  - writes-dev
+  given:
+  - el pool abierto, con autorizacion para escribir
+  when:
+  - la CSM pulsa "Decline" en una tarjeta sintetica
+  then:
+  - el pool sigue abierto en el mismo sitio y sin esa tarjeta
+  - el aviso "Suggestion declined" con Undo se ve por encima del pool y se puede pulsar
+- title: Undo a decline made in the pool brings the card back into the open pool
+  tags:
+  - ac-8
+  - happy-path
+  - writes-dev
+  given:
+  - la CSM acaba de declinar una tarjeta en el pool
+  when:
+  - pulsa "Undo" en el aviso
+  then:
+  - la sugerencia vuelve a estar pendiente y vuelve a aparecer en el pool, que sigue abierto
+- title: Accept and Decline on a Suggested panel card behave as before
+  tags:
+  - ac-9
+  - regression
+  - writes-dev
+  given:
+  - el pool esta cerrado y el panel tiene al menos una tarjeta, con autorizacion para escribir
+  when:
+  - la CSM pulsa "Decline" en una tarjeta del panel y despues "Undo"
+  then:
+  - la pagina se comporta como antes, no se abre ningun pool y la tarjeta vuelve tras Undo
+- title: Closing the pool itself ends the visit and reopening starts from page one
+  tags:
+  - edge-case
+  - regression
+  given:
+  - el pool con "Load more" pulsado y alguna fila atendida en la visita
+  when:
+  - la CSM cierra el pool con su X y vuelve a abrir "View all suggested tasks"
+  then:
+  - el pool empieza en la pagina 1 con 20 filas y ninguna fila de la visita anterior queda oculta por error
+- title: The account-scoped pool behaves the same
+  tags:
+  - edge-case
+  - account-scope
+  - writes-dev
+  given:
+  - la pestana Tasks de la cuenta de prueba en implementacion, con "View all suggested tasks" abierto
+  when:
+  - la CSM abre "Details" y cierra con Escape, y declina una tarjeta y pulsa Undo, con autorizacion para escribir
+  then:
+  - el modal de la cuenta vuelve con sus filas y sigue abierto tras Decline y Undo, igual que en My Day
+- title: A slow Accept resolved after the pool was closed does not bring a stale pool back
+  tags:
+  - edge-case
+  - missing-doc
+  - writes-dev
+  given:
+  - la respuesta de Accept de una tarjeta del pool se retrasa varios segundos en el navegador, sin cambiar la peticion
+  when:
+  - la CSM pulsa "Accept" y cierra el pool antes de que llegue la respuesta
+  then:
+  - al resolverse, no vuelve a aparecer ningun pool y la pagina muestra la tarea aceptada
+- title: Focus stays inside the pool after actions, and Escape still closes it
+  tags:
+  - edge-case
+  - missing-doc
+  - accessibility
+  given:
+  - el pool abierto
+  when:
+  - la CSM pulsa "Load more", "Decline" en una tarjeta y cierra un Task Detail, y tras cada accion pulsa Escape
+  then:
+  - tras cada accion el foco queda dentro del modal y Escape cierra el pool
+  - si tras "Load more" el foco cae al body y Escape no cierra, se registra como hallazgo con la regla del comentario del
+    autor ("after an action in the pool, focus stays inside the modal")
+tags:
+- im-1314
+- im-1229
+- im-1318
+- csm-os
+- suggested-tasks
+- task-detail
+- my-day
+- migration-app
+- frontend
+estimatedDuration: 120
+metadata:
+  createdBy: codex
+  createdAt: '2026-09-30T16:07:40Z'
+  updatedBy: codex
+  updatedAt: '2026-09-30T16:07:40Z'
+  version: 1
