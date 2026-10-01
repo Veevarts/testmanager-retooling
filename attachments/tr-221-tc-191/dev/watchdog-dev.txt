@@ -1,0 +1,39 @@
+TR-221 · escenarios 9 y 10 en dev · watchdog real de dev con corridas sinteticas (autorizado por el usuario de QA)
+
+Sembradas por QA el 2026-10-01 a las 21:48:36Z en el workspace de QA ("Test QA Backup"), con condicion de no
+sobrescribir: 3 corridas en RUNNING (createdAt hace 2 h) con un objeto OPPORTUNITY_MEMBERSHIP en PENDING cada una.
+  S1  sin lastActivityAt y objeto sin tocar desde hace 2 h            -> debe caer en el siguiente tick
+  S2  lastActivityAt = hace 5 min (como un latido del ETL)            -> control: no debe caer hasta 45 min despues
+  S3  objeto actualizado hace 5 min (como un PUT de ficheros)         -> control: no debe caer hasta 45 min despues
+Watchdog de dev: regla veev-ue1-dev-migration-run-watchdog ENABLED, rate(15 minutes), ticks a :04, :19, :34 y :49;
+umbral por defecto 45 min.
+
+TICK 21:49:12Z (36 s despues de sembrar)
+  log  migration.run.watchdog.failed-stale     una corrida, inactiveMinutes 120, summary 1/0/1
+  log  migration.objects.settle.completed      objectCount 1, settledFailed 1
+  log  migration.run.watchdog.completed        scanned 3, failedStale 1, skipped 0, errors 0, thresholdMinutes 45
+  log  ops.alert.skipped.no-topic              title ":rotating_light: Migration App (dev) — 1 migration run failed: the
+                                               ETL stopped reporting" (dev no tiene tema de alertas: por diseno)
+  DynamoDB  S1 FAILED (indice de estado MIGRATION_RUN#FAILED), objeto FAILED; S2 y S3 siguen RUNNING
+  Interfaz  historial del workspace de QA: S1 FAILED, S2 y S3 RUNNING (ui/03)
+
+TICK 22:04Z
+  S2 y S3 siguen RUNNING (21 min sin actividad).
+
+TICK 22:19Z
+  S2 y S3 siguen RUNNING (36 min sin actividad).
+
+TICK 22:34:13Z (primer tick tras cumplir los 45 min: los dos controles caducaban a las 22:28:36Z)
+  log  migration.run.watchdog.failed-stale     dos corridas, inactiveMinutes 50 cada una
+  log  migration.objects.settle.completed      settledCompleted 0, settledFailed 1 (una vez por corrida)
+  log  migration.run.watchdog.completed        scanned 2, failedStale 2, skipped 0, errors 0, thresholdMinutes 45
+  log  ops.alert.skipped.no-topic              title ":rotating_light: Migration App (dev) — 2 migration runs failed: the
+                                               ETL stopped reporting" (una sola alerta por tick, con las dos corridas)
+  DynamoDB  S2 y S3 FAILED (indice MIGRATION_RUN#FAILED), summary 1/0/1, objeto FAILED; lastActivityAt = hora del tick
+  Interfaz  historial del workspace de QA: las 3 FAILED, "Download Results" desactivado en las 3 (no tienen ficheros)
+            (ui/04)
+
+LECTURA
+  El watchdog usa la actividad mas reciente (latido del ETL o cambio de un objeto), no solo createdAt: los controles
+  creados hace 2 h no cayeron mientras tuvieron actividad reciente, y cayeron en el primer tick tras 45 min sin ella.
+  Una alerta por tick, que agrupa las corridas falladas en ese tick.

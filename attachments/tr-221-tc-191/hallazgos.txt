@@ -1,0 +1,38 @@
+TR-221 · IM-1202 · TC-191 v2 · repeticion tras TR-219 (2026-10-01)
+
+VEREDICTO: 15/15 PASS (AC4 con alcance) -> se aprueba.
+Los dos FAIL de TR-219 quedan resueltos y desplegados en dev y produccion:
+
+F2 de TR-219 · AC5 watchdog -> CORREGIDO (BE #419, #422)
+  Dev: corrida sintetica en RUNNING sin actividad desde hace 2 h -> FAILED en el primer tick (21:49:12Z) con su objeto
+  asentado FAILED y summary 1/0/1; la interfaz la muestra FAILED. Dos controles con actividad reciente (un latido y un
+  objeto actualizado) siguieron en RUNNING en los ticks de 21:49, 22:04 y 22:19 y pasaron a FAILED en el primer tick
+  tras cumplir 45 min sin actividad (22:34:13Z, una sola alerta para las dos) (ver dev/watchdog-dev.txt, ui/04).
+  Produccion (solo conteos): 0 corridas en RUNNING; el tick de 16:23Z fallo las 17 corridas atascadas.
+  El latido del ETL (ETL #190) sale cada 5 min mientras hay progreso y se detiene al estancarse (arnes HB1/HB2).
+
+F1 de TR-219 · AC4 "and an alert fires" -> CORREGIDO, con alcance (BE #424)
+  La alerta la publica el watchdog al fallar una corrida que el ETL dejo de informar: SNS -> AWS Chatbot -> canal
+  privado de Slack, solo en produccion. Dev: el tick construye la alerta (":rotating_light: Migration App (dev) — 1
+  migration run failed: the ETL stopped reporting") y la omite por falta de tema (ops.alert.skipped.no-topic).
+  Produccion, solo lectura: la Lambda puede publicar en el tema (simulador IAM), el tema esta suscrito a Chatbot, Chatbot
+  apunta al canal, el mensaje de prueba se entrego sin fallos y la alarma de fallo de publicacion esta en OK.
+  Alcance: QA no puede provocar en produccion una corrida colgada para ver el mensaje real en Slack.
+
+NUEVO COMPORTAMIENTO (ETL #190, BE #417) -> PASS
+  Corrida con un objeto roto (Contact Role): FAILED con conteos 4/3/1; los 3 objetos buenos COMPLETED, informados al
+  terminar cada uno y descargables (md5 = etag); Contact Role sin ficheros ("No CSV files available yet"). Corrida solo
+  con objetos buenos: COMPLETED 3/3. Cierra la observacion O1 de TR-219 (CSV huerfanos).
+
+OBSERVACIONES (no bloquean)
+O1 · Nadie vigila al watchdog: en produccion fallo en cada tick unas 15 h (180 ValidationException, 01:23Z-16:10Z, el
+     defecto de BE #422) sin ningun aviso. La alerta solo cubre las corridas que el watchdog falla. Propuesta: alarma
+     sobre los errores de invocacion del watchdog (FailedInvocations de la regla o un filtro de metricas del handler).
+O2 · La alarma de fallo de publicacion avisa por el mismo tema y Chatbot: si lo que cae es SNS o Chatbot, se pierden la
+     alerta y su alarma. El tema y Chatbot se crearon fuera de banda (no estan en IaC).
+O3 · La interfaz muestra FAILED pero no los conteos (3 de 4 completados); estan en la API (summary).
+O4 · La alerta solo existe en produccion: un fallo del camino de alertas solo se puede detectar alli.
+
+DATOS DE PRUEBA EN DEV (autorizados por el usuario de QA)
+  Workspace de QA: 3 corridas sinteticas (sembradas en RUNNING, hoy FAILED por el watchdog).
+  Workspace del autor: QA-3 (mixta, FAILED 4/3/1) y QA-4 (objetos buenos, COMPLETED).

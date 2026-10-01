@@ -1,0 +1,38 @@
+TR-221 · escenarios 9 y 10 en produccion · SOLO LECTURA, conteos y configuracion (autorizado por el usuario de QA)
+
+QA no lanzo corridas, no publico en SNS y no toco la configuracion. Sin ids ni clientes.
+
+ESTADO DE LAS CORRIDAS (consulta COUNT por el indice de estado, 2026-10-01 ~22:00Z)
+  RUNNING 0 · FAILED 21 · COMPLETED 34
+  -> no queda ninguna corrida atascada (el ticket hablaba de 15 en RUNNING; TR-219 sumo las de 09-18 y 09-29).
+
+WATCHDOG (logs del backend de produccion, 2026-10-01)
+  regla veev-ue1-prod-migration-run-watchdog: ENABLED, rate(15 minutes)
+  invocaciones del handler: 203 desde las 01:23Z
+  ticks fallidos con ValidationException: 180, de 01:23Z a 16:10Z (el defecto que corrigio BE #422; EventBridge
+    reintenta cada tick fallido)
+  ticks completados: 23, de 16:23Z a 21:53Z
+    16:23Z  failedStale 17  (las 17 corridas atascadas, en un solo tick)
+    resto   failedStale 0
+  -> O1: durante ~15 h el watchdog fallo en cada tick y nada aviso; la alerta solo cubre las corridas que el watchdog
+     falla, no al watchdog roto.
+
+CADENA DE LA ALERTA (BE #424, solo produccion)
+  Lambda de produccion: OPS_ALERTS_TOPIC_ARN definido; MIGRATION_APP_UI_BASE_URL definido.
+  Simulador de IAM sobre el rol de la Lambda: sns:Publish sobre el tema -> allowed.
+  Tema SNS implementation-studio-prod-alerts: existe; 1 suscripcion https a AWS Chatbot.
+  AWS Chatbot: configuracion implementation-studio-prod-alerts -> canal implementation-studio-prod-alerts, con ese tema.
+  Alarma veev-ue1-prod-migration-app-slack-publish-failures: estado OK, metrica MigrationApp/Alerting
+    SlackPublishFailures (EMF escrito por el adaptador en stdout, por eso no necesita cloudwatch:PutMetricData, que el
+    rol no tiene), accion = el mismo tema.
+  Metricas del tema el 2026-10-01: 1 mensaje publicado (hora 12 COT, el de prueba del autor), notificaciones
+    entregadas 1 + 1, fallidas 0. SlackPublishFailures sin datos (ningun fallo).
+  No hubo en produccion ninguna corrida que el watchdog fallara despues del despliegue de la alerta (18:46Z), asi que
+  no hay un mensaje real de "corrida fallada" que contar. El barrido de las 17 fue a las 16:23Z, antes de la alerta.
+  -> O2: la alarma de fallo de publicacion avisa por el mismo tema y Chatbot; si lo que falla es SNS o Chatbot, se
+     pierden las dos.
+
+QUE NO PUEDE VERIFICAR QA
+  Ver en Slack el mensaje de una corrida real fallada exige una corrida colgada en produccion (escritura en produccion,
+  fuera del alcance de QA). Lo verificado: el watchdog construye y envia la alerta (dev, escenario 10), la Lambda de
+  produccion tiene permiso para publicar, y el tema entrega a Chatbot sin fallos.

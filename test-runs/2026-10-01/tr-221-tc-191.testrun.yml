@@ -1,0 +1,237 @@
+schemaVersion: '1.0'
+id: tr-c26bace7-45b9-4e6d-b683-d5aacabea46d
+key: TR-221
+title: >-
+  TR-221 · IM-1202 · TC-191 v2 · 15/15 PASS — repeticion: el watchdog saca de RUNNING las corridas que no informan, la alerta
+  llega a Slack en produccion y un objeto roto ya no hunde la corrida
+status: completed
+environment:
+  name: >-
+    Dev de Migration App (backend 992e0fbc, ETL e421bc3) con sesion admin: 2 corridas en el workspace de pruebas del autor
+    y 3 corridas sinteticas sembradas en el workspace de QA, autorizadas por el usuario de QA. Produccion solo en lectura
+    (conteos y configuracion, autorizados). Clones locales del ETL (Node 22) y del backend (Node 20).
+  buildVersion: >-
+    Mixed: ETL "PR #190"; backend "PR #417", "PR #419", "PR #422" y "PR #424" (promociones "#418", "#421", "#423" y "#426");
+    infraestructura del watchdog (EventBridge) y de la alerta (SNS, Chatbot, alarma de CloudWatch).
+startedAt: '2026-10-01T21:40:00Z'
+completedAt: '2026-10-01T22:45:00Z'
+executedBy: codex
+notes: |
+  ## Solution understood
+
+  TR-219 devolvio la historia porque no habia alerta (AC4) ni watchdog (AC5). Ahora el backend tiene un watchdog cada
+  15 min que pasa a FAILED una corrida RUNNING sin actividad en 45 min (latido del ETL, cambio de estado o de un objeto),
+  asienta sus objetos y publica una alerta a Slack por SNS y AWS Chatbot (solo produccion), con una alarma si la
+  publicacion falla. El ETL manda un latido cada 5 min mientras avanza y deja de mandarlo si nada se mueve en 50 min.
+  Ademas ("#190", "#417"): un objeto que falla ya no hunde la corrida, cada objeto informa sus ficheros al terminar, un
+  objeto solo es descargable si todas sus partes salieron, y la corrida termina COMPLETED o FAILED con conteos.
+
+  ## Inferred technical tests
+
+  - Suites y specs nuevos en main y en los commits de TR-219, y 11 mutaciones: ejecutado.
+  - Arnes con el adaptador real y RunHeartbeat contra HTTP local (reintentos, latido, estancamiento, seguridad): ejecutado.
+  - Dev, escrituras autorizadas: corrida mixta con Contact Role y corrida buena desde la interfaz; 3 corridas sinteticas
+    en RUNNING (una caducada y dos controles) para el watchdog real de dev. Ejecutado.
+  - Produccion, solo lectura: corridas por estado, ticks del watchdog, tema SNS, Chatbot, alarma, metricas y simulador de
+    IAM. Ejecutado.
+  - No ejecutable por QA: provocar una corrida colgada en produccion para ver el mensaje real en Slack.
+
+  ## Resultado
+
+  15/15 PASS (AC4 con alcance): F1 y F2 de TR-219 corregidos. Observaciones no bloqueantes: nadie vigila al propio
+  watchdog (fallo ~15 h en produccion sin aviso antes de "#422"), la alarma de publicacion usa el mismo tema, y la
+  interfaz no muestra los conteos de una corrida FAILED. Detalle en attachments/tr-221-tc-191/hallazgos.txt.
+results:
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Deployment state · Dev and production run the IM-1202 builds and the next deploy keeps the custom domain
+  scenarioIndex: 0
+  status: passed
+  executedAt: '2026-10-01T21:45:00Z'
+  stepResults: []
+  actual: |
+    Backend en dev 992e0fbc ("#424") y en produccion f22d90e2 ("#426"); ETL e421bc3 ("#190") en dev y en produccion, los
+    dos apuntando a su dominio propio. Reglas del watchdog ENABLED cada 15 min. Los recursos del dominio propio siguen
+    intactos tras los despliegues de "#418" a "#426". attachments/tr-221-tc-191/dev/despliegue.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: Unit tests · The PR suites pass on main, fail on the parent and catch mutations of the fix
+  scenarioIndex: 1
+  status: passed
+  executedAt: '2026-10-01T22:00:00Z'
+  stepResults: []
+  actual: |
+    ETL 1027/1027 y specs de "#190" 90/90 en main (fallan las 5 suites en ea90850d). Backend migration+shared 400/400 y
+    specs nuevos 105/105 en main (fallan las 10 suites en 9ea9df33). 11/11 mutaciones detectadas por asercion.
+    attachments/tr-221-tc-191/scenario-0-unit-tests/
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC1 · The ETL backend URL is outside the namespace the private DNS intercepts
+  scenarioIndex: 2
+  status: passed
+  executedAt: '2026-10-01T22:02:00Z'
+  stepResults: []
+  actual: |
+    Sin cambios desde TR-219: los dos dominios propios siguen respondiendo desde API Gateway (x-amz-apigw-id) y sus
+    recursos del stack estan intactos. attachments/tr-221-tc-191/regresion-y-seguridad.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC1 · After the repoint, the production backend receives the ETL callbacks (read-only)
+  scenarioIndex: 3
+  status: passed
+  executedAt: '2026-10-01T22:00:00Z'
+  stepResults: []
+  actual: |
+    Vale el PASS de TR-219 (403 antes, 200 despues): desde el despliegue de "#190" no ha habido corridas del ETL en
+    produccion que contar, y la ruta no cambio (mismo dominio, misma URL). attachments/tr-221-tc-191/matriz-escenarios.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC2 · A successful single-object run in dev reaches COMPLETED with every part in files[]
+  scenarioIndex: 4
+  status: passed
+  executedAt: '2026-10-01T21:52:46Z'
+  stepResults: []
+  actual: |
+    QA-4 (tres objetos buenos): COMPLETED 3/3/0, cada objeto COMPLETED con sus partes al terminar. QA-3: files[] = S3 en
+    sus 4 partes. attachments/tr-221-tc-191/dev/corridas-dev.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC3 · The run history lists and downloads every generated CSV part
+  scenarioIndex: 5
+  status: passed
+  executedAt: '2026-10-01T21:52:30Z'
+  stepResults: []
+  actual: |
+    Historial y detalle listan cada parte de los objetos completos; Download CSVs baja un zip con las 4 partes de QA-3,
+    md5 = etag. Contact Role muestra "No CSV files available yet". attachments/tr-221-tc-191/dev/corridas-dev.txt, ui/02
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: Failure path · A run that fails during CSV generation ends FAILED and no object stays PENDING
+  scenarioIndex: 6
+  status: passed
+  executedAt: '2026-10-01T21:50:39Z'
+  stepResults: []
+  actual: |
+    QA-3 (3 objetos buenos + Contact Role): FAILED con conteos 4/3/1 al segundo; los buenos COMPLETED y descargables,
+    Contact Role FAILED sin ficheros; ninguno en PENDING. Antes ("#173") un fallo hundia la corrida entera y dejaba CSV
+    huerfanos (O1 de TR-219). attachments/tr-221-tc-191/dev/corridas-dev.txt, ui/01
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    AC4 · A refused callback is retried with backoff and then reported as an ERROR with the HTTP status and run id
+  scenarioIndex: 7
+  status: passed
+  executedAt: '2026-10-01T22:01:00Z'
+  stepResults: []
+  actual: |
+    Arnes v2 con HTTP real: 403 persistente -> 4 intentos (507, 1005, 2003 ms) y ERROR con el 403 y el id de la corrida.
+    El evento migration.run.terminal.callback.undelivered sigue en el caso de uso; specs de "#190" en verde.
+    attachments/tr-221-tc-191/harness/salida.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC4 · An alert fires on an undelivered terminal callback
+  scenarioIndex: 8
+  status: passed
+  executedAt: '2026-10-01T22:00:00Z'
+  stepResults: []
+  actual: |
+    Con alcance. El watchdog publica la alerta a Slack (SNS -> Chatbot) al fallar una corrida sin actividad. Dev: el tick
+    la construye y la omite por falta de canal. Produccion, solo lectura: la Lambda puede publicar en el tema, el tema
+    llega a Chatbot y al canal, el mensaje de prueba se entrego sin fallos y la alarma de publicacion esta en OK. No se
+    puede ver un mensaje real sin colgar una corrida en produccion. attachments/tr-221-tc-191/prod/watchdog-y-alerta-prod.txt, dev/watchdog-dev.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC5 · A run that never reports is moved out of RUNNING by a watchdog
+  scenarioIndex: 9
+  status: passed
+  executedAt: '2026-10-01T22:34:13Z'
+  stepResults: []
+  actual: |
+    Dev: corrida sintetica sin actividad -> FAILED en el tick de 21:49:12Z, objeto FAILED, interfaz FAILED; dos controles
+    con actividad reciente (latido y objeto) siguieron RUNNING en los ticks de 21:49, 22:04 y 22:19 y cayeron en el de
+    22:34:13Z, el primero tras 45 min sin actividad, con una sola alerta para las dos. Produccion: 0 en RUNNING; las 17
+    atascadas pasaron a FAILED a las 16:23Z. attachments/tr-221-tc-191/dev/watchdog-dev.txt, ui/03-04, prod/watchdog-y-alerta-prod.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: Edge case · The terminal status is honest when no inventory or only part of it lands
+  scenarioIndex: 10
+  status: passed
+  executedAt: '2026-10-01T21:52:46Z'
+  stepResults: []
+  actual: |
+    COMPLETED solo con todos los objetos entregados (QA-4) y FAILED con conteos si no (QA-3); specs de "#190" y
+    mutaciones X2/X3. attachments/tr-221-tc-191/dev/corridas-dev.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: Regression · The shared VPC endpoint, the package pusher and the browser UI are untouched
+  scenarioIndex: 11
+  status: passed
+  executedAt: '2026-10-01T22:02:00Z'
+  stepResults: []
+  actual: |
+    El endpoint de la VPC sigue con DNS privado y la API privada del package pusher sigue anclada a el; la interfaz sigue
+    con su URL. attachments/tr-221-tc-191/regresion-y-seguridad.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Security · The API key and the full callback URL never reach the logs, and malformed config is rejected
+  scenarioIndex: 12
+  status: passed
+  executedAt: '2026-10-01T22:01:00Z'
+  stepResults: []
+  actual: |
+    Ninguna de las tres llamadas (estado, ficheros y latido) registra la clave ni la URL con ids; la clave va en cada
+    peticion. 1e4, 30s, 12.5 y 0x10 se rechazan con WARN. OWASP: 5 aplicables, 5 PASS. attachments/tr-221-tc-191/harness/salida.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: AC5 · The ETL heartbeat keeps a progressing run alive and stops once the run stalls
+  scenarioIndex: 13
+  status: passed
+  executedAt: '2026-10-01T22:01:00Z'
+  stepResults: []
+  actual: |
+    Latidos cada 100 ms (intervalo de prueba) mientras habia progreso y ninguno tras el umbral de estancamiento, con el
+    aviso migration.backend.heartbeat.stalled; un latido rechazado (503) es un solo intento. Por defecto 5 min y 50 min.
+    Mutacion X4 detectada. attachments/tr-221-tc-191/harness/salida.txt
+- testCaseId: 9b2da66a-6efc-4f95-bd38-e5f5a6abcbfa
+  testCaseKey: TC-191
+  scenarioTitle: >-
+    Edge case · Only fully extracted objects are downloadable, and a run stops early only when the database fails
+  scenarioIndex: 14
+  status: passed
+  executedAt: '2026-10-01T22:00:00Z'
+  stepResults: []
+  actual: |
+    Un objeto solo se lista para descargar si todas sus partes salieron (mutacion Y5 detectada; Contact Role sin CSV en
+    dev); la corrida solo para antes por la base (mutaciones X1 y X5 detectadas). attachments/tr-221-tc-191/scenario-0-unit-tests/mutaciones.txt
+summary:
+  total: 15
+  passed: 15
+  failed: 0
+  blocked: 0
+  skipped: 0
+  notRun: 0
+  passRate: 100
+history:
+- action: run-started
+  timestamp: '2026-10-01T21:40:00Z'
+  user: codex
+  from: planned
+  to: in-progress
+  reason: >-
+    Repeticion de TC-191 v2 tras los PRs de alerta y watchdog: suites, mutaciones, arnes, corridas autorizadas en dev, corridas
+    sinteticas para el watchdog y lecturas agregadas de produccion.
+- action: run-completed
+  timestamp: '2026-10-01T22:45:00Z'
+  user: codex
+  from: in-progress
+  to: completed
+  reason: >-
+    15/15 PASS: watchdog y alerta en su sitio, aislamiento por objeto y descargas por objeto correctos. Historia aprobada.
+metadata:
+  createdBy: codex
+  createdAt: '2026-10-01T22:45:00Z'
+  updatedBy: codex
+  updatedAt: '2026-10-01T22:45:00Z'
+  version: 1

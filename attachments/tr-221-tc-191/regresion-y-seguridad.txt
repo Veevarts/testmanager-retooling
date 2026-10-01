@@ -1,0 +1,33 @@
+TR-221 · IM-1202 · regresion tecnica, seguridad y OWASP Top 10 (2021) · repeticion
+
+Superficie nueva: ETL (aislamiento por objeto, aviso por objeto, latido, politica de parada, una conexion por corrida),
+backend (latido, descarga todo-o-nada, watchdog programado, alerta SNS), infraestructura (regla EventBridge, tema SNS
+y Chatbot fuera de banda, alarma de CloudWatch).
+
+REGRESION TECNICA
+ Dominio propio del ETL (TR-219)          recursos intactos; los dos dominios responden desde API Gateway        PASS
+ Endpoint compartido y package pusher     DNS privado sigue activo; la politica sigue anclada al endpoint        PASS
+ Corrida buena / descargas                COMPLETED con todo descargable, md5 = etag (dev)                       PASS
+ Resto de suites                          ETL 1027/1027 · backend migration+shared 400/400                       PASS
+ Watchdog en produccion                   0 corridas en RUNNING; 23 ticks correctos desde 16:23Z                 PASS
+   (antes de BE #422 fallo en cada tick ~15 h sin avisar: O1)
+
+SEGURIDAD
+ - Clave del ETL: va en x-api-key en estado, ficheros y latido; ningun log la contiene (arnes H6, 15 lineas).
+ - URL con ids de cliente y corrida: no se registra en ninguna de las tres llamadas (H6).
+ - La alerta lleva cliente y enlace a la corrida en la Migration App hacia un canal privado de Slack.
+ - El rol de la Lambda puede publicar solo en el tema de alertas (simulador IAM); no tiene cloudwatch:PutMetricData y no
+   lo necesita (EMF por stdout).
+ - Sin secretos en los diffs.
+
+OWASP TOP 10 (2021)
+ A01 Broken Access Control        Aplica  latido y llamadas del ETL siguen tras ApiKeyAuthGuard; el watchdog solo actua
+                                          sobre corridas RUNNING inactivas, con guarda condicional contra actividad tardia  PASS
+ A04 Insecure Design              Aplica  watchdog + alerta cierran el "fallo mudo"; queda sin vigilancia el propio
+                                          watchdog (O1)                                                                 PASS*
+ A05 Security Misconfiguration    Aplica  tema y Chatbot creados fuera de banda (no en IaC); alarma al mismo tema (O2)   PASS*
+ A08 Software/Data Integrity      Aplica  files[] = S3; objeto parcial no descargable (Y5); FAILED con conteos          PASS
+ A09 Logging/Monitoring           Aplica  alerta a Slack en produccion + alarma de publicacion; en dev se omite por
+                                          diseno (sin canal)                                                            PASS
+ A02, A03, A06, A07, A10          N/A     sin cifrado, entradas, dependencias de riesgo, sesion ni red nuevos
+Resumen: 5 aplicables, 5 PASS (2 con observacion), 0 FAIL, 5 N/A.

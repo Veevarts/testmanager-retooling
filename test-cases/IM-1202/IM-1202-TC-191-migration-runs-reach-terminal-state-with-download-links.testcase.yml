@@ -38,11 +38,24 @@ description: |
   - R5. MIGRATION_APP_BACKEND_URL solo existe como estado de AWS: ningun repositorio la declara, y el despliegue del
     ETL relee la definicion viva. Un cambio manual se puede perder o revertir sin rastro en git.
   - R6. La promocion a produccion de "PR #415" ("PR #416") arrastra tambien el horario diario de playbooks de IM-1207.
+
+  V2 (2026-10-01, repeticion tras TR-219, que devolvio la historia por AC4 y AC5). Nuevos PRs:
+  - MigrationToolETL "PR #190": un objeto que falla ya no hunde la corrida (se salta y se sigue), cada objeto terminado
+    informa sus ficheros al momento, COMPLETED solo si todos los objetos salieron y FAILED con conteos si no; la corrida
+    para antes solo si la base falla (conexion sin reconexion o 2 timeouts seguidos); latido cada 5 min mientras hay
+    progreso, que se detiene si nada avanza en 50 min; una conexion por corrida.
+  - MigrationAppBackend "PR #417": latido del ETL (lastActivityAt) y descarga todo-o-nada por objeto.
+  - MigrationAppBackend "PR #419" y "PR #422": watchdog cada 15 min que pasa a FAILED una corrida RUNNING sin actividad
+    (latido, cambio de estado o de un objeto) en 45 min y asienta sus objetos.
+  - MigrationAppBackend "PR #424": alerta a Slack (SNS -> AWS Chatbot) por cada tick que falla corridas, solo en
+    produccion, y alarma de CloudWatch si la publicacion falla.
+  Riesgo nuevo: la alerta solo existe en produccion y QA no puede provocar alli una corrida colgada; se verifica el
+  camino en dev (el watchdog la construye y la omite por falta de tema) y la cadena real de produccion en solo lectura.
 type: integration
 priority: high
 status: active
 preconditions:
-- Dev corre el backend con el PR 415 y el ETL con la imagen del PR 173, apuntando al dominio propio de dev.
+- Dev corre el backend con el PR 424 y el ETL con la imagen del PR 190, apuntando al dominio propio de dev.
 - Hay acceso de solo lectura a AWS (ECS, API Gateway, Route 53, DynamoDB de dev, CloudWatch) y a GitHub.
 - Hay una sesion QA en la Migration App de dev y un workspace de QA con un respaldo encendido.
 - Clones de MigrationToolETL y MigrationAppBackend en main, con dependencias y Node 20.
@@ -130,10 +143,10 @@ scenarios:
   given:
   - un workspace de QA cuyo respaldo hace fallar la extraccion
   when:
-  - QA lanza una corrida y la extraccion falla
+  - QA lanza una corrida con objetos que funcionan y uno que falla (Contact Role) y la extraccion de ese objeto falla
   then:
-  - la corrida queda FAILED en torno a un minuto despues del fallo, no en RUNNING
-  - todos los objetos quedan FAILED; ninguno se queda en PENDING, como pasaba antes del PR 415
+  - la corrida queda FAILED con sus conteos (total, completados, fallidos) en torno a un minuto despues, no en RUNNING
+  - los objetos que terminaron quedan COMPLETED y descargables; el que fallo queda FAILED sin ficheros; ninguno en PENDING
 - title: AC4 · A refused callback is retried with backoff and then reported as an ERROR with the HTTP status and run id
   tags:
   - ac-4
@@ -151,21 +164,25 @@ scenarios:
   - ac-4
   - missing-doc
   given:
-  - el evento migration.run.terminal.callback.undelivered del ETL
+  - una corrida cuyo resultado final no se puede entregar queda en RUNNING sin actividad
   when:
-  - se buscan alarmas de CloudWatch, filtros de metricas y monitores de Datadog sobre ese evento
+  - el watchdog la pasa a FAILED
   then:
-  - existe una alerta sobre el evento que avisa a un canal con destinatarios
+  - se publica una alerta a un canal con destinatarios (produccion) con la corrida y que hacer
+  - en dev el watchdog construye la alerta y la omite porque no hay canal
+  - si la publicacion falla, una alarma avisa al mismo canal
 - title: AC5 · A run that never reports is moved out of RUNNING by a watchdog
   tags:
   - ac-5
   - missing-doc
   given:
-  - una corrida sin llamada final dentro de la ventana del watchdog
+  - una corrida sin llamada final dentro de la ventana del watchdog y dos de control, una con latido reciente y otra con
+    un objeto actualizado hace poco
   when:
   - el watchdog barre las corridas
   then:
-  - la corrida pasa de RUNNING a un estado final y la interfaz deja de mostrarla en curso
+  - la corrida sin actividad pasa de RUNNING a FAILED, sus objetos se asientan y la interfaz deja de mostrarla en curso
+  - las de control siguen en RUNNING hasta que su ultima actividad supera el umbral
 - title: Edge case · The terminal status is honest when no inventory or only part of it lands
   tags:
   - edge-case
@@ -197,6 +214,28 @@ scenarios:
   then:
   - ningun registro contiene la clave ni la URL con ids; solo el host
   - valores como 1e4 o 30s se rechazan con un WARN y se usa el valor por defecto
+- title: AC5 · The ETL heartbeat keeps a progressing run alive and stops once the run stalls
+  tags:
+  - ac-5
+  - edge-case
+  given:
+  - el latido real del ETL apuntando a un servidor HTTP local, con un intervalo corto
+  when:
+  - la corrida avanza durante un rato y luego se detiene
+  then:
+  - salen latidos mientras hay progreso y dejan de salir cuando pasa el umbral de estancamiento, con un aviso
+  - un latido rechazado es un solo intento y no rompe la corrida
+- title: Edge case · Only fully extracted objects are downloadable, and a run stops early only when the database fails
+  tags:
+  - edge-case
+  - regression
+  given:
+  - objetos con todas sus partes, objetos con alguna parte fallida y fallos de base de datos
+  when:
+  - se listan los ficheros de una corrida y se aplica la politica de parada
+  then:
+  - un objeto solo es descargable si todas sus partes salieron; el resto muestra que no hay CSV disponibles
+  - la corrida solo para antes si la conexion falla y una reconexion no ayuda, o con dos timeouts seguidos
 tags:
 - im-1202
 - im-1319
@@ -212,5 +251,5 @@ metadata:
   createdBy: codex
   createdAt: '2026-09-30T16:52:16Z'
   updatedBy: codex
-  updatedAt: '2026-09-30T16:52:16Z'
-  version: 1
+  updatedAt: '2026-10-01T22:15:00Z'
+  version: 2
